@@ -536,6 +536,14 @@ export function isClosedJiraStatus(status?: string | null): boolean {
   return tone === 'done' || tone === 'cancelled';
 }
 
+export function isCancelledJiraStatus(status?: string | null): boolean {
+  return getUXEpicStatusTone(status || undefined) === 'cancelled';
+}
+
+export function isCancelledDesignDisplayItem(item: DesignDisplayItem): boolean {
+  return item.type === 'ux_ticket' && isCancelledJiraStatus(item.issueStatus);
+}
+
 function getParentClosedPreferPriority(item: DesignDisplayItem): number {
   if (getItemChannelPriority(item) !== 2) return 0;
   if (item.type !== 'ux_ticket') return 1;
@@ -566,7 +574,10 @@ export function prepareDesignDisplayItems(
   limit: number = JIRA_CONTEXT_PANEL_ITEM_LIMIT,
 ): DesignDisplayItem[] {
   return limitDesignDisplayItems(
-    sortDesignDisplayItems(filterSameProjectDesignItems(dedupeDesignData(items), currentTicketKey)),
+    sortDesignDisplayItems(
+      filterSameProjectDesignItems(dedupeDesignData(items), currentTicketKey)
+        .filter(item => !isCancelledDesignDisplayItem(item)),
+    ),
     limit,
   );
 }

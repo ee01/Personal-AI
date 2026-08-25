@@ -52,6 +52,10 @@ const fixtureHtml = `<!doctype html>
             <span class="issue-link-summary">Checkout UX handoff</span>
           </div>
           <div class="issue-link">
+            <a class="issue-link-key" href="https://jira.ringcentral.com/browse/UX-900">UX-900</a>
+            <span class="issue-link-summary">Cancelled UX ticket should hide</span>
+          </div>
+          <div class="issue-link">
             <a class="issue-link-key" href="https://jira.ringcentral.com/browse/UX-200">UX-200</a>
             <span class="issue-link-summary">Missing design spec</span>
           </div>
@@ -251,6 +255,22 @@ try {
       ]);
     }
 
+    if (pathname === '/rest/api/2/issue/UX-900/remotelink') {
+      return fulfillJson([
+        {
+          object: {
+            title: 'Cancelled handoff should hide',
+            url: 'https://www.figma.com/proto/cancelled900/Hidden',
+            status: {
+              icon: {
+                title: 'ready_for_development',
+              },
+            },
+          },
+        },
+      ]);
+    }
+
     if (pathname === '/rest/api/2/issue/UX-200/remotelink') {
       return fulfillJson([]);
     }
@@ -289,8 +309,23 @@ try {
         fields: {
           summary: 'Checkout UX handoff',
           issuetype: { name: 'Epic' },
-          status: { name: 'Cancelled' },
+          status: { name: 'In Progress' },
           customfield_21233: null,
+          customfield_11450: null,
+          duedate: null,
+          fixVersions: [],
+        },
+      });
+    }
+
+    if (pathname === '/rest/api/2/issue/UX-900') {
+      return fulfillJson({
+        key: 'UX-900',
+        fields: {
+          summary: 'Cancelled UX ticket should hide',
+          issuetype: { name: 'Epic' },
+          status: { name: 'Cancelled' },
+          customfield_21233: 'https://www.figma.com/proto/cancelled900/Hidden',
           customfield_11450: null,
           duedate: null,
           fixVersions: [],
@@ -479,9 +514,10 @@ try {
   assert.match(itemTexts[0], /Ready for development/);
   assert.match(itemTexts[0], /(Updated|已更新) 2026-05-19/);
   assert.match(itemTexts[0], /Status time|状态时间/);
-  assert.match(itemTexts[0], /Cancelled/);
+  assert.match(itemTexts[0], /In Progress/);
   assert.match(itemTexts[0], /Linked issue/);
   assert.match(itemTexts[0], /Remote link/);
+  assert.equal(itemTexts.some(text => /UX-900|Cancelled/.test(text)), false);
   assert.match(
     await page.locator('.design-link-item', { hasText: 'Ready checkout prototype' }).locator('.design-updated-tag').getAttribute('aria-label'),
     /2026-05-19 12:34 UTC.*Source: Jira\/Figma status updated time/,

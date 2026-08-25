@@ -49,10 +49,10 @@ import {
   getUXEpicStatusTone,
   getJiraProjectKey,
   isClosedJiraStatus,
+  isCancelledJiraStatus,
   isDesignUpdatedDateMissing,
   isMeaningfulDesignTitle,
   isSameJiraProject,
-  JIRA_CONTEXT_PANEL_ITEM_LIMIT,
   mergeDesignSources,
   matchesProjectPattern,
   normalizeDesignUrl,
@@ -70,6 +70,7 @@ import {
   formatBackendProgressSource,
   getJiraIssueLinkRelationship,
   isSameJiraIssue,
+  prepareBackendProgressItems,
   shouldIncludeBackendDependency,
 } from './jiraBackendProgress';
 
@@ -819,6 +820,7 @@ async function findUXTickets(parentData: any, currentTicketKey: string, projectP
       && matchesProjectPattern(issue.key, projectPrefix)
       && issue.key !== currentTicketKey
       && !isSameJiraProject(currentTicketKey, issue.key)
+      && !isCancelledJiraStatus(issue.fields?.status?.name || issue.status?.name)
     ));
 
     matchedIssues
@@ -1096,6 +1098,7 @@ async function appendUXDesignItems(
     }
     const baseSource = sourcePrefix ? `${sourcePrefix}_${uxTicket.source}` : uxTicket.source;
     const issueStatus = uxTicket.status || designContext.status;
+    if (isCancelledJiraStatus(issueStatus)) continue;
     const candidates = designContext.designLinks.length > 0
       ? designContext.designLinks
       : extractDesignLinks(normalizeDesignUrl(designContext.designLink), true).map(candidate => ({
@@ -2197,45 +2200,6 @@ interface BackendProgressData {
   issueStatus?: string | null;
 }
 
-function getBackendChannelPriority(source: string): number {
-  // linked / story > epic > parent impact layers > parent sub issues
-  if (source.includes('parent_impact_layer')) return 2;
-  if (source.includes('parent_')) return 3;
-  if (source.includes('epic')) return 1;
-  if (source.includes('linked_issues') || source.includes('user_story')) return 0;
-  return 1;
-}
-
-function sortBackendProgressItems(items: BackendProgressData[]): BackendProgressData[] {
-  return items
-    .map((item, index) => ({ item, index }))
-    .sort((a, b) => {
-      const aChannel = getBackendChannelPriority(a.item.source);
-      const bChannel = getBackendChannelPriority(b.item.source);
-      const channelDiff = aChannel - bChannel;
-      if (channelDiff !== 0) return channelDiff;
-
-      // Prefer closed/done for parent impact layers and parent sub-issue channels.
-      if (aChannel >= 2) {
-        const aClosed = isClosedJiraStatus(a.item.issueStatus) ? 0 : 1;
-        const bClosed = isClosedJiraStatus(b.item.issueStatus) ? 0 : 1;
-        if (aClosed !== bClosed) return aClosed - bClosed;
-      }
-
-      return a.index - b.index;
-    })
-    .map(entry => entry.item);
-}
-
-function prepareBackendProgressItems(
-  items: BackendProgressData[],
-  currentTicketKey: string,
-  limit: number = JIRA_CONTEXT_PANEL_ITEM_LIMIT,
-): BackendProgressData[] {
-  const filtered = items.filter(item => !isSameJiraIssue(currentTicketKey, item.dependencyTicketKey));
-  return sortBackendProgressItems(filtered).slice(0, Math.max(0, limit));
-}
-
 // 从API数据中查找外部依赖项目的tickets（仅搜索issue links）
 function findDependencyTicketsFromData(data: any, projectPrefix: string, currentTicketKey: string): { key: string; summary: string; status?: string; relationship?: string }[] {
   const tickets: { key: string; summary: string; status?: string; relationship?: string }[] = [];
@@ -2248,6 +2212,7 @@ function findDependencyTicketsFromData(data: any, projectPrefix: string, current
       && issue.key
       && matchesProjectPattern(issue.key, projectPrefix)
       && shouldIncludeBackendDependency(currentTicketKey, issue.key, 'issue_links')
+      && !isCancelledJiraStatus(issue.fields?.status?.name)
     ) {
       tickets.push({
         key: issue.key,
@@ -2439,6 +2404,7 @@ async function findImpactLayerEpicsFromParent(
       // Keep configured dependency-project tickets on the classic parent/linked channels.
       if (depProject && matchesProjectPattern(key, depProject)) continue;
       if (!shouldIncludeParentDependencyEpic(issue)) continue;
+      if (isCancelledJiraStatus(issue.fields?.status?.name || issue.status?.name)) continue;
       if (!issueMatchesImpactLayerProject(key, layer)) continue;
 
       seenKeys.add(key);
@@ -2490,6 +2456,7 @@ async function findDependencyEpicsFromParent(
       && matchesProjectPattern(issue.key, projectPrefix)
       && shouldIncludeBackendDependency(currentTicketKey, issue.key, 'init_parent')
       && shouldIncludeParentDependencyEpic(issue)
+      && !isCancelledJiraStatus(issue.fields?.status?.name || issue.status?.name)
     ))
     .sort((a: any, b: any) => {
       const aClosed = isClosedJiraStatus(a.fields?.status?.name || a.status?.name) ? 0 : 1;
@@ -2515,8 +2482,11 @@ async function appendBackendProgressItems(
   shouldContinue: () => boolean,
 ): Promise<void> {
   for (const dep of depTickets) {
+    if (isCancelledJiraStatus(dep.status)) continue;
     const details = await fetchDependencyDetails(dep.key);
     if (!shouldContinue()) return;
+    const issueStatus = dep.status || details.status || null;
+    if (isCancelledJiraStatus(issueStatus)) continue;
     let rolloutDate: string | null = null;
     if (details.fixVersion) {
       rolloutDate = await fetchRolloutDate(details.fixVersion);
@@ -2530,7 +2500,7 @@ async function appendBackendProgressItems(
       rolloutDate,
       fixVersion: details.fixVersion,
       source: formatBackendProgressSource(source, dep.relationship),
-      issueStatus: dep.status || details.status || null,
+      issueStatus,
     });
   }
 }
@@ -2605,6 +2575,7 @@ function getDependencyTicketsFromLinkedIssues(projectPrefix: string): { key: str
           ?.querySelector('.aui-lozenge, .status-text, [data-tooltip]')
           ?.textContent
           ?.trim();
+        if (isCancelledJiraStatus(statusText)) return;
         tickets.push({ key: reference.key, url: reference.url, summary, status: statusText });
       }
     });

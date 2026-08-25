@@ -1,6 +1,6 @@
 # Jira Backend Progress（外部依赖进展 / BE date）
 
-*最后更新: 2026-08-11*
+*最后更新: 2026-08-25*
 
 ## 功能概述
 
@@ -11,13 +11,14 @@ Backend Progress 在 Jira ticket summary 下方展示绿色卡片，汇总当前
 ## 展示约束
 
 1. **同项目过滤只作用于 INIT/Parent 查询**：通过 Parent/INIT 的 Impacted Layers、issue links、subtasks 或 `portfolioChildrenOf` 找到的票，如果与当前 issue 同项目则不展示。当前页 Linked Issues、上级 User Story 的 Issue Links、Epic 自身及上级 Epic 的 Issue Links **不做同项目过滤**；它们只排除当前 issue 自身。
-2. **最多 5 条**：按渠道排序后截断。优先级为：
+2. **Cancelled 完全不展示**：`Cancelled` / `Canceled` / `Won't Do` / `Rejected` / `Duplicate` 等 cancelled 口径的依赖票不进入面板，也不占用 5 条名额。Closed/Done 仍会展示。
+3. **最多 5 条**：按渠道排序后截断。优先级为：
 
    **linked issues（含 user story）> epic 关联 > parent Impacted Layers > parent sub issues**
 
    （Design Links 另有 description 通道；BE 无 description 扫描。）
 
-   parent Impacted Layers / parent sub issues 通道有多条时 **closed/done 优先**。
+   parent Impacted Layers / parent sub issues 通道有多条时 **closed/done 优先**（Cancelled 已先剔除）。因此 INIT 页面上排在前面的开放票，仍可能排在 Impacted Layers 和其它 closed parent 子票之后；例如 `MTR-141170` 上 `RCV-141220`（INIT 子票里最前的 Initial RCV Epic）会在剔除 `RCV-152284` / `RCV-151775` 后进入前 5 条。
 
 ## 展示格式
 
@@ -81,7 +82,8 @@ INIT / Parent 的 **sub-issue** 路径下，已知 issue type 时只收 Epic；i
 
 ```text
 src/contentScriptJira.ts   // collectAndDisplayBackendProgress / findImpactLayerEpicsFromParent / displayBackendProgress
-src/jiraBackendProgress.ts // Linked/Epic 与 INIT/Parent 的同项目过滤边界
+src/jiraBackendProgress.ts // Linked/Epic 与 INIT/Parent 的同项目过滤；Cancelled 剔除与 5 条排序截断
+src/jiraDesignLinks.ts     // isCancelledJiraStatus / 面板条数上限
 src/background.ts          // FETCH_ROLLOUT_DATE
 src/options.tsx            // DEPENDENCIES_JIRA_PROJECT 配置
 src/utils.ts               // 默认 DEPENDENCIES_JIRA_PROJECT=RCV

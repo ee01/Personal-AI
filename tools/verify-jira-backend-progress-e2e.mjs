@@ -100,6 +100,16 @@ try {
             {
               type: { name: 'Dependency', outward: 'depends on', inward: 'has dependents' },
               outwardIssue: {
+                key: 'RCV-159999',
+                fields: {
+                  summary: 'Cancelled epic link must be hidden',
+                  status: { name: 'Cancelled' },
+                },
+              },
+            },
+            {
+              type: { name: 'Dependency', outward: 'depends on', inward: 'has dependents' },
+              outwardIssue: {
                 key: 'RCV-152720',
                 fields: {
                   summary: 'Same-project direct dependency must be shown',
@@ -183,7 +193,7 @@ try {
   assert.match(rows[2], /epic:depends on/);
   assert.match(rows[3], /MTR-147003/);
   assert.match(rows[3], /parent_impact_layer:Apps - mThor/);
-  assert.equal(rows.some(row => row.includes('RCV-153400')), false);
+  assert.equal(rows.some(row => row.includes('RCV-153400') || row.includes('RCV-159999')), false);
 
   console.log('Jira Backend Progress E2E verification passed:', rows.map(row => row.replace(/\s+/g, ' ').trim()));
 } finally {

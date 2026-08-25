@@ -52,6 +52,7 @@ import {
   getFigmaDisplayLabel,
   getUXEpicStatusTone,
   isClosedJiraStatus,
+  isCancelledJiraStatus,
   isDesignUpdatedDateMissing,
   isSameJiraProject,
   JIRA_CONTEXT_PANEL_ITEM_LIMIT,
@@ -85,6 +86,11 @@ function verifyProjectPatternMatching() {
   assert.equal(isClosedJiraStatus('Closed'), true);
   assert.equal(isClosedJiraStatus('Done'), true);
   assert.equal(isClosedJiraStatus('In Progress'), false);
+  assert.equal(isCancelledJiraStatus('Cancelled'), true);
+  assert.equal(isCancelledJiraStatus('Canceled'), true);
+  assert.equal(isCancelledJiraStatus("Won't Do"), true);
+  assert.equal(isCancelledJiraStatus('Closed'), false);
+  assert.equal(isCancelledJiraStatus('In Progress'), false);
 }
 
 function verifyUrlNormalization() {
@@ -713,6 +719,27 @@ function verifyDisplayOrdering() {
   ], 'ABC-123');
   assert.equal(prepared.length, JIRA_CONTEXT_PANEL_ITEM_LIMIT);
   assert.ok(prepared.every(item => item.type !== 'ux_ticket' || (item as any).uxTicketKey !== 'ABC-999'));
+
+  const preparedWithoutCancelled = prepareDesignDisplayItems([
+    {
+      type: 'ux_ticket',
+      uxTicketKey: 'UX-CANCEL',
+      summary: 'Cancelled parent ticket should hide',
+      source: 'parent_child_issue',
+      linkProvided: false,
+      issueStatus: 'Cancelled',
+    },
+    {
+      type: 'ux_ticket',
+      uxTicketKey: 'UX-OPEN',
+      summary: 'Open parent ticket should remain',
+      source: 'parent_child_issue',
+      linkProvided: false,
+      issueStatus: 'Initial',
+    },
+  ], 'MTR-141170');
+  assert.equal(preparedWithoutCancelled.length, 1);
+  assert.equal((preparedWithoutCancelled[0] as any).uxTicketKey, 'UX-OPEN');
   assert.match(
     getDesignSourceSummary(sorted),
     /^5 entries · Remote link, Linked issue/,

@@ -5,7 +5,7 @@ alwaysApply: false
 ---
 # Jira 设计链接显示功能
 
-*最后更新: 2026-08-03*
+*最后更新: 2026-08-25*
 
 ## 功能概述
 
@@ -14,7 +14,8 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 额外展示约束：
 
 1. **同项目不展示**：目标 UX ticket 与当前 issue 同项目时不展示（例如在 `RCV-xxx` 上不会把同项目 `RCV-*` 当成设计依赖）。
-2. **最多 5 条**：按渠道排序后截断。渠道优先级为 **当前票直连（description / remote link / Jira Designs）> linked issues（含 epic 关联）> parent / INIT**；同渠道内继续按行动状态与更新时间排序；parent 通道有多条时 **closed/done 优先**。
+2. **Cancelled 完全不展示**：UX ticket 状态为 `Cancelled` / `Canceled` / `Won't Do` / `Rejected` / `Duplicate` 时整行不展示，也不占用 5 条名额。Closed/Done 仍会展示。
+3. **最多 5 条**：按渠道排序后截断。渠道优先级为 **当前票直连（description / remote link / Jira Designs）> linked issues（含 epic 关联）> parent / INIT**；同渠道内继续按行动状态与更新时间排序；parent 通道有多条时 **closed/done 优先**（Cancelled 已先剔除）。
 
 ## 大白话运行逻辑
 
@@ -26,7 +27,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 2. UX ticket 关联质量：linked issue、Epic、Parent（通常是 INIT）能不能找到 UX 项目 ticket，决定能不能补充缺失设计入口。查找路径与 Backend Progress 类似：当前票 linked issues → 上级 Epic 的 linked/subtask/child → Epic 的 Parent Link（INIT）下的 UX ticket。当 Jira DOM 只暴露 query 参数、`jql` 过滤条件、属性或纯文本 key 时，具体行会显示 `Key from ...` 和 `只读恢复` 边界，而不是把弱回退伪装成标准链接或已经写入的 Jira 关系；面板顶部不再渲染 `恢复范围` 总览行。
 3. 域名白名单：只有 Figma、Miro、Loom、Google Slides、Zeplin 或配置过的设计域名会被当成设计链接；Miro 只收 board / live-embed 路径，Loom 只收 share / embed 路径，避免官网、帮助、博客、价格页误占交付入口。
 4. 设计状态字段：remote link / UX ticket 上有状态、更新时间、ETA 时，对应设计行会显示行动提示和日期标签；若来源只给了 `Design updated` 状态但没有可用更新时间，会展示 `更新时间缺失`。面板顶部不再渲染 `复查范围` 汇总行。
-5. 去重与安全过滤：同一 Figma 文件/节点、encoded URL、重复链接会被合并；非 http/https 链接不会展示。面板首屏**直接展示具体设计/UX 行**，不显示 `扫描口径` 或 `过滤范围` 汇总；被过滤的 non-handoff refs、过滤来源/原因仍可在 footer 看到。如果本页只发现非交付设计工具链接，会显示一行 `未找到交付设计入口`，而不是静默不显示。
+5. 去重与安全过滤：同一 Figma 文件/节点、encoded URL、重复链接会被合并；非 http/https 链接不会展示。Cancelled 状态的 UX ticket 整行剔除。面板首屏**直接展示具体设计/UX 行**，不显示 `扫描口径` 或 `过滤范围` 汇总；被过滤的 non-handoff refs、过滤来源/原因仍可在 footer 看到。如果本页只发现非交付设计工具链接，会显示一行 `未找到交付设计入口`，而不是静默不显示。
 6. 打开链接只是打开来源：设计入口、UX ticket 或 UX Epic 链接的 hover / 读屏文案会先说明目标、来源、待复查更新时间、恢复候选来源和只读边界；点击后原 Jira 页会留下 `来源打开回执`。这不会刷新 Figma/Jira 元数据、标记设计已复查、创建或编辑 Jira 关联，也不会写入 Memory Service。
 
 ## 主要功能
@@ -366,7 +367,7 @@ const PAGE_CHANGE_DELAY = 1000;
 58. 设计入口、UX ticket 和 UX Epic 链接的 hover / 读屏文案会在点击前说明只读打开、更新时间待复查、恢复候选关系和不刷新/不写入边界；点击后的 `来源打开回执` 只是把这次打开结果留在原 Jira 页。
 59. Miro / Loom 不再按 host 全量识别；只有 Miro board/live-embed 和 Loom share/embed 这类可交付路径会进入设计行，普通产品、帮助、博客、价格页不会被误显示成 handoff。
 60. 面板首屏改为只展示具体设计/UX 行（一行一个），不再渲染 `扫描口径` / `过滤范围` / `恢复范围` / `复查范围` 汇总摘要；过滤计数保留在 footer，行内状态/来源/Key from 标签不变。
-61. 同项目过滤：目标 UX ticket 与当前 issue 同项目时不展示；面板最多 5 条，渠道优先级为当前票直连（description / remote / Jira Designs）> linked / epic > parent，parent 多条时 closed 优先。
+61. 同项目过滤：目标 UX ticket 与当前 issue 同项目时不展示；Cancelled 状态的 UX ticket 完全不展示；面板最多 5 条，渠道优先级为当前票直连（description / remote / Jira Designs）> linked / epic > parent，parent 多条时 closed 优先。
 
 ### 未来增强计划 🔄
 1. 在权限允许时展示轻量预览或缩略图，减少打开外部工具的次数。
