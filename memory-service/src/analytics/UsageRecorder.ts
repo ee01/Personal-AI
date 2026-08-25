@@ -18,6 +18,8 @@ export interface RecordLlmUsageParams {
   completionTokens: number;
   status?: 'ok' | 'error' | string | null;
   errorKind?: string | null;
+  /** Actual provider that served or failed the call (set during fallback). */
+  provider?: string | null;
   /** Overrides for context fields (fall back to the current async context). */
   userId?: string | null;
   capability?: string | null;
@@ -55,7 +57,13 @@ export function recordLlmUsage(params: RecordLlmUsageParams): void {
       status: params.status === 'error' ? 'error' : 'ok',
       errorKind: params.errorKind ?? null,
       requestId: params.requestId ?? null,
-      meta: params.meta ?? null,
+      meta: (() => {
+        const meta = {
+          ...(params.meta ?? {}),
+          ...(params.provider ? { provider: params.provider } : {}),
+        };
+        return Object.keys(meta).length > 0 ? meta : null;
+      })(),
     });
   } catch {
     // Best-effort: never surface analytics errors into the caller.

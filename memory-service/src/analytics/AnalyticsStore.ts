@@ -19,6 +19,7 @@ import {
   normalizeCapability,
 } from './capabilityMap.js';
 import { estimateCostUsd } from './pricing.js';
+import { getConfig } from '../config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -167,12 +168,47 @@ function loadSchemaSql(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Corruption handling
+// ---------------------------------------------------------------------------
+
+/**
+ * True for the SQLite errors that mean the file itself is damaged, as opposed
+ * to a schema/constraint problem. Raw telemetry is disposable, but salvaging it
+ * still needs an operator, so the store degrades instead of serving 500s from
+ * every read.
+ */
+export function isAnalyticsCorruptionError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && /^SQLITE_(CORRUPT|NOTADB)/.test(code)) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : '';
+  return /database disk image is malformed|file is not a database/i.test(
+    message,
+  );
+}
+
+export class AnalyticsCorruptError extends Error {
+  readonly dbPath: string;
+
+  constructor(dbPath: string, cause: unknown) {
+    super(
+      `Analytics database is corrupt (${dbPath}). Run "npm --prefix memory-service run repair:analytics" to salvage it.`,
+    );
+    this.name = 'AnalyticsCorruptError';
+    this.dbPath = dbPath;
+    this.cause = cause;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // AnalyticsStore
 // ---------------------------------------------------------------------------
 
 export class AnalyticsStore {
   private db: SQLiteDatabase;
   private readonly dbPath: string;
+  private corrupt = false;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
@@ -181,11 +217,98 @@ export class AnalyticsStore {
       fs.mkdirSync(dir, { recursive: true });
     }
     this.db = new BetterSqlite3(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
+    // Analytics is the highest-churn DB in the service and lives on the same
+    // (often bind-mounted) volume as the memory DBs, so it needs the same
+    // journal/sync escape hatch instead of forcing WAL — with its own override
+    // so telemetry can go DELETE + FULL without slowing memory writes.
+    const config = getConfig();
+    this.db.pragma(`journal_mode = ${config.analyticsSqliteJournalMode}`);
+    this.db.pragma(`synchronous = ${config.analyticsSqliteSynchronous}`);
     this.db.exec(loadSchemaSql());
     this.ensureSchemaMigrations();
+    this.pruneOldEvents();
     this.repriceZeroCostEvents();
+  }
+
+  /** True once a statement failed with SQLITE_CORRUPT; reads/writes stop. */
+  get isCorrupt(): boolean {
+    return this.corrupt;
+  }
+
+  /**
+   * Latch the store off when a statement reports file-level damage, so one bad
+   * page stops producing generic 500s from every subsequent read.
+   * Returns true when the error was a corruption error.
+   */
+  markCorruptIfNeeded(err: unknown): boolean {
+    if (!isAnalyticsCorruptionError(err)) return false;
+    if (!this.corrupt) {
+      this.corrupt = true;
+      console.error(
+        `[AnalyticsStore] Corrupt database at ${this.dbPath}; usage analytics ` +
+          'is disabled until the file is repaired ' +
+          '(npm --prefix memory-service run repair:analytics).',
+      );
+    }
+    return true;
+  }
+
+  /** Best-effort write: telemetry must never fail the request it describes. */
+  private guardWrite(label: string, fn: () => void): void {
+    if (this.corrupt) return;
+    try {
+      fn();
+    } catch (err) {
+      if (!this.markCorruptIfNeeded(err)) {
+        console.warn(
+          `[AnalyticsStore] ${label} failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+  }
+
+  /**
+   * Drop raw events older than the retention window. Daily rollups keep the
+   * long-term LLM history, reports never look back further than 30 days, and
+   * unbounded `api_call_events` growth is what makes this file large enough to
+   * be worth corrupting in the first place.
+   */
+  pruneOldEvents(nowMs: number = Date.now()): {
+    usageEvents: number;
+    apiCallEvents: number;
+  } {
+    const config = getConfig();
+    const deleteOlderThan = (table: string, retentionDays: number): number => {
+      if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+      return this.db
+        .prepare(`DELETE FROM ${table} WHERE ts < ?`)
+        .run(nowMs - retentionDays * MS_PER_DAY).changes;
+    };
+    try {
+      const usageEvents = deleteOlderThan(
+        'usage_events',
+        config.analyticsRetentionDays,
+      );
+      const apiCallEvents = deleteOlderThan(
+        'api_call_events',
+        config.analyticsApiRetentionDays,
+      );
+      if (usageEvents || apiCallEvents) {
+        console.log(
+          `[AnalyticsStore] Pruned ${usageEvents} usage_events (>${config.analyticsRetentionDays}d) ` +
+            `and ${apiCallEvents} api_call_events (>${config.analyticsApiRetentionDays}d)`,
+        );
+      }
+      return { usageEvents, apiCallEvents };
+    } catch (err) {
+      if (isAnalyticsCorruptionError(err)) this.corrupt = true;
+      console.warn(
+        '[AnalyticsStore] pruneOldEvents skipped:',
+        err instanceof Error ? err.message : String(err),
+      );
+      return { usageEvents: 0, apiCallEvents: 0 };
+    }
   }
 
   /**
@@ -292,50 +415,54 @@ export class AnalyticsStore {
       completionTokens,
     );
 
-    this.db
-      .prepare(
-        `INSERT INTO usage_events
+    this.guardWrite('recordUsageEvent', () => {
+      this.db
+        .prepare(
+          `INSERT INTO usage_events
            (ts, user_id, side, capability, feature, route, model,
             prompt_tokens, completion_tokens, total_tokens,
             est_cost_usd, cost_flagged, status, error_kind, request_id, meta_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        ts,
-        event.userId ?? 'unknown',
-        event.side,
-        capability,
-        event.feature ?? null,
-        event.route ?? null,
-        event.model ?? null,
-        promptTokens,
-        completionTokens,
-        totalTokens,
-        estCostUsd,
-        flagged ? 1 : 0,
-        status,
-        event.errorKind ?? null,
-        event.requestId ?? null,
-        event.meta ? JSON.stringify(event.meta) : null,
-      );
+        )
+        .run(
+          ts,
+          event.userId ?? 'unknown',
+          event.side,
+          capability,
+          event.feature ?? null,
+          event.route ?? null,
+          event.model ?? null,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          estCostUsd,
+          flagged ? 1 : 0,
+          status,
+          event.errorKind ?? null,
+          event.requestId ?? null,
+          event.meta ? JSON.stringify(event.meta) : null,
+        );
+    });
   }
 
   recordApiCall(event: ApiCallEventInput): void {
     const ts = normalizeTs(event.ts);
-    this.db
-      .prepare(
-        `INSERT INTO api_call_events
+    this.guardWrite('recordApiCall', () => {
+      this.db
+        .prepare(
+          `INSERT INTO api_call_events
            (ts, user_id, capability, route, method, status)
          VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        ts,
-        event.userId ?? 'unknown',
-        event.capability ? normalizeCapability(event.capability) : null,
-        event.route,
-        event.method,
-        event.status,
-      );
+        )
+        .run(
+          ts,
+          event.userId ?? 'unknown',
+          event.capability ? normalizeCapability(event.capability) : null,
+          event.route,
+          event.method,
+          event.status,
+        );
+    });
   }
 
   // ---- Rollup -----------------------------------------------------------

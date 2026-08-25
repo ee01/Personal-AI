@@ -19,7 +19,7 @@ Usage Analytics 是一套**本地打点**的系统级用量观测能力：把 Ch
 
 关键边界：**打点永远是 best-effort 副作用**——analytics 任何异常都被吞掉，绝不影响 LLM 主链路或 API 响应；成本是本地估算，不做 oneapi 对账。
 
-后端 LLM 的最终失败也会记录一条 0-token `status:'error'` 事件，并把错误归为 `auth / rate_limit / timeout / network / server / unknown`；内部 provider retry 不会被重复记成多次功能调用。网页聚焦分析现在归到 `memory_capture`，下钻 route 为 `/source-memory/webpage-analysis`。
+后端 LLM 的最终失败也会记录一条 0-token `status:'error'` 事件，并把错误归为 `auth / rate_limit / timeout / network / server / unknown`；内部 provider retry 不会被重复记成多次功能调用。若配置了 `LLM_FALLBACKS`，成功打点记**实际服务**的 model/provider，每个失败目标各记一条 error。网页聚焦分析现在归到 `memory_capture`，下钻 route 为 `/source-memory/webpage-analysis`。
 
 ## 个人链接（HMAC）
 
@@ -35,7 +35,7 @@ Token 格式：`base64url({u,s,exp}).HMAC-SHA256`，密钥为 `ANALYTICS_TOKEN_S
 扩展入口：
 
 - Options / 记忆探索侧栏：「打开我的用量报表」→ `POST /usage/my-link` → 打开签名 dashboard
-- esone.qiu Options 仍保留「全体用量报表（Admin）」与 Admin Token 配置
+- esone.qiu Options 底部「管理入口」：全体用量报表 + 设备 key 批准页；Admin Token 配置同区
 
 ## 前后端如何看
 
@@ -99,10 +99,24 @@ Token 格式：`base64url({u,s,exp}).HMAC-SHA256`，密钥为 `ANALYTICS_TOKEN_S
 - `GET /usage/report?range=24h|7d|30d&user=<id|all>&side=all|frontend|backend`（Admin Token 或签名 token）
 - `GET /usage/users`、`GET /usage/dashboard`（同上；self 强制只看本人）
 
+这三个 GET 是自认证入口：带 `?token=` 或 `X-Analytics-Token` 时跳过全局 Bearer 鉴权（浏览器直接打开链接时没有 Authorization 头），token 校验仍在路由内完成。不带 token 时照旧走全局鉴权，返回 `authentication_required`；`POST /usage/telemetry`、`POST /usage/my-link` 不在豁免范围内。
+
 环境变量：
 
 - `ANALYTICS_ADMIN_TOKEN`：全体报表 break-glass
 - `ANALYTICS_TOKEN_SECRET`：HMAC 密钥（空则回退 Admin Token）
+- `ANALYTICS_RETENTION_DAYS`（默认 90）/ `ANALYTICS_API_RETENTION_DAYS`（默认 30）：原始事件保留期，`0` 表示不清理。启动时和每次 rollup 后各清一次；`usage_rollup_daily` 永久保留，报表最长只看 30 天
+- `ANALYTICS_SQLITE_JOURNAL_MODE` / `ANALYTICS_SQLITE_SYNCHRONOUS`：只作用于 analytics 库，留空则继承服务级 `SQLITE_JOURNAL_MODE` / `SQLITE_SYNCHRONOUS`。线上（macOS Docker bind mount）设为 `DELETE` + `FULL`，让打点库牺牲并发换持久性，记忆库仍走 WAL
+
+## 库损坏与修复
+
+`api_call_events` 每天新增数万行，是全服务写入最频繁的表；放在 bind mount 上的 `usage.db` 一旦有页损坏，报表接口会整体不可用。
+
+- 运行时行为：读到 `SQLITE_CORRUPT` 时 store 自锁，`/usage/report`、`/usage/users` 返回 503 `analytics_store_corrupt`（不再是裸 500），打点写入静默跳过，不影响被记录的业务请求
+- 修复（在服务主机上，先停服）：`node memory-service/tools/repair-analytics-db.mjs`
+  - 只依赖 node + `sqlite3` CLI，原文件先备份进 `analytics/quarantine/`
+  - 默认用 `sqlite3 .recover` 抢救可读行；`--reset` 直接弃档重建；`--vacuum` 压缩健康库
+- 无参数运行等于体检：打印 `quick_check` 与三张表行数
 
 ## 验证指引
 

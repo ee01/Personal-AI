@@ -18,6 +18,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getConfig } from '../config.js';
 import {
   getAnalyticsStore,
+  isAnalyticsCorruptionError,
   type AnalyticsStore,
   type DailyActivityRow,
   type UsageAggregateRow,
@@ -265,6 +266,23 @@ function requireAnalyticsViewer(
  * self ⇒ always token.userId (ignore query user=).
  * all  ⇒ honor query, default 'all'.
  */
+/**
+ * A damaged usage.db is an operations problem, not a bug in the caller's
+ * request: answer 503 with the repair command instead of a bare 500.
+ */
+function replyAnalyticsUnavailable(
+  reply: FastifyReply,
+  err: unknown,
+): FastifyReply {
+  const store = getAnalyticsStore();
+  store?.markCorruptIfNeeded(err);
+  return reply.status(503).send({
+    error: 'analytics_store_corrupt',
+    message:
+      'Usage analytics database is damaged. Run "npm --prefix memory-service run repair:analytics" on the service host to salvage it.',
+  });
+}
+
 function resolveReportUser(
   viewer: AnalyticsViewer,
   requestedUser: string | undefined,
@@ -725,8 +743,15 @@ export async function usageRoutes(app: FastifyInstance): Promise<void> {
     const range = parseRange(request.query.range);
     const user = resolveReportUser(viewer, request.query.user);
     const side = parseSide(request.query.side);
-    const report = buildReport(store, range, user, Date.now(), side, viewer);
-    return reply.status(200).send(report);
+    try {
+      const report = buildReport(store, range, user, Date.now(), side, viewer);
+      return reply.status(200).send(report);
+    } catch (err) {
+      if (store.isCorrupt || isAnalyticsCorruptionError(err)) {
+        return replyAnalyticsUnavailable(reply, err);
+      }
+      throw err;
+    }
   });
 
   app.get<{ Querystring: { range?: string; token?: string } }>(
@@ -740,7 +765,15 @@ export async function usageRoutes(app: FastifyInstance): Promise<void> {
       }
       const range = parseRange(request.query.range);
       const sinceMs = Date.now() - rangeToMs(range);
-      const users = store.getActiveUsers(sinceMs);
+      let users: ReturnType<AnalyticsStore['getActiveUsers']>;
+      try {
+        users = store.getActiveUsers(sinceMs);
+      } catch (err) {
+        if (store.isCorrupt || isAnalyticsCorruptionError(err)) {
+          return replyAnalyticsUnavailable(reply, err);
+        }
+        throw err;
+      }
       if (viewer.scope === 'self') {
         const selfId = viewer.userId || '';
         const selfOnly = users.filter((u) => u.userId === selfId);

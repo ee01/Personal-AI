@@ -445,6 +445,7 @@ export class ProactiveScheduler {
     console.log(
       `[ProactiveScheduler] Usage rollup complete for ${rolled.length} day(s): ${rolled.join(', ')}`,
     );
+    store.pruneOldEvents();
   }
 
   private scheduleKeystoneBriefComposer(): void {
