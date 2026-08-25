@@ -1,3 +1,5 @@
+import { detectCursorAgentBinary } from './cursorCommand.js';
+
 export const WORKER_PROTOCOL_VERSION = 1;
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const CLAIM_INTERVAL_MS = 5_000;
@@ -77,7 +79,16 @@ export async function pairWorker(state: WorkerState): Promise<WorkerState> {
     protocolVersion: WORKER_PROTOCOL_VERSION,
     hostKind: state.hostKind,
     hostname: state.hostname,
-    capabilities: { echo: true, acpCodex: true, acpClaudeCode: true },
+    capabilities: {
+      echo: true,
+      acpCodex: true,
+      acpClaudeCode: true,
+      acpCursor: Boolean(
+        process.env.CURSOR_AGENT_COMMAND ||
+          process.env.ACP_CURSOR_COMMAND ||
+          detectCursorAgentBinary(),
+      ),
+    },
   });
   return {
     ...state,

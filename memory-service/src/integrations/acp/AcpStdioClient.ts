@@ -4,10 +4,13 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 export type AcpMcpServerConfig =
   | {
@@ -324,6 +327,44 @@ export function defaultCodexAcpCommand(): { command: string; args: string[] } {
       ? process.env.ACP_CODEX_ARGS.split(/\s+/).filter(Boolean)
       : ['-y', '@agentclientprotocol/codex-acp'],
   };
+}
+
+export function defaultCursorAcpCommand(): { command: string; args: string[] } {
+  if (process.env.ACP_CURSOR_COMMAND) {
+    return {
+      command: process.env.ACP_CURSOR_COMMAND,
+      args: process.env.ACP_CURSOR_ARGS
+        ? process.env.ACP_CURSOR_ARGS.split(/\s+/).filter(Boolean)
+        : [],
+    };
+  }
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, '../../../../cursor-acp/dist/index.js'),
+    path.resolve(here, '../../cursor-acp/dist/index.js'),
+    path.resolve(here, '../vendor/cursor-acp/index.js'),
+    path.resolve(here, 'vendor/cursor-acp/index.js'),
+    path.resolve(here, '../cursor-acp/index.js'),
+  ];
+  const file = candidates.find((candidate) => existsSync(candidate)) || candidates[0]!;
+  return { command: process.execPath, args: [file] };
+}
+
+export function acpCommandForType(
+  type: string,
+): { command: string; args: string[] } {
+  if (type === 'acp-claude-code') {
+    return {
+      command: process.env.ACP_CLAUDE_COMMAND || 'npx',
+      args: process.env.ACP_CLAUDE_ARGS
+        ? process.env.ACP_CLAUDE_ARGS.split(/\s+/).filter(Boolean)
+        : ['-y', '@agentclientprotocol/claude-code-acp'],
+    };
+  }
+  if (type === 'acp-cursor') {
+    return defaultCursorAcpCommand();
+  }
+  return defaultCodexAcpCommand();
 }
 
 export function newSessionKey(): string {

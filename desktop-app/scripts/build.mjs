@@ -120,6 +120,17 @@ async function main() {
   await fs.cp(path.join(workerRoot, 'dist'), path.join(distDir, 'worker'), {
     recursive: true,
   });
+  const cursorAcpRoot = path.resolve(desktopAppRoot, '..', 'cursor-acp');
+  await run(process.execPath, [
+    tscEntrypoint,
+    '-p',
+    path.join(cursorAcpRoot, 'tsconfig.json'),
+  ]);
+  await fs.cp(
+    path.join(cursorAcpRoot, 'dist'),
+    path.join(distDir, 'worker', 'vendor', 'cursor-acp'),
+    { recursive: true },
+  );
   await normalizeReadablePermissions(distDir);
   if (process.platform === 'darwin') {
     for (const helper of nativeHelperBuilds) {

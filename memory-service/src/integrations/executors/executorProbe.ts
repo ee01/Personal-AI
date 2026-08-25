@@ -5,14 +5,17 @@
 
 import {
   AcpStdioClient,
-  defaultCodexAcpCommand,
+  acpCommandForType,
   type AcpSpawnFn,
 } from '../acp/AcpStdioClient.js';
 import {
   OpenClawGatewayClient,
   type GatewayWebSocketConstructor,
 } from '../openclaw/OpenClawGatewayClient.js';
-import type { AgentExecutorInstance } from './executorRegistry.js';
+import {
+  isAcpExecutorType,
+  type AgentExecutorInstance,
+} from './executorRegistry.js';
 import { isWorkerStale, WORKER_HEARTBEAT_INTERVAL_SECONDS } from '../workers/workerProtocol.js';
 
 export type ProbeStage = 'dns' | 'connect' | 'auth' | 'ready';
@@ -238,19 +241,13 @@ async function probeAcpLocal(
   startedAt: number,
   now: () => number,
 ): Promise<ExecutorProbeResult> {
-  const cmd =
-    instance.type === 'acp-claude-code'
-      ? {
-          command: process.env.ACP_CLAUDE_COMMAND || 'npx',
-          args: process.env.ACP_CLAUDE_ARGS
-            ? process.env.ACP_CLAUDE_ARGS.split(/\s+/).filter(Boolean)
-            : ['-y', '@agentclientprotocol/claude-code-acp'],
-        }
-      : defaultCodexAcpCommand();
+  const cmd = acpCommandForType(instance.type);
   const missingHint =
     instance.type === 'acp-claude-code'
       ? '请安装 Claude Code ACP（npx @agentclientprotocol/claude-code-acp），并确认 node 在 PATH 中。'
-      : '请安装 Codex ACP（npx @agentclientprotocol/codex-acp），并确认 node 在 PATH 中。';
+      : instance.type === 'acp-cursor'
+        ? '请安装 Cursor CLI（cursor-agent / agent），在本机执行 cursor-agent login 或设置 CURSOR_API_KEY，并编译 cursor-acp。'
+        : '请安装 Codex ACP（npx @agentclientprotocol/codex-acp），并确认 node 在 PATH 中。';
 
   const client = new AcpStdioClient({
     command: cmd.command,
@@ -282,7 +279,10 @@ async function probeAcpLocal(
         ok: false,
         stage: 'auth',
         detail: `ACP 鉴权失败：${message}`,
-        nextAction: '在本机完成 Codex / Claude Code 登录后再测。',
+        nextAction:
+          instance.type === 'acp-cursor'
+            ? '在本机执行 cursor-agent login，或设置 CURSOR_API_KEY 后再测。'
+            : '在本机完成 Codex / Claude Code 登录后再测。',
       });
     }
     return finish(startedAt, now(), {
@@ -384,7 +384,7 @@ export async function probeExecutor(
   if (instance.type === 'openclaw-gateway') {
     return probeOpenClawGateway(instance, deps, startedAt, now);
   }
-  if (instance.type === 'acp-codex' || instance.type === 'acp-claude-code') {
+  if (isAcpExecutorType(instance.type)) {
     if (instance.runtime === 'remote') {
       return probeAcpRemote(instance, deps, startedAt, now, options.deep === true);
     }

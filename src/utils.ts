@@ -118,7 +118,8 @@ export interface EnvConfigType {
       | 'openclaw-responses'
       | 'openclaw-gateway'
       | 'acp-codex'
-      | 'acp-claude-code';
+      | 'acp-claude-code'
+      | 'acp-cursor';
     baseUrl?: string;
     apiKey?: string;
     cwd?: string;

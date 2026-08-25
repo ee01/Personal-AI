@@ -19,7 +19,7 @@ import {
 import type { AgentExecutorInstance } from './executorRegistry.js';
 import {
   AcpStdioClient,
-  defaultCodexAcpCommand,
+  acpCommandForType,
   type AcpMcpServerConfig,
   type AcpSpawnFn,
 } from '../acp/AcpStdioClient.js';
@@ -139,15 +139,7 @@ export class AcpExecutor implements AgentExecutor {
         ? Math.max(1000, Math.floor(request.timeoutMs))
         : this.options.defaultTimeoutMs ?? 600_000;
 
-    const cmd =
-      this.instance.type === 'acp-claude-code'
-        ? {
-            command: process.env.ACP_CLAUDE_COMMAND || 'npx',
-            args: process.env.ACP_CLAUDE_ARGS
-              ? process.env.ACP_CLAUDE_ARGS.split(/\s+/).filter(Boolean)
-              : ['-y', '@agentclientprotocol/claude-code-acp'],
-          }
-        : defaultCodexAcpCommand();
+    const cmd = acpCommandForType(this.instance.type);
 
     const client = new AcpStdioClient({
       command: cmd.command,

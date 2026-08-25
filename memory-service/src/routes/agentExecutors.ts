@@ -71,6 +71,7 @@ export async function agentExecutorRoutes(app: FastifyInstance): Promise<void> {
       new ActionReadinessService(db, userDataManager, userId).recordExecutorProbe(
         instance.id,
         { ...result },
+        { executorType: instance.type },
       );
     } catch {
       /* probe must still return even if readiness write fails */

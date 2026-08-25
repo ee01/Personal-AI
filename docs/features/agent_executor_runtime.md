@@ -1,6 +1,6 @@
 # Agent Executor Runtime
 
-*最后更新: 2026-08-20*
+*最后更新: 2026-08-24*
 
 Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契约、记忆工具、对外被调用」拆成稳定分层。Sheet / Jira 只负责计划与触发；执行账本在 memory-service。
 
@@ -53,7 +53,7 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 - `client.id=gateway-client`、`client.mode=backend`（`mode` ≠ `role`；`role` 仍为 `operator`）
 - 等待 `connect.challenge` 后用本地 Ed25519 设备身份签名 v3 payload（`data/openclaw-gateway-device.json`）
 - 远程首次连接可能需在 OpenClaw 侧批准 pairing（`openclaw devices list` / approve）
-| `acp-codex` / `acp-claude-code` | `AcpExecutor` | stdio 驱动官方 ACP adapter；注入 Personal AI MCP |
+| `acp-codex` / `acp-claude-code` / `acp-cursor` | `AcpExecutor` | stdio 驱动官方 ACP adapter（Cursor 走仓库内 `cursor-acp` shim）；注入 Personal AI MCP |
 
 共享契约：`agentResultContract.ts` — success 必须带可验证 artifact；`observedFields` 接受 **array 或 object**。
 
@@ -82,6 +82,18 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 - **local**：`session/new` 注入 Streamable HTTP + stdio 两份 personal-memory MCP（按需检索，不复制记忆库）
 - **remote**：由 Worker 在用户机器上 spawn ACP；只注入 HTTP MCP（用户机器要能访问 Memory Service 公网/内网地址）
 - `cwd` 来自执行器实例配置（local）或 Desktop/Worker 本机设置（remote）；`sessionId` 写入结果 payload 便于续聊
+
+## ACP Cursor（cursor-agent）
+
+- 类型：`acp-cursor`。Options 下拉里显示「Cursor（cursor-agent）」，运行位置仍是 `local` / `remote`（Worker 通道），**没有**独立的第五种执行器。
+- 适配器：仓库内 `cursor-acp/` 是薄 ACP stdio shim。Memory Service / Worker 默认 `node cursor-acp/dist/index.js`（可用 `ACP_CURSOR_COMMAND` 覆盖）。一期不上 npm。
+- 底层 CLI：宿主机 `cursor-agent`（别名 `agent`）。鉴权是 `cursor-agent login` 或 `CURSOR_API_KEY`，凭据不经过 Memory Service。
+- Headless 旗标：`-p --output-format stream-json --trust --approve-mcps --workspace <cwd>`；只读任务加 `--mode ask`；续聊 `--resume <chatId>`。默认不加 `--force`。
+- 会话：ACP `sessionId` 与 Cursor chat id 映射保存在进程内和 tmp 目录，shim 重启后仍可 resume。
+- MCP：ACP `session/new` 里的 **HTTP** MCP 合并进项目 `.cursor/mcp.json`，名字加 `personal-ai-` 前缀；已有同名条目不覆盖并警告；任务结束（prompt 返回 / 进程退出）恢复原文件。stdio MCP 不写入。
+- Probe：local 会 spawn shim 并 `initialize`；`cursor-agent` 未安装 → `connect`；未登录 → `auth`。remote 仍只看 Worker 心跳 / echo。
+- Desktop：设置页可覆盖 Cursor ACP 命令和 `cursor-agent` 路径；Electron 拉起 Worker 时会把 `~/.local/bin` 补进 PATH，避免 GUI 找不到 CLI。
+- **不做**：Cursor Cloud / Background Agents（P3）；独立 `CursorCliExecutor`。
 
 ## A2A（Block G）
 
@@ -129,7 +141,7 @@ curl -sS 'http://memory.xmnup.com/api/v1/context-pack?scope=identity_preferences
 
 用户在 Options「Agent 执行器」里登记 OpenClaw / ACP。ACP 多一个**运行位置**：
 
-1. **local**：任务在 Memory Service 主机上 `spawn` `codex-acp` / Claude ACP（自托管同机用这档）。
+1. **local**：任务在 Memory Service 主机上 `spawn` `codex-acp` / Claude ACP / Cursor ACP shim（自托管同机用这档）。
 2. **remote**：任务不在服务端跑，只写入队列态 `awaiting_claim`，等已配对的 Worker 出站领取。Worker 是通道，不是第五种执行器类型；一台 Worker 可以绑多个 ACP 实例。
 
 三种 Worker 宿主走同一协议（pair / heartbeat / claim / report，`protocolVersion=1`）：

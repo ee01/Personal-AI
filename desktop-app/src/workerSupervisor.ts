@@ -1,6 +1,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +21,8 @@ export type WorkerLocalSettings = {
   cwd?: string;
   acpCodexCommand?: string;
   acpClaudeCommand?: string;
+  acpCursorCommand?: string;
+  cursorAgentCommand?: string;
 };
 
 export class WorkerSupervisor {
@@ -202,10 +205,17 @@ export class WorkerSupervisor {
       '--host-kind',
       'desktop',
     ];
+    const extraPath = [
+      path.join(os.homedir(), '.local', 'bin'),
+      '/usr/local/bin',
+      '/opt/homebrew/bin',
+      process.env.PATH || '',
+    ].join(path.delimiter);
     const child = fork(entry, args, {
       stdio: 'pipe',
       env: {
         ...process.env,
+        PATH: extraPath,
         WORKER_HOST_KIND: 'desktop',
       },
     });

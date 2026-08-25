@@ -169,6 +169,32 @@ describe('executorProbe', () => {
     expect(result.stage).toBe('ready');
   });
 
+  it('acp-cursor local initialize handshake is ready', async () => {
+    const result = await probeExecutor(
+      {
+        id: 'cursor',
+        label: 'Cursor',
+        type: 'acp-cursor',
+        runtime: 'local',
+        cwd: '/tmp',
+        enabled: true,
+      },
+      {},
+      {
+        spawnFn: () =>
+          createFakeAcpChild({
+            onRequest: (method, _params, respond) => {
+              if (method === 'initialize') {
+                respond({ protocolVersion: 1 });
+              }
+            },
+          }),
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.stage).toBe('ready');
+  });
+
   it('acp remote without worker tells the user to pair', async () => {
     const result = await probeExecutor({
       id: 'codex-remote',

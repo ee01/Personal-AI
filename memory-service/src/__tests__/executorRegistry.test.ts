@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPersistedLegacyOpenClawImport,
   findEnabledExecutor,
+  isAcpExecutorType,
   publicExecutorOptions,
   resolveAgentExecutors,
   resolveAgentTaskExecutorId,
@@ -186,6 +187,27 @@ describe('executorRegistry', () => {
       id: 'codex-remote',
       runtime: 'remote',
       workerId: 'worker-1',
+    });
+  });
+
+  it('treats acp-cursor as ACP with local runtime by default', () => {
+    const executors = resolveAgentExecutors({
+      openClawEnabled: false,
+      openClawBaseUrl: '',
+      openClawApiKey: '',
+      agentExecutors: [
+        {
+          id: 'cursor',
+          label: 'Cursor',
+          type: 'acp-cursor',
+          enabled: true,
+        },
+      ],
+    });
+    expect(isAcpExecutorType('acp-cursor')).toBe(true);
+    expect(executors[0]).toMatchObject({
+      type: 'acp-cursor',
+      runtime: 'local',
     });
   });
 

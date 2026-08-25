@@ -13,7 +13,14 @@ export type AgentExecutorType =
   | 'openclaw-responses'
   | 'openclaw-gateway'
   | 'acp-codex'
-  | 'acp-claude-code';
+  | 'acp-claude-code'
+  | 'acp-cursor';
+
+export function isAcpExecutorType(
+  type: unknown,
+): type is Extract<AgentExecutorType, `acp-${string}`> {
+  return type === 'acp-codex' || type === 'acp-claude-code' || type === 'acp-cursor';
+}
 
 export type ExecutorDefaultUse = 'agent_task' | 'reflection_research';
 
@@ -58,7 +65,8 @@ function normalizeExecutorType(value: unknown): AgentExecutorType | null {
     value === 'openclaw-responses' ||
     value === 'openclaw-gateway' ||
     value === 'acp-codex' ||
-    value === 'acp-claude-code'
+    value === 'acp-claude-code' ||
+    value === 'acp-cursor'
   ) {
     return value;
   }
@@ -78,7 +86,7 @@ export function normalizeAgentExecutorInstance(
   if (!id) return null;
   const type = normalizeExecutorType(input.type) ?? 'openclaw-responses';
   const label = nonEmpty(input.label) || id;
-  const isAcp = type === 'acp-codex' || type === 'acp-claude-code';
+  const isAcp = isAcpExecutorType(type);
   const runtime: AgentExecutorRuntime | undefined = isAcp
     ? input.runtime === 'remote'
       ? 'remote'
@@ -306,6 +314,61 @@ export function findEnabledExecutor(
       aliases.has(item.id),
     ) || null
   );
+}
+
+export type DelegationExecutorConfig = Pick<
+  UserRuntimeConfig,
+  | 'openClawEnabled'
+  | 'openClawBaseUrl'
+  | 'openClawApiKey'
+  | 'agentExecutors'
+  | 'executorDefaults'
+>;
+
+export interface DelegationExecutorTarget {
+  actionType: string;
+  sourceKind?: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * Single source of truth for "who runs this delegation". Readiness probes and
+ * real dispatch must resolve the same instance, otherwise a probe can condemn
+ * a runtime that execution never uses.
+ */
+export function resolveExecutorForDelegation(
+  config: DelegationExecutorConfig,
+  target: DelegationExecutorTarget,
+): AgentExecutorInstance | null {
+  const params = target.params ?? {};
+  const metadata =
+    params.metadata &&
+    typeof params.metadata === 'object' &&
+    !Array.isArray(params.metadata)
+      ? (params.metadata as Record<string, unknown>)
+      : {};
+  const requested =
+    nonEmpty(params.executor) ||
+    nonEmpty(metadata.executor) ||
+    nonEmpty(metadata.executorId);
+
+  const defaults = resolveExecutorDefaults(config);
+  // Agent Task v1 callers baked executor=openclaw (type name). Honor the
+  // Options Agent Task default, including retries of already-queued rows.
+  if (target.sourceKind === 'agent_task') {
+    return findEnabledExecutor(config, requested || defaults.agent_task);
+  }
+
+  if (requested) {
+    return findEnabledExecutor(config, requested);
+  }
+
+  // Legacy action type without an explicit executor id.
+  if (target.actionType === 'delegate_openclaw') {
+    return findEnabledExecutor(config, 'openclaw');
+  }
+
+  return findEnabledExecutor(config, defaults.agent_task);
 }
 
 export function sanitizeAgentExecutorsForResponse(

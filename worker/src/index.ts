@@ -89,6 +89,14 @@ async function main(): Promise<void> {
   const settings: LocalExecutorSettings = {
     ...loadedSettings,
     cwd: argValue('--cwd') || process.env.WORKER_CWD || loadedSettings.cwd,
+    acpCursorCommand:
+      argValue('--acp-cursor-command') ||
+      process.env.ACP_CURSOR_COMMAND ||
+      loadedSettings.acpCursorCommand,
+    cursorAgentCommand:
+      argValue('--cursor-agent-command') ||
+      process.env.CURSOR_AGENT_COMMAND ||
+      loadedSettings.cursorAgentCommand,
   };
   let currentTaskCount = 0;
   let running = true;

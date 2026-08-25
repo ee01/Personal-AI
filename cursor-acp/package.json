@@ -1,14 +1,14 @@
 {
-  "name": "@personal-ai/worker",
-  "version": "1.0.0",
+  "name": "@personal-ai/cursor-acp",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Headless / Desktop-embedded Personal AI agent worker",
+  "description": "ACP stdio shim that drives cursor-agent for Personal AI executors",
   "bin": {
-    "personal-ai-worker": "./dist/index.js"
+    "cursor-agent-acp": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc && npm --prefix ../cursor-acp run build && node ../cursor-acp/scripts/install-vendor.mjs dist/vendor/cursor-acp",
+    "build": "tsc",
     "start": "node dist/index.js",
     "test": "tsx --test src/**/*.test.ts"
   },

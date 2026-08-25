@@ -8,7 +8,8 @@ export type AgentExecutorTypeOption =
   | 'openclaw-responses'
   | 'openclaw-gateway'
   | 'acp-codex'
-  | 'acp-claude-code';
+  | 'acp-claude-code'
+  | 'acp-cursor';
 
 export type AgentExecutorDraft = {
   id: string;
@@ -71,7 +72,6 @@ const DESKTOP_RELEASES_URL =
   'https://github.com/ee01/Personal-AI/releases?q=desktop-v';
 const PLATFORM_SCHEDULE_DOC =
   'https://github.com/ee01/Personal-AI/blob/develop/docs/features/agent_executor_runtime.md';
-const PROBE_TTL_MS = 5 * 60 * 1000;
 
 function newId(): string {
   return `exec_${Math.random().toString(36).slice(2, 8)}`;
@@ -82,7 +82,7 @@ function isOpenClawType(type: AgentExecutorTypeOption): boolean {
 }
 
 function isAcpType(type: AgentExecutorTypeOption): boolean {
-  return type === 'acp-codex' || type === 'acp-claude-code';
+  return type === 'acp-codex' || type === 'acp-claude-code' || type === 'acp-cursor';
 }
 
 function isPrivateOrLoopbackUrl(raw: string | undefined): boolean {
@@ -225,7 +225,7 @@ export function AgentExecutorsSettings({
         {
           id,
           label: '新执行器',
-          type: 'openclaw-responses',
+          type: 'openclaw-gateway',
           baseUrl: openclaw?.baseUrl || '',
           enabled: true,
           apiKey: '',
@@ -241,10 +241,6 @@ export function AgentExecutorsSettings({
   }
 
   async function probe(id: string, deep = false) {
-    const cached = probes[id];
-    if (cached && !deep && Date.now() - cached.at < PROBE_TTL_MS) {
-      return;
-    }
     setProbingId(id);
     setBanner('');
     try {
@@ -377,7 +373,7 @@ export function AgentExecutorsSettings({
         </div>
       ) : (
         listed.map((item) => {
-          const probe = probes[item.id];
+          const probeChip = probes[item.id];
           const runtime = item.runtime === 'remote' ? 'remote' : 'local';
           return (
             <div
@@ -427,6 +423,7 @@ export function AgentExecutorsSettings({
                     <option value="openclaw-responses">OpenClaw（HTTP）</option>
                     <option value="acp-codex">Codex ACP</option>
                     <option value="acp-claude-code">Claude Code ACP</option>
+                    <option value="acp-cursor">Cursor（cursor-agent）</option>
                   </select>
                 </label>
               </div>
@@ -646,7 +643,7 @@ export function AgentExecutorsSettings({
                     alignItems: 'center',
                     gap: 6,
                     fontSize: 12,
-                    color: chipColor(probe),
+                    color: chipColor(probeChip),
                   }}
                 >
                   <span
@@ -654,11 +651,11 @@ export function AgentExecutorsSettings({
                       width: 8,
                       height: 8,
                       borderRadius: 99,
-                      background: chipColor(probe),
+                      background: chipColor(probeChip),
                     }}
                   />
-                  {probe
-                    ? `${probe.ok ? '就绪' : '失败'} · ${probe.stage}${probe.cached ? ' · 缓存' : ''}`
+                  {probeChip
+                    ? `${probeChip.ok ? '就绪' : '失败'} · ${probeChip.stage}${probeChip.cached ? ' · 缓存' : ''}`
                     : '未测试'}
                 </span>
                 <button
@@ -669,10 +666,10 @@ export function AgentExecutorsSettings({
                   删除
                 </button>
               </div>
-              {probe?.detail ? (
+              {probeChip?.detail ? (
                 <div style={{ color: '#4b5563', fontSize: 12, marginTop: 6 }}>
-                  {probe.detail}
-                  {probe.nextAction ? ` ${probe.nextAction}` : ''}
+                  {probeChip.detail}
+                  {probeChip.nextAction ? ` ${probeChip.nextAction}` : ''}
                 </div>
               ) : null}
             </div>

@@ -1,10 +1,13 @@
 import { WorkerAcpClient, type AcpSpawnFn } from './acpClient.js';
+import { defaultCursorAcpCommand } from './cursorCommand.js';
 import type { ClaimedTask } from './protocol.js';
 
 export interface LocalExecutorSettings {
   cwd?: string;
   acpCodexCommand?: string;
   acpClaudeCommand?: string;
+  acpCursorCommand?: string;
+  cursorAgentCommand?: string;
   mcpUrl?: string;
   mcpBearer?: string;
   userId?: string;
@@ -93,16 +96,21 @@ export async function runClaimedTask(
             ? process.env.ACP_CLAUDE_ARGS.split(/\s+/).filter(Boolean)
             : ['-y', '@agentclientprotocol/claude-code-acp'],
         }
-      : {
+      : type === 'acp-cursor'
+        ? defaultCursorAcpCommand()
+        : {
           command: process.env.ACP_CODEX_COMMAND || 'npx',
           args: process.env.ACP_CODEX_ARGS
             ? process.env.ACP_CODEX_ARGS.split(/\s+/).filter(Boolean)
             : ['-y', '@agentclientprotocol/codex-acp'],
         };
-  const cmd = splitCommand(
-    type === 'acp-claude-code' ? settings.acpClaudeCommand : settings.acpCodexCommand,
-    fallback,
-  );
+  const override =
+    type === 'acp-claude-code'
+      ? settings.acpClaudeCommand
+      : type === 'acp-cursor'
+        ? settings.acpCursorCommand
+        : settings.acpCodexCommand;
+  const cmd = splitCommand(override, fallback);
   const mcpUrl = settings.mcpUrl || task.memory?.mcpUrl;
   const mcpBearer = settings.mcpBearer;
   const userId = settings.userId || task.memory?.userId;
@@ -128,6 +136,9 @@ export async function runClaimedTask(
     env: {
       INITIAL_AGENT_MODE: task.request?.mode === 'write' ? 'agent' : 'read-only',
       NO_BROWSER: '1',
+      ...(settings.cursorAgentCommand
+        ? { CURSOR_AGENT_COMMAND: settings.cursorAgentCommand }
+        : {}),
     },
     spawnFn: settings.spawnFn,
     requestTimeoutMs: timeoutMs,
