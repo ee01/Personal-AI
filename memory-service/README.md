@@ -142,7 +142,13 @@ Key environment variables (see `.env.example` for all options):
 | `HOST` | `0.0.0.0` | Bind address |
 | `DATA_DIR` | `./data` | Directory for SQLite DB and markdown files |
 | `LOG_LEVEL` | `info` | Pino log level |
-| `LLM_PROVIDER` | `openai` | LLM backend: `openai`, `groq`, `ollama`, `dify` |
+| `LLM_PROVIDER` | `openai` | LLM backend: `openai`, `claude`, `groq`, `ollama`, `dify` |
+| `CLAUDE_API_KEY` | -- | Anthropic API key (`ANTHROPIC_API_KEY` also works). No base URL needed |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model when `LLM_PROVIDER=claude` or a `claude/...` fallback |
+| `LLM_FALLBACKS` | -- | Ordered fallback chain, e.g. `groq/llama-3.3-70b-versatile,ollama/qwen3:14b` |
+| `LLM_FALLBACK_COOLDOWN_MS` | `60000` | Circuit-breaker cooldown after consecutive failures |
+| `LLM_FALLBACK_FAILURE_THRESHOLD` | `3` | Consecutive failures before a target is cooled down |
+| `LLM_FALLBACK_ON_JSON_PARSE` | `false` | Also fail over when `generateJSON` cannot parse the response |
 | `OPENAI_API_KEY` | -- | OpenAI API key |
 | `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model to use |
 | `EMBEDDING_PROVIDER` | `local` | Embedding backend: `local` (Xenova/transformers) |

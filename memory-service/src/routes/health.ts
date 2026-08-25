@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 
 import type { HealthResponse } from '../types/index.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
+import { getLLMClient } from '../llm/LLMClient.js';
 
 const require = createRequire(import.meta.url);
 
@@ -81,6 +82,7 @@ export async function healthRoutes(
         loaded: embeddingLoaded,
         model: embeddingModel,
       },
+      llm: getLLMClient().getTargetHealthSnapshot(),
     };
 
     return reply.status(200).send(body);

@@ -18,6 +18,8 @@ describe('LLMClient', () => {
       openaiApiKey: 'test-key',
       openaiApiBaseUrl: '',
       openaiModel: 'gpt-4o-mini',
+      claudeApiKey: '',
+      claudeModel: 'claude-sonnet-4-6',
       groqApiKey: '',
       difyApiKey: '',
       difyApiUrl: '',
@@ -25,6 +27,10 @@ describe('LLMClient', () => {
       ollamaBaseUrl: 'http://localhost:11434',
       ollamaModel: 'llama3',
       llmRequestTimeoutMs: 30000,
+      llmFallbacks: [],
+      llmFallbackCooldownMs: 60_000,
+      llmFallbackFailureThreshold: 3,
+      llmFallbackOnJsonParse: false,
       embeddingProvider: 'local',
       embeddingModel: 'Xenova/all-MiniLM-L6-v2',
       embeddingDimension: 384,
@@ -238,5 +244,37 @@ describe('LLMClient', () => {
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.temperature).toBe(0.1);
+  });
+
+  it('calls Anthropic chat completions without a base URL for the claude provider', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    });
+
+    const client = new LLMClient(
+      makeConfig({
+        llmProvider: 'claude',
+        openaiApiKey: '',
+        openaiApiBaseUrl: '',
+        claudeApiKey: 'sk-ant-test',
+        claudeModel: 'claude-sonnet-4-6',
+      }),
+    );
+
+    await client.generate('hello');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://api.anthropic.com/v1/chat/completions',
+    );
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<
+      string,
+      string
+    >;
+    expect(headers['anthropic-version']).toBe('2023-06-01');
+    expect(headers.Authorization).toBe('Bearer sk-ant-test');
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe('claude-sonnet-4-6');
   });
 });

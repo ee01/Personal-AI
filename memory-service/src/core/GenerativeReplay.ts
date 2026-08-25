@@ -285,6 +285,8 @@ Return JSON: {
     const dreamData = await llm.generateJSON<DreamLLMResponse>(prompt, {
       maxTokens: 2000,
       temperature: 0.7,
+      // Long-form narrative generation regularly exceeds the 60s default.
+      timeoutMs: 120_000,
     });
 
     // 2e. Write narrative to dreams/{topic-slug}-{date}.md

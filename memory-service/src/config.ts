@@ -2,6 +2,14 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  DEFAULT_CLAUDE_MODEL,
+  parseLLMFallbacks,
+  primaryTargetSpec,
+  type LLMTargetCredentialContext,
+  type LLMTargetSpec,
+} from './llm/LLMTarget.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
@@ -19,6 +27,8 @@ export interface Config {
   openaiApiKey: string;
   openaiApiBaseUrl: string;
   openaiModel: string;
+  claudeApiKey: string;
+  claudeModel: string;
   groqApiKey: string;
   difyApiKey: string;
   difyApiUrl: string;
@@ -26,6 +36,11 @@ export interface Config {
   ollamaBaseUrl: string;
   ollamaModel: string;
   llmRequestTimeoutMs: number;
+  /** Ordered fallback targets after the primary provider. Empty = no fallback. */
+  llmFallbacks: LLMTargetSpec[];
+  llmFallbackCooldownMs: number;
+  llmFallbackFailureThreshold: number;
+  llmFallbackOnJsonParse: boolean;
 
   // Embedding
   embeddingProvider: string;
@@ -36,11 +51,35 @@ export interface Config {
   apiKey: string;
   /** Issue-only key for first-party clients (extension). Cannot read/write memory. */
   bootstrapApiKey: string;
+  /**
+   * Comma-separated Google OAuth client ids allowed as tokeninfo `aud`.
+   * Empty disables Google self-serve verification for already-claimed users.
+   */
+  googleOAuthClientIds: string;
+  /**
+   * Comma-separated email domains allowed for Google verification.
+   * Empty skips the domain check (still requires email_verified + aud).
+   */
+  googleAllowedEmailDomains: string;
+  /** Shown to clients when device-key issuance needs admin help. */
+  adminContactEmail: string;
+  /**
+   * Token for the device-key approval admin page. Falls back to
+   * ANALYTICS_ADMIN_TOKEN when empty.
+   */
+  adminApiToken: string;
 
   // Usage analytics
   analyticsAdminToken: string;
   /** HMAC secret for per-user dashboard links. Falls back to admin token. */
   analyticsTokenSecret: string;
+  /** Journal/sync for analytics/usage.db; defaults to the service-wide setting. */
+  analyticsSqliteJournalMode: SqliteJournalMode;
+  analyticsSqliteSynchronous: SqliteSynchronousMode;
+  /** Raw usage_events older than this are pruned. 0 disables pruning. */
+  analyticsRetentionDays: number;
+  /** Raw api_call_events older than this are pruned. 0 disables pruning. */
+  analyticsApiRetentionDays: number;
 
   // Bot
   botApiBaseUrl: string;
@@ -123,7 +162,8 @@ export interface Config {
     | 'openclaw-gateway'
     | 'openclaw-responses'
     | 'acp-codex'
-    | 'acp-claude-code';
+    | 'acp-claude-code'
+    | 'acp-cursor';
   openClawExecutorLabel: string;
 
   // Outreach
@@ -181,6 +221,44 @@ function parseSqliteSynchronousMode(
   return 'NORMAL';
 }
 
+function parsePositiveInt(
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+): number {
+  const parsed = parseInt(raw || String(fallback), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, parsed);
+}
+
+/** Retention for raw analytics events; `0` keeps everything. */
+function parseRetentionDays(raw: string | undefined, fallback: number): number {
+  const value = String(raw ?? '').trim();
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+}
+
+function buildLlmCredentialContext(): LLMTargetCredentialContext {
+  return {
+    openaiApiKey: process.env.OPENAI_API_KEY || '',
+    openaiApiBaseUrl: process.env.OPENAI_API_BASE_URL || '',
+    openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    claudeApiKey:
+      process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || '',
+    claudeModel: process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL,
+    groqApiKey: process.env.GROQ_API_KEY || '',
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+    ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
+    difyApiKey: process.env.DIFY_API_KEY || '',
+    difyApiUrl: process.env.DIFY_API_URL || process.env.DIFY_API_BASE_URL || '',
+    difyAppMode: (process.env.DIFY_APP_MODE === 'completion'
+      ? 'completion'
+      : 'chat') as 'chat' | 'completion',
+  };
+}
+
 function parseOpenClawExecutorType(
   raw: string | undefined,
 ): Config['openClawExecutorType'] {
@@ -189,7 +267,8 @@ function parseOpenClawExecutorType(
     value === 'openclaw-gateway' ||
     value === 'openclaw-responses' ||
     value === 'acp-codex' ||
-    value === 'acp-claude-code'
+    value === 'acp-claude-code' ||
+    value === 'acp-cursor'
   ) {
     return value;
   }
@@ -245,6 +324,9 @@ export function getConfig(): Readonly<Config> {
     openaiApiKey: process.env.OPENAI_API_KEY || '',
     openaiApiBaseUrl: process.env.OPENAI_API_BASE_URL || '',
     openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    claudeApiKey:
+      process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || '',
+    claudeModel: process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL,
     groqApiKey: process.env.GROQ_API_KEY || '',
     difyApiKey: process.env.DIFY_API_KEY || '',
     difyApiUrl: process.env.DIFY_API_URL || process.env.DIFY_API_BASE_URL || '',
@@ -254,6 +336,25 @@ export function getConfig(): Readonly<Config> {
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
     llmRequestTimeoutMs,
+    llmFallbacks: (() => {
+      const creds = buildLlmCredentialContext();
+      const primary = primaryTargetSpec(
+        process.env.LLM_PROVIDER || 'openai',
+        creds,
+      );
+      return parseLLMFallbacks(process.env.LLM_FALLBACKS, creds, primary);
+    })(),
+    llmFallbackCooldownMs: parsePositiveInt(
+      process.env.LLM_FALLBACK_COOLDOWN_MS,
+      60_000,
+      0,
+    ),
+    llmFallbackFailureThreshold: parsePositiveInt(
+      process.env.LLM_FALLBACK_FAILURE_THRESHOLD,
+      3,
+      1,
+    ),
+    llmFallbackOnJsonParse: process.env.LLM_FALLBACK_ON_JSON_PARSE === 'true',
 
     // Embedding
     embeddingProvider: process.env.EMBEDDING_PROVIDER || 'local',
@@ -263,6 +364,11 @@ export function getConfig(): Readonly<Config> {
     // Auth
     apiKey: process.env.API_KEY || '',
     bootstrapApiKey: process.env.BOOTSTRAP_API_KEY || '',
+    googleOAuthClientIds: process.env.GOOGLE_OAUTH_CLIENT_IDS || '',
+    googleAllowedEmailDomains: process.env.GOOGLE_ALLOWED_EMAIL_DOMAINS || '',
+    adminContactEmail: process.env.ADMIN_CONTACT_EMAIL || '',
+    adminApiToken:
+      process.env.ADMIN_API_TOKEN || process.env.ANALYTICS_ADMIN_TOKEN || '',
 
     // Usage analytics
     analyticsAdminToken: process.env.ANALYTICS_ADMIN_TOKEN || '',
@@ -270,6 +376,24 @@ export function getConfig(): Readonly<Config> {
       process.env.ANALYTICS_TOKEN_SECRET ||
       process.env.ANALYTICS_ADMIN_TOKEN ||
       '',
+    // Telemetry writes are far more frequent than memory writes, so the
+    // analytics DB can trade WAL concurrency for durability on its own.
+    analyticsSqliteJournalMode: parseSqliteJournalMode(
+      process.env.ANALYTICS_SQLITE_JOURNAL_MODE || process.env.SQLITE_JOURNAL_MODE,
+    ),
+    analyticsSqliteSynchronous: parseSqliteSynchronousMode(
+      process.env.ANALYTICS_SQLITE_SYNCHRONOUS || process.env.SQLITE_SYNCHRONOUS,
+    ),
+    analyticsRetentionDays: parseRetentionDays(
+      process.env.ANALYTICS_RETENTION_DAYS,
+      90,
+    ),
+    // api_call_events records every /api/v1 request (~30k rows/day here), so it
+    // keeps a shorter window than token usage; reports never exceed 30 days.
+    analyticsApiRetentionDays: parseRetentionDays(
+      process.env.ANALYTICS_API_RETENTION_DAYS,
+      30,
+    ),
 
     // Bot
     botApiBaseUrl: process.env.BOT_API_BASE_URL || '',

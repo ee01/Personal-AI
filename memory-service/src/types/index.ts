@@ -2513,6 +2513,12 @@ export interface HealthResponse {
     loaded: boolean;
     model: string;
   };
+  llm?: Array<{
+    id: string;
+    healthy: boolean;
+    cooldownUntil: number | null;
+    consecutiveFailures: number;
+  }>;
 }
 
 // ============ Multi-User / Fastify Extensions ============

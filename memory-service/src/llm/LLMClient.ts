@@ -3,10 +3,12 @@
  *
  * Providers:
  *   - openai   : OpenAI Chat Completions API
+ *   - claude   : Anthropic Claude (no base URL; uses api.anthropic.com)
  *   - groq     : Groq (OpenAI-compatible) API
  *   - ollama   : Local Ollama instance
  *   - dify     : Dify chat-messages API
  *
+ * Optional ordered fallback is configured via `LLM_FALLBACKS`.
  * Uses native fetch — no external SDKs required.
  */
 
@@ -20,6 +22,21 @@ import {
   SCENARIO_TEMPERATURE,
   type LLMScenario,
 } from './modelSampling.js';
+import {
+  classifyLLMError,
+  LLMAllTargetsFailedError,
+  shouldRetrySameTarget,
+  type LLMTargetFailure,
+} from './llmErrors.js';
+import {
+  primaryTargetSpec,
+  resolveTarget,
+  type LLMTargetCredentialContext,
+  type ResolvedLLMTarget,
+} from './LLMTarget.js';
+import { TargetHealthTracker } from './TargetHealthTracker.js';
+
+export { LLMAllTargetsFailedError } from './llmErrors.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -63,9 +80,19 @@ const GROQ_BASE_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 export class LLMClient {
   private config: Readonly<Config>;
+  private readonly healthTracker: TargetHealthTracker;
 
   constructor(config: Readonly<Config>) {
     this.config = config;
+    this.healthTracker = new TargetHealthTracker(
+      config.llmFallbackFailureThreshold,
+      config.llmFallbackCooldownMs,
+      config.llmFallbacks.length > 0,
+    );
+  }
+
+  getTargetHealthSnapshot() {
+    return this.healthTracker.snapshot(this.resolveTargetChain());
   }
 
   // ---- Public API ---------------------------------------------------------
@@ -74,40 +101,13 @@ export class LLMClient {
    * Send a prompt to the configured LLM and return the text response.
    */
   async generate(prompt: string, options?: LLMOptions): Promise<LLMResponse> {
-    const provider = this.config.llmProvider;
-
-    const attempt = async (): Promise<LLMResponse> => {
-      switch (provider) {
-        case 'openai':
-          return this.callOpenAICompatible(this.getOpenAIChatCompletionsUrl(), this.config.openaiApiKey, this.config.openaiModel, prompt, options);
-        case 'groq':
-          return this.callOpenAICompatible(GROQ_BASE_URL, this.config.groqApiKey, this.config.openaiModel, prompt, options);
-        case 'ollama':
-          return this.callOllama(prompt, options);
-        case 'dify':
-          return this.callDify(prompt, options);
-        default:
-          throw new Error(`[LLMClient] Unsupported provider: ${provider}`);
-      }
-    };
-
-    try {
-      const response = await this.withRetry(attempt, options);
-      this.recordBackendUsage(response, prompt);
-      return response;
-    } catch (error) {
-      this.recordBackendFailure(error);
-      throw error;
-    }
-  }
-
-  /**
-   * Model name for the currently active provider (used for usage attribution).
-   */
-  private getActiveModel(): string {
-    return this.config.llmProvider === 'ollama'
-      ? this.config.ollamaModel
-      : this.config.openaiModel;
+    return this.runWithFallback(prompt, options, (target) =>
+      this.withRetryForTarget(
+        target,
+        () => this.callTarget(target, prompt, options),
+        options,
+      ),
+    );
   }
 
   /**
@@ -128,7 +128,11 @@ export class LLMClient {
    * When the provider omits usage, fall back to a content-length estimate so
    * streaming / incomplete-usage calls still appear in the report.
    */
-  private recordBackendUsage(response: LLMResponse, prompt?: string): void {
+  private recordBackendUsage(
+    response: LLMResponse,
+    prompt: string | undefined,
+    target: ResolvedLLMTarget,
+  ): void {
     let promptTokens = response.usage?.promptTokens ?? 0;
     let completionTokens = response.usage?.completionTokens ?? 0;
     if (!response.usage || (promptTokens === 0 && completionTokens === 0)) {
@@ -138,30 +142,19 @@ export class LLMClient {
     }
     recordLlmUsage({
       side: 'backend',
-      model: this.getActiveModel(),
+      model: target.model,
+      provider: target.provider,
       promptTokens,
       completionTokens,
     });
   }
 
-  private recordBackendFailure(error: unknown): void {
-    const message = String(
-      error instanceof Error ? error.message : error || '',
-    ).toLowerCase();
-    const errorKind = /\b(?:401|403)\b/.test(message)
-      ? 'auth'
-      : /\b429\b|rate limit/.test(message)
-        ? 'rate_limit'
-        : /timeout|aborted/.test(message)
-          ? 'timeout'
-          : /fetch failed|failed to fetch|network/.test(message)
-            ? 'network'
-            : /\b5\d\d\b/.test(message)
-              ? 'server'
-              : 'unknown';
+  private recordBackendFailure(error: unknown, target: ResolvedLLMTarget): void {
+    const errorKind = classifyLLMError(error);
     recordLlmUsage({
       side: 'backend',
-      model: this.getActiveModel(),
+      model: target.model,
+      provider: target.provider,
       promptTokens: 0,
       completionTokens: 0,
       status: 'error',
@@ -178,42 +171,38 @@ export class LLMClient {
     options: LLMOptions | undefined,
     onDelta: LLMStreamDeltaHandler,
   ): Promise<LLMResponse> {
-    const provider = this.config.llmProvider;
+    const targets = this.getOrderedTargets();
+    const failures: LLMTargetFailure[] = [];
+    const hasFallback = this.config.llmFallbacks.length > 0;
 
-    let response: LLMResponse;
-    switch (provider) {
-      case 'openai':
-        response = await this.callOpenAICompatibleStream(
-          this.getOpenAIChatCompletionsUrl(),
-          this.config.openaiApiKey,
-          this.config.openaiModel,
+    for (const target of targets) {
+      let emitted = false;
+      const wrappedOnDelta: LLMStreamDeltaHandler = async (delta) => {
+        if (delta) emitted = true;
+        await onDelta(delta);
+      };
+      try {
+        const response = await this.callTargetStream(
+          target,
           prompt,
           options,
-          onDelta,
+          wrappedOnDelta,
         );
-        break;
-      case 'groq':
-        response = await this.callOpenAICompatibleStream(
-          GROQ_BASE_URL,
-          this.config.groqApiKey,
-          this.config.openaiModel,
-          prompt,
-          options,
-          onDelta,
-        );
-        break;
-      case 'ollama':
-        response = await this.callOllamaStream(prompt, options, onDelta);
-        break;
-      case 'dify':
-        response = await this.callDifyStream(prompt, options, onDelta);
-        break;
-      default:
-        response = await this.replayBlockingResponse(prompt, options, onDelta);
-        break;
+        this.recordBackendUsage(response, prompt, target);
+        this.healthTracker.recordSuccess(target.id);
+        this.logFailover(failures, target);
+        return response;
+      } catch (error) {
+        this.recordBackendFailure(error, target);
+        if (emitted) throw error;
+        const kind = classifyLLMError(error);
+        this.healthTracker.recordFailure(target.id, kind);
+        failures.push(this.toFailure(target, error, kind));
+        if (!hasFallback) throw error;
+      }
     }
-    this.recordBackendUsage(response, prompt);
-    return response;
+
+    throw new LLMAllTargetsFailedError(failures);
   }
 
   /**
@@ -221,8 +210,175 @@ export class LLMClient {
    * Handles responses wrapped in markdown code blocks (```json ... ```).
    */
   async generateJSON<T>(prompt: string, options?: LLMOptions): Promise<T> {
-    const response = await this.generate(prompt, options);
-    return this.parseJSON<T>(response.content);
+    if (!this.config.llmFallbackOnJsonParse) {
+      const response = await this.generate(prompt, options);
+      return this.parseJSON<T>(response.content);
+    }
+
+    const targets = this.getOrderedTargets();
+    const failures: LLMTargetFailure[] = [];
+
+    for (const target of targets) {
+      try {
+        const response = await this.withRetryForTarget(
+          target,
+          () => this.callTarget(target, prompt, options),
+          options,
+        );
+        try {
+          const parsed = this.parseJSON<T>(response.content);
+          this.recordBackendUsage(response, prompt, target);
+          this.healthTracker.recordSuccess(target.id);
+          this.logFailover(failures, target);
+          return parsed;
+        } catch (parseError) {
+          this.recordBackendFailure(parseError, target);
+          this.healthTracker.recordFailure(target.id, 'unknown');
+          failures.push(this.toFailure(target, parseError, 'unknown'));
+        }
+      } catch (error) {
+        this.recordBackendFailure(error, target);
+        const kind = classifyLLMError(error);
+        this.healthTracker.recordFailure(target.id, kind);
+        failures.push(this.toFailure(target, error, kind));
+      }
+    }
+
+    throw new LLMAllTargetsFailedError(failures);
+  }
+
+  private async runWithFallback(
+    prompt: string,
+    options: LLMOptions | undefined,
+    invoke: (target: ResolvedLLMTarget) => Promise<LLMResponse>,
+  ): Promise<LLMResponse> {
+    const targets = this.getOrderedTargets();
+    const failures: LLMTargetFailure[] = [];
+    const hasFallback = this.config.llmFallbacks.length > 0;
+
+    for (const target of targets) {
+      try {
+        const response = await invoke(target);
+        this.recordBackendUsage(response, prompt, target);
+        this.healthTracker.recordSuccess(target.id);
+        this.logFailover(failures, target);
+        return response;
+      } catch (error) {
+        this.recordBackendFailure(error, target);
+        const kind = classifyLLMError(error);
+        this.healthTracker.recordFailure(target.id, kind);
+        failures.push(this.toFailure(target, error, kind));
+        if (!hasFallback) throw error;
+      }
+    }
+
+    throw new LLMAllTargetsFailedError(failures);
+  }
+
+  private credentialContext(): LLMTargetCredentialContext {
+    return {
+      openaiApiKey: this.config.openaiApiKey,
+      openaiApiBaseUrl: this.config.openaiApiBaseUrl,
+      openaiModel: this.config.openaiModel,
+      claudeApiKey: this.config.claudeApiKey,
+      claudeModel: this.config.claudeModel,
+      groqApiKey: this.config.groqApiKey,
+      ollamaBaseUrl: this.config.ollamaBaseUrl,
+      ollamaModel: this.config.ollamaModel,
+      difyApiKey: this.config.difyApiKey,
+      difyApiUrl: this.config.difyApiUrl,
+      difyAppMode: this.config.difyAppMode,
+    };
+  }
+
+  private resolveTargetChain(): ResolvedLLMTarget[] {
+    const ctx = this.credentialContext();
+    const primarySpec = primaryTargetSpec(this.config.llmProvider, ctx);
+    const openaiUrl = this.getOpenAIChatCompletionsUrl();
+    const primary = resolveTarget(primarySpec, ctx, openaiUrl, GROQ_BASE_URL);
+    const fallbacks = this.config.llmFallbacks.map((spec) =>
+      resolveTarget(spec, ctx, openaiUrl, GROQ_BASE_URL),
+    );
+    return [primary, ...fallbacks];
+  }
+
+  private getOrderedTargets(): ResolvedLLMTarget[] {
+    return this.healthTracker.orderTargets(this.resolveTargetChain());
+  }
+
+  private async callTarget(
+    target: ResolvedLLMTarget,
+    prompt: string,
+    options?: LLMOptions,
+  ): Promise<LLMResponse> {
+    switch (target.provider) {
+      case 'openai':
+      case 'claude':
+      case 'groq':
+        return this.callOpenAICompatible(
+          target.baseUrl,
+          target.apiKey,
+          target.model,
+          prompt,
+          options,
+        );
+      case 'ollama':
+        return this.callOllama(prompt, options, target);
+      case 'dify':
+        return this.callDify(prompt, options, target);
+      default:
+        throw new Error(`[LLMClient] Unsupported provider: ${target.provider}`);
+    }
+  }
+
+  private async callTargetStream(
+    target: ResolvedLLMTarget,
+    prompt: string,
+    options: LLMOptions | undefined,
+    onDelta: LLMStreamDeltaHandler,
+  ): Promise<LLMResponse> {
+    switch (target.provider) {
+      case 'openai':
+      case 'claude':
+      case 'groq':
+        return this.callOpenAICompatibleStream(
+          target.baseUrl,
+          target.apiKey,
+          target.model,
+          prompt,
+          options,
+          onDelta,
+        );
+      case 'ollama':
+        return this.callOllamaStream(prompt, options, onDelta, target);
+      case 'dify':
+        return this.callDifyStream(prompt, options, onDelta, target);
+      default:
+        return this.replayBlockingResponse(prompt, options, onDelta, target);
+    }
+  }
+
+  private toFailure(
+    target: ResolvedLLMTarget,
+    error: unknown,
+    kind: LLMTargetFailure['kind'],
+  ): LLMTargetFailure {
+    return {
+      targetId: target.id,
+      kind,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  private logFailover(
+    failures: LLMTargetFailure[],
+    target: ResolvedLLMTarget,
+  ): void {
+    if (!failures.length) return;
+    const last = failures[failures.length - 1];
+    console.warn(
+      `[LLMClient] failover ${last.targetId} (${last.kind}) -> ${target.id}`,
+    );
   }
 
   // ---- Provider implementations -------------------------------------------
@@ -247,8 +403,22 @@ export class LLMClient {
     return `${trimmed}/v1/chat/completions`;
   }
 
+  private buildOpenAICompatibleHeaders(
+    baseUrl: string,
+    apiKey: string,
+  ): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    };
+    if (/api\.anthropic\.com/i.test(baseUrl)) {
+      headers['anthropic-version'] = '2023-06-01';
+    }
+    return headers;
+  }
+
   /**
-   * Call an OpenAI-compatible chat completions endpoint (OpenAI / Groq).
+   * Call an OpenAI-compatible chat completions endpoint (OpenAI / Claude / Groq).
    */
   private async callOpenAICompatible(
     baseUrl: string,
@@ -268,10 +438,7 @@ export class LLMClient {
     return this.withRequestTimeout(options, async (signal) => {
       const res = await fetch(baseUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: this.buildOpenAICompatibleHeaders(baseUrl, apiKey),
         body: JSON.stringify({
           model,
           messages,
@@ -317,10 +484,7 @@ export class LLMClient {
     return this.withRequestTimeout(options, async (signal) => {
       const res = await fetch(baseUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: this.buildOpenAICompatibleHeaders(baseUrl, apiKey),
         body: JSON.stringify({
           model,
           messages,
@@ -374,9 +538,13 @@ export class LLMClient {
   /**
    * Call a local Ollama instance via /api/chat.
    */
-  private async callOllama(prompt: string, options?: LLMOptions): Promise<LLMResponse> {
-    const url = `${this.config.ollamaBaseUrl}/api/chat`;
-    const model = this.config.ollamaModel;
+  private async callOllama(
+    prompt: string,
+    options?: LLMOptions,
+    target?: ResolvedLLMTarget,
+  ): Promise<LLMResponse> {
+    const url = `${target?.baseUrl || this.config.ollamaBaseUrl}/api/chat`;
+    const model = target?.model || this.config.ollamaModel;
     const temperature = resolveTemperature(model, options) ?? DEFAULT_TEMPERATURE;
 
     const messages: Array<{ role: string; content: string }> = [];
@@ -423,9 +591,10 @@ export class LLMClient {
     prompt: string,
     options: LLMOptions | undefined,
     onDelta: LLMStreamDeltaHandler,
+    target?: ResolvedLLMTarget,
   ): Promise<LLMResponse> {
-    const url = `${this.config.ollamaBaseUrl}/api/chat`;
-    const model = this.config.ollamaModel;
+    const url = `${target?.baseUrl || this.config.ollamaBaseUrl}/api/chat`;
+    const model = target?.model || this.config.ollamaModel;
     const temperature = resolveTemperature(model, options) ?? DEFAULT_TEMPERATURE;
     const messages = this.buildMessages(prompt, options);
 
@@ -512,10 +681,14 @@ export class LLMClient {
   /**
    * Call Dify API. Supports chat (conversational) and completion (text generation) app modes.
    */
-  private async callDify(prompt: string, options?: LLMOptions): Promise<LLMResponse> {
-    const base = this.config.difyApiUrl.replace(/\/$/, '');
+  private async callDify(
+    prompt: string,
+    options?: LLMOptions,
+    target?: ResolvedLLMTarget,
+  ): Promise<LLMResponse> {
+    const base = (target?.baseUrl || this.config.difyApiUrl).replace(/\/$/, '');
     const isV1Base = base.endsWith('/v1');
-    const mode = this.config.difyAppMode;
+    const mode = target?.difyAppMode || this.config.difyAppMode;
     const path = mode === 'completion' ? 'completion-messages' : 'chat-messages';
     const url = isV1Base ? `${base}/${path}` : `${base}/v1/${path}`;
     const effectivePrompt = options?.systemPrompt
@@ -532,7 +705,7 @@ export class LLMClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.config.difyApiKey}`,
+          Authorization: `Bearer ${target?.apiKey || this.config.difyApiKey}`,
         },
         body: JSON.stringify(body),
         signal,
@@ -561,10 +734,11 @@ export class LLMClient {
     prompt: string,
     options: LLMOptions | undefined,
     onDelta: LLMStreamDeltaHandler,
+    target?: ResolvedLLMTarget,
   ): Promise<LLMResponse> {
-    const base = this.config.difyApiUrl.replace(/\/$/, '');
+    const base = (target?.baseUrl || this.config.difyApiUrl).replace(/\/$/, '');
     const isV1Base = base.endsWith('/v1');
-    const mode = this.config.difyAppMode;
+    const mode = target?.difyAppMode || this.config.difyAppMode;
     const path = mode === 'completion' ? 'completion-messages' : 'chat-messages';
     const url = isV1Base ? `${base}/${path}` : `${base}/v1/${path}`;
     const effectivePrompt = options?.systemPrompt
@@ -581,7 +755,7 @@ export class LLMClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.config.difyApiKey}`,
+          Authorization: `Bearer ${target?.apiKey || this.config.difyApiKey}`,
         },
         body: JSON.stringify(body),
         signal,
@@ -633,13 +807,21 @@ export class LLMClient {
   /**
    * Retry an async operation once on failure with a 1 second delay.
    */
-  private async withRetry(fn: () => Promise<LLMResponse>, options?: LLMOptions): Promise<LLMResponse> {
+  private async withRetryForTarget(
+    _target: ResolvedLLMTarget,
+    fn: () => Promise<LLMResponse>,
+    options?: LLMOptions,
+  ): Promise<LLMResponse> {
     const retryCount = this.getRetryCount(options);
+    const hasFallback = this.config.llmFallbacks.length > 0;
     for (let attempt = 0; attempt <= retryCount; attempt++) {
       try {
         return await fn();
       } catch (err) {
-        if (attempt < retryCount) {
+        const kind = classifyLLMError(err);
+        const canRetry =
+          attempt < retryCount && (!hasFallback || shouldRetrySameTarget(kind));
+        if (canRetry) {
           console.warn(
             `[LLMClient] Attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS}ms:`,
             (err as Error).message,
@@ -651,7 +833,6 @@ export class LLMClient {
       }
     }
 
-    // Unreachable, but TypeScript requires it.
     throw new Error('[LLMClient] All retry attempts exhausted');
   }
 
@@ -797,8 +978,11 @@ export class LLMClient {
     prompt: string,
     options: LLMOptions | undefined,
     onDelta: LLMStreamDeltaHandler,
+    target?: ResolvedLLMTarget,
   ): Promise<LLMResponse> {
-    const response = await this.generate(prompt, options);
+    const response = target
+      ? await this.callTarget(target, prompt, options)
+      : await this.generate(prompt, options);
     const chunks = response.content.match(/[\s\S]{1,24}/g) ?? [response.content];
     for (const chunk of chunks) {
       if (!chunk) continue;
