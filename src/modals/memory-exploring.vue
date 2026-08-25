@@ -8,80 +8,40 @@
       <div v-if="!isTaskSurface" class="sidebar">
         <div class="sidebar-header">
           <div class="logo">🧠 {{ t('memoryExplorer.title') }}</div>
-          <p class="sidebar-note">
-            {{ t('memoryExplorer.sidebarNote') }}
-          </p>
           <div
             v-if="memoryUserIdentity || memoryUserIdentityError"
             :class="[
               'memory-user-status',
               {
-                warning:
-                  memoryUserIdentity?.fallbackToDefault ||
-                  Boolean(memoryUserIdentityError),
+                warning: isMemoryUserIdentityWarning,
+                refreshing: memoryUserIdentityRefreshing,
               },
             ]"
           >
-            <span class="memory-user-dot" aria-hidden="true"></span>
-            <div class="memory-user-copy">
-              <div class="memory-user-label">
-                {{ t('memoryExplorer.currentUser') }}
-              </div>
-              <div class="memory-user-value">
+            <div class="memory-user-row">
+              <span class="memory-user-dot" aria-hidden="true"></span>
+              <div
+                class="memory-user-value"
+                :title="memoryUserIdentityTooltip"
+                :aria-label="memoryUserIdentityAriaLabel"
+              >
                 {{
                   memoryUserIdentity?.id || t('memoryExplorer.unconfirmed')
                 }}
-              </div>
-              <div
-                v-if="memoryUserIdentity?.storageKey"
-                class="memory-user-storage"
-                :title="memoryUserIdentity.storageKey"
-              >
-                {{ memoryUserIdentity.storageKey }}
-              </div>
-              <div
-                v-if="memoryUserIdentity?.identitySource"
-                class="memory-user-source"
-              >
-                {{ memoryUserIdentitySourceLabel }}
-              </div>
-              <div
-                v-if="memoryUserIdentity?.isolation"
-                class="memory-user-boundary"
-              >
-                {{ memoryUserIdentityBoundary }}
-              </div>
-              <div
-                v-if="memoryUserIdentityWriteBoundary"
-                class="memory-user-write-boundary"
-              >
-                {{ memoryUserIdentityWriteBoundary }}
-              </div>
-              <div
-                v-if="memoryUserIdentity?.fallbackToDefault"
-                class="memory-user-hint"
-              >
-                {{ t('memoryExplorer.defaultSpaceHint') }}
-              </div>
-              <div v-else-if="memoryUserIdentityError" class="memory-user-hint">
-                {{ memoryUserIdentityError }}
-              </div>
-              <div class="memory-user-snapshot">
-                {{ memoryUserIdentitySnapshotLabel }}
               </div>
               <div class="memory-user-actions">
                 <button
                   type="button"
                   class="memory-user-action"
-                  :disabled="memoryUserIdentityRefreshing"
-                  :title="memoryUserIdentityRefreshBoundary"
-                  :aria-label="memoryUserIdentityRefreshBoundary"
-                  @click="refreshMemoryUserIdentity"
+                  :disabled="!memoryUserIdentityCanBackup"
+                  :title="memoryUserIdentityBackupBoundary"
+                  :aria-label="memoryUserIdentityBackupBoundary"
+                  @click="exportMemoryBackup"
                 >
                   {{
-                    memoryUserIdentityRefreshing
-                      ? t('common.loading')
-                      : t('memoryExplorer.identityAction.refresh')
+                    memoryBackupExporting
+                      ? t('memoryExplorer.identityAction.backupDownloading')
+                      : t('memoryExplorer.identityAction.backup')
                   }}
                 </button>
                 <button
@@ -94,6 +54,9 @@
                   {{ t('memoryExplorer.identityAction.openSettings') }}
                 </button>
               </div>
+            </div>
+            <div v-if="memoryUserIdentityHint" class="memory-user-hint">
+              {{ memoryUserIdentityHint }}
             </div>
           </div>
         </div>
@@ -486,7 +449,7 @@ import {
   type RecallScope,
 } from '../services/MemoryServiceClient';
 import { getEnvConfig } from '../utils';
-import { extensionUiLanguage, initExtensionVueI18n, vueT } from '../i18n/vue';
+import { initExtensionVueI18n, vueT } from '../i18n/vue';
 import {
   MEMORY_ENTRY_RULES_HASH,
   buildMemoryEntryRulesUrl,
@@ -589,8 +552,9 @@ const memoryUserIdentity = ref<{
   };
 } | null>(null);
 const memoryUserIdentityError = ref('');
-const memoryUserIdentityCheckedAt = ref<number | null>(null);
 const memoryUserIdentityRefreshing = ref(false);
+const memoryBackupExporting = ref(false);
+const memoryBackupError = ref('');
 let outreachCountTimer: ReturnType<typeof setInterval> | null = null;
 const TERMINAL_OUTREACH_STATUSES = new Set([
   'resolved',
@@ -700,72 +664,6 @@ function getRecallScopeButtonBoundary(scope: RecallScope): string {
   });
 }
 
-const memoryUserIdentitySourceLabel = computed(() => {
-  const source = memoryUserIdentity.value?.identitySource;
-  if (source === 'default_fallback') {
-    return t('memoryExplorer.identitySource.defaultFallback');
-  }
-  if (source === 'local_inferred') {
-    return t('memoryExplorer.identitySource.localInferred');
-  }
-  return t('memoryExplorer.identitySource.header');
-});
-
-const memoryUserIdentityBoundary = computed(() => {
-  const writeBoundary = memoryUserIdentity.value?.writeBoundary;
-  if (
-    memoryUserIdentity.value?.fallbackToDefault ||
-    writeBoundary?.mode === 'default_read_only_fallback' ||
-    writeBoundary?.canWrite === false
-  ) {
-    return t('memoryExplorer.identityBoundary.defaultFallback');
-  }
-  return t('memoryExplorer.identityBoundary.explicit');
-});
-
-function formatMemoryUserBlockedOperations(values?: string[]): string {
-  const labels: Record<string, string> = {
-    write: t('memoryExplorer.identityBlockedOperation.write'),
-    import: t('memoryExplorer.identityBlockedOperation.import'),
-    restore: t('memoryExplorer.identityBlockedOperation.restore'),
-    profile_update: t('memoryExplorer.identityBlockedOperation.profileUpdate'),
-  };
-  const normalized = values?.length
-    ? values
-    : ['write', 'import', 'restore'];
-  const rendered = Array.from(
-    new Set(normalized.map((value) => labels[value] || value)),
-  );
-  return rendered.join(t('memoryExplorer.identityBlockedOperation.separator'));
-}
-
-const memoryUserIdentityWriteBoundary = computed(() => {
-  const identity = memoryUserIdentity.value;
-  if (!identity) return '';
-
-  const writeBoundary = identity.writeBoundary;
-  const writeBlocked =
-    identity.fallbackToDefault ||
-    writeBoundary?.mode === 'default_read_only_fallback' ||
-    writeBoundary?.canWrite === false;
-
-  if (writeBlocked) {
-    return t('memoryExplorer.identityWriteBoundary.defaultFallback', {
-      operations: formatMemoryUserBlockedOperations(
-        writeBoundary?.blockedOperations,
-      ),
-    });
-  }
-
-  if (writeBoundary?.canWrite === true || identity.identitySource === 'header') {
-    return t('memoryExplorer.identityWriteBoundary.explicit', {
-      userId: identity.id,
-    });
-  }
-
-  return '';
-});
-
 const memoryUserIdentityActionUserId = computed(
   () => memoryUserIdentity.value?.id || t('memoryExplorer.unconfirmed'),
 );
@@ -787,20 +685,58 @@ const memoryUserIdentityActionState = computed<
   return 'explicit';
 });
 
-const memoryUserIdentityRefreshBoundary = computed(() => {
+const isMemoryUserIdentityWarning = computed(() => {
+  const identity = memoryUserIdentity.value;
+  const writeBoundary = identity?.writeBoundary;
+  return Boolean(
+    identity?.fallbackToDefault ||
+      writeBoundary?.mode === 'default_read_only_fallback' ||
+      writeBoundary?.canWrite === false,
+  );
+});
+
+const memoryUserIdentityHint = computed(() => {
+  if (memoryBackupError.value) return memoryBackupError.value;
+  if (isMemoryUserIdentityWarning.value) {
+    return t('memoryExplorer.defaultSpaceHint');
+  }
+  return '';
+});
+
+const memoryUserIdentityTooltip = computed(() => {
+  const identity = memoryUserIdentity.value;
+  return [identity?.id || t('memoryExplorer.unconfirmed'), identity?.storageKey]
+    .filter(Boolean)
+    .join(' · ');
+});
+
+const memoryUserIdentityAriaLabel = computed(
+  () =>
+    `${t('memoryExplorer.currentUser')} ${memoryUserIdentityActionUserId.value}`,
+);
+
+const memoryUserIdentityCanBackup = computed(() => {
+  if (memoryBackupExporting.value) return false;
+  return memoryUserIdentityActionState.value !== 'defaultFallback';
+});
+
+const memoryUserIdentityBackupBoundary = computed(() => {
+  if (memoryBackupExporting.value) {
+    return t('memoryExplorer.identityAction.backupBoundary.downloading');
+  }
   const userId = memoryUserIdentityActionUserId.value;
   const actionState = memoryUserIdentityActionState.value;
   if (actionState === 'defaultFallback') {
-    return t('memoryExplorer.identityAction.refreshBoundary.defaultFallback', {
+    return t('memoryExplorer.identityAction.backupBoundary.defaultFallback', {
       userId,
     });
   }
   if (actionState === 'localInferred') {
-    return t('memoryExplorer.identityAction.refreshBoundary.localInferred', {
+    return t('memoryExplorer.identityAction.backupBoundary.localInferred', {
       userId,
     });
   }
-  return t('memoryExplorer.identityAction.refreshBoundary.explicit', {
+  return t('memoryExplorer.identityAction.backupBoundary.explicit', {
     userId,
   });
 });
@@ -821,21 +757,6 @@ const memoryUserIdentitySettingsBoundary = computed(() => {
   return t('memoryExplorer.identityAction.settingsBoundary.explicit', {
     userId,
   });
-});
-
-const memoryUserIdentitySnapshotLabel = computed(() => {
-  if (memoryUserIdentityRefreshing.value) {
-    return t('memoryExplorer.identitySnapshot.loading');
-  }
-  if (!memoryUserIdentityCheckedAt.value) {
-    return t('memoryExplorer.identitySnapshot.pending');
-  }
-  const checkedAt = new Intl.DateTimeFormat(extensionUiLanguage.value, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(new Date(memoryUserIdentityCheckedAt.value));
-  return t('memoryExplorer.identitySnapshot.checkedAt', { time: checkedAt });
 });
 
 function normalizeClientRecallScope(value: unknown): RecallScope | null {
@@ -1011,13 +932,29 @@ async function loadMemoryUserIdentity() {
     };
     memoryUserIdentityError.value = describeMemoryUserIdentityError(error);
   } finally {
-    memoryUserIdentityCheckedAt.value = Date.now();
     memoryUserIdentityRefreshing.value = false;
   }
 }
 
-async function refreshMemoryUserIdentity() {
-  await loadMemoryUserIdentity();
+async function exportMemoryBackup() {
+  if (!memoryUserIdentityCanBackup.value || memoryBackupExporting.value) return;
+  memoryBackupExporting.value = true;
+  memoryBackupError.value = '';
+  try {
+    const result = await getMemoryServiceClient().exportMemory();
+    const url = URL.createObjectURL(result.blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = result.fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('下载记忆备份失败:', error);
+    memoryBackupError.value =
+      error instanceof Error ? error.message : '下载记忆备份失败';
+  } finally {
+    memoryBackupExporting.value = false;
+  }
 }
 
 function openMemoryIdentitySettings() {
@@ -1449,162 +1386,97 @@ html,
   background: rgba(15, 23, 42, 0.8);
   backdrop-filter: blur(20px);
   border-right: 1px solid rgba(148, 163, 184, 0.1);
-  padding: 2rem 0;
+  padding: 1.15rem 0 0;
   transition: all 0.3s ease;
 }
 
 .sidebar-header {
-  padding: 0 2rem 2rem;
+  padding: 0 2rem 0.85rem;
   border-bottom: 1px solid rgba(148, 163, 184, 0.1);
 }
 
-.sidebar-note {
-  margin-top: 0.85rem;
-  color: #cbd5e1;
-  font-size: 0.78rem;
-  line-height: 1.55;
-}
-
 .memory-user-status {
-  display: grid;
-  grid-template-columns: 0.55rem minmax(0, 1fr);
-  gap: 0.6rem;
-  align-items: start;
-  margin-top: 1rem;
-  padding: 0.75rem;
-  border: 1px solid rgba(34, 197, 94, 0.28);
-  border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.62);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.7rem;
 }
 
-.memory-user-status.warning {
-  border-color: rgba(245, 158, 11, 0.36);
-  background: rgba(69, 48, 12, 0.28);
+.memory-user-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .memory-user-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  margin-top: 0.25rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  flex-shrink: 0;
   border-radius: 999px;
   background: #22c55e;
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+}
+
+.memory-user-status.refreshing .memory-user-dot {
+  opacity: 0.55;
 }
 
 .memory-user-status.warning .memory-user-dot {
   background: #f59e0b;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
-}
-
-.memory-user-copy {
-  min-width: 0;
-}
-
-.memory-user-label {
-  color: #94a3b8;
-  font-size: 0.68rem;
-  line-height: 1.2;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
 }
 
 .memory-user-value {
-  margin-top: 0.15rem;
+  min-width: 0;
+  flex: 1;
   color: #f8fafc;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 650;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.memory-user-storage {
-  margin-top: 0.28rem;
-  color: #cbd5e1;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    'Liberation Mono', 'Courier New', monospace;
-  font-size: 0.64rem;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.memory-user-source {
-  margin-top: 0.32rem;
-  color: #bfdbfe;
-  font-size: 0.68rem;
-  line-height: 1.4;
-}
-
-.memory-user-boundary {
-  margin-top: 0.35rem;
-  color: #86efac;
-  font-size: 0.68rem;
-  line-height: 1.4;
-}
-
-.memory-user-write-boundary {
-  margin-top: 0.35rem;
-  color: #dbeafe;
-  font-size: 0.68rem;
-  line-height: 1.4;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .memory-user-hint {
-  margin-top: 0.35rem;
   color: #fbbf24;
-  font-size: 0.7rem;
-  line-height: 1.4;
-}
-
-.memory-user-snapshot {
-  margin-top: 0.4rem;
-  color: #94a3b8;
-  font-size: 0.66rem;
-  line-height: 1.4;
+  font-size: 0.68rem;
+  line-height: 1.35;
 }
 
 .memory-user-actions {
   display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-  margin-top: 0.55rem;
+  flex-shrink: 0;
+  gap: 0.1rem;
 }
 
 .memory-user-action {
   appearance: none;
-  border: 1px solid rgba(148, 163, 184, 0.32);
-  border-radius: 0.35rem;
-  background: rgba(15, 23, 42, 0.74);
-  color: #dbeafe;
+  border: 0;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: #94a3b8;
   cursor: pointer;
-  font-size: 0.66rem;
+  font-size: 0.68rem;
   font-weight: 650;
   line-height: 1.2;
-  min-height: 1.75rem;
-  padding: 0.3rem 0.45rem;
+  min-height: 1.45rem;
+  padding: 0.12rem 0.32rem;
 }
 
 .memory-user-action:hover:not(:disabled) {
-  border-color: rgba(96, 165, 250, 0.58);
-  color: #eff6ff;
+  background: rgba(148, 163, 184, 0.12);
+  color: #e2e8f0;
 }
 
 .memory-user-action:disabled {
-  cursor: progress;
-  opacity: 0.62;
-}
-
-.memory-user-status.warning .memory-user-boundary {
-  color: #fcd34d;
-}
-
-.memory-user-status.warning .memory-user-write-boundary {
-  color: #fde68a;
-}
-
-.memory-user-status.warning .memory-user-source {
-  color: #fde68a;
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .logo {
-  font-size: 1.5rem;
+  font-size: 1.2rem;
   font-weight: 700;
   background: linear-gradient(135deg, #60a5fa, #a78bfa);
   -webkit-background-clip: text;
@@ -1617,7 +1489,7 @@ html,
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 1.5rem 0;
+  padding: 0.75rem 0;
 }
 
 .entity-type {
@@ -3351,15 +3223,11 @@ button.entity-type.usage-analytics-entry {
   }
 
   .sidebar-header {
-    padding: 0 1rem 0.75rem;
-  }
-
-  .sidebar-note {
-    display: none;
+    padding: 0 1rem 0.65rem;
   }
 
   .logo {
-    font-size: 1.25rem;
+    font-size: 1.1rem;
   }
 
   .entity-types {

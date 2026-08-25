@@ -108,45 +108,20 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       'OpenClaw 外部执行需要在处理页确认',
 
     'memoryExplorer.title': '记忆查询系统',
-    'memoryExplorer.sidebarNote':
-      '记忆入口规则只展示你手动创建的规则；帮我问 / 自我反思等系统内部观察会在主动询问里展示证据，不计入这里的 FollowThreads。',
     'memoryExplorer.currentUser': '当前记忆用户',
     'memoryExplorer.unconfirmed': '未确认',
-    'memoryExplorer.defaultSpaceHint':
-      '未解析到个人身份，正在使用 default 空间；写入会被拦截，直到身份恢复。',
-    'memoryExplorer.identitySource.header':
-      '身份来源: 已解析并发送 X-User-Id',
-    'memoryExplorer.identitySource.defaultFallback':
-      '身份来源: 未解析，本次只读请求回退到 default',
-    'memoryExplorer.identitySource.localInferred':
-      '身份来源: 本机推断，服务端未确认',
-    'memoryExplorer.identityBoundary.explicit':
-      '读写、备份与恢复只作用于这个 per-user SQLite 空间。',
-    'memoryExplorer.identityBoundary.defaultFallback':
-      '仅只读兼容回退；写入、导入、恢复会被拦截，直到身份恢复。',
-    'memoryExplorer.identityWriteBoundary.explicit':
-      '写入边界: 读写、备份与恢复只限 {userId}；不会落到 default 或其他用户空间。',
-    'memoryExplorer.identityWriteBoundary.defaultFallback':
-      '写入边界: {operations} 已拦截；恢复 userinfo.username 或在设置里配置 userId 后再试。',
-    'memoryExplorer.identityBlockedOperation.write': '写入',
-    'memoryExplorer.identityBlockedOperation.import': '导入',
-    'memoryExplorer.identityBlockedOperation.restore': '恢复',
-    'memoryExplorer.identityBlockedOperation.profileUpdate': '画像更新',
-    'memoryExplorer.identityBlockedOperation.separator': '、',
-    'memoryExplorer.identitySnapshot.pending':
-      '身份快照待刷新；不会写入、导入或恢复记忆。',
-    'memoryExplorer.identitySnapshot.loading':
-      '正在读取只读身份快照...',
-    'memoryExplorer.identitySnapshot.checkedAt':
-      '身份快照 {time} 来自只读 /stats；刷新只重新检查身份边界。',
-    'memoryExplorer.identityAction.refresh': '刷新身份快照',
-    'memoryExplorer.identityAction.openSettings': '打开设置',
-    'memoryExplorer.identityAction.refreshBoundary.explicit':
-      '刷新身份快照：只重新读取 {userId} 的只读 /stats 身份快照；不会写入、导入、恢复、迁移记忆，也不会切换到 default 或其他用户空间。',
-    'memoryExplorer.identityAction.refreshBoundary.defaultFallback':
-      '刷新身份快照：只重新检查 {userId} 的 default fallback 是否仍被拦截；不会写入、导入、恢复、迁移记忆、确认 default 数据归属或重试失败写入。',
-    'memoryExplorer.identityAction.refreshBoundary.localInferred':
-      '刷新身份快照：只重新请求 /stats 校验本机推断的 {userId}；不会写入、导入、恢复、迁移记忆或把本机推断当作服务端确认。',
+    'memoryExplorer.defaultSpaceHint': '身份未确认，写入已拦截',
+    'memoryExplorer.identityAction.backup': '备份',
+    'memoryExplorer.identityAction.backupDownloading': '下载中',
+    'memoryExplorer.identityAction.openSettings': '设置',
+    'memoryExplorer.identityAction.backupBoundary.explicit':
+      '备份：只向当前 {userId} 的记忆服务请求 backup zip 并保存到本机；不会恢复、删除、替换、同步或外发记忆。',
+    'memoryExplorer.identityAction.backupBoundary.defaultFallback':
+      '备份：当前是 default 只读回退，不会下载 backup zip，避免把 default 空间误存成本人备份。请先在设置恢复身份。',
+    'memoryExplorer.identityAction.backupBoundary.localInferred':
+      '备份：会按本机推断的 {userId} 请求 backup zip；不会把推断身份写入服务端、恢复、删除、替换或外发记忆。',
+    'memoryExplorer.identityAction.backupBoundary.downloading':
+      '备份：正在请求 backup zip；完成前还没有新文件，也不会恢复、删除、替换、同步或外发记忆。',
     'memoryExplorer.identityAction.settingsBoundary.explicit':
       '打开设置：只打开 Options 查看或调整 Memory Service 身份配置；不会迁移 {userId} 数据、切换当前结果、写入、导入、恢复或落到 default。',
     'memoryExplorer.identityAction.settingsBoundary.defaultFallback':
@@ -366,45 +341,20 @@ export const UI_MESSAGES: Record<UiLanguage, Record<string, string>> = {
       'OpenClaw execution needs confirmation in the handling page',
 
     'memoryExplorer.title': 'Memory Explorer',
-    'memoryExplorer.sidebarNote':
-      'Memory entry rules only show rules you created manually. Internal observations from Quick Ask and reflection appear with evidence in Outreach and are not counted as FollowThreads here.',
     'memoryExplorer.currentUser': 'Current memory user',
     'memoryExplorer.unconfirmed': 'Unconfirmed',
-    'memoryExplorer.defaultSpaceHint':
-      'Personal identity was not resolved. Using the default space; writes are blocked until identity recovers.',
-    'memoryExplorer.identitySource.header':
-      'Identity source: resolved and sent as X-User-Id',
-    'memoryExplorer.identitySource.defaultFallback':
-      'Identity source: unresolved read request fell back to default',
-    'memoryExplorer.identitySource.localInferred':
-      'Identity source: inferred locally, not confirmed by service',
-    'memoryExplorer.identityBoundary.explicit':
-      'Reads, writes, backups, and restores apply only to this per-user SQLite space.',
-    'memoryExplorer.identityBoundary.defaultFallback':
-      'Read-only compatibility fallback; writes, imports, and restores are blocked until identity recovers.',
-    'memoryExplorer.identityWriteBoundary.explicit':
-      'Write boundary: reads, writes, backups, and restores stay within {userId}; they will not fall back to default or another user space.',
-    'memoryExplorer.identityWriteBoundary.defaultFallback':
-      'Write boundary: {operations} are blocked. Restore userinfo.username or configure userId in settings before retrying.',
-    'memoryExplorer.identityBlockedOperation.write': 'writes',
-    'memoryExplorer.identityBlockedOperation.import': 'imports',
-    'memoryExplorer.identityBlockedOperation.restore': 'restores',
-    'memoryExplorer.identityBlockedOperation.profileUpdate': 'profile updates',
-    'memoryExplorer.identityBlockedOperation.separator': ', ',
-    'memoryExplorer.identitySnapshot.pending':
-      'Identity snapshot has not refreshed yet; no memory writes, imports, or restores happen here.',
-    'memoryExplorer.identitySnapshot.loading':
-      'Reading the read-only identity snapshot...',
-    'memoryExplorer.identitySnapshot.checkedAt':
-      'Identity snapshot at {time} came from read-only /stats; refresh only checks the identity boundary again.',
-    'memoryExplorer.identityAction.refresh': 'Refresh identity',
-    'memoryExplorer.identityAction.openSettings': 'Open settings',
-    'memoryExplorer.identityAction.refreshBoundary.explicit':
-      'Refresh identity snapshot: only rereads the read-only /stats identity snapshot for {userId}; it will not write, import, restore, migrate memories, or switch to default or another user space.',
-    'memoryExplorer.identityAction.refreshBoundary.defaultFallback':
-      'Refresh identity snapshot: only checks whether the {userId} default fallback is still blocked; it will not write, import, restore, migrate memories, confirm default ownership, or retry failed writes.',
-    'memoryExplorer.identityAction.refreshBoundary.localInferred':
-      'Refresh identity snapshot: only requests /stats again to verify the locally inferred {userId}; it will not write, import, restore, migrate memories, or treat local inference as service confirmation.',
+    'memoryExplorer.defaultSpaceHint': 'Identity unconfirmed; writes are blocked',
+    'memoryExplorer.identityAction.backup': 'Backup',
+    'memoryExplorer.identityAction.backupDownloading': 'Saving',
+    'memoryExplorer.identityAction.openSettings': 'Settings',
+    'memoryExplorer.identityAction.backupBoundary.explicit':
+      'Backup: only requests a backup zip from the current {userId} memory service and saves it locally; it will not restore, delete, replace, sync, or send memories.',
+    'memoryExplorer.identityAction.backupBoundary.defaultFallback':
+      'Backup: current identity is the default read-only fallback, so no backup zip will download. Recover identity in Settings first to avoid saving the default space as your backup.',
+    'memoryExplorer.identityAction.backupBoundary.localInferred':
+      'Backup: requests a backup zip using the locally inferred {userId}; it will not write inferred identity to the service, restore, delete, replace, or send memories.',
+    'memoryExplorer.identityAction.backupBoundary.downloading':
+      'Backup: requesting a backup zip; no new file exists yet, and this will not restore, delete, replace, sync, or send memories.',
     'memoryExplorer.identityAction.settingsBoundary.explicit':
       'Open settings: only opens Options to view or adjust Memory Service identity configuration; it will not migrate {userId} data, switch current results, write, import, restore, or fall back to default.',
     'memoryExplorer.identityAction.settingsBoundary.defaultFallback':
