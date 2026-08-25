@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, onUpdated, ref, watch } from 'vue';
 import { useRoadmapState } from '../composables/useRoadmapState';
 import {
   addD,
@@ -294,6 +294,46 @@ function showEpicPrefix(frac: number): boolean {
   return stripPx.value ? frac * stripPx.value > 110 : frac > 0.16;
 }
 
+/* ---------- 标题贴边（sticky title）----------
+   bar 左侧被裁到可视范围（0%）外、右侧仍有部分可见时（比如已经跑了很久的长任务），
+   把「前缀 chip + 标题」这一组整体平移贴到可视范围最左侧，不用平移很久才能看到是
+   哪条任务；同时用 max-width 把可用宽度限制为「bar 右边界到可视范围左边界」的剩余
+   距离，交给 .rb-label 已有的 overflow:hidden + text-overflow:ellipsis 从后面截断——
+   保留标题开头，贴到 bar 末尾位置后面用省略号收住，而不是反直觉地露出标题尾巴。
+   （按标题真实宽度反向钳制平移量的写法会导致窄可视段里露出标题尾部而不是开头，
+   demo 里踩过这个坑——见 docs/demo/roadmap-demo.html 同名注释——这里直接采用
+   「永远贴左 + 限宽交给省略号」的定稿方案。）
+   titleGroups 记录每条可见 bar 的 {el, leftPx, rightPx}（在当前 winS/pxPerDay 坐标系
+   下，panPx=0 时的边界）；updateStickyLabels(panPx) 用它们换算出该不该贴、贴多少——
+   panPx=0 用于渲染后的静止定位，拖动时 applyResPan() 用当前 resPanPx 重算，
+   做到「不论左右滚动都固定」。 */
+const titleGroups = new Map<string, { el: HTMLElement; leftPx: number; rightPx: number }>();
+function setTitleGroupEl(subId: string, el: Element | null, s: RoadmapSub, end: Date) {
+  if (!el) {
+    titleGroups.delete(subId);
+    return;
+  }
+  const { cs, ce } = barSpan(s, end);
+  const leftPx = diffD(winS.value, cs) * pxPerDay.value;
+  const rightPx = leftPx + (diffD(cs, ce) + 1) * pxPerDay.value;
+  titleGroups.set(subId, { el: el as HTMLElement, leftPx, rightPx });
+}
+function updateStickyLabels(panPx: number) {
+  titleGroups.forEach(({ el, leftPx, rightPx }) => {
+    const effLeft = leftPx - panPx;
+    const effRight = rightPx - panPx;
+    if (effLeft < 0 && effRight > 0) {
+      el.style.transform = `translateX(${-effLeft}px)`;
+      el.style.maxWidth = `${effRight}px`;
+    } else {
+      el.style.transform = '';
+      el.style.maxWidth = '';
+    }
+  });
+}
+onMounted(() => updateStickyLabels(0));
+onUpdated(() => updateStickyLabels(0));
+
 /* ---------- 时间窗平移（丝滑版）----------
    渲染时按 3 倍窗宽出内容（BUF，见上）：表头日期格、网格线、任务条都装进平移层
    （每行一个 .res-pan，表头一个 .res-days-pan）。滑动期间只对这些层写 transform
@@ -319,6 +359,7 @@ function applyResPan() {
     el.classList.remove('settle');
     el.style.transform = `translateX(${-resPanPx}px)`;
   });
+  updateStickyLabels(resPanPx);
 }
 
 function commitResPan() {
@@ -602,11 +643,16 @@ async function commitRename(m: TeamMember) {
           >
             <i class="rb-stripe" :style="{ background: epicColor(orderedEpicKeys, it.key) }" />
             <span
-              v-if="showEpicPrefix(barSpan(s, end).frac)"
-              class="rb-parent"
-              :style="{ color: epicColor(orderedEpicKeys, it.key) }"
-            >{{ epicShort(it) }}</span>
-            <span class="rb-label">{{ s.alias || s.title }}</span>
+              class="rb-title-group"
+              :ref="(el) => setTitleGroupEl(s.id, el, s, end)"
+            >
+              <span
+                v-if="showEpicPrefix(barSpan(s, end).frac)"
+                class="rb-parent"
+                :style="{ color: epicColor(orderedEpicKeys, it.key) }"
+              >{{ epicShort(it) }}</span>
+              <span class="rb-label">{{ s.alias || s.title }}</span>
+            </span>
             <span
               v-if="
                 resSel.person === personKeyOf(row) &&

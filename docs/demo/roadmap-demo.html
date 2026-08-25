@@ -249,6 +249,9 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
   overflow:hidden;text-overflow:ellipsis}
 /* ---- 主任务归属：左侧色条 + 前缀 chip（hover 联动高亮同主任务） ---- */
 .res-bar .rb-stripe{position:absolute;left:0;top:0;bottom:0;width:4px;flex:none}
+/* 标题分组（前缀 chip + 备注名/标题）：bar 左侧被裁到可视范围外时，这一组会被
+   平移「粘」在可视范围最左侧，不随 bar 本身滚出视野；见 updateStickyLabels() */
+.res-bar .rb-title-group{display:flex;align-items:center;min-width:0;overflow:hidden}
 .res-bar .rb-parent{flex:none;max-width:42%;margin-left:9px;padding:1px 6px;border-radius:4px;
   font-size:9px;font-weight:600;background:rgba(255,255,255,.6);color:rgba(0,0,0,.6);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1322,6 +1325,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部），可添加成员、双击改名、移除空闲成员。任务条<b>左侧色条 + 前缀 chip 标识所属主任务</b>（备注名优先，条太窄只留色条），hover 任务条或工具栏「主任务」图例会<b>联动高亮同主任务的所有条</b></li>
     <li><b>聚焦当前任务（人员视图）</b>：<b>单击任务条</b>标记该成员「正在做」，可继续单击多选；点到<b>另一个成员</b>的任务会对那个人重新开始多选。选中后成员名下出现操作点：<b>「其余延至下周 →」</b>把 TA 其余<b>开始日在下周一之前、尚未结束</b>的任务统一<b>延至下周一开始</b>（任务长度不变）—— 已开始未做完的同样延后；开始日已在下周及以后的<b>远任务不动</b>；已结束的是历史记录不动；每条<b>最多顺延到所属 Epic 结束日</b>（角标预告 →下周一 / →钳制日期 / ✕，hover 按钮预览虚线落点影子）。延后非草稿任务自动回写 Jira <b>Target Start/End</b>；延完再按一次不会继续往后推（幂等）。Esc 或点空白处退出聚焦</li>
     <li><b>人员视图时间窗平移</b>：近 2 周模式下<b>触控板双指左右滑动</b>整窗平移（窗口长度 14 天不变），或点两端「◂ 更早 / 更晚 ▸」角标平移两周；平移后表头出现<b>「回到今天」</b>，点「近 2 周」按钮同样回到今天。配合聚焦功能：成员先领取了很后面的任务时，滑到时间后方把它标记「正在做」，再一键把眼前的任务延至下周</li>
+    <li><b>人员视图任务条标题贴边</b>：任务开始时间被裁到可视范围左侧外（比如已经进行了很久的长任务）时，「主任务前缀 + 标题」这一组会贴在可视范围最左侧显示，不用滚很久才能看到是哪条任务；贴到任务条自己的结束位置后就不再继续贴，交给省略号收尾（保留标题开头，不会露出反直觉的标题尾巴）。不论是双指滑动过程中还是滑完之后都会跟着实时贴边</li>
     <li><b>创建 Jira 后草稿名保留为备注名</b>：回传 jira key 时自动把原草稿标题存为备注名，甘特上展示的名字不因创建（或 Agent 规范化 summary、后续 Jira 刷新）而改变，hover 才看正式 summary。编辑备注名时<b>清空后回车 = 恢复展示原 ticket 名</b></li>
     <li><b>清理过期</b>：过期 Epic 回退 Backlog（保留子任务记录，重拖回任务视图可还原），过期子任务从任务视图清理</li>
     <li>拖入排期：带 Target 日期的卡片<b>按 Target start/end 落位</b>，其余按松手位置 + 预估</li>
@@ -3874,6 +3878,32 @@ let resPanPx = 0, resPanTimer = null;
 const resPanLayers = () => [...document.querySelectorAll('#resView .res-pan, #resView .res-days-pan')];
 function applyResPan(){
   resPanLayers().forEach(l => { l.classList.remove('settle'); l.style.transform = `translateX(${-resPanPx}px)`; });
+  updateStickyLabels(resPanPx);
+}
+/* ---- 标题贴边（sticky title）----
+   bar 左侧被裁到可视范围（0%）外、右侧仍有部分可见时，把「前缀 chip + 标题」
+   这组整体平移贴到可视范围最左侧；同时用 max-width 把它的可用宽度限制为
+   「bar 右边界到可视范围左边界」的剩余距离——交给 .rb-label 已有的
+   overflow:hidden + text-overflow:ellipsis 从后面截断，效果是「保留标题开头，
+   贴到 bar 末尾位置后面用省略号收住」，而不是反直觉地露出标题的尾巴。
+   （早期版本按标题真实宽度反向钳制平移量，会让长标题在窄可视段里露出尾部
+   文字而不是开头——弃用，改成「永远贴左 + 限宽交给省略号」这个更简单也更对
+   的方案。）
+   renderResource() 里每条 bar 建好后把 {el, barLeftPx, barRightPx} 记进这里；
+   panPx=0 用于渲染后的静止定位，实时拖动时 applyResPan() 用当前 resPanPx 重算，
+   做到「不论左右滚动都固定」。 */
+let stickyEntries = [];
+function updateStickyLabels(panPx){
+  stickyEntries.forEach(({ el, barLeftPx, barRightPx }) => {
+    const effLeft = barLeftPx - panPx, effRight = barRightPx - panPx;
+    if (effLeft < 0 && effRight > 0){
+      el.style.transform = `translateX(${-effLeft}px)`;
+      el.style.maxWidth = effRight + 'px';
+    } else {
+      el.style.transform = '';
+      el.style.maxWidth = '';
+    }
+  });
 }
 function commitResPan(pxPerDay){
   clearTimeout(resPanTimer); resPanTimer = null;
@@ -3916,6 +3946,7 @@ function renderResource(){
   const t = team(); computeTL();
   if (resSel.team !== t.name) resSel = { team: t.name, person:null, ids:new Set() };
   const rv = $('#resView'); rv.innerHTML = '';
+  stickyEntries = [];
   rv.onclick = e => {     // 点空白处退出聚焦（任务条 / 操作点 / 平移控件各自 stopPropagation）
     if (e.target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip,.res-today-btn')) return;
     clearResSel();
@@ -4065,10 +4096,19 @@ function renderResource(){
       const barFrac = (diffD(cs, ce) + 1) / days;
       const showParent = stripPx ? barFrac * stripPx > 110 : barFrac > 0.16;
       b.innerHTML = `<i class="rb-stripe" style="background:${col}"></i>`
+        + `<span class="rb-title-group">`
         + (showParent ? `<span class="rb-parent" style="color:${col}">${esc(epicShort(it))}</span>` : '')
-        + `<span class="rb-label">${esc(s.alias || s.title)}</span>`;
+        + `<span class="rb-label">${esc(s.alias || s.title)}</span>`
+        + `</span>`;
       b.dataset.epic = it.key;
       b.dataset.sid = s.id;
+      {
+        // 标题贴边：记下这条 bar 在当前（未平移）坐标系里的左右边界，供
+        // updateStickyLabels() 用实时 pan 偏移换算出该不该贴、贴多少。
+        const barLeftPx = diffD(winS, cs) * pxPerDay;
+        const barRightPx = barLeftPx + (diffD(cs, ce) + 1) * pxPerDay;
+        stickyEntries.push({ el: b.querySelector('.rb-title-group'), barLeftPx, barRightPx });
+      }
       /* 聚焦状态：选中 = 正在做；未选中的顺延候选 = 角标预告落点（→ 下周一 / 钳制日期 / ✕） */
       let tipTail = `主任务：${it.alias || it.title}`;
       if (resSel.person === personKey && resSel.ids.size){
@@ -4213,6 +4253,7 @@ function renderResource(){
     inp.onblur = () => setTimeout(() => { if (document.body.contains(inp)) renderResource(); }, 120);
   };
   rv.appendChild(add);
+  updateStickyLabels(0);   // 首次定位；scrollWidth 测量必须在元素已挂载到文档后才准确
 }
 
 /* ---------- 团队切换 / 新建 ---------- */
