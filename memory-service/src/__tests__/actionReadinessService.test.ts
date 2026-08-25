@@ -27,12 +27,28 @@ describe('ActionReadinessService', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'action-readiness-'));
     userDataManager = new UserDataManager();
     userDataManager.initialize(tempDir);
+    // Declare the responses protocol explicitly: probes now follow the
+    // configured executor, and these cases stub the HTTP transport.
     userDataManager.writeFile(
       'config.json',
       JSON.stringify({
         openClawEnabled: true,
         openClawBaseUrl: 'https://openclaw.example.com',
         openClawApiKey: 'test-key',
+        agentExecutors: [
+          {
+            id: 'openclaw',
+            label: 'OpenClaw',
+            type: 'openclaw-responses',
+            baseUrl: 'https://openclaw.example.com',
+            apiKey: 'test-key',
+            enabled: true,
+          },
+        ],
+        executorDefaults: {
+          agent_task: 'openclaw',
+          reflection_research: 'openclaw',
+        },
       }),
     );
   });
@@ -465,6 +481,123 @@ describe('ActionReadinessService', () => {
     ).toBeNull();
     expect(baiduCheck.decision).toBe('allow');
     expect(roadmapCheck.decision).toBe('allow');
+  });
+
+  it('refreshes openclaw:global when an OpenClaw executor probe succeeds', () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const failed = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 新 缺少 Assignee 的 INIT',
+      params: {
+        task: '查询缺少 assignee 的 INIT。',
+        mode: 'read',
+        targetSystem: 'agent_task',
+      },
+      sourceKind: 'agent_task',
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    service.recordDelegationOutcome(failed, {
+      status: 'auth_error',
+      summary: 'OpenClaw 返回鉴权失败或权限不足。',
+      artifacts: [],
+      payload: { httpStatus: 401 },
+    });
+    expect(service.getByScopeKey('openclaw:global')?.status).toBe('blocked_auth');
+    expect(service.checkAction(failed).decision).toBe('block');
+
+    service.recordExecutorProbe(
+      'openclaw',
+      {
+        ok: true,
+        detail: 'Gateway WebSocket 握手与鉴权成功。',
+      },
+      { executorType: 'openclaw-gateway' },
+    );
+
+    expect(service.getByScopeKey('openclaw:global')?.status).toBe('ready');
+    expect(service.checkAction(failed).decision).not.toBe('block');
+  });
+
+  it('lets a global auth block expire so agent_task can recover without a manual DB edit', () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const failed = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team 的 Epics',
+      params: {
+        task: '查询缺少 Team 的 NOVA Epics。',
+        mode: 'read',
+        targetSystem: 'agent_task',
+        metadata: { triggerSource: 'jira_rule' },
+      },
+      sourceKind: 'agent_task',
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    service.recordDelegationOutcome(failed, {
+      status: 'auth_error',
+      summary: 'OpenClaw 返回鉴权失败或权限不足。',
+      artifacts: [],
+      payload: { httpStatus: 401 },
+    });
+
+    const blocked = service.getByScopeKey('openclaw:global');
+    expect(blocked?.status).toBe('blocked_auth');
+    expect(blocked?.expiresAt).toBeTypeOf('number');
+
+    db.prepare(
+      'UPDATE action_readiness_contracts SET expires_at = ? WHERE scope_key = ?',
+    ).run(1, 'openclaw:global');
+
+    // Dispatch is refused before the executor is reached, so without a TTL the
+    // contract could never be cleared by a successful run.
+    expect(service.checkAction(failed).receipt.status).toBe('expired');
+    expect(service.checkAction(failed).decision).not.toBe('block');
+  });
+
+  it('ages out a legacy auth block that was persisted without an expiry', () => {
+    const service = new ActionReadinessService(
+      db,
+      userDataManager,
+      'test-user',
+    );
+    const action = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova Committed 的 INIT 同步',
+      params: {
+        task: '同步 Epic Commit=Yes。',
+        mode: 'read',
+        targetSystem: 'agent_task',
+      },
+      sourceKind: 'agent_task',
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+    service.recordDelegationOutcome(action, {
+      status: 'auth_error',
+      summary: 'OpenClaw 返回鉴权失败或权限不足。',
+      artifacts: [],
+      payload: { httpStatus: 401 },
+    });
+
+    // Reproduce a row written before auth blocks carried a TTL.
+    db.prepare(
+      `UPDATE action_readiness_contracts
+       SET expires_at = NULL, blocked_since = ?, updated_at = ?
+       WHERE scope_key = 'openclaw:global'`,
+    ).run(1, 1);
+
+    expect(service.getByScopeKey('openclaw:global')?.expiresAt).toBeUndefined();
+    expect(service.checkAction(action).receipt.status).toBe('expired');
+    expect(service.checkAction(action).decision).not.toBe('block');
   });
 
   it('still blocks later agent_task dispatch when the gateway itself is missing', () => {

@@ -4,8 +4,19 @@ import type Database from 'better-sqlite3';
 import {
   OpenClawDelegationService,
   type DelegationOutcome,
+  type DelegationStatus,
 } from '../integrations/OpenClawDelegationService.js';
-import { resolveAgentExecutors } from '../integrations/executors/executorRegistry.js';
+import type { AgentResultEnvelope } from '../integrations/executors/AgentExecutor.js';
+import {
+  createAgentExecutor,
+  isSupportedExecutorType,
+} from '../integrations/executors/executorFactory.js';
+import {
+  isAcpExecutorType,
+  resolveAgentExecutors,
+  resolveExecutorForDelegation,
+  type AgentExecutorInstance,
+} from '../integrations/executors/executorRegistry.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { now } from '../utils/time.js';
@@ -15,6 +26,13 @@ const READY_TTL_SECONDS = 6 * 60 * 60;
 const DEGRADED_TTL_SECONDS = 15 * 60;
 /** Single-task proof failure should not permanently block the whole scope. */
 const PROOF_FAIL_TTL_SECONDS = 5 * 60;
+/**
+ * Auth blocks must expire too. A credential/URL fix is invisible to this
+ * service, so a permanent fuse leaves every sibling action unrunnable with no
+ * path back: dispatch is refused before the executor is reached, which means no
+ * successful outcome can ever clear the contract.
+ */
+const AUTH_FAIL_TTL_SECONDS = 15 * 60;
 
 export type ActionReadinessStatus =
   | 'ready'
@@ -295,6 +313,31 @@ function isConnectionLayerOutcome(
   return false;
 }
 
+/**
+ * A probe only cares about the connection layer, so any non-terminal or
+ * unexpected run state is treated as a plain error rather than a fake success.
+ */
+function probeOutcomeFromEnvelope(
+  envelope: AgentResultEnvelope,
+): DelegationOutcome {
+  const status: DelegationStatus =
+    envelope.status === 'succeeded'
+      ? 'success'
+      : envelope.status === 'capability_missing' ||
+          envelope.status === 'auth_error' ||
+          envelope.status === 'need_human_decision' ||
+          envelope.status === 'timeout'
+        ? envelope.status
+        : 'error';
+  return {
+    status,
+    summary: envelope.summary,
+    artifacts: envelope.artifacts || [],
+    transcriptPath: envelope.transcriptPath,
+    payload: envelope.payload,
+  };
+}
+
 function statusReason(status: ActionReadinessStatus): string {
   switch (status) {
     case 'ready':
@@ -381,6 +424,20 @@ export class ActionReadinessService {
     );
   }
 
+  /** Same resolution the dispatcher uses, so a probe tests the real runtime. */
+  private resolveProbeExecutor(
+    action: QueuedActionRecord,
+  ): AgentExecutorInstance | null {
+    return resolveExecutorForDelegation(
+      getUserRuntimeConfig(this.userDataManager),
+      {
+        actionType: action.actionType,
+        sourceKind: action.sourceKind,
+        params: safeObject(action.params),
+      },
+    );
+  }
+
   getByScopeKey(scopeKey: string): ActionReadinessContract | null {
     const row = this.db
       .prepare(
@@ -392,14 +449,17 @@ export class ActionReadinessService {
 
   /**
    * Task-level executor probe receipt. Never sets blocked_proof / scope fuse.
+   * When an OpenClaw executor probe succeeds, also refresh openclaw:global so
+   * Options「测试」and Agent Task dispatch share the same gateway gate.
    */
   recordExecutorProbe(
     executorId: string,
     probe: Record<string, unknown>,
+    options?: { executorType?: string },
   ): ActionReadinessContract {
     const ok = probe.ok === true;
     const currentTime = now();
-    return this.upsertContract({
+    const contract = this.upsertContract({
       scopeKey: `executor-probe:${executorId}`,
       actionFamily: 'executor_probe',
       targetSystem: executorId,
@@ -416,6 +476,27 @@ export class ActionReadinessService {
       lastProbeResult: probe,
       expiresAt: currentTime + 5 * 60,
     });
+
+    const executorType = options?.executorType;
+    if (
+      ok &&
+      (executorType === 'openclaw-gateway' ||
+        executorType === 'openclaw-responses')
+    ) {
+      this.upsertContract({
+        ...globalOpenClawScope(),
+        status: 'ready',
+        statusReason:
+          typeof probe.detail === 'string' && probe.detail.trim()
+            ? probe.detail
+            : 'OpenClaw gateway 连接和鉴权最近一次检查通过。',
+        lastProbeAt: currentTime,
+        lastProbeResult: { source: 'executor_probe', executorId, ...probe },
+        expiresAt: currentTime + READY_TTL_SECONDS,
+      });
+    }
+
+    return contract;
   }
 
   checkAction(
@@ -494,8 +575,13 @@ export class ActionReadinessService {
     const config = getUserRuntimeConfig(this.userDataManager);
     const reflectionBlocked =
       this.isReflectionDelegationSource(action) && !config.openClawEnabled;
+    const executorInstance = reflectionBlocked
+      ? null
+      : this.resolveProbeExecutor(action);
     const localConfigurationBlocked =
-      reflectionBlocked || !config.openClawBaseUrl;
+      reflectionBlocked ||
+      !executorInstance ||
+      !isSupportedExecutorType(executorInstance.type);
     if (
       localConfigurationBlocked ||
       initial.receipt.status === 'blocked_input'
@@ -512,10 +598,10 @@ export class ActionReadinessService {
           summary: initial.receipt.reason ?? statusReason(initial.receipt.status),
           boundary:
             initial.receipt.status === 'blocked_input'
-              ? '本次只检查必填输入；输入仍不完整，未调用 OpenClaw，也未提交原动作。'
+              ? '本次只检查必填输入；输入仍不完整，未调用执行器，也未提交原动作。'
               : reflectionBlocked
                 ? '外部委派已关闭；本次未提交反思/联动原动作（Agent Task 不受此开关影响）。'
-                : '本次只检查本地 OpenClaw 配置；未提交原动作，未读取或写入外部业务数据。',
+                : '本次只检查本地 Agent 执行器配置；未提交原动作，未读取或写入外部业务数据。',
         },
       };
     }
@@ -526,8 +612,35 @@ export class ActionReadinessService {
     }
 
     const checkedAt = now();
-    const targetLabel = scope.targetSystem ?? 'OpenClaw gateway';
-    const outcome = await this.delegationService.delegate({
+    const probeExecutor = executorInstance as AgentExecutorInstance;
+
+    // A remote-worker ACP executor is only reachable from the worker process,
+    // so an inline probe would report a gateway fault that does not exist.
+    if (isAcpExecutorType(probeExecutor.type) && probeExecutor.runtime === 'remote') {
+      const unchanged = this.checkAction(action);
+      if (unchanged.decision === 'block') this.linkCheck(unchanged);
+      return {
+        decision: unchanged.decision === 'probe_first' ? 'block' : unchanged.decision,
+        receipt: unchanged.receipt,
+        probeReceipt: {
+          probeOnly: true,
+          originalActionExecuted: false,
+          checkedAt,
+          status: unchanged.receipt.status,
+          summary: `执行器「${probeExecutor.label}」运行在远端 Worker 上，无法在服务端内联重测；就绪状态以下一次 Worker 领取结果为准。`,
+          boundary:
+            '本次没有联系远端 Worker，也没有提交原动作；契约状态保持不变。',
+        },
+      };
+    }
+
+    const targetLabel = scope.targetSystem ?? probeExecutor.label;
+    const executor = createAgentExecutor(probeExecutor, {
+      delegationService: this.delegationService,
+      userId: this.userId ?? 'default',
+      defaultTimeoutMs: config.openClawTimeoutMs,
+    });
+    const envelope = await executor.submit({
       task: [
         'Readiness probe only. Do not execute the original action and do not modify external data.',
         `Check whether the ${targetLabel} capability is reachable and authorized for a future ${scope.mode} action.`,
@@ -539,15 +652,19 @@ export class ActionReadinessService {
       threadId: action.threadId ?? action.id,
       runId: action.runId,
       actionId: `${action.id}:readiness-probe:${checkedAt}`,
+      idempotencyKey: `pai:${action.id}:readiness-probe:${checkedAt}`,
       sessionKey: `readiness:${scope.scopeKey}:${this.userId ?? 'default'}`,
       metadata: {
         probeOnly: true,
         originalActionId: action.id,
         requestedMode: scope.mode,
         scopeKey: scope.scopeKey,
+        executorId: probeExecutor.id,
+        executorType: probeExecutor.type,
       },
     });
 
+    const outcome = probeOutcomeFromEnvelope(envelope);
     const receipt = this.applyDelegationOutcome(action, outcome, 'probe');
     const refreshed = this.checkAction(action);
     const decision =
@@ -845,7 +962,12 @@ export class ActionReadinessService {
         httpStatus === 401 || httpStatus === 403
           ? globalOpenClawScope()
           : scope;
-      contract = update(targetScope, 'blocked_auth', outcome.summary);
+      contract = update(
+        targetScope,
+        'blocked_auth',
+        outcome.summary,
+        currentTime + AUTH_FAIL_TTL_SECONDS,
+      );
     } else if (outcome.status === 'capability_missing') {
       if (payload.configured === false) {
         // True config gap — block the whole gateway until Options is fixed.
@@ -1013,6 +1135,21 @@ export class ActionReadinessService {
   private toEffectiveContract(
     contract: ActionReadinessContract,
   ): ActionReadinessContract {
+    // Rows written before auth blocks had a TTL carry no expiry, so deploying
+    // the TTL alone would leave them fused forever. Age them out instead of
+    // requiring a manual edit of every affected database.
+    if (contract.status === 'blocked_auth' && !contract.expiresAt) {
+      const staleSince =
+        (contract.blockedSince ?? contract.updatedAt) + AUTH_FAIL_TTL_SECONDS;
+      if (staleSince <= now()) {
+        return {
+          ...contract,
+          status: 'expired',
+          statusReason: statusReason('expired'),
+        };
+      }
+      return contract;
+    }
     if (
       contract.expiresAt &&
       contract.expiresAt <= now() &&

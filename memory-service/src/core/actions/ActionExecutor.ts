@@ -6,14 +6,15 @@ import {
   OpenClawDelegationService,
   type DelegationOutcome,
 } from '../../integrations/OpenClawDelegationService.js';
-import { OpenClawResponsesExecutor } from '../../integrations/executors/OpenClawResponsesExecutor.js';
-import { OpenClawGatewayExecutor } from '../../integrations/executors/OpenClawGatewayExecutor.js';
-import { AcpExecutor } from '../../integrations/executors/AcpExecutor.js';
 import type { AgentResultEnvelope } from '../../integrations/executors/AgentExecutor.js';
 import {
-  findEnabledExecutor,
+  createAgentExecutor,
+  isSupportedExecutorType,
+} from '../../integrations/executors/executorFactory.js';
+import {
+  isAcpExecutorType,
   isAgentDelegateActionType,
-  resolveExecutorDefaults,
+  resolveExecutorForDelegation,
   type AgentExecutorInstance,
 } from '../../integrations/executors/executorRegistry.js';
 import {
@@ -706,45 +707,20 @@ export class ActionExecutor {
     action: QueuedActionRecord,
     params: Record<string, unknown>,
   ): AgentExecutorInstance | null {
-    const config = getUserRuntimeConfig(this.userDataManager);
-    const metadata =
-      params.metadata &&
-      typeof params.metadata === 'object' &&
-      !Array.isArray(params.metadata)
-        ? (params.metadata as Record<string, unknown>)
-        : {};
-    const requested =
-      (typeof params.executor === 'string' && params.executor.trim()) ||
-      (typeof metadata.executor === 'string' && metadata.executor.trim()) ||
-      (typeof metadata.executorId === 'string' && metadata.executorId.trim()) ||
-      undefined;
-
-    const defaults = resolveExecutorDefaults(config);
-    // Agent Task v1 callers baked executor=openclaw (type name). Honor the
-    // Options Agent Task default, including retries of already-queued rows.
-    if (action.sourceKind === 'agent_task') {
-      return findEnabledExecutor(
-        config,
-        requested || defaults.agent_task,
-      );
-    }
-
-    if (requested) {
-      return findEnabledExecutor(config, requested);
-    }
-
-    // Legacy action type without an explicit executor id.
-    if (action.actionType === 'delegate_openclaw') {
-      return findEnabledExecutor(config, 'openclaw');
-    }
-
-    return findEnabledExecutor(config, defaults.agent_task);
+    return resolveExecutorForDelegation(
+      getUserRuntimeConfig(this.userDataManager),
+      {
+        actionType: action.actionType,
+        sourceKind: action.sourceKind,
+        params,
+      },
+    );
   }
 
   private isRemoteAcp(instance: AgentExecutorInstance | null): boolean {
     return Boolean(
       instance &&
-        (instance.type === 'acp-codex' || instance.type === 'acp-claude-code') &&
+        isAcpExecutorType(instance.type) &&
         instance.runtime === 'remote',
     );
   }
@@ -900,12 +876,7 @@ export class ActionExecutor {
       };
     }
 
-    if (
-      executorInstance.type !== 'openclaw-responses' &&
-      executorInstance.type !== 'openclaw-gateway' &&
-      executorInstance.type !== 'acp-codex' &&
-      executorInstance.type !== 'acp-claude-code'
-    ) {
+    if (!isSupportedExecutorType(executorInstance.type)) {
       return {
         result: {
           status: 'capability_missing',
@@ -920,26 +891,15 @@ export class ActionExecutor {
       };
     }
 
-    const executor =
-      executorInstance.type === 'openclaw-gateway'
-        ? new OpenClawGatewayExecutor(executorInstance, {
-            defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
-              .openClawTimeoutMs,
-            onProgress: async (patch) => {
-              this.actionRepo.patchRunningResult(action.id, patch);
-            },
-          })
-        : executorInstance.type === 'acp-codex' ||
-            executorInstance.type === 'acp-claude-code'
-          ? new AcpExecutor(executorInstance, {
-              userId: this.userId ?? 'default',
-              defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
-                .openClawTimeoutMs,
-            })
-          : new OpenClawResponsesExecutor(
-              this.delegationService,
-              executorInstance,
-            );
+    const executor = createAgentExecutor(executorInstance, {
+      delegationService: this.delegationService,
+      userId: this.userId ?? 'default',
+      defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
+        .openClawTimeoutMs,
+      onProgress: async (patch) => {
+        this.actionRepo.patchRunningResult(action.id, patch);
+      },
+    });
     const envelope = await executor.submit({
       task:
         typeof params.task === 'string' && params.task.trim().length > 0

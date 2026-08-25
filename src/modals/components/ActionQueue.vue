@@ -2353,7 +2353,12 @@ function transcriptToggleBoundaryLabel(action: RuntimeAction): string {
 }
 
 function isOpenClawDelegationAction(action: RuntimeAction): boolean {
-  return action.actionType === 'delegate_openclaw';
+  // Agent Task rows are delegate_agent; they share the same readiness gate and
+  // boundary copy, so excluding them mislabels probe/execute errors as cancels.
+  return (
+    action.actionType === 'delegate_openclaw' ||
+    action.actionType === 'delegate_agent'
+  );
 }
 
 function actionResultPayload(action: RuntimeAction): Record<string, unknown> {

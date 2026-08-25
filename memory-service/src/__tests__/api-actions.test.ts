@@ -132,4 +132,31 @@ describe('Action API', () => {
     });
     expect(repo.getById(action.id)?.queueStatus).toBe('failed');
   });
+
+  it('accepts a readiness probe for delegate_agent so Agent Task can be unblocked', async () => {
+    const repo = new ActionRepository(db);
+    repo.create({
+      id: 'action-agent-task-probe',
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team 的 Epics',
+      params: {
+        task: '查询缺少 Team 的 NOVA Epics。',
+        mode: 'read',
+        targetSystem: 'agent_task',
+      },
+      sourceKind: 'agent_task',
+      executionMode: 'auto',
+      queueStatus: 'failed',
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/actions/action-agent-task-probe/readiness/probe',
+    });
+
+    // The gate blocks every agent delegate type, so the probe must accept them
+    // all; rejecting delegate_agent left blocked Agent Tasks with no way back.
+    expect(response.statusCode).not.toBe(400);
+    expect(response.json()).toHaveProperty('probeReceipt.probeOnly', true);
+  });
 });

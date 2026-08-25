@@ -7,6 +7,10 @@ import {
 } from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { ActionReadinessService } from '../core/ActionReadinessService.js';
+import {
+  AGENT_ACTION_TYPES,
+  isAgentDelegateActionType,
+} from '../integrations/executors/executorRegistry.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 
 export async function actionRoutes(app: FastifyInstance): Promise<void> {
@@ -27,11 +31,13 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
     const repo = new ActionRepository(db);
     const staleAfterSeconds =
       getOpenClawStaleRunningAfterSeconds(userDataManager);
-    repo.recoverStaleRunningActions({
-      actionType: 'delegate_openclaw',
-      staleAfterSeconds,
-      errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
-    });
+    for (const actionType of AGENT_ACTION_TYPES) {
+      repo.recoverStaleRunningActions({
+        actionType,
+        staleAfterSeconds,
+        errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
+      });
+    }
     const result = repo.list({
       actionId: request.query.actionId,
       queueStatus: request.query.queueStatus ?? 'all',
@@ -64,7 +70,7 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
     if (!existing) {
       return reply.status(404).send({ error: 'Action not found' });
     }
-    if (existing.actionType === 'delegate_openclaw') {
+    if (isAgentDelegateActionType(existing.actionType)) {
       const readiness = new ActionReadinessService(
         db,
         userDataManager,
@@ -103,10 +109,10 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
     if (!action) {
       return reply.status(404).send({ error: 'Action not found' });
     }
-    if (action.actionType !== 'delegate_openclaw') {
+    if (!isAgentDelegateActionType(action.actionType)) {
       return reply.status(400).send({
         code: 'readiness_not_supported',
-        error: 'Readiness probe is only supported for delegate_openclaw',
+        error: 'Readiness probe is only supported for agent delegate actions',
       });
     }
 
