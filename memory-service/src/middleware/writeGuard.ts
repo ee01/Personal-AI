@@ -20,11 +20,14 @@ export async function writeGuardMiddleware(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  // Skip for health checks, docs, and MCP HTTP (self-authed bearer)
+  // Skip for health checks, docs, MCP HTTP, and admin self-auth POSTs
+  // (device-key approval page uses ?token= without X-User-Id).
+  const pathOnly = request.url.split('?')[0];
   if (
     request.url === '/health' ||
     request.url.startsWith('/docs') ||
-    request.url.split('?')[0] === '/mcp'
+    pathOnly === '/mcp' ||
+    pathOnly.startsWith('/api/v1/admin/key-requests')
   ) {
     return;
   }

@@ -82,6 +82,7 @@ import { evidenceWatchContractRoutes } from './routes/evidenceWatchContracts.js'
 import { usageRoutes } from './routes/usage.js';
 import { memoryClaimRoutes } from './routes/memoryClaims.js';
 import { userKeyRoutes } from './routes/userKeys.js';
+import { adminKeyRequestRoutes } from './routes/adminKeyRequests.js';
 import { contextPackRoutes } from './routes/contextPack.js';
 import { mcpHttpRoutes } from './routes/mcp.js';
 import { a2aRoutes } from './routes/a2a.js';
@@ -358,6 +359,11 @@ export async function buildApp(
       await instance.register(usageRoutes);
       await instance.register(memoryClaimRoutes);
       await instance.register(userKeyRoutes);
+      await instance.register(async (adminScope) => {
+        await adminScope.register(adminKeyRequestRoutes, {
+          userContextManager,
+        });
+      });
       await instance.register(contextPackRoutes);
     },
     { prefix: '/api/v1' },

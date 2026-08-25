@@ -12,9 +12,10 @@ import {
 } from '../i18n/index.js';
 import { DEFAULT_MEMORY_SERVICE_BASE_URL } from '../memoryServiceConfig.js';
 import {
-  ensureDeviceApiKey,
+  ensureDeviceApiKeyOutcome,
   clearStoredDeviceKey,
   clearStoredHelpCenterKey,
+  type DeviceKeyOutcome,
 } from '../deviceApiKey.js';
 import { getDefaultEnvConfig } from '../utils.js';
 
@@ -3564,6 +3565,7 @@ export interface RuntimeConfigResponse {
       | 'openclaw-gateway'
       | 'acp-codex'
       | 'acp-claude-code'
+      | 'acp-cursor'
       | string;
     baseUrl?: string;
     cwd?: string;
@@ -4964,6 +4966,7 @@ export class MemoryServiceClient {
   private _configLoadPromise: Promise<void> | null = null;
   private _userIdResolvePromise: Promise<void> | null = null;
   private _deviceKeyPromise: Promise<string | null> | null = null;
+  private _deviceKeyBlocked: DeviceKeyOutcome | null = null;
   private readonly configOverrides: Partial<MemoryServiceConfig>;
 
   constructor(config?: Partial<MemoryServiceConfig>) {
@@ -5075,6 +5078,17 @@ export class MemoryServiceClient {
     if (!this.shouldSendUserIdentity()) return this.apiKey;
     this.bootstrapKey = this.resolveBootstrapKey(this.bootstrapKey);
 
+    // Claim-gate left us needing Google / admin — do not fall through to
+    // anonymous requests (that would spam 401s). Other unavailable reasons
+    // (e.g. bootstrap_missing) still allow open-local anonymous X-User-Id.
+    if (
+      this._deviceKeyBlocked &&
+      (this._deviceKeyBlocked.status === 'needs_verification' ||
+        this._deviceKeyBlocked.status === 'pending_approval')
+    ) {
+      return this.apiKey;
+    }
+
     if (!this._deviceKeyPromise) {
       this._deviceKeyPromise = this.issueDeviceKeyPromise(false);
     }
@@ -5083,22 +5097,107 @@ export class MemoryServiceClient {
     return deviceToken || this.apiKey;
   }
 
+  /** Throw when claim-gate blocked issuance and no service-key fallback exists. */
+  private assertDeviceAuthReady(deviceBearer: string | undefined): void {
+    if (deviceBearer) return;
+    if (!this.shouldSendUserIdentity()) return;
+    if (
+      !this._deviceKeyBlocked ||
+      (this._deviceKeyBlocked.status !== 'needs_verification' &&
+        this._deviceKeyBlocked.status !== 'pending_approval')
+    ) {
+      return;
+    }
+    throw new MemoryServiceError(
+      409,
+      this._deviceKeyBlocked.status === 'needs_verification'
+        ? 'user_already_claimed'
+        : this._deviceKeyBlocked.status,
+      this._deviceKeyBlocked,
+    );
+  }
+
   private issueDeviceKeyPromise(forceReissue: boolean): Promise<string | null> {
-    return ensureDeviceApiKey({
+    return ensureDeviceApiKeyOutcome({
       baseUrl: this.baseUrl,
       bootstrapKey: this.resolveBootstrapKey(this.bootstrapKey),
       serviceKey: this.apiKey,
       userId: this.userId,
       forceReissue,
     })
-      .then((token) => {
-        if (!token) this._deviceKeyPromise = null;
-        return token;
+      .then((outcome) => {
+        if (outcome.status === 'ok') {
+          this._deviceKeyBlocked = null;
+          return outcome.token;
+        }
+        this._deviceKeyBlocked = outcome;
+        this._deviceKeyPromise = null;
+        return null;
       })
       .catch(() => {
         this._deviceKeyPromise = null;
         return null;
       });
+  }
+
+  /** Last structured device-key outcome (for Options / diagnostics). */
+  getDeviceKeyBlockState(): DeviceKeyOutcome | null {
+    return this._deviceKeyBlocked;
+  }
+
+  /**
+   * Interactive Google verification for an already-claimed namespace.
+   * Clears the blocked state on success so subsequent requests resume.
+   */
+  async verifyDeviceKeyWithGoogleInteractive(): Promise<DeviceKeyOutcome> {
+    await this.ensureConfigLoaded();
+    await this.ensureUserIdResolved();
+    const { verifyDeviceKeyWithGoogle } = await import('../deviceApiKey.js');
+    const outcome = await verifyDeviceKeyWithGoogle({
+      baseUrl: this.baseUrl,
+      bootstrapKey: this.resolveBootstrapKey(this.bootstrapKey),
+      serviceKey: this.apiKey,
+      userId: this.userId,
+      requestId:
+        this._deviceKeyBlocked &&
+        'requestId' in this._deviceKeyBlocked &&
+        this._deviceKeyBlocked.requestId
+          ? this._deviceKeyBlocked.requestId
+          : undefined,
+    });
+    if (outcome.status === 'ok') {
+      this._deviceKeyBlocked = null;
+      this._deviceKeyPromise = Promise.resolve(outcome.token);
+    } else {
+      this._deviceKeyBlocked = outcome;
+      this._deviceKeyPromise = null;
+    }
+    return outcome;
+  }
+
+  async completeApprovedDeviceKeyRequest(
+    requestId: string,
+  ): Promise<DeviceKeyOutcome> {
+    await this.ensureConfigLoaded();
+    await this.ensureUserIdResolved();
+    const { completeApprovedDeviceKeyRequest } = await import(
+      '../deviceApiKey.js'
+    );
+    const outcome = await completeApprovedDeviceKeyRequest({
+      baseUrl: this.baseUrl,
+      bootstrapKey: this.resolveBootstrapKey(this.bootstrapKey),
+      serviceKey: this.apiKey,
+      userId: this.userId,
+      requestId,
+    });
+    if (outcome.status === 'ok') {
+      this._deviceKeyBlocked = null;
+      this._deviceKeyPromise = Promise.resolve(outcome.token);
+    } else {
+      this._deviceKeyBlocked = outcome;
+      this._deviceKeyPromise = null;
+    }
+    return outcome;
   }
 
   private isRecoverableAuthError(
@@ -5132,6 +5231,7 @@ export class MemoryServiceClient {
     this.applyUserIdentityHeader(headers);
     await this.applyUiLanguageHeaders(headers);
     const deviceBearer = await this.ensureDeviceBearer();
+    this.assertDeviceAuthReady(deviceBearer);
     if (deviceBearer) {
       headers.Authorization = `Bearer ${deviceBearer}`;
     }
@@ -5227,6 +5327,7 @@ export class MemoryServiceClient {
     }
 
     const deviceBearer = await this.ensureDeviceBearer();
+    this.assertDeviceAuthReady(deviceBearer);
     if (deviceBearer) {
       headers['Authorization'] = `Bearer ${deviceBearer}`;
     }
@@ -5323,13 +5424,16 @@ export class MemoryServiceClient {
     }
 
     const deviceBearer = await this.ensureDeviceBearer();
+    this.assertDeviceAuthReady(deviceBearer);
     if (deviceBearer) {
       headers['Authorization'] = `Bearer ${deviceBearer}`;
     }
 
     const controller = new AbortController();
-    const timeout = timeoutMs ?? this.timeout;
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      timeoutMs ?? this.timeout,
+    );
 
     try {
       const response = await fetch(url, {
@@ -5370,7 +5474,7 @@ export class MemoryServiceClient {
       if (err.name === 'AbortError') {
         throw new MemoryServiceError(
           0,
-          `Request to ${path} timed out after ${timeout}ms`,
+          `Request to ${path} timed out after ${this.timeout}ms`,
         );
       }
 
@@ -5400,6 +5504,7 @@ export class MemoryServiceClient {
     await this.applyUiLanguageHeaders(headers);
 
     const deviceBearer = await this.ensureDeviceBearer();
+    this.assertDeviceAuthReady(deviceBearer);
     if (deviceBearer) {
       headers.Authorization = `Bearer ${deviceBearer}`;
     }
@@ -7206,13 +7311,11 @@ export class MemoryServiceClient {
     return this.waitAndDownloadExport();
   }
 
-  async createExportJob(
-    body: {
-      includeDerived?: boolean;
-      includeVectors?: boolean;
-      encrypt?: boolean;
-    } = {},
-  ): Promise<MemoryExportJob> {
+  async createExportJob(body: {
+    includeDerived?: boolean;
+    includeVectors?: boolean;
+    encrypt?: boolean;
+  } = {}): Promise<MemoryExportJob> {
     return this.request<MemoryExportJob>('POST', '/export/jobs', body);
   }
 
@@ -8065,6 +8168,7 @@ export class MemoryServiceClient {
     }
     if (this.userId !== previous) {
       this._deviceKeyPromise = null;
+      this._deviceKeyBlocked = null;
     }
   }
 

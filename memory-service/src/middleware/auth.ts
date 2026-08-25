@@ -28,7 +28,49 @@ export function expectedBootstrapKey(): string {
   return process.env.BOOTSTRAP_API_KEY || getConfig().bootstrapApiKey || '';
 }
 
-const KEYS_PATH_RE = /^\/api\/v1\/users\/me\/keys(?:\/|$)/;
+const KEYS_PATH_RE =
+  /^\/api\/v1\/users\/me\/(?:keys|key-requests)(?:\/|$)/;
+
+/**
+ * Browser chrome probes. Chrome/Safari request these without Authorization
+ * when any HTML page (docs, usage dashboard) is opened. They are not APIs.
+ */
+const BROWSER_PROBE_PATH_RE =
+  /^\/(?:favicon\.ico|robots\.txt|apple-touch-icon(?:-precomposed)?\.png)$/;
+
+function isBrowserProbeRequest(request: FastifyRequest): boolean {
+  const method = request.method?.toUpperCase() ?? 'GET';
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  return BROWSER_PROBE_PATH_RE.test(request.url.split('?')[0]);
+}
+
+/**
+ * Endpoints that authenticate themselves with an admin/analytics token
+ * instead of a service/personal key (browser-openable pages).
+ */
+const ADMIN_SELF_AUTH_PATH_RE =
+  /^\/api\/v1\/(?:usage\/(?:dashboard|report|users)|admin\/key-requests(?:\/|$))/;
+
+function hasAdminOrAnalyticsToken(request: FastifyRequest): boolean {
+  const header =
+    request.headers['x-analytics-token'] || request.headers['x-admin-token'];
+  const headerValue = Array.isArray(header) ? header[0] : header;
+  if (typeof headerValue === 'string' && headerValue.trim()) return true;
+
+  const queryStart = request.url.indexOf('?');
+  if (queryStart < 0) return false;
+  const token = new URLSearchParams(request.url.slice(queryStart + 1)).get(
+    'token',
+  );
+  return Boolean(token && token.trim());
+}
+
+function isAdminSelfAuthRequest(request: FastifyRequest): boolean {
+  const method = request.method?.toUpperCase() ?? 'GET';
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') return false;
+  if (!ADMIN_SELF_AUTH_PATH_RE.test(request.url.split('?')[0])) return false;
+  return hasAdminOrAnalyticsToken(request);
+}
 
 /**
  * Create a Fastify `onRequest` hook that resolves the caller's identity.
@@ -45,12 +87,15 @@ export function createAuthMiddleware(ucm: UserContextManager) {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> {
-    // Skip auth for health checks, docs, MCP HTTP (self-authed), and CORS preflight
+    // Skip auth for health checks, docs, MCP HTTP (self-authed), signed usage
+    // dashboard reads (self-authed), browser chrome probes, and CORS preflight
     if (
       request.url === '/health' ||
       request.url.startsWith('/docs') ||
       request.url.split('?')[0] === '/mcp' ||
-      request.method === 'OPTIONS'
+      request.method === 'OPTIONS' ||
+      isBrowserProbeRequest(request) ||
+      isAdminSelfAuthRequest(request)
     ) {
       return;
     }
@@ -133,7 +178,7 @@ export function createAuthMiddleware(ucm: UserContextManager) {
         return reply.code(403).send({
           error: 'bootstrap_key_scope_insufficient',
           message:
-            'This bootstrap key can only manage personal API keys (POST/GET/DELETE /users/me/keys).',
+            'This bootstrap key can only manage personal API keys (POST/GET/DELETE /users/me/keys and GET /users/me/key-requests).',
         });
       }
       const resolvedUserId = resolveUserIdHeader(request.headers['x-user-id']);

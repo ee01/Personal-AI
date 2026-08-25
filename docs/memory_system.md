@@ -213,7 +213,7 @@ POST /api/v1/ambient-calibration/traces
 | 向量检索  | sqlite-vec (384 维)            | 与 DB 同进程，无外部依赖                                   |
 | 全文检索  | FTS5 (BM25)                    | SQLite 原生                                                |
 | Embedding | Xenova/all-MiniLM-L6-v2 (本地) | 无需外部 API                                               |
-| LLM       | OpenAI / Groq / Ollama / Dify  | 可插拔                                                     |
+| LLM       | OpenAI / Claude / Groq / Ollama / Dify | 可插拔；`claude` 直连 Anthropic，不用填 base URL；`LLM_FALLBACKS` 可配置有序降级链 |
 | 调度      | node-cron + heartbeat loop     | 巩固 / 自我反思 / Rehearsal aging / 梦境重放 / 周报 / 通知 |
 
 ---
@@ -570,16 +570,21 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 对外开口之前，身份一度只靠 `X-User-Id`——任意网页都能自称任意用户。现在分三层：
 
 - **全权 `API_KEY`**：可带任意 `X-User-Id` 读写。只给 Desktop App / 运维 / 部署验证，**不要打进扩展包或 Options**。生产环境配置后，匿名 `X-User-Id`（无 Bearer）一律 401。扩展日常不走这把钥匙，因此 Options 里填了也不会变成「模拟他人」。
-- **Bootstrap `BOOTSTRAP_API_KEY`**：scope 仅 `keys.issue`，只能调 `/users/me/keys`。扩展构建或 Options 可注入；泄露后不能直接读数据，必须先留痕签发。新用户设备 key 签发只依赖 bootstrap，与是否配置全权 `API_KEY` 无关。
-- **Tier-2 个人 key（`pak.<base64url(userId)>.<secret>`）**：每台设备各自签发，绑定唯一用户。库内只存 sha256（migration `060`，含 `issued_from_ip` / `issued_from_ua`）。扩展 background 首次访问时用 bootstrap 自动签发；帮助中心仍可手动签发外接用 key。本机 `chrome.storage.local.memoryServiceDeviceKey` 里的 pak 如果被服务端判定 `invalid_user_api_key`（例如服务端用户库重建、key 被吊销），扩展会丢掉过期 pak，再用 Bootstrap 重签一把，而不是一直带着作废密钥 401。Roadmap 部署不会清掉这把本机 key。
+- **Bootstrap `BOOTSTRAP_API_KEY`**：scope 仅 `keys.issue`，且**只能认领全新命名空间**（历史上从未签发过任何 `pak`、也无真实用户数据）。扩展构建或 Options 可注入；泄露后不能直接读数据，也不能给已认领用户再签 key。新用户开箱签发只依赖 bootstrap，与是否配置全权 `API_KEY` 无关。
+- **Tier-2 个人 key（`pak.<base64url(userId)>.<secret>`）**：每台设备各自签发，绑定唯一用户。库内只存 sha256（migration `060`，含 `issued_from_ip` / `issued_from_ua`）。扩展 background 在可认领命名空间用 bootstrap 自动签发；已认领用户的新设备改走 Google 服务端校验或管理员批准。帮助中心仍可手动签发外接用 key。本机 `chrome.storage.local.memoryServiceDeviceKey` 里的 pak 如果被服务端判定 `invalid_user_api_key`（例如服务端用户库重建、key 被吊销），扩展会丢掉过期 pak 并按认领门禁重试，而不是一直带着作废密钥刷 401。Roadmap 部署不会清掉这把本机 key。
+
+**已认领后的新设备**（TOFU 之后）：
+
+1. **Google 自助校验**：`POST /users/me/keys` 可带 `verification: { provider: 'google', accessToken }`。服务端调 `tokeninfo`，校验 `aud ∈ GOOGLE_OAUTH_CLIENT_IDS`、`email_verified`、可选域名白名单 `GOOGLE_ALLOWED_EMAIL_DOMAINS`（空=不限域名）、未过期；邮箱 localpart 与 `userId` 一致，或命中 `user_identity_aliases`（migration `062`）即签发。
+2. **管理员批准**：校验失败或不匹配时写入 `device_key_requests`（migration `063`），扩展收到 `409 user_already_claimed` / `google_email_mismatch`（body 含 `verifyMethods`、`adminContact`、`requestId`）后停止无凭证回落。管理员在 `/api/v1/admin/key-requests?token=…` 批准后，扩展带 `requestId` 重试签发并消费批准；批准时可写入别名，使后续设备可自助过关。
 
 约束点：
 
 - **CORS 默认全关**：`ALLOWED_ORIGINS` 留空则不反射任何浏览器 Origin。扩展 SW / `chrome-extension://` 页面本就不走 CORS。Roadmap content script 的 memory 调用一律经 background 代理。
-- **签发可信**：`POST /users/me/keys` 要求 bootstrap / service key / 同用户已有 key；匿名在配置了密钥后被拒。每用户每小时签发上限 10。
+- **签发可信**：`POST /users/me/keys` 要求 bootstrap / service key / 同用户已有 key；匿名在配置了密钥后被拒。每用户每小时签发上限 10。bootstrap 对已认领命名空间返回 `409`，不再静默签发。
 - **越权即拒绝**：`X-User-Id` 与 key 绑定用户不一致 → 403；bootstrap 访问非 keys 路径 → 403 `bootstrap_key_scope_insufficient`。
-- **已知限制**：bootstrap 可从扩展包逆向提取；装了扩展的人仍可篡改本地 userinfo 冒充他人——根治需 SSO，本轮不处理。
-- **验证**：`userApiKeys.test.ts`（含多设备与 bootstrap scope）；自托管指引见 [self-hosting-memory-service.md](./self-hosting-memory-service.md)。
+- **已知限制**：bootstrap 仍可从扩展包逆向提取，但能力已收窄为「仅认领空命名空间」；组织内抢注风险已接受。装了扩展的人仍可篡改本地 userinfo 冒充尚未认领的名字——根治需 SSO。
+- **验证**：`userApiKeys.test.ts` / `userClaimGate.test.ts` / `googleIdentity.test.ts` / `deviceKeyRequests.test.ts`；自托管指引见 [self-hosting-memory-service.md](./self-hosting-memory-service.md)。
 
 ### 删除的彻底性：级联删除 (Cascade Deletion, P2-10)
 
@@ -1379,7 +1384,7 @@ data/
 - 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
 - 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
 - 实时事件流 `/events` 兼容浏览器 `EventSource`：客户端会在本地配置和 `userinfo.username` 解析完成后再用 `?userId=` 建立连接；如果身份仍未解析，则不附带 query userId，让服务端按 default fallback 回执处理。服务端优先校验 query userId 并按用户过滤事件；非法 userId 会直接拒绝，避免事件流误连到 `default` 用户。连接成功的 `connected` 事件会带 `user` 回执，说明身份来自 query、header 还是 default fallback，并列出 per-user storage key 与“只接收同用户或全局事件”的过滤边界。
-- `/stats` 会返回当前请求的 `user` 隔离摘要，包括 `id`、`identitySource`、`storageKey`、是否因为缺少 `X-User-Id` 回退到 `default`，以及 `writeBoundary` 机器可读契约。`writeBoundary` 明确当前空间是 `explicit_read_write` 还是 `default_read_only_fallback`，写入是否允许、哪些操作会被拦截，以及恢复动作是重新解析 `userinfo.username` / 配置 userId 还是无需处理。Memory Exploring 侧栏会直接展示当前记忆用户、per-user SQLite storage key、身份来源和“读写 / 备份 / 恢复只作用于这个空间”的边界；Today Pilot 首屏也会把顶部统计和 mission 读取绑定到同一个身份快照，显示“当前统计来自哪个用户空间”和对应 storage key。如果正在使用 `default` fallback，会把身份来源标成未解析只读回退，并按 `writeBoundary.blockedOperations` 说明写入、导入、恢复、画像更新等操作会被拦截，避免用户误把 fallback 数据当成自己的账号数据。身份卡还会显示本次只读 `/stats` 快照时间，并提供“刷新身份快照”和“打开设置”；这两个按钮的 hover / 读屏文案会分别说明刷新只重新读取只读 `/stats` 身份快照、设置只打开 Options 恢复登录 / `userinfo.username` / userId 配置，二者都不会写入、导入、恢复、迁移记忆、切换用户空间或重试失败写入。
+- `/stats` 会返回当前请求的 `user` 隔离摘要，包括 `id`、`identitySource`、`storageKey`、是否因为缺少 `X-User-Id` 回退到 `default`，以及 `writeBoundary` 机器可读契约。`writeBoundary` 明确当前空间是 `explicit_read_write` 还是 `default_read_only_fallback`，写入是否允许、哪些操作会被拦截，以及恢复动作是重新解析 `userinfo.username` / 配置 userId 还是无需处理。Memory Exploring 侧栏默认只显示当前记忆用户和状态灯；storage key 放在用户名 hover 里，不占菜单高度。身份异常（`default` fallback 或写入被拦截）时才补一行短提示，并保留紧凑的「备份」「设置」。备份只向当前用户空间请求 backup zip；若正在 default 只读回退则禁用，避免把 default 空间误存成本人备份。设置只打开 Options 恢复登录 / `userinfo.username` / userId 配置。二者都不会恢复、删除、替换、迁移记忆或切换用户空间。Today Pilot 首屏仍把顶部统计和 mission 读取绑定到同一个身份快照，显示“当前统计来自哪个用户空间”和对应 storage key。
 
 ---
 

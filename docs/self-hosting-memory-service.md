@@ -34,7 +34,9 @@ git clone https://github.com/ee01/Personal-AI.git
 cd Personal-AI
 cp memory-service/.env.example memory-service/.env
 # 编辑 memory-service/.env：
-#   OPENAI_API_KEY=...          # LLM 能力需要
+#   LLM_PROVIDER=claude         # 或 openai / groq / ollama / dify
+#   CLAUDE_API_KEY=...          # Claude 不需要填 base URL
+#   OPENAI_API_KEY=...          # LLM_PROVIDER=openai 时需要
 #   API_KEY=...                 # 全权运维密钥（不要放进扩展）
 #   BOOTSTRAP_API_KEY=...       # 仅签发设备 key；可放进扩展 Options
 #   ALLOWED_ORIGINS=            # 留空：浏览器 CORS 全关（推荐）
@@ -49,7 +51,8 @@ curl http://localhost:3210/health
 1. 打开 Personal AI → Options →「记忆系统」
 2. **记忆服务 API 地址**填 `http://localhost:3210/api/v1`（或你的公网/内网地址）
 3. **Bootstrap 密钥**填与服务端 `BOOTSTRAP_API_KEY` 相同的值
-4. 保存后刷新扩展；首次访问记忆接口时会自动为本机签发设备 key
+4. 保存后刷新扩展；**全新用户**首次访问记忆接口时会自动为本机签发设备 key（TOFU 认领）
+5. **已有数据的用户换机 / 重装**：Bootstrap 不再直接签发。扩展会提示用 Google 验证或请求管理员批准；未完成前不会继续发无凭证请求（避免 401 风暴）
 
 `ROADMAP_BASE_URL` 与 Memory 地址彼此独立。Roadmap 私有部署时同样只改 Options 里的 Roadmap 地址，**不需要**在 Memory Service 上登记 Roadmap 域名。
 
@@ -58,10 +61,12 @@ curl http://localhost:3210/health
 | 凭据 | 能力 | 放哪 |
 |---|---|---|
 | `API_KEY` | 任意 `X-User-Id` 读写；**配置后关闭匿名 `X-User-Id`** | 仅运维 / Desktop App / 部署脚本 |
-| `BOOTSTRAP_API_KEY` | 只能签发 `/users/me/keys` | 可进扩展 Options / 构建注入 |
+| `BOOTSTRAP_API_KEY` | 只能认领空命名空间并签发第一把 `/users/me/keys` | 可进扩展 Options / 构建注入 |
 | 每设备 `pak.…` 个人 key | 只能访问自己的记忆 | 扩展自动签发，存在本机 `chrome.storage.local`（不是 envConfig） |
+| `GOOGLE_OAUTH_CLIENT_IDS` / `GOOGLE_ALLOWED_EMAIL_DOMAINS` | 已认领用户自助换机（可选） | 仅服务端 `.env`；域名填**你自己的**公司域，不要沿用公共实例示例 |
+| `ADMIN_CONTACT_EMAIL` / `ADMIN_API_TOKEN` | 409 兜底联系人 + `/api/v1/admin/key-requests` 批准页 | 仅服务端；联系人填部署方管理员 |
 
-公共/生产环境应设置 `API_KEY`。未设置时（本地开发），任意能打到服务的客户端只要伪造 `X-User-Id` 就能读写对应用户。设置后，匿名请求返回 401；新用户签发设备 key 仍走 `BOOTSTRAP_API_KEY`，不受影响。部署 Roadmap **不会**清理 Chrome 里的设备 key；若服务端用户库重建导致旧 pak 失效，扩展会在收到 `invalid_user_api_key` 后用 Bootstrap 自动重签。
+公共/生产环境应设置 `API_KEY`。未设置时（本地开发），任意能打到服务的客户端只要伪造 `X-User-Id` 就能读写对应用户。设置后，匿名请求返回 401；**新用户**认领仍走 `BOOTSTRAP_API_KEY`。自托管若不配 Google 相关变量：新用户仍可认领；老用户新设备只走管理员批准（`ADMIN_API_TOKEN`，可回落到 `ANALYTICS_ADMIN_TOKEN`）。部署 Roadmap **不会**清理 Chrome 里的设备 key；若服务端用户库重建导致旧 pak 失效，扩展会按认领门禁重试（空命名空间可 bootstrap 重签，已认领则需 Google / 管理员）。
 
 不要把 `API_KEY` 打进 Chrome 扩展包或 Options。扩展只需要 Bootstrap；全权密钥留给 Desktop App 环境变量和运维脚本（`curl -H "Authorization: Bearer $API_KEY" -H "X-User-Id: someone"`）。
 

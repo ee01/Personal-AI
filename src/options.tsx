@@ -22,7 +22,12 @@ import { AgentExecutorsSettings } from './components/AgentExecutorsSettings';
 import { AutoBackupSettings } from './components/AutoBackupSettings';
 import { ToggleField } from './components/ToggleField';
 import { syncUserLanguagePreferenceProfileItem } from './services/UserLanguagePreferenceSync';
-import { DEVICE_KEY_STORAGE } from './deviceApiKey';
+import {
+  DEVICE_KEY_STORAGE,
+  DEVICE_KEY_STATE_STORAGE,
+  readDeviceKeyState,
+  type DeviceKeyOutcome,
+} from './deviceApiKey';
 import { agentCoordinator } from './agentWorkflow';
 import {
   AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
@@ -2107,6 +2112,10 @@ const Options = () => {
     userId: string;
     keyPrefix: string;
   } | null>(null);
+  const [deviceKeyState, setDeviceKeyState] = useState<DeviceKeyOutcome | null>(
+    null,
+  );
+  const [deviceKeyBusy, setDeviceKeyBusy] = useState(false);
   const lastLanguageSyncKeyRef = useRef('');
   const [status, setStatus] = useState<{
     message: string;
@@ -2540,7 +2549,13 @@ const Options = () => {
   // 页面加载时从 Chrome 存储中获取配置
   useEffect(() => {
     chrome.storage.local.get(
-      ['envConfig', 'userinfo', 'memoryServiceUserApiKey', DEVICE_KEY_STORAGE],
+      [
+        'envConfig',
+        'userinfo',
+        'memoryServiceUserApiKey',
+        DEVICE_KEY_STORAGE,
+        DEVICE_KEY_STATE_STORAGE,
+      ],
       (result) => {
       console.log('result', result);
       const storedPersonalKey =
@@ -2553,6 +2568,12 @@ const Options = () => {
             }
           : null,
       );
+      const storedState = result?.[DEVICE_KEY_STATE_STORAGE] as
+        | DeviceKeyOutcome
+        | undefined;
+      if (storedState && typeof storedState === 'object' && 'status' in storedState) {
+        setDeviceKeyState(storedState);
+      }
       // Align with MemoryServiceClient identity resolution: username, then
       // email local-part. Otherwise esone.qiu-only UI can stay hidden when
       // chrome.storage only has email / userEmail.
@@ -2676,6 +2697,117 @@ const Options = () => {
       timeout: targetConfig.MEMORY_SERVICE_TIMEOUT || 30_000,
       userId,
     });
+  };
+
+  const resolveMemoryServiceBaseUrl = (): string | null => {
+    const base = String(config.MEMORY_SERVICE_BASE_URL || '')
+      .trim()
+      .replace(/\/+$/, '');
+    return base || null;
+  };
+
+  const resolveAdminToken = (): string =>
+    String(config.ANALYTICS_ADMIN_TOKEN || 'esone').trim();
+
+  const openMemoryAdminPage = (path: string) => {
+    const base = resolveMemoryServiceBaseUrl();
+    if (!base) {
+      setStatus({
+        message: '请先填写记忆服务 API 地址',
+        type: 'error',
+      });
+      return;
+    }
+    const token = resolveAdminToken();
+    window.open(
+      `${base}${path}?token=${encodeURIComponent(token)}`,
+      '_blank',
+      'noopener',
+    );
+  };
+
+  const refreshDeviceKeyUi = async () => {
+    const state = await readDeviceKeyState();
+    setDeviceKeyState(state);
+    if (currentUsername) {
+      const stored = await chrome.storage.local.get([DEVICE_KEY_STORAGE]);
+      const key = stored[DEVICE_KEY_STORAGE] as
+        | { userId?: string; keyPrefix?: string }
+        | undefined;
+      if (key?.userId === currentUsername && key.keyPrefix) {
+        setPersonalApiKey({
+          userId: key.userId,
+          keyPrefix: key.keyPrefix,
+        });
+      }
+    }
+  };
+
+  const handleVerifyDeviceKeyWithGoogle = async () => {
+    setDeviceKeyBusy(true);
+    try {
+      const client = await createMemoryServiceClient(config);
+      const outcome = await client.verifyDeviceKeyWithGoogleInteractive();
+      setDeviceKeyState(outcome);
+      if (outcome.status === 'ok') {
+        await refreshDeviceKeyUi();
+        setStatus({
+          message: 'Google 验证通过，本机设备 key 已签发',
+          type: 'success',
+        });
+      } else if (outcome.status === 'pending_approval') {
+        setStatus({
+          message: '已提交管理员批准请求，请等待处理',
+          type: 'error',
+        });
+      } else {
+        setStatus({
+          message: outcome.message || 'Google 验证未通过',
+          type: 'error',
+        });
+      }
+    } catch (error) {
+      console.warn('Device key Google verify failed', error);
+      setStatus({
+        message: 'Google 验证失败，请重试或联系管理员',
+        type: 'error',
+      });
+    } finally {
+      setDeviceKeyBusy(false);
+    }
+  };
+
+  const handleCompleteApprovedDeviceKey = async () => {
+    const requestId =
+      deviceKeyState &&
+      'requestId' in deviceKeyState &&
+      deviceKeyState.requestId
+        ? deviceKeyState.requestId
+        : '';
+    if (!requestId) return;
+    setDeviceKeyBusy(true);
+    try {
+      const client = await createMemoryServiceClient(config);
+      const outcome = await client.completeApprovedDeviceKeyRequest(requestId);
+      setDeviceKeyState(outcome);
+      if (outcome.status === 'ok') {
+        await refreshDeviceKeyUi();
+        setStatus({
+          message: '管理员已批准，本机设备 key 已签发',
+          type: 'success',
+        });
+      } else {
+        setStatus({
+          message: outcome.message || '批准尚未生效，请稍后再试',
+          type: 'error',
+        });
+      }
+    } catch (error) {
+      console.warn('Complete approved device key failed', error);
+      setStatus({ message: '领取批准失败', type: 'error' });
+    } finally {
+      setDeviceKeyBusy(false);
+    }
   };
 
   const handleUiLanguageChange = async (nextLanguage: UiLanguage) => {
@@ -2827,10 +2959,14 @@ const Options = () => {
               const type =
                 item.type === 'openclaw-gateway' ||
                 item.type === 'acp-codex' ||
-                item.type === 'acp-claude-code'
+                item.type === 'acp-claude-code' ||
+                item.type === 'acp-cursor'
                   ? item.type
                   : 'openclaw-responses';
-              const isAcp = type === 'acp-codex' || type === 'acp-claude-code';
+              const isAcp =
+                type === 'acp-codex' ||
+                type === 'acp-claude-code' ||
+                type === 'acp-cursor';
               return {
                 id: String(item.id || ''),
                 label: String(item.label || item.id || ''),
@@ -3970,43 +4106,6 @@ const Options = () => {
           >
             📊 打开我的用量报表
           </button>
-          {currentUsername.toLowerCase() === 'esone.qiu' && (
-            <button
-              type="button"
-              onClick={() => {
-                const base = String(config.MEMORY_SERVICE_BASE_URL || '')
-                  .trim()
-                  .replace(/\/+$/, '');
-                if (!base) {
-                  setStatus({
-                    message: '请先填写记忆服务 API 地址',
-                    type: 'error',
-                  });
-                  return;
-                }
-                const token = String(
-                  config.ANALYTICS_ADMIN_TOKEN || 'esone',
-                ).trim();
-                window.open(
-                  `${base}/usage/dashboard?token=${encodeURIComponent(token)}`,
-                  '_blank',
-                  'noopener',
-                );
-              }}
-              style={{
-                backgroundColor: '#6366f1',
-                color: 'white',
-                padding: '10px 20px',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: 'bold',
-              }}
-            >
-              📊 打开全体用量报表（Admin）
-            </button>
-          )}
         </div>
       </div>
 
@@ -4292,15 +4391,110 @@ const Options = () => {
             value={
               personalApiKey
                 ? `${personalApiKey.keyPrefix}…（绑定 ${personalApiKey.userId}）`
-                : '尚未签发（首次访问记忆服务时自动生成）'
+                : deviceKeyState?.status === 'needs_verification'
+                  ? '已认领命名空间：需要 Google 验证或管理员批准'
+                  : deviceKeyState?.status === 'pending_approval'
+                    ? `等待管理员批准（${
+                        'requestId' in deviceKeyState
+                          ? deviceKeyState.requestId.slice(0, 8)
+                          : ''
+                      }…）`
+                    : deviceKeyState?.status === 'unavailable'
+                      ? `尚未签发：${deviceKeyState.reason}`
+                      : '尚未签发（新用户首次访问记忆服务时自动认领）'
             }
             readOnly
             style={{ background: '#f5f5f5', color: '#666' }}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            每台设备各自签发；换浏览器会自动再签一把。管理全部设备 / 外接工具
-            key：打开「帮助中心 → 记忆外接」。
+            全新用户用 Bootstrap 自动认领；老用户换设备需 Google 验证或管理员批准。
+            管理全部设备 / 外接工具 key：打开「帮助中心 → 记忆外接」。
           </small>
+          {(deviceKeyState?.status === 'needs_verification' ||
+            deviceKeyState?.status === 'pending_approval' ||
+            deviceKeyState?.status === 'unavailable') && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 12,
+                border: '1px solid #f59e0b',
+                background: '#fffbeb',
+                borderRadius: 6,
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                设备 key 需要处理
+              </div>
+              <div style={{ fontSize: 13, color: '#92400e', marginBottom: 8 }}>
+                {deviceKeyState.message ||
+                  (deviceKeyState.status === 'needs_verification'
+                    ? '此用户命名空间已被认领。请用 Google 验证本机，或请求管理员批准。'
+                    : deviceKeyState.status === 'pending_approval'
+                      ? '已创建批准请求，请等待管理员处理后再点「领取已批准的 key」。'
+                      : '暂时无法签发设备 key。')}
+              </div>
+              {'googleEmail' in deviceKeyState && deviceKeyState.googleEmail ? (
+                <div style={{ fontSize: 13, marginBottom: 8 }}>
+                  Google 账号：<code>{deviceKeyState.googleEmail}</code>
+                  {' · 申请用户：'}
+                  <code>
+                    {'userId' in deviceKeyState
+                      ? deviceKeyState.userId
+                      : currentUsername}
+                  </code>
+                </div>
+              ) : null}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {(deviceKeyState.status === 'needs_verification' ||
+                  deviceKeyState.status === 'pending_approval') && (
+                  <button
+                    type="button"
+                    disabled={deviceKeyBusy}
+                    onClick={() => void handleVerifyDeviceKeyWithGoogle()}
+                  >
+                    {deviceKeyBusy ? '处理中…' : '用 Google 验证这台设备'}
+                  </button>
+                )}
+                {deviceKeyState.status === 'pending_approval' &&
+                  'requestId' in deviceKeyState &&
+                  deviceKeyState.requestId && (
+                    <button
+                      type="button"
+                      disabled={deviceKeyBusy}
+                      onClick={() => void handleCompleteApprovedDeviceKey()}
+                    >
+                      领取已批准的 key
+                    </button>
+                  )}
+                {'requestId' in deviceKeyState && deviceKeyState.requestId ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(
+                        String(deviceKeyState.requestId),
+                      );
+                      setStatus({
+                        message: 'requestId 已复制',
+                        type: 'success',
+                      });
+                    }}
+                  >
+                    复制 requestId
+                  </button>
+                ) : null}
+                {'adminContact' in deviceKeyState &&
+                deviceKeyState.adminContact ? (
+                  <a
+                    href={`mailto:${deviceKeyState.adminContact}?subject=${encodeURIComponent(
+                      `Personal AI device key approval: ${currentUsername}`,
+                    )}`}
+                  >
+                    联系管理员（{deviceKeyState.adminContact}）
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          )}
         </div>
         <div className="form-group">
           <label htmlFor="MEMORY_SERVICE_TIMEOUT">请求超时（毫秒）</label>
@@ -4320,46 +4514,8 @@ const Options = () => {
         <AutoBackupSettings />
         {currentUsername.toLowerCase() === 'esone.qiu' && (
           <div className="form-group">
-            <label htmlFor="ANALYTICS_ADMIN_TOKEN">用量分析 Admin Token</label>
-            <input
-              type="password"
-              id="ANALYTICS_ADMIN_TOKEN"
-              name="ANALYTICS_ADMIN_TOKEN"
-              value={config.ANALYTICS_ADMIN_TOKEN || ''}
-              onChange={handleInputChange}
-              placeholder="与 memory-service ANALYTICS_ADMIN_TOKEN 一致"
-            />
-            <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-              仅 esone.qiu 可见。用于打开用量分析报表；默认可用 esone（与当前远端配置一致）。
-            </small>
             <button
               type="button"
-              style={{ marginTop: '10px' }}
-              onClick={() => {
-                const base = String(config.MEMORY_SERVICE_BASE_URL || '')
-                  .trim()
-                  .replace(/\/+$/, '');
-                if (!base) {
-                  setStatus({
-                    message: '请先填写记忆服务 API 地址',
-                    type: 'error',
-                  });
-                  return;
-                }
-                const token = String(
-                  config.ANALYTICS_ADMIN_TOKEN || 'esone',
-                ).trim();
-                const url = `${base}/usage/dashboard?token=${encodeURIComponent(
-                  token,
-                )}`;
-                window.open(url, '_blank', 'noopener');
-              }}
-            >
-              打开用量分析报表
-            </button>
-            <button
-              type="button"
-              style={{ marginTop: '10px', marginLeft: '8px' }}
               onClick={async () => {
                 try {
                   const response = await chrome.runtime.sendMessage({
@@ -4393,6 +4549,9 @@ const Options = () => {
             >
               立即上报并自检
             </button>
+            <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+              运维自检：立即 flush 前端用量缓冲。Admin 报表入口见页面底部「管理入口」。
+            </small>
           </div>
         )}
         <h3 style={{ margin: '16px 0 10px' }}>自我反思 / 场景预演生产</h3>
@@ -4896,48 +5055,6 @@ const Options = () => {
         <ContextSiteMuteSettings />
       </div>
 
-      <AgentExecutorsSettings
-        sectionRef={openClawConfigSectionRef}
-        highlighted={
-          highlightedSection === 'openclaw-config' ||
-          highlightedSection === 'OPENCLAW_ENABLED' ||
-          highlightedSection === 'agent-executors-config'
-        }
-        executors={config.AGENT_EXECUTORS || []}
-        defaults={
-          config.EXECUTOR_DEFAULTS || {
-            agent_task: '',
-            reflection_research: '',
-          }
-        }
-        externalDelegationEnabled={config.OPENCLAW_ENABLED !== false}
-        openClawTimeoutMs={Number(config.OPENCLAW_TIMEOUT_MS) || 600000}
-        openClawApiKeyConfigured={config.OPENCLAW_API_KEY_CONFIGURED === true}
-        minOpenClawTimeoutSeconds={MIN_OPENCLAW_TIMEOUT_SECONDS}
-        onChange={({
-          executors,
-          defaults,
-          openClawEnabled,
-          openClawBaseUrl,
-          openClawTimeoutMs,
-          clearOpenClawApiKey,
-        }) =>
-          setConfig((prev) => ({
-            ...prev,
-            AGENT_EXECUTORS: executors,
-            EXECUTOR_DEFAULTS: defaults,
-            OPENCLAW_ENABLED: openClawEnabled,
-            OPENCLAW_BASE_URL: openClawBaseUrl,
-            ...(typeof openClawTimeoutMs === 'number'
-              ? { OPENCLAW_TIMEOUT_MS: openClawTimeoutMs }
-              : {}),
-            ...(clearOpenClawApiKey !== undefined
-              ? { OPENCLAW_CLEAR_API_KEY: clearOpenClawApiKey }
-              : {}),
-          }))
-        }
-      />
-
       <div
         id="outreach-config"
         ref={outreachConfigSectionRef}
@@ -5435,6 +5552,48 @@ const Options = () => {
         </div>
       )}
 
+      <AgentExecutorsSettings
+        sectionRef={openClawConfigSectionRef}
+        highlighted={
+          highlightedSection === 'openclaw-config' ||
+          highlightedSection === 'OPENCLAW_ENABLED' ||
+          highlightedSection === 'agent-executors-config'
+        }
+        executors={config.AGENT_EXECUTORS || []}
+        defaults={
+          config.EXECUTOR_DEFAULTS || {
+            agent_task: '',
+            reflection_research: '',
+          }
+        }
+        externalDelegationEnabled={config.OPENCLAW_ENABLED !== false}
+        openClawTimeoutMs={Number(config.OPENCLAW_TIMEOUT_MS) || 600000}
+        openClawApiKeyConfigured={config.OPENCLAW_API_KEY_CONFIGURED === true}
+        minOpenClawTimeoutSeconds={MIN_OPENCLAW_TIMEOUT_SECONDS}
+        onChange={({
+          executors,
+          defaults,
+          openClawEnabled,
+          openClawBaseUrl,
+          openClawTimeoutMs,
+          clearOpenClawApiKey,
+        }) =>
+          setConfig((prev) => ({
+            ...prev,
+            AGENT_EXECUTORS: executors,
+            EXECUTOR_DEFAULTS: defaults,
+            OPENCLAW_ENABLED: openClawEnabled,
+            OPENCLAW_BASE_URL: openClawBaseUrl,
+            ...(typeof openClawTimeoutMs === 'number'
+              ? { OPENCLAW_TIMEOUT_MS: openClawTimeoutMs }
+              : {}),
+            ...(clearOpenClawApiKey !== undefined
+              ? { OPENCLAW_CLEAR_API_KEY: clearOpenClawApiKey }
+              : {}),
+          }))
+        }
+      />
+
       <div className="form-section">
         <h2>{t('options.sections.jira')}</h2>
         <div className="form-group">
@@ -5560,6 +5719,43 @@ const Options = () => {
         </div>
         <button onClick={handleExport}>导出配置</button>
       </div>
+
+      {currentUsername.toLowerCase() === 'esone.qiu' && (
+        <div className="form-section">
+          <h2>管理入口</h2>
+          <small
+            style={{ color: '#666', display: 'block', marginBottom: '15px' }}
+          >
+            memory-service 运维页面（仅 esone.qiu 可见）。Token 与远端
+            ANALYTICS_ADMIN_TOKEN 或 ADMIN_API_TOKEN 一致；未填写时默认 esone。
+          </small>
+          <div className="form-group">
+            <label htmlFor="ANALYTICS_ADMIN_TOKEN">Admin Token</label>
+            <input
+              type="password"
+              id="ANALYTICS_ADMIN_TOKEN"
+              name="ANALYTICS_ADMIN_TOKEN"
+              value={config.ANALYTICS_ADMIN_TOKEN || ''}
+              onChange={handleInputChange}
+              placeholder="与 memory-service ANALYTICS_ADMIN_TOKEN 一致"
+            />
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => openMemoryAdminPage('/usage/dashboard')}
+            >
+              用量分析报表（Admin）
+            </button>
+            <button
+              type="button"
+              onClick={() => openMemoryAdminPage('/admin/key-requests')}
+            >
+              设备 key 批准（Admin）
+            </button>
+          </div>
+        </div>
+      )}
 
       {status.message && (
         <div className={`status-message ${status.type}`}>{status.message}</div>

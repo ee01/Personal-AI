@@ -348,3 +348,91 @@ test('reissues a device key when the stored pak is rejected as invalid', async (
     (globalThis as any).chrome = previousChrome;
   }
 });
+
+test('claim-gate 409 does not continue with unauthenticated business requests', async () => {
+  const previousChrome = (globalThis as any).chrome;
+  const previousFetch = globalThis.fetch;
+  const requested: Array<{ url: string; auth: string; method: string }> = [];
+
+  installChromeStorage({
+    envConfig: {
+      MEMORY_SERVICE_BOOTSTRAP_KEY: 'test-bootstrap',
+    },
+    userinfo: { username: 'esone.qiu' },
+  });
+  (globalThis as any).chrome.identity = {
+    getAuthToken: (
+      _details: unknown,
+      callback: (token?: string) => void,
+    ) => {
+      (globalThis as any).chrome.runtime = {
+        lastError: { message: 'not signed in' },
+      };
+      callback(undefined);
+    },
+  };
+  (globalThis as any).chrome.runtime = { lastError: undefined };
+
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = new Headers(init?.headers);
+    const method = String(init?.method || 'GET').toUpperCase();
+    requested.push({
+      url,
+      auth: headers.get('Authorization') || '',
+      method,
+    });
+    if (url.endsWith('/users/me/keys') && method === 'POST') {
+      return new Response(
+        JSON.stringify({
+          error: 'user_already_claimed',
+          userId: 'esone.qiu',
+          verifyMethods: ['google'],
+          adminContact: 'admin@example.com',
+          requestId: 'req-claim-1',
+        }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(JSON.stringify({ outreachEnabled: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new MemoryServiceClient({
+      baseUrl: 'http://memory.xmnup.com/api/v1',
+      userId: 'esone.qiu',
+    });
+    await assert.rejects(
+      () => client.getRuntimeConfig(),
+      (error: unknown) => {
+        assert.ok(error && typeof error === 'object');
+        const err = error as { status?: number; message?: string };
+        assert.equal(err.status, 409);
+        assert.match(String(err.message || ''), /user_already_claimed/);
+        return true;
+      },
+    );
+    assert.equal(
+      requested.some(
+        (item) =>
+          item.url.endsWith('/users/me/keys') &&
+          item.method === 'POST' &&
+          item.auth === 'Bearer test-bootstrap',
+      ),
+      true,
+    );
+    assert.equal(
+      requested.some((item) => item.url.endsWith('/config')),
+      false,
+      'must not fall through to anonymous /config after claim-gate 409',
+    );
+    const block = client.getDeviceKeyBlockState();
+    assert.equal(block?.status, 'needs_verification');
+  } finally {
+    globalThis.fetch = previousFetch;
+    (globalThis as any).chrome = previousChrome;
+  }
+});

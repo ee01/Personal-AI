@@ -256,7 +256,7 @@
 | 工作/个人/全部范围语义 | 召回 | [memory_system.md](./memory_system.md) | `/recall`、`/ask`、被动召回共用；搜索范围按钮和入口先显示范围意图、排除域、旧快照和无写入边界 |
 | TTL 试用期与生命周期端点 | 生命周期 | [memory_system.md](./memory_system.md) | 低置信/untrusted 自动捕获 72h probation；`/lifecycle/forget` 与 `/lifecycle/compress` 降级不物理删 |
 | 级联删除 | 生命周期 | [memory_system.md](./memory_system.md) | 用户显式删除时清理孤儿属性、关系证据、反思 artifact 与画像证据影子 |
-| 多用户隔离 | 身份与隔离 | [memory_system.md](./memory_system.md) | per-user SQLite DB、身份来源、`/stats.user.writeBoundary` 与身份卡刷新 / 设置按钮边界 |
+| 多用户隔离 | 身份与隔离 | [memory_system.md](./memory_system.md) | per-user SQLite DB、身份来源、`/stats.user.writeBoundary`；侧栏默认用户名 + 状态灯，异常时才提示，备份 / 设置入口保持紧凑 |
 | 记忆注入防护 | 安全防护 | [memory_system.md](./memory_system.md) / [memory_capture.md](./features/memory_capture.md) | trust class 打标、Ask 中性框架、flagged 证据阻断无人值守动作；不删改原文 |
 | 自我反思线程 | 反思与梦境 | [memory_system.md](./memory_system.md) | `ReflectionThreadService` 与 UI 线程页；列表显示已读取/总计、当前切片逾期数和只读分页回执，详情页显示手动反思 / 暂停 / 恢复 / 关闭的操作范围回执 |
 | 反思本地研究补查 | 反思与梦境 | [memory_system.md](./memory_system.md) | 反思 run 内查询本地记忆和派生证据；详情页显示本轮研究范围、trace 卡、研究证据采用回执和手动推进 / 动作 / transcript / 会话导航控件边界 |
@@ -274,7 +274,8 @@
 | Agent Thinking 分析编排 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | `IntelligentAgent` 通用工具/思考循环供消息分析、Google Slides、主动通知和显式编排复用；被动网页 Memory Capture 使用单次无工具 LLM，不进入该循环 |
 | Agent Thinking 工具审批 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | 阻断、队列口径、审批前确认、结果区定位、批准 key / 审核包 / 重跑配置复制按钮边界 |
 | Agent Thinking trace 可视化 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | Options 演示、Trace 复核路线、问题 span 步骤定位、步骤按钮 hover/读屏复核理由与复制反馈 |
-| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP local/remote）；probe 连通性；Worker pair/claim/lease；Desktop 内嵌与 headless 安装 |
+| Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP Codex/Claude/Cursor local/remote）；probe 连通性；Worker pair/claim/lease；Desktop 内嵌与 headless 安装 |
+| Cursor ACP 执行器 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options 类型 `acp-cursor`；`cursor-acp` shim 把 ACP 译成 `cursor-agent` headless；HTTP MCP 写入 `.cursor/mcp.json` 并在任务结束恢复 |
 | Task Scheduler 后台任务调度 | 任务调度 | [task_scheduler_api.md](./features/task_scheduler_api.md) | 扩展后台 `scheduled_task_*` alarm 统一调度；任务启停、状态、折叠需处理预览、下一步提示边界、提交中、按钮边界、刷新确认和操作范围 |
 | 用量与 Token 分析报表 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 使用视角四视图（功能总览/用户活跃/偏好矩阵/次要面板）+ 中文功能名 + 30d；按 user × capability × model × side 归因 |
 | 前后端用量打点 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 前端 `UsageTracker` 缓冲 + `chrome.alarms` 批量上报 `POST /usage/telemetry`；后端 `AsyncLocalStorage` + `LLMClient`（含 stream）记录真实/估算 usage，onResponse 记接口频率 |
