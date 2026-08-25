@@ -104,6 +104,39 @@ function formatBytes(bytes?: number): string {
 }
 
 export function AutoBackupSettings(): React.ReactElement {
+  return (
+    <AutoBackupErrorBoundary>
+      <AutoBackupSettingsForm />
+    </AutoBackupErrorBoundary>
+  );
+}
+
+class AutoBackupErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: string | null }
+> {
+  state: { error: string | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error): { error: string } {
+    return { error: error.message || String(error) };
+  }
+
+  render(): React.ReactNode {
+    if (this.state.error) {
+      return (
+        <div className="form-section" style={{ marginTop: 24 }}>
+          <h2>自动备份</h2>
+          <p style={{ color: '#b42318', fontSize: 13 }}>
+            配置区未能加载：{this.state.error}
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function AutoBackupSettingsForm(): React.ReactElement {
   const [tab, setTab] = useState<ChannelTab>('webdav');
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [status, setStatus] = useState<MemoryBackupStatusResponse | null>(null);
@@ -111,12 +144,13 @@ export function AutoBackupSettings(): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [desktopInstalled, setDesktopInstalled] = useState<boolean | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (alive?: () => boolean) => {
     const client = getMemoryServiceClient();
     const [config, backupStatus] = await Promise.all([
       client.getRuntimeConfig(),
       client.getBackupStatus().catch(() => null),
     ]);
+    if (alive && !alive()) return;
     setDraft(draftFromConfig(config));
     setStatus(backupStatus);
     setTab(
@@ -125,13 +159,24 @@ export function AutoBackupSettings(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    void load().catch((error) => {
-      setMessage(error instanceof Error ? error.message : String(error));
+    let cancelled = false;
+    const desktop = new DesktopAppClient();
+    void load(() => !cancelled).catch((error) => {
+      if (!cancelled) {
+        setMessage(error instanceof Error ? error.message : String(error));
+      }
     });
-    void DesktopAppClient.getInstance()
+    void desktop
       .getHealth()
-      .then(() => setDesktopInstalled(true))
-      .catch(() => setDesktopInstalled(false));
+      .then((health) => {
+        if (!cancelled) setDesktopInstalled(Boolean(health?.ok));
+      })
+      .catch(() => {
+        if (!cancelled) setDesktopInstalled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   const patch = (partial: Partial<Draft>) =>
