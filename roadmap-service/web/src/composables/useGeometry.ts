@@ -1,5 +1,17 @@
+import { ref } from 'vue';
+
 export const MS = 86_400_000;
-export const DAY_W = 7;
+
+/**
+ * Gantt zoom: pixels per day. A ref (not a plain constant) so GanttPanel's
+ * wheel/pinch handler can rescale the whole timeline live; every geometry
+ * helper below reads `DAY_W.value`, and any `.vue` file that imports `DAY_W`
+ * by name gets it auto-unwrapped in its own template.
+ */
+export const DAY_W_DEFAULT = 7;
+export const DAY_W_MIN = 2.2;
+export const DAY_W_MAX = 24;
+export const DAY_W = ref(DAY_W_DEFAULT);
 
 export const strip = (d: Date) =>
   new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -138,11 +150,11 @@ export function rangesOverlap(
 
 /** Pixel offset of a calendar day from the timeline start (left edge of the day cell). */
 export function X(tl: Timeline, d: Date | string): number {
-  return diffD(tl.start, d) * DAY_W;
+  return diffD(tl.start, d) * DAY_W.value;
 }
 
 export const dateAtX = (tl: Timeline, px: number) =>
-  addD(tl.start, Math.round(px / DAY_W));
+  addD(tl.start, Math.round(px / DAY_W.value));
 
 export function colorCls(start: Date | string, days: number): string {
   const s = typeof start === 'string' ? parseDate(start) : start;

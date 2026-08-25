@@ -23,8 +23,10 @@ import type {
 import type { RemoteTask } from './JiraClient.js';
 import { jiraSearchChildTasks } from './JiraClient.js';
 import {
+  addDaysIso,
   clipDescription,
   daysBetweenIso,
+  diffDaysIso,
   importedTaskSpan,
   looksFullName,
   mergeAssigneeMapIdentities,
@@ -743,7 +745,12 @@ export function applyIntent(
   intent: Record<string, unknown>,
   actor: ActorContext,
 ):
-  | { ok: true; snapshot: TeamSnapshot; itemKey?: string }
+  | {
+      ok: true;
+      snapshot: TeamSnapshot;
+      itemKey?: string;
+      deferSummary?: { moved: string[]; capped: string[]; stuck: string[] };
+    }
   | { ok: false; error: string; current?: unknown } {
   const team = getTeam(teamId);
   if (!team) return { ok: false, error: 'team_not_found' };
@@ -754,6 +761,8 @@ export function applyIntent(
   touchPresence(teamId, actor);
   /** Set by `add_item` so the caller can locate the row it just created. */
   let createdItemKey: string | null = null;
+  /** Set by `defer_subs` so the caller can toast counts + know which subs to Jira-sync. */
+  let deferSummary: { moved: string[]; capped: string[]; stuck: string[] } | undefined;
 
   if (op === 'update_jql') {
     const releaseSheet = normalizeReleaseSheetInput(intent.releaseSheet);
@@ -1224,19 +1233,24 @@ export function applyIntent(
       item.type === type &&
       item.project_key === projectKey;
     if (!unchanged) {
+      // Preserve the draft title as the display alias so the gantt name stays
+      // put through Agent-mode summary rewrites and later refresh_from_jira
+      // overwrites of `title` (alias is never touched by that path). Only when
+      // the user hasn't already set one — never clobber a manual alias.
+      const alias = item.alias || item.title;
       db.prepare(
         `UPDATE items SET
-          jira_key = ?, type = ?, project_key = ?,
+          jira_key = ?, type = ?, project_key = ?, alias = ?,
           version = version + 1, updated_at = ?
          WHERE team_id = ? AND key = ?`,
-      ).run(jiraKey, type, projectKey, ts, teamId, key);
+      ).run(jiraKey, type, projectKey, alias, ts, teamId, key);
       writeActivity({
         teamId,
         actor,
         op,
         targetType: 'item',
         targetKey: key,
-        summary: { title: item.title, alias: item.alias, jiraKey, type },
+        summary: { title: item.title, alias, jiraKey, type },
       });
     }
   } else if (op === 'add_sub') {
@@ -1386,17 +1400,19 @@ export function applyIntent(
         .get(teamId, mapping.draftId) as SubRow | undefined;
       if (!sub) continue;
       if (sub.jira_key === mapping.jiraKey && !sub.is_draft) continue;
+      // Same alias preservation as resolve_item above.
+      const alias = sub.alias || sub.title;
       db.prepare(
-        `UPDATE subs SET jira_key = ?, is_draft = 0, version = version + 1, updated_at = ?
+        `UPDATE subs SET jira_key = ?, is_draft = 0, alias = ?, version = version + 1, updated_at = ?
          WHERE id = ?`,
-      ).run(mapping.jiraKey, ts, sub.id);
+      ).run(mapping.jiraKey, alias, ts, sub.id);
       writeActivity({
         teamId,
         actor,
         op,
         targetType: 'sub',
         targetKey: sub.id,
-        summary: { title: sub.title, jiraKey: mapping.jiraKey },
+        summary: { title: sub.title, alias, jiraKey: mapping.jiraKey },
       });
     }
   } else if (op === 'cleanup') {
@@ -1832,6 +1848,56 @@ export function applyIntent(
     if (ttlSkip) {
       return { ok: true, snapshot: getTeamSnapshot(teamId)! };
     }
+  } else if (op === 'defer_subs') {
+    // "其余延至下周": move each sub's start to `targetStart` (client sends the
+    // computed next-Monday date — the server just clamps and applies), length
+    // unchanged. Clamped to the parent Epic's gantt end so a task never gets
+    // pushed past its own Epic; a sub already past that end doesn't move at all.
+    const subIds = Array.isArray(intent.subIds) ? intent.subIds.map(String) : [];
+    const targetStart = isoDateOrNull(intent.targetStart);
+    if (!targetStart) return { ok: false, error: 'target_start_required' };
+    const moved: string[] = [];
+    const capped: string[] = [];
+    const stuck: string[] = [];
+    for (const subId of subIds) {
+      const sub = db
+        .prepare(`SELECT * FROM subs WHERE team_id = ? AND id = ?`)
+        .get(teamId, subId) as SubRow | undefined;
+      if (!sub || sub.cleared || !sub.start_date || !sub.days) continue;
+      const item = getItem(teamId, sub.item_key);
+      if (!item || !item.start_date || !item.days) continue;
+      const epicEnd = addDaysIso(item.start_date, item.days - 1);
+      const subEnd = addDaysIso(sub.start_date, sub.days - 1);
+      const want = diffDaysIso(sub.start_date, targetStart);
+      const maxByEpic = diffDaysIso(subEnd, epicEnd);
+      const shift = Math.min(want, maxByEpic);
+      if (shift <= 0) {
+        stuck.push(subId);
+        continue;
+      }
+      const nextStart = addDaysIso(sub.start_date, shift);
+      db.prepare(
+        `UPDATE subs SET start_date = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+      ).run(nextStart, ts, subId);
+      moved.push(subId);
+      if (shift < want) capped.push(subId);
+    }
+    deferSummary = { moved, capped, stuck };
+    if (moved.length) {
+      writeActivity({
+        teamId,
+        actor,
+        op,
+        targetType: 'sub',
+        targetKey: subIds[0] || '',
+        summary: {
+          movedCount: moved.length,
+          cappedCount: capped.length,
+          stuckCount: stuck.length,
+          targetStart,
+        },
+      });
+    }
   } else {
     return { ok: false, error: `unsupported_op:${op}` };
   }
@@ -1839,9 +1905,12 @@ export function applyIntent(
   const snapshot = getTeamSnapshot(teamId)!;
   getEventBus().emit('snapshot', snapshot, teamId);
   getEventBus().emit('intent', { op, intent, actor }, teamId);
-  return createdItemKey
-    ? { ok: true, snapshot, itemKey: createdItemKey }
-    : { ok: true, snapshot };
+  return {
+    ok: true,
+    snapshot,
+    ...(createdItemKey ? { itemKey: createdItemKey } : {}),
+    ...(deferSummary ? { deferSummary } : {}),
+  };
 }
 
 const AV_COLORS = [

@@ -244,6 +244,30 @@ export function useRoadmapApi() {
     return data.snapshot;
   }
 
+  /**
+   * `defer_subs` is a batch intent, so it doesn't go through the generic
+   * `sendIntent` (which only returns the snapshot) — the caller needs
+   * `deferSummary` to build an accurate toast and know which subs to
+   * Jira-sync, both keyed by subId.
+   */
+  async function deferSubs(teamId: string, subIds: string[], targetStart: string) {
+    return apiFetch<{
+      ok: true;
+      snapshot: TeamSnapshot;
+      deferSummary?: { moved: string[]; capped: string[]; stuck: string[] };
+    }>(`/api/v1/teams/${teamId}/intents`, {
+      teamId,
+      method: 'POST',
+      body: JSON.stringify({
+        op: 'defer_subs',
+        subIds,
+        targetStart,
+        ...actorPayload.value,
+        shareToken: getShareToken(teamId),
+      }),
+    });
+  }
+
   async function importTasks(
     teamId: string,
     tasks?: Array<{
@@ -377,6 +401,7 @@ export function useRoadmapApi() {
     fetchTeam,
     shareTeam,
     sendIntent,
+    deferSubs,
     importTasks,
     syncTarget,
     fetchActivity,

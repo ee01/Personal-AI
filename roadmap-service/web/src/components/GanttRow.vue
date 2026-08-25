@@ -17,7 +17,7 @@ import {
 import { memberChipHtml, openOwnerFloat } from '../composables/useOwnerFloat';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { useRoadmapState } from '../composables/useRoadmapState';
-import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, driftedDepCount, depBadgeTip, depHoverTip, depEtaMismatchesJira, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS } from '../composables/useRoadmapContract';
+import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, driftedDepCount, depBadgeTip, depHoverTip, depEtaMismatchesJira, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS, shouldWrapAlias } from '../composables/useRoadmapContract';
 import {
   defaultNewSubSpan,
   dispName,
@@ -113,8 +113,8 @@ function browseUrl(key: string | null | undefined) {
 const disp = computed(() => props.item.alias || props.item.title);
 const isDraft = computed(() => isDraftItem(props.item));
 const dispKey = computed(() => itemDisplayKey(props.item));
-const wrapMode = computed(() => Boolean(props.item.alias));
-const barW = computed(() => (props.item.days || 0) * DAY_W - 2);
+const wrapMode = computed(() => shouldWrapAlias(props.item.alias));
+const barW = computed(() => (props.item.days || 0) * DAY_W.value - 2);
 const labelIn = computed(() => wrapMode.value || barW.value >= 110);
 const visibleSubs = computed(() => props.item.subs.filter((s) => !s.cleared));
 const nSubs = computed(() => visibleSubs.value.length);
@@ -240,7 +240,7 @@ function barDragStart(
 
   const applyVisual = () => {
     barEl.style.left = `${X(props.tl, live.start)}px`;
-    barEl.style.width = `${live.days * DAY_W - 2}px`;
+    barEl.style.width = `${live.days * DAY_W.value - 2}px`;
     if (barEl.classList.contains('free-h') && barEl.parentElement) {
       barEl.parentElement.style.height = `${barEl.offsetHeight + (sub ? 14 : 18)}px`;
     }
@@ -266,7 +266,7 @@ function barDragStart(
       }
     }
 
-    const dd = Math.round((dx + scrolled) / DAY_W);
+    const dd = Math.round((dx + scrolled) / DAY_W.value);
     if (mode === 'move') {
       live.start = addD(
         orig.start,
@@ -982,7 +982,7 @@ watch(
           :data-sub-id="s.id"
           :class="[
             s.temp ? 'draft' : s.start && s.days ? colorCls(s.start, s.days) : '',
-            { 'free-h': !!s.alias },
+            { 'free-h': shouldWrapAlias(s.alias) },
           ]"
           :style="{
             left: `${s.start ? X(tl, s.start) : 0}px`,
@@ -996,10 +996,10 @@ watch(
           :data-tip="`${s.key || '草稿 · 未创建到 Jira'}${s.createdBy && s.createdBy !== currentUser ? ` · 由 ${showName(s.createdBy)} 添加` : ''} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · Owner ${showName(s.owner)}` : ''}${barSprintTitle(s.start, s.days)}||${s.title}||${tooltipHintLine(s.description, subOpsHint(s))}`"
           @pointerdown="barDragStart($event, s, $event.currentTarget as HTMLElement)"
         >
-          <div v-if="s.alias" class="wrap-label">{{ esc(s.alias) }}</div>
+          <div v-if="shouldWrapAlias(s.alias)" class="wrap-label">{{ esc(s.alias!) }}</div>
           <span v-else class="in-label">
             <span v-if="s.key" style="font-family: var(--mono); font-size: 9.5px; opacity: 0.75">{{ s.key }}</span>
-            {{ s.key ? ' · ' : '' }}{{ esc(s.title) }}
+            {{ s.key ? ' · ' : '' }}{{ esc(s.alias || s.title) }}
           </span>
           <span
             v-if="s.createdBy && s.createdBy !== currentUser"

@@ -168,6 +168,32 @@ describe('resolve_item', () => {
     expect(item.type).toBe('Task');
     expect(item.projectKey).toBe('OTHER');
   });
+
+  it('carries the draft title into alias, and never overwrites a pre-existing one', () => {
+    const key = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Draft epic name' }),
+    ).itemKey!;
+    const resolved = expectOk(
+      apply(teamId, { op: 'resolve_item', itemKey: key, jiraKey: 'NOVA-800' }),
+    ).snapshot;
+    expect(itemOf(resolved, key).alias).toBe('Draft epic name');
+
+    const withAlias = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Draft epic name two' }),
+    ).itemKey!;
+    expectOk(
+      apply(teamId, {
+        op: 'set_alias',
+        itemKey: withAlias,
+        alias: 'User alias',
+        baseVersion: itemOf(getTeamSnapshot(teamId)!, withAlias).version,
+      }),
+    );
+    const resolvedTwo = expectOk(
+      apply(teamId, { op: 'resolve_item', itemKey: withAlias, jiraKey: 'NOVA-801' }),
+    ).snapshot;
+    expect(itemOf(resolvedTwo, withAlias).alias).toBe('User alias');
+  });
 });
 
 describe('resolve_draft', () => {
@@ -242,6 +268,57 @@ describe('resolve_draft', () => {
       }),
     ).snapshot;
     expect(subOf(corrected, itemKey, subId).key).toBe('NOVA-601');
+  });
+
+  it('carries the draft title into alias so the gantt name survives a later refresh_from_jira summary rewrite', () => {
+    const itemKey = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Parent for alias carry' }),
+    ).itemKey!;
+    const withSub = expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey,
+        title: 'My hand-typed draft title',
+      }),
+    ).snapshot;
+    const subId = itemOf(withSub, itemKey).subs[0].id;
+    expect(subOf(withSub, itemKey, subId).alias).toBeNull();
+
+    const resolved = expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: subId, jiraKey: 'NOVA-700' }],
+      }),
+    ).snapshot;
+    const sub = subOf(resolved, itemKey, subId);
+    expect(sub.alias).toBe('My hand-typed draft title');
+    expect(sub.title).toBe('My hand-typed draft title');
+  });
+
+  it('does not clobber an alias the user already set before resolving', () => {
+    const itemKey = expectOk(
+      apply(teamId, { op: 'add_item', title: 'Parent for existing alias' }),
+    ).itemKey!;
+    const withSub = expectOk(
+      apply(teamId, { op: 'add_sub', itemKey, title: 'Original draft title' }),
+    ).snapshot;
+    const subId = itemOf(withSub, itemKey).subs[0].id;
+    expectOk(
+      apply(teamId, {
+        op: 'update_sub',
+        subId,
+        alias: 'User chosen alias',
+        baseVersion: subOf(withSub, itemKey, subId).version,
+      }),
+    );
+
+    const resolved = expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: subId, jiraKey: 'NOVA-701' }],
+      }),
+    ).snapshot;
+    expect(subOf(resolved, itemKey, subId).alias).toBe('User chosen alias');
   });
 });
 

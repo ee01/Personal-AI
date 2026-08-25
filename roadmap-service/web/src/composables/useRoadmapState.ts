@@ -57,6 +57,7 @@ const INTENT_ERROR_TEXT: Record<string, string> = {
   merge_target_not_full_name: '合并目标必须是 Firstname Lastname',
   member_name_taken: '该成员名已存在，请用 Assignee 映射的「合并」',
   item_not_draft: '已创建 Jira 的条目不能在 Roadmap 改 description',
+  target_start_required: '缺少目标日期',
 };
 
 export function intentErrorText(error?: string | null): string {
@@ -81,6 +82,8 @@ export function createRoadmapState() {
 
   const view = ref<ViewMode>('gantt');
   const resWin = ref<ResWindow>('2w');
+  /** Resource-view hover: highlights every bar for this Epic across all rows + the toolbar legend. */
+  const hoveredEpicKey = ref<string | null>(null);
   const focusQuarter = ref(CURQ);
   /** Session-only Sprint↔month toggle; not persisted / not synced. */
   const rulerMode = ref<RulerMode>('release');
@@ -298,6 +301,27 @@ export function createRoadmapState() {
     }
   }
 
+  /** "其余延至下周": batch-moves subs and reports which ones actually moved so
+   * the caller can toast a summary and Jira-sync the moved ones. Null subIds
+   * (already resolved, editable off, etc.) return null — nothing to report. */
+  async function deferSubsToNextMonday(subIds: string[], targetStart: string) {
+    if (!teamId.value || !editable.value || !subIds.length) return null;
+    try {
+      const data = await api.deferSubs(teamId.value, subIds, targetStart);
+      commitSnapshot(data.snapshot);
+      return data.deferSummary || null;
+    } catch (err: unknown) {
+      const e = err as { status?: number; body?: { error?: string } };
+      if (e.status === 409) {
+        toast('版本冲突，正在刷新…');
+        commitSnapshot(await api.fetchTeam(teamId.value));
+      } else {
+        toast(intentErrorText(e.body?.error));
+      }
+      throw err;
+    }
+  }
+
   function ensureActorName(): boolean {
     if (!api.actorName.value.trim()) {
       nameGateOpen.value = true;
@@ -500,6 +524,7 @@ export function createRoadmapState() {
     toasts,
     view,
     resWin,
+    hoveredEpicKey,
     focusQuarter,
     rulerMode,
     modals,
@@ -516,6 +541,7 @@ export function createRoadmapState() {
     loadTeams,
     selectTeam,
     applySnapshotFromIntent,
+    deferSubsToNextMonday,
     ensureActorName,
     expiredStats,
     draftItems,

@@ -4,6 +4,9 @@ import { useRoadmapState, scheduleFromBacklog, hasTargetInTimeline, targetDays }
 import {
   X,
   DAY_W,
+  DAY_W_DEFAULT,
+  DAY_W_MIN,
+  DAY_W_MAX,
   computeTL,
   fmtMD,
   fmtISO,
@@ -46,6 +49,7 @@ import {
   mapGet,
   teamAssigneeMap,
 } from '../composables/useAssigneeMap';
+import { clipTxt, epicColor, epicShort } from '../composables/useRoadmapContract';
 
 const state = useRoadmapState();
 const gate = useExtensionGate();
@@ -59,6 +63,97 @@ let silentRefreshInFlight = false;
 
 const tl = computed<Timeline>(() =>
   computeTL(state.snapshot.value?.team.checkedQuarters || []),
+);
+
+/* ---------- 时间轴缩放 ----------
+   触控板双指捏合（浏览器映射为 ctrlKey+wheel）/ ⌘+滚轮：甘特任意位置缩放，光标下的
+   日期锚定不动；时间标尺上双指上下滑动同样缩放（无需修饰键，标尺没有纵向内容，纵向
+   滑动这里没有歧义）；双击标尺：非 100% 复位，已是 100% 则适应全部。缩放级别按团队
+   存 localStorage，只影响本人视图，下次打开恢复。 */
+const zoomHint = ref({ show: false, text: '' });
+let zoomHintTimer: ReturnType<typeof setTimeout> | null = null;
+let zoomPending: { f: number; x: number } | null = null;
+let zoomApplyTimer: ReturnType<typeof setTimeout> | null = null;
+
+const zoomStorageKey = (teamId: string) => `roadmap.zoom.${teamId}`;
+
+function showZoomHint() {
+  const w = gScroll.value?.clientWidth || 0;
+  const span = w / DAY_W.value;
+  const spanTxt = span >= 60 ? `${(span / 30.44).toFixed(1)} 个月` : `${Math.round(span / 7)} 周`;
+  zoomHint.value = {
+    show: true,
+    text: `缩放 ${Math.round((DAY_W.value / DAY_W_DEFAULT) * 100)}%${w ? ` · 视野约 ${spanTxt}` : ''}`,
+  };
+  if (zoomHintTimer) clearTimeout(zoomHintTimer);
+  zoomHintTimer = setTimeout(() => {
+    zoomHint.value.show = false;
+  }, 900);
+}
+
+function persistZoom() {
+  const id = state.snapshot.value?.team.id;
+  if (id) window.localStorage.setItem(zoomStorageKey(id), String(DAY_W.value));
+}
+
+function setZoom(next: number, anchorClientX?: number) {
+  const clamped = clamp(next, DAY_W_MIN, DAY_W_MAX);
+  if (Math.abs(clamped - DAY_W.value) < 0.005) {
+    showZoomHint();
+    return;
+  }
+  const sc = gScroll.value;
+  if (!sc) {
+    DAY_W.value = clamped;
+    showZoomHint();
+    persistZoom();
+    return;
+  }
+  const rect = sc.getBoundingClientRect();
+  const ax = (anchorClientX ?? rect.left + sc.clientWidth / 2) - rect.left;
+  // 锚点像素对应的天序号：缩放前后钉在同一屏幕位置
+  const anchorDay = (sc.scrollLeft + ax) / DAY_W.value;
+  DAY_W.value = clamped;
+  nextTick(() => {
+    sc.scrollLeft = anchorDay * DAY_W.value - ax;
+  });
+  showZoomHint();
+  persistZoom();
+}
+
+function onGanttWheel(e: WheelEvent) {
+  const pinch = e.ctrlKey || e.metaKey;
+  const onRuler = !!(e.target as HTMLElement).closest('.g-header,.g-relruler');
+  if (!pinch && !onRuler) return; // 正文普通滚动 = 平移，不拦截
+  if (!pinch && Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // 标尺上横向滑动仍是平移
+  e.preventDefault();
+  const k = e.ctrlKey ? 0.014 : e.deltaMode === 1 ? 0.12 : 0.004; // 捏合步进小 → 系数大
+  zoomPending = { f: (zoomPending ? zoomPending.f : 1) * Math.exp(-e.deltaY * k), x: e.clientX };
+  if (!zoomApplyTimer) {
+    zoomApplyTimer = setTimeout(() => {
+      zoomApplyTimer = null;
+      if (!zoomPending) return;
+      const { f, x } = zoomPending;
+      zoomPending = null;
+      setZoom(DAY_W.value * f, x);
+    }, 16); // 合帧：滚轮连发只重渲染一次
+  }
+}
+
+function onRulerDblClick(e: MouseEvent) {
+  e.preventDefault();
+  if (Math.abs(DAY_W.value - DAY_W_DEFAULT) > 0.1) setZoom(DAY_W_DEFAULT, e.clientX);
+  else if (gScroll.value) setZoom(gScroll.value.clientWidth / tl.value.days); // 已是 100% → 适应全部
+}
+
+watch(
+  () => state.snapshot.value?.team.id,
+  (id) => {
+    if (!id) return;
+    const saved = Number(window.localStorage.getItem(zoomStorageKey(id)));
+    DAY_W.value = saved && Number.isFinite(saved) ? clamp(saved, DAY_W_MIN, DAY_W_MAX) : DAY_W_DEFAULT;
+  },
+  { immediate: true },
 );
 
 /** Data-level schedule (always on when configured) — for catch-sprint hints. */
@@ -111,6 +206,21 @@ const phaseLegend = computed(() => {
   }));
 });
 
+/** Resource view only shows sub-tasks; this is what the "主任务" legend and the
+ * per-bar prefix chip/stripe key off of — every Epic with at least one
+ * non-cleared sub, in the same order as the gantt rows. */
+const epicLegend = computed(() => {
+  const keys = state.scheduledItems.value.map((it) => it.key);
+  return state.scheduledItems.value
+    .filter((it) => it.subs.some((s) => !s.cleared))
+    .map((it) => ({
+      key: it.key,
+      title: clipTxt(it.title, 90),
+      short: epicShort(it),
+      color: epicColor(keys, it.key),
+    }));
+});
+
 const monthOffsetDays = computed(() => {
   const months = tl.value.months;
   const acc: number[] = [];
@@ -124,12 +234,12 @@ const monthOffsetDays = computed(() => {
 
 const visibleSegments = computed(() => {
   if (!activeRel.value || !splitKind.value) return [];
-  const maxX = tl.value.days * DAY_W;
+  const maxX = tl.value.days * DAY_W.value;
   return sprintSegments.value
     .map((sg, i) => {
       if (sg.end <= tl.value.start || sg.start > tl.value.end) return null;
-      const x0 = clamp(X(tl.value, sg.start) + DAY_W / 2, 0, maxX);
-      const x1 = clamp(X(tl.value, sg.end) + DAY_W / 2, 0, maxX);
+      const x0 = clamp(X(tl.value, sg.start) + DAY_W.value / 2, 0, maxX);
+      const x1 = clamp(X(tl.value, sg.end) + DAY_W.value / 2, 0, maxX);
       const cur = today >= sg.start && today < sg.end;
       const tip =
         `${sg.rel.name}${cur ? '（当前 Sprint）' : ''} · ${fmtMD(sg.start)} → ${fmtMD(sg.end)}||` +
@@ -163,7 +273,7 @@ const visibleTicks = computed(() => {
   for (const p of activeRel.value.phases) {
     if (!shownPhaseKinds.value.includes(p.kind)) continue;
     if (p.date < tl.value.start || p.date > tl.value.end) continue;
-    const px = X(tl.value, p.date) + DAY_W / 2;
+    const px = X(tl.value, p.date) + DAY_W.value / 2;
     const past = p.date < today;
     const ymd = `${p.date.getFullYear()}-${String(p.date.getMonth() + 1).padStart(2, '0')}-${String(p.date.getDate()).padStart(2, '0')}`;
     const entry: (typeof out)[number] = {
@@ -192,7 +302,7 @@ const splitLines = computed(() => {
   return sprintSegments.value
     .filter((sg) => sg.start >= tl.value.start && sg.start <= tl.value.end)
     .map((sg) => ({
-      left: X(tl.value, sg.start) + DAY_W / 2,
+      left: X(tl.value, sg.start) + DAY_W.value / 2,
       color: PHASE_RULER[splitKind.value!].color,
     }));
 });
@@ -208,7 +318,7 @@ const phaseLines = computed(() => {
         p.date <= tl.value.end,
     )
     .map((p) => ({
-      left: X(tl.value, p.date) + DAY_W / 2,
+      left: X(tl.value, p.date) + DAY_W.value / 2,
       color: PHASE_RULER[p.kind].color,
       pro: p.kind === 'pro',
     }));
@@ -535,12 +645,12 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
       const day = hasTarget
         ? diffD(tl.value.start, it.targetStart!)
         : clamp(
-            Math.round((ev.clientX - inner.getBoundingClientRect().left) / DAY_W),
+            Math.round((ev.clientX - inner.getBoundingClientRect().left) / DAY_W.value),
             0,
             tl.value.days - 1,
           );
       dropVisible.value = true;
-      dropLeft.value = day * DAY_W;
+      dropLeft.value = day * DAY_W.value;
       const startHint = addD(tl.value.start, day);
       const daysHint = hasTarget
         ? targetDays(it)
@@ -570,7 +680,7 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
         days = targetDays(it);
       } else {
         const day = clamp(
-          Math.round((ev.clientX - inner.getBoundingClientRect().left) / DAY_W),
+          Math.round((ev.clientX - inner.getBoundingClientRect().left) / DAY_W.value),
           0,
           tl.value.days - 1,
         );
@@ -703,6 +813,18 @@ async function commitBar(
   }
 }
 
+/** After a "其余延至下周" batch commit, resource view only knows which subIds
+ * moved — the snapshot it committed already has their new dates, so read
+ * those back and queue the same debounced Jira Target sync a drag would. */
+function onDeferCommitted(subIds: string[]) {
+  for (const it of state.scheduledItems.value) {
+    for (const s of it.subs) {
+      if (!subIds.includes(s.id) || !s.key || !s.start || !s.days) continue;
+      scheduleTargetDateSync({ subId: s.id, jiraKey: s.key, start: s.start, days: s.days });
+    }
+  }
+}
+
 async function onUpdateSub(intent: Record<string, unknown>) {
   const subId = String(intent.subId || '');
   const item = state.scheduledItems.value.find((row) =>
@@ -828,6 +950,7 @@ onUnmounted(() => {
 
 <template>
   <section class="gantt-panel">
+    <div class="zoom-hint" :class="{ show: zoomHint.show }">{{ zoomHint.text }}</div>
     <div class="g-toolbar">
       <div class="view-switch">
         <button
@@ -906,6 +1029,20 @@ onUnmounted(() => {
         >
           全部
         </button>
+      </div>
+
+      <div v-show="state.view.value === 'resource' && epicLegend.length" class="legend epic-legend">
+        <span style="font-weight: 600">主任务</span>
+        <span
+          v-for="ep in epicLegend"
+          :key="ep.key"
+          class="lg"
+          :data-tip="`${ep.key}||${ep.title}||hover 高亮该主任务名下所有任务条`"
+          @mouseenter="state.hoveredEpicKey.value = ep.key"
+          @mouseleave="state.hoveredEpicKey.value = null"
+        >
+          <span class="ep-dot" :style="{ background: ep.color }" />{{ ep.short }}
+        </span>
       </div>
 
       <div class="g-spacer" />
@@ -1022,9 +1159,10 @@ onUnmounted(() => {
       ref="gScroll"
       class="gantt-scroll"
       :class="{ 'rel-on': !!activeRel }"
+      @wheel="onGanttWheel"
     >
       <div class="g-inner" :style="{ width: `${tl.days * DAY_W}px` }">
-        <div v-if="activeRel && splitKind" class="g-relruler">
+        <div v-if="activeRel && splitKind" class="g-relruler" @dblclick="onRulerDblClick">
           <div
             v-for="(sg, i) in visibleSegments"
             :key="`sg-${sg.rel.name}-${i}`"
@@ -1050,7 +1188,7 @@ onUnmounted(() => {
             >{{ tick.proLabel }}</span>
           </template>
         </div>
-        <div class="g-header" :class="{ slim: !!activeRel }">
+        <div class="g-header" :class="{ slim: !!activeRel }" @dblclick="onRulerDblClick">
           <div
             v-for="mo in tl.months"
             :key="`${mo.y}-${mo.m}`"
@@ -1144,7 +1282,11 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <ResourceView v-show="state.view.value === 'resource'" :tl="tl" />
+    <ResourceView
+      v-show="state.view.value === 'resource'"
+      :tl="tl"
+      @defer-committed="onDeferCommitted"
+    />
 
     <div
       v-show="dragHint.show"

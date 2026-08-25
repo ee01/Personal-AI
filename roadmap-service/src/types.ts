@@ -56,7 +56,8 @@ export type IntentOp =
   | 'update_create_jira_prompt'
   | 'update_assignee_map'
   | 'merge_people'
-  | 'refresh_from_jira';
+  | 'refresh_from_jira'
+  | 'defer_subs';
 
 export type MarkerKind = 'phase' | 'dep';
 export type PhaseKind = 'design' | 'stage' | 'production' | 'custom';

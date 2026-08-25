@@ -14,12 +14,15 @@ import {
   depStatusChipLabel,
   depStatusIsStale,
   driftedDepCount,
+  epicColor,
+  epicShort,
   formatEstimate,
   isDraftItem,
   isSystemActivity,
   itemDisplayKey,
   pendingDepCount,
   pickTickerEntry,
+  shouldWrapAlias,
   subTypeComesFromCreateMeta,
   tickerLabel,
   tooltipHintLine,
@@ -113,6 +116,41 @@ describe('display helpers', () => {
     expect(typeBadge('Initiative')).toEqual({ cls: 'type-INIT', label: 'INIT' });
     expect(typeBadge('Task')).toEqual({ cls: 'type-TASK', label: 'TASK' });
     expect(typeBadge('Story').cls).toBe('type-TASK');
+  });
+
+  it('only wraps an alias to multiple lines when it reads like a short display name', () => {
+    expect(shouldWrapAlias(null)).toBe(false);
+    expect(shouldWrapAlias(undefined)).toBe(false);
+    expect(shouldWrapAlias('')).toBe(false);
+    expect(shouldWrapAlias('智能快捷回复')).toBe(true);
+    // A preserved draft title (see resolve_item/resolve_draft) is usually long
+    // English prose — wrapping that to multiple lines blows up bar height for
+    // no benefit, so it falls back to single-line ellipsis like a plain title.
+    expect(
+      shouldWrapAlias(
+        'Wire A/B experiment flags and metrics events for smart replies rollout',
+      ),
+    ).toBe(false);
+  });
+
+  it('assigns each Epic a stable color from its position in the gantt row order', () => {
+    const order = ['NOVA-1', 'NOVA-2', 'NOVA-3'];
+    expect(epicColor(order, 'NOVA-1')).toBe(epicColor(order, 'NOVA-1'));
+    expect(epicColor(order, 'NOVA-1')).not.toBe(epicColor(order, 'NOVA-2'));
+    // A key with no known row position still gets a deterministic color
+    // instead of throwing or falling back to the same swatch every time.
+    expect(epicColor(order, 'UNKNOWN-KEY')).toBe(epicColor(order, 'UNKNOWN-KEY'));
+  });
+
+  it('prefers the alias over the title for the resource-view Epic prefix chip', () => {
+    expect(epicShort({ alias: '短名', title: 'Some very long epic title here' })).toBe(
+      '短名',
+    );
+    expect(epicShort({ alias: null, title: 'Short title' })).toBe('Short title');
+    expect(
+      epicShort({ alias: null, title: 'A title so long it needs truncation applied' })
+        .length,
+    ).toBeLessThan('A title so long it needs truncation applied'.length);
   });
 });
 

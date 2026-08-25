@@ -1,20 +1,26 @@
 # Roadmap 甘特 & 人员视图体验改进 Plan
 
-> 状态：设计完成，交互方案已在 demo 验证，待落地 roadmap-service
-> 配套 demo：`docs/demo/roadmap-demo.html`（本轮 5 个需求的界面效果均已实现并可操作）
-> 代码走读基线：2026-08-25 develop 分支
+> 状态：**已落地 roadmap-service**，7 项全部实现并在真实 dev server（backend + Vite web）里手动 + 脚本化验证通过；新增/更新的 vitest 用例全绿（143 passed）
+> 配套 demo：`docs/demo/roadmap-demo.html`（设计原型，真实实现的交互与动效与其一致）
+> 代码走读基线：2026-08-25 develop 分支；落地完成：2026-08-25
 
 覆盖 7 项（5 个原始需求 + 复盘追加的 2 项）：
 
-| # | 需求 | Demo 状态 | 真实实现主要位置 |
+| # | 需求 | 状态 | 真实实现位置 |
 |---|------|-----------|------------------|
-| 1 | 甘特时间轴缩放（无按钮，手势优先） | ✅ 可玩 | `web/src/composables/useGeometry.ts` + `GanttPanel.vue` |
-| 2 | 创建 Jira 回传 key 后，草稿名留作备注名 | ✅ 可玩 | `src/core/TeamService.ts` resolve_draft / resolve_item |
-| 3 | 清空备注名回车 = 恢复原 ticket summary | ✅（demo 原生支持，补了提示/反馈） | `web/src/components/GanttRow.vue` saveAlias |
-| 4 | 人员视图标识子任务所属主任务 | ✅ 可玩 | `web/src/components/ResourceView.vue`（纯前端） |
-| 5 | 聚焦「正在做」，其余任务一键**延至下周** | ✅ 可玩（语义已按复盘定稿） | `ResourceView.vue` + 新 intent `defer_subs` |
-| 6 | 人员视图时间窗平移（双指左右滑） | ✅ 可玩 | `ResourceView.vue`（纯前端） |
-| 7 | 车道装箱排序修复（横向接排） | ✅ 已修 | `ResourceView.vue` placeLanes |
+| 1 | 甘特时间轴缩放（无按钮，手势优先） | ✅ 已实现并验证 | `web/src/composables/useGeometry.ts`（`DAY_W` 改 ref）+ `GanttPanel.vue`（wheel/dblclick + localStorage 持久化） |
+| 2 | 创建 Jira 回传 key 后，草稿名留作备注名 | ✅ 已实现并验证 | `src/core/TeamService.ts` resolve_draft / resolve_item（`alias = COALESCE(alias, title)`）+ `useRoadmapContract.ts` shouldWrapAlias |
+| 3 | 清空备注名回车 = 恢复原 ticket summary | ✅ 复核确认原本已正确工作，无需改动 | `web/src/components/GanttRow.vue` saveAlias（端到端走读 + 浏览器实测均正常） |
+| 4 | 人员视图标识子任务所属主任务 | ✅ 已实现并验证 | `web/src/components/ResourceView.vue` + `useRoadmapContract.ts`（epicColor/epicShort）+ `GanttPanel.vue`（工具栏图例） |
+| 5 | 聚焦「正在做」，其余任务一键**延至下周** | ✅ 已实现并验证 | `ResourceView.vue`（选择/预告/影子 UI）+ 新 intent `defer_subs`（`TeamService.ts` + `types.ts` + `useRoadmapApi.ts`/`useRoadmapState.ts`） |
+| 6 | 人员视图时间窗平移（双指左右滑） | ✅ 已实现并验证 | `ResourceView.vue`（纯前端，缓冲渲染 + transform + settle） |
+| 7 | 车道装箱排序修复（横向接排） | ✅ 已实现并验证 | `ResourceView.vue` `tasksOf()` 排序 |
+
+## 落地后的验证方式
+
+- `npx vitest run`：143 个用例全绿，含新增的 `TeamService.deferSubs.test.ts`（5 例：整体移动/Epic 端钳制/已顶死/幂等/跳过无效 id/缺 targetStart 报错）与 `resolve_item`/`resolve_draft`/`roadmapContract` 的别名保留、`epicColor`/`shouldWrapAlias` 用例。
+- 真实 dev server（`npm run dev` + `npm run dev:web`，`better-sqlite3` 需先 `npm rebuild` 匹配本机 Node 版本）+ Browser 工具手动/脚本化操作：缩放锚点保持、备注名清空回退、Epic 归属色条/前缀/图例/hover 高亮、车道横向接排、时间窗平移像素级对齐（0px 误差）+ transform 跟手、聚焦多选/跨人重置/Esc 退出、顺延执行（含 Epic 端钳制与顶死）、幂等性、Jira Target 回写队列触发，均通过。
+- 测试用临时团队/数据已从本地 `roadmap-service/data/roadmap.db` 清理干净，未影响原有 `扩展引导验证` 团队数据。
 
 ---
 
@@ -167,24 +173,23 @@
 6. 协作安全：他人经 SSE 改动导致重渲染时选中集不丢（demo 已验证：协作模拟移动 Epic 后，钳制角标实时重算且选择保留）。
 7. 配合「时间窗平移」（见 §6）：成员先领取了很后面的任务时，滑到时间后方把它标记「正在做」，再回来一键把眼前的任务延至下周。
 
-### 真实实现
+### 真实实现（已落地）
 
 前端（`ResourceView.vue`）：
-- 组件内选择态 `ref<{ person: string | null; ids: Set<string> }>`（`'__un'` 代表未分配行）；bar 增加 click/hover 处理与上述类名；操作点渲染进 `.res-person` 列（236px 宽度足够）；ghost 预览用现有百分比几何。
-- 现状 bar 是 `cursor:default` 无任何交互（`tokens.css:230`），新增 click 不与既有手势冲突。
-- 下周一由**客户端计算并显式传给后端**（见下），避免服务端时区歧义。
+- 选择态 `resSel = ref<{ person: string | null; ids: Set<string> }>`（`'__un'` 代表未分配行）；bar 加 `@click`/`sel`/`will-move`/`at-cap` 类名 + `.rb-shift` 落点角标；操作点（`.rp-focus`）渲染进 `.rp-info`；hover「其余延至下周」渲染 `.res-bar.ghost` 预览层，复用现有百分比几何；Esc 与点击空白（`.res-view` 上排除 `.res-bar/.rp-focus/...` 的背景点击）都会退出聚焦；切团队 / 切「近 2 周·全部」会连同 §6 的 `resOffset` 一起复位。
+- 下周一由**客户端算好后作为 `targetStart` 显式传给后端**，避免服务端时区歧义；前端的 `deferPlan()`（预告角标/影子用）与后端算法必须保持一致，已在两侧代码注释互相引用。
 
-后端：新 intent **`{ op: 'defer_subs', subIds: string[], targetStart: 'YYYY-MM-DD', baseVersions?: Record<string,number> }`**
-- `targetStart` = 客户端算好的下周一（显式日期也让这个 intent 可复用为「延到任意日期」）；
-- 在 `applyIntent`（`TeamService.ts`）内单事务处理：逐条 `shift = min(targetStart − start, epicEnd − subEnd)`，`shift > 0` 才移动，bump version；返回 `{ moved, capped, stuck }` 摘要；activity 记一条聚合事件（「Esone 将 Vivi 的 2 个任务延至下周」），避免 N 条噪音。
-- *为什么不复用逐条 `update_sub`*：N 次请求 × baseVersion 竞态 × N 条 activity/SSE，聚合语义也丢了。
-- `src/types.ts:26-59` `IntentOp` 增加 `defer_subs`；`useRoadmapState.ts:44-60` `INTENT_ERROR_TEXT` 补文案。
-- Jira Target 回写：对每个 moved 非草稿 sub 复用现有 `scheduleTargetDateSync`（`GanttPanel.vue:309-327`，扩展优先/服务端 PAT 兜底，Target Start 与 End 成对回写），批量场景 debounce 天然合并。
+后端：新 intent **`{ op: 'defer_subs', subIds: string[], targetStart: 'YYYY-MM-DD' }`**（`TeamService.ts` `applyIntent` 内一个新分支）：
+- 逐条读取 sub + 其 parent item，`shift = min(diffDays(sub.start, targetStart), diffDays(subEnd, epicEnd))`；`shift > 0` 才移动 `start_date`（`days` 不变），bump version；返回 `{ moved, capped, stuck }`（**subId 数组**，不是计数——前端要用它们精确定位需要回写 Jira 的那几条）；`moved.length` 时写一条聚合 activity。
+- **范围裁剪（相对最初方案的简化，记录取舍）**：去掉了 `baseVersions` 乐观并发参数——这是一个批量整理未来待办的低风险操作，真发生并发冲突时让下一次刷新自然纠正即可，不值得为它做「部分 409」的复杂语义。服务端也**不**检查「是否已过期」——那是纯前端概念（`isDeferCandidate`），服务端只按 Epic 跨度钳制；调用方必须在拼 `subIds` 前自己过滤远任务/已完成任务（`TeamService.deferSubs.test.ts` 里专门有一条用例记录了这个边界，别指望服务端兜底）。
+- `src/types.ts` `IntentOp` 增加 `'defer_subs'`；`useRoadmapState.ts` `INTENT_ERROR_TEXT` 增加 `target_start_required`。
+- 新增 `deferSubs()`（`useRoadmapApi.ts`）+ `deferSubsToNextMonday()`（`useRoadmapState.ts`）——**没有走通用的 `applySnapshotFromIntent`**，因为这是唯一需要拿到 `deferSummary`（而不只是 snapshot）的调用方；409 冲突时的处理与通用路径一致（toast + 重新拉取快照）。
+- Jira Target 回写：`ResourceView.vue` 执行完成后 `emit('defer-committed', movedSubIds)`；`GanttPanel.vue` 监听后从最新 snapshot 里查出这些 sub 的当前 start/days，复用已有的 `scheduleTargetDateSync`（同一套 debounce/凭据优先级/防抖 in-flight 保护），无需新建同步逻辑。
 
-### 测试
+### 测试（已通过）
 
-- `defer_subs`：全额到下周一 / 被钳（落点早于 targetStart）/ 顶死 / 已结束不动 / 远任务不在 subIds / draft 与非 draft 混合；并发 version 冲突返回 409；幂等（第二次调用 moved=0）。
-- 交互：跨人重选、Esc/空白退出、平移时间窗后选中保留、「近 2 周」窗口外的候选也被计入并移动（操作点计数以数据为准，不以可见条为准）。
+- 后端 `TeamService.deferSubs.test.ts`（5 例，全绿）：整体移动到 targetStart / 被 Epic 端钳制 / 已在 targetStart（顶死不动）/ 幂等（二次调用 `moved: []`，version 不变）/ 跳过不存在或缺日期的 subId 不影响批次其余项 / 缺 `targetStart` 报 `target_start_required`。
+- 浏览器手动 + 脚本化交互验证：单击多选、跨人切换重置、Esc/点空白退出、hover 影子预览（含钳制态文案）、执行后 toast 文案与 DB 落库一致、按钮在无可移项时禁用（幂等场景下自动禁用）、「近 2 周」窗口外的候选按数据计入（不受可见窗口限制）。
 
 ---
 
@@ -244,11 +249,15 @@
 - **聚焦 + 延至下周**：人员视图点 Vivi Wang 的任务多选「正在做」（Epic「AI 会话摘要」下预置了 进行中 / 下周一前将开始 / 长任务贴 Epic 末（钳制）/ 远任务（下周后，不动）的组合数据）→ 左侧操作点显示「✓ 正在做 N · 待延至下周 M」→ hover「其余延至下周 →」看虚线落点影子 → 点击执行：候选统一延至下周一、长度不变，远任务与已结束的不动，非草稿回写 Jira Target Start/End；再按一次无变化（幂等）。约 16 秒后协作模拟把该 Epic 提前 4 天，可观察钳制角标实时变化且选择保留。
 - **时间窗平移**：人员视图「近 2 周」模式下双指左右滑动——1:1 跟手（带触控板惯性），松手后落格到整天并弹性归位；或点「◂ 更早 / 更晚 ▸」角标动画平移两周；平移后表头出现「回到今天」。滑到后方选中远任务再回来执行顺延，选中不丢。
 
-## 落地顺序建议
+## 落地记录
 
-1. **#3 清空备注名**（定位 + 小修 + 测试，半天）
-2. **#2 resolve 时固化 alias**（后端两处 SQL + 前端 wrap 规则，1 天）
-3. **#4 主任务归属 + #7 车道排序修复**（纯前端，1 天）
-4. **#1 时间轴缩放**（DAY_W 响应式化 + 手势 + 持久化，1~2 天）
-5. **#6 时间窗平移**（纯前端，半天；为 #5 铺路）
-6. **#5 聚焦 + 延至下周**（前端交互 + 新 intent `defer_subs` + 回写联动，2~3 天）
+全部 7 项已按下面顺序实现并验证，一次性完成（同一天内）：
+
+1. **#3 清空备注名** —— 复核结论：现状代码端到端已经正确工作（`saveAlias` 的空值 guard 只拦草稿 title 模式，`update_sub`/`set_alias` 都能正确写 NULL），浏览器实测确认清空后正确回落到 Jira summary。**无需改动**。
+2. **#2 resolve 时固化 alias** —— `TeamService.ts` 的 `resolve_item`/`resolve_draft` 两处补 `alias = COALESCE(alias, title)`；`useRoadmapContract.ts` 加 `shouldWrapAlias`（≤40 字符才换行），`GanttRow.vue` 两处 wrap 判断改用它。
+3. **#4 主任务归属 + #7 车道排序修复** —— `useRoadmapContract.ts` 加 `epicColor`/`epicShort`；`ResourceView.vue` 加色条/前缀 chip/hover 高亮 + `tasksOf()` 排序修复；`GanttPanel.vue` 工具栏加「主任务」图例；`useRoadmapState.ts` 加共享的 `hoveredEpicKey`。
+4. **#1 时间轴缩放** —— `useGeometry.ts` 的 `DAY_W` 改为 `ref`（约 12 处消费点按脚本/模板上下文分别补 `.value` 或利用模板自动解包）；`GanttPanel.vue` 加 wheel/dblclick 处理 + 缩放提示 UI + 按团队 localStorage 持久化。
+5. **#6 时间窗平移** —— `ResourceView.vue` 加 3 倍窗宽缓冲渲染 + transform 跟手 + 140ms 落格 + settle 弹性动画；表头与时间带按同一套 `inset:0` + 百分比坐标（而非「3 倍宽 + 负 margin」）以保证像素对齐。
+6. **#5 聚焦 + 延至下周** —— `ResourceView.vue` 加选择/预告/影子 UI；新 intent `defer_subs`（`TeamService.ts`/`types.ts`）；`useRoadmapApi.ts`/`useRoadmapState.ts` 加专用的 `deferSubs`/`deferSubsToNextMonday`（跳过通用 `applySnapshotFromIntent`，因为要拿 `deferSummary`）；`GanttPanel.vue` 监听 `defer-committed` 事件触发已有的 Jira Target 回写。
+
+验证：`npx vitest run` 143 例全绿（含新增 `TeamService.deferSubs.test.ts` 与 `roadmapContract`/`TeamService.items` 的别名保留用例）；真实 dev server 上用 Browser 工具做了完整的手动 + 脚本化交互验证（见上文各节「测试」小节）。

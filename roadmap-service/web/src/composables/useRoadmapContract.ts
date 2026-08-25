@@ -240,6 +240,45 @@ export function canDeleteItem(
   return item.source === 'manual' && !item.jiraKey;
 }
 
+/**
+ * Aliases past this length are usually a preserved draft title (see
+ * resolve_item/resolve_draft), not a hand-typed short display name — wrapping
+ * those to multiple lines blows up the bar height for no benefit, so they get
+ * single-line ellipsis like a plain title instead.
+ */
+export const ALIAS_WRAP_MAX_CHARS = 40;
+
+export function shouldWrapAlias(alias: string | null | undefined): boolean {
+  return Boolean(alias) && alias!.length <= ALIAS_WRAP_MAX_CHARS;
+}
+
+/**
+ * Resource view shows only sub-tasks, so which Epic a bar belongs to isn't
+ * visible from the row alone. Each Epic gets a stable color from its gantt
+ * row position (not a hash of the key) so neighbors in the list get visibly
+ * distinct colors instead of two dark blues next to each other.
+ */
+export const EPIC_PALETTE = [
+  '#6D4FA3',
+  '#0684BC',
+  '#2E8540',
+  '#C9842A',
+  '#B8478D',
+  '#4FA3A5',
+  '#5B8DEF',
+  '#C75B4A',
+];
+
+export function epicColor(orderedKeys: string[], key: string): string {
+  const idx = orderedKeys.indexOf(key);
+  const fallback = key.length;
+  return EPIC_PALETTE[(idx >= 0 ? idx : fallback) % EPIC_PALETTE.length];
+}
+
+export function epicShort(item: Pick<RoadmapItem, 'alias' | 'title'>): string {
+  return clipTxt(item.alias || item.title, 14);
+}
+
 export function formatEstimate(estimate: number | null | undefined): string {
   return typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0
     ? `${estimate}w`

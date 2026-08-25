@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoadmapState } from '../composables/useRoadmapState';
 import {
   addD,
   colorCls,
   diffD,
+  esc,
+  fmtISO,
   fmtMD,
   initials,
   parseDate,
@@ -15,10 +17,24 @@ import {
 } from '../composables/useGeometry';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
-import { tooltipHintLine } from '../composables/useRoadmapContract';
+import { tooltipHintLine, epicColor, epicShort } from '../composables/useRoadmapContract';
 
 const props = defineProps<{ tl: Timeline }>();
 const state = useRoadmapState();
+const rootEl = ref<HTMLElement | null>(null);
+/** Time-band pixel width (root minus the 236px name column) — used to decide
+ * whether a bar is wide enough for the Epic-name prefix chip. */
+const stripPx = ref(0);
+let stripRO: ResizeObserver | null = null;
+onMounted(() => {
+  const measure = () => {
+    stripPx.value = Math.max(0, (rootEl.value?.clientWidth || 0) - 236);
+  };
+  measure();
+  stripRO = new ResizeObserver(measure);
+  if (rootEl.value) stripRO.observe(rootEl.value);
+});
+onUnmounted(() => stripRO?.disconnect());
 const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
 function showName(name: string | null | undefined) {
   return dispName(assigneeMap.value, name);
@@ -29,9 +45,18 @@ const renamingId = ref<string | null>(null);
 const renameValue = ref('');
 
 const allWin = computed(() => state.resWin.value === 'all');
-const winS = computed(() => (allWin.value ? props.tl.start : today));
-const winE = computed(() => (allWin.value ? props.tl.end : addD(today, 13)));
+/** Near-2-weeks window can be panned (see §6): resOffset in days, relative to
+ * today. Session-only UI state — not persisted, not synced to teammates. */
+const resOffset = ref(0);
+const winS = computed(() => (allWin.value ? props.tl.start : addD(today, resOffset.value)));
+const winE = computed(() => (allWin.value ? props.tl.end : addD(winS.value, 13)));
 const days = computed(() => diffD(winS.value, winE.value) + 1);
+/** Pan buffer: one window's worth of days rendered on each side so a drag
+ * slides existing bars into view instead of needing a full re-render mid-gesture. */
+const BUF = computed(() => (allWin.value ? 0 : days.value));
+const rangeS = computed(() => addD(winS.value, -BUF.value));
+const rangeE = computed(() => addD(winE.value, BUF.value));
+const pxPerDay = computed(() => Math.max(20, stripPx.value / days.value));
 
 type TaskPair = { s: RoadmapSub; it: RoadmapItem };
 
@@ -43,8 +68,19 @@ function tasksOf(name: string | null): TaskPair[] {
       if ((s.owner || null) === name) out.push({ s, it });
     }
   }
-  return out;
+  // Greedy lane packing below requires start-ascending input — otherwise it
+  // opens lanes it doesn't need to (a later-starting task can land in an
+  // earlier lane only if it's seen after that lane's occupant). Same-day
+  // starts put the longer task first so short ones have a better chance of
+  // slotting into another lane's tail instead of opening a new one.
+  return out.sort((a, b) => {
+    const byStart = dateMs(a.s.start || '') - dateMs(b.s.start || '');
+    if (byStart) return byStart;
+    return (b.s.days || 0) - (a.s.days || 0);
+  });
 }
+
+const orderedEpicKeys = computed(() => state.scheduledItems.value.map((it) => it.key));
 
 /** Simple greedy lane packing so overlapping bars don't stack on one row. */
 function placeLanes(tasks: TaskPair[]) {
@@ -83,8 +119,263 @@ const unassigned = computed(() => {
   return { m: null, tasks, virtual: true as const, ...placeLanes(tasks) };
 });
 
+/* ---------- 聚焦「正在做」+ 其余延至下周 ----------
+   单击任务条标记「正在做」，可继续单击多选；点到另一个成员的任务对那个人重新开始
+   多选。顺延对象 = 该成员未选中 && 未清理 && 开始日 < 下周一 && 尚未结束的任务
+   （已开始未做完的同样算，已结束的历史记录不算，下周及以后的远任务不算）；开始日
+   移到下周一，长度不变，每条最多顺延到所属 Epic 的结束日。服务端是权威计算
+   （见 TeamService.applyIntent 的 defer_subs 分支）；这里的 deferPlan 只用于
+   UI 预告角标 / hover 影子，双方公式必须一致。 */
+const emit = defineEmits<{ (e: 'defer-committed', subIds: string[]): void }>();
+
+const UNASSIGNED_KEY = '__un';
+const resSel = ref<{ person: string | null; ids: Set<string> }>({ person: null, ids: new Set() });
+let focusHintShown = false;
+
+function clearResSel() {
+  if (!resSel.value.person) return;
+  resSel.value = { person: null, ids: new Set() };
+}
+
+// 换团队 / 换「近 2 周·全部」都回到今天、清空聚焦，不带着旧偏移量或旧选择
+watch(
+  () => [state.resWin.value, state.snapshot.value?.team.id] as const,
+  () => {
+    resOffset.value = 0;
+    clearResSel();
+  },
+);
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') clearResSel();
+}
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onUnmounted(() => document.removeEventListener('keydown', onKeydown));
+
+/** Click on empty space exits focus; clicks on bars/dock/chips handle themselves. */
+function onBackgroundClick(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip')) return;
+  clearResSel();
+}
+
+const nextMonday = computed(() => {
+  let d = (8 - today.getDay()) % 7;
+  if (!d) d = 7;
+  return addD(today, d);
+});
+
+function isDeferCandidate(s: RoadmapSub): boolean {
+  if (!s.start || !s.days) return false;
+  const end = addD(s.start, s.days - 1);
+  return dateMs(end) >= dateMs(today) && dateMs(s.start) < dateMs(nextMonday.value);
+}
+
+/** want = days to reach next Monday; shift = that, clamped to the Epic's end. */
+function deferPlan(s: RoadmapSub, it: RoadmapItem) {
+  const want = diffD(s.start!, nextMonday.value);
+  const epicEnd = addD(it.start!, (it.days || 1) - 1);
+  const subEnd = addD(s.start!, (s.days || 1) - 1);
+  const maxByEpic = diffD(subEnd, epicEnd);
+  return { want, shift: Math.max(0, Math.min(want, maxByEpic)) };
+}
+
+function personKeyOf(row: { virtual: boolean; m: TeamMember | null }): string {
+  return row.virtual ? UNASSIGNED_KEY : row.m!.id;
+}
+
+function isFocusing(personKey: string): boolean {
+  return resSel.value.person === personKey && resSel.value.ids.size > 0;
+}
+
+function moversOf(row: { tasks: TaskPair[] }, personKey: string): TaskPair[] {
+  if (!isFocusing(personKey)) return [];
+  return row.tasks.filter(({ s }) => !resSel.value.ids.has(s.id) && isDeferCandidate(s));
+}
+
+function movableOf(row: { tasks: TaskPair[] }, personKey: string): TaskPair[] {
+  return moversOf(row, personKey).filter(({ s, it }) => deferPlan(s, it).shift > 0);
+}
+
+function onBarClick(s: RoadmapSub, personKey: string) {
+  if (resSel.value.person !== personKey) {
+    resSel.value = { person: personKey, ids: new Set([s.id]) };
+    if (!focusHintShown) {
+      focusHintShown = true;
+      state.toast('已标记「正在做」，可继续多选；左侧操作点可把 TA 其余任务一键延至下周');
+    }
+    return;
+  }
+  const ids = new Set(resSel.value.ids);
+  if (ids.has(s.id)) {
+    ids.delete(s.id);
+    resSel.value = { person: ids.size ? personKey : null, ids };
+  } else {
+    ids.add(s.id);
+    resSel.value = { person: personKey, ids };
+  }
+}
+
+const previewPerson = ref<string | null>(null);
+
+/** Fallback hint line for the tooltip (real description still wins via tooltipHintLine). */
+function focusTipHint(s: RoadmapSub, it: RoadmapItem, personKey: string): string {
+  const base = `主任务：${it.alias || it.title}`;
+  if (resSel.value.person !== personKey || !resSel.value.ids.size) {
+    return `${base}||单击标记「正在做」，可多选；其余任务可一键延至下周`;
+  }
+  if (resSel.value.ids.has(s.id)) {
+    return `${base}||已标记「正在做」· 再次单击取消`;
+  }
+  if (!isDeferCandidate(s)) return base;
+  const { want, shift } = deferPlan(s, it);
+  if (shift <= 0) return `${base}||待延至下周 · 但已顶到所属 Epic 结束日，无法后移`;
+  if (shift < want) {
+    return `${base}||待延至下周 · 受所属 Epic 结束日限制，只能移到 ${fmtMD(addD(s.start!, shift))}（未到下周一）`;
+  }
+  return `${base}||待延至下周 · 一键后开始日移到下周一 ${fmtMD(nextMonday.value)}，长度不变`;
+}
+
+/** Ghost preview bars for the movable set — shown while hovering "其余延至下周". */
+function deferGhosts(row: { placed: ReturnType<typeof placeLanes>['placed'] }, personKey: string) {
+  if (previewPerson.value !== personKey) return [];
+  const out: Array<{ id: string; cs: Date | string; newStart: Date; frac: number; li: number; clamped: boolean }> = [];
+  for (const { s, it, li } of row.placed) {
+    if (resSel.value.ids.has(s.id) || !isDeferCandidate(s)) continue;
+    const { want, shift } = deferPlan(s, it);
+    if (shift <= 0) continue;
+    const ns = addD(s.start!, shift);
+    const ne = addD(ns, (s.days || 1) - 1);
+    if (dateMs(ne) < dateMs(rangeS.value) || dateMs(ns) > dateMs(rangeE.value)) continue;
+    const cs = dateMs(ns) < dateMs(rangeS.value) ? rangeS.value : ns;
+    const ce = dateMs(ne) > dateMs(rangeE.value) ? rangeE.value : ne;
+    out.push({ id: s.id, cs, newStart: ns, frac: (diffD(cs, ce) + 1) / days.value, li, clamped: shift < want });
+  }
+  return out;
+}
+
+async function runDefer(row: { tasks: TaskPair[] }, personKey: string) {
+  previewPerson.value = null;
+  const movable = movableOf(row, personKey);
+  if (!movable.length) return;
+  const subIds = movable.map(({ s }) => s.id);
+  const targetStartIso = fmtISO(nextMonday.value);
+  let summary: { moved: string[]; capped: string[]; stuck: string[] } | null = null;
+  try {
+    summary = await state.deferSubsToNextMonday(subIds, targetStartIso);
+  } catch {
+    return; // toast already shown by deferSubsToNextMonday
+  }
+  if (!summary) return;
+  const { moved, capped, stuck } = summary;
+  state.toast(
+    `<span class="ok">✓</span> 已将 <b>${moved.length}</b> 个任务延至下周一（${fmtMD(nextMonday.value)}）开始` +
+      (capped.length ? `，其中 ${capped.length} 个受 Epic 结束限制未到下周一` : '') +
+      (stuck.length ? `；${stuck.length} 个已顶到 Epic 结束未动` : ''),
+  );
+  if (moved.length) emit('defer-committed', moved);
+}
+
 function pct(d: Date | string) {
   return (diffD(winS.value, d) / days.value) * 100;
+}
+
+/** Clip to the render range (buffer included) — bars poking into the buffer
+ * render there and slide into view on pan, instead of being cut at the
+ * visible window's edge. */
+function barSpan(s: RoadmapSub, end: Date) {
+  const cs = dateMs(s.start!) < dateMs(rangeS.value) ? rangeS.value : s.start!;
+  const ce = dateMs(end) > dateMs(rangeE.value) ? rangeE.value : end;
+  return { cs, ce, frac: (diffD(cs, ce) + 1) / days.value };
+}
+
+/** Bar wide enough to fit `[Epic name] label` without crowding the label out. */
+function showEpicPrefix(frac: number): boolean {
+  return stripPx.value ? frac * stripPx.value > 110 : frac > 0.16;
+}
+
+/* ---------- 时间窗平移（丝滑版）----------
+   渲染时按 3 倍窗宽出内容（BUF，见上）：表头日期格、网格线、任务条都装进平移层
+   （每行一个 .res-pan，表头一个 .res-days-pan）。滑动期间只对这些层写 transform
+   （1:1 跟手，继承触控板原生惯性），不重建任何 DOM；手势停 140ms 后 commit：
+   偏移量落格到整天、重渲染重居中，亚天残差用 settle 弹性动画归零。 */
+const headPanEl = ref<HTMLElement | null>(null);
+const rowPanEls = new Map<string, HTMLElement>();
+function setRowPanEl(key: string, el: Element | null) {
+  if (el) rowPanEls.set(key, el as HTMLElement);
+  else rowPanEls.delete(key);
+}
+function panLayers(): HTMLElement[] {
+  const els = [...rowPanEls.values()];
+  if (headPanEl.value) els.push(headPanEl.value);
+  return els;
+}
+
+let resPanPx = 0;
+let resPanTimer: ReturnType<typeof setTimeout> | null = null;
+
+function applyResPan() {
+  panLayers().forEach((el) => {
+    el.classList.remove('settle');
+    el.style.transform = `translateX(${-resPanPx}px)`;
+  });
+}
+
+function commitResPan() {
+  if (resPanTimer) clearTimeout(resPanTimer);
+  resPanTimer = null;
+  const dd = Math.round(resPanPx / pxPerDay.value);
+  const residual = resPanPx - dd * pxPerDay.value;
+  resPanPx = 0;
+  resOffset.value += dd;
+  nextTick(() => {
+    if (Math.abs(residual) <= 0.5) return;
+    const layers = panLayers();
+    layers.forEach((el) => {
+      el.classList.remove('settle');
+      el.style.transform = `translateX(${-residual}px)`;
+    });
+    void layers[0]?.offsetWidth; // force reflow so the transition below actually animates
+    layers.forEach((el) => {
+      el.classList.add('settle');
+      el.style.transform = 'translateX(0)';
+    });
+  });
+}
+
+/**双指左右滑动 = 平移时间窗（仅近 2 周模式；纵向滚动仍滚成员列表） */
+function onResWheel(e: WheelEvent) {
+  if (allWin.value) return;
+  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  resPanPx += e.deltaX;
+  if (Math.abs(resPanPx) >= BUF.value * pxPerDay.value) {
+    commitResPan();
+    return;
+  }
+  applyResPan();
+  if (resPanTimer) clearTimeout(resPanTimer);
+  resPanTimer = setTimeout(commitResPan, 140);
+}
+
+/** Animated jump for the overflow chips / "回到今天": slides by transform when
+ * it fits inside the render buffer, otherwise just re-renders at the offset. */
+function panBy(dd: number) {
+  if (!dd) return;
+  if (Math.abs(dd) > BUF.value) {
+    resPanPx = 0;
+    resOffset.value += dd;
+    return;
+  }
+  resPanPx = 0;
+  const layers = panLayers();
+  layers.forEach((el) => {
+    el.classList.add('settle');
+    el.style.transform = `translateX(${-dd * pxPerDay.value}px)`;
+  });
+  setTimeout(() => {
+    resOffset.value += dd;
+  }, 190);
 }
 
 function overflowCounts(placed: ReturnType<typeof placeLanes>['placed']) {
@@ -98,7 +389,7 @@ function overflowCounts(placed: ReturnType<typeof placeLanes>['placed']) {
 }
 
 function inWindow(s: RoadmapSub, end: Date | string) {
-  return rangesOverlap(s.start!, end, winS.value, winE.value);
+  return rangesOverlap(s.start!, end, rangeS.value, rangeE.value);
 }
 
 async function removeMember(id: string) {
@@ -147,10 +438,21 @@ async function commitRename(m: TeamMember) {
 </script>
 
 <template>
-  <div class="res-view">
+  <div ref="rootEl" class="res-view" @wheel="onResWheel" @click="onBackgroundClick">
     <div class="res-head">
       <div class="res-corner">
-        成员 / 任务 {{ allWin ? '（全部时间轴）' : '（今天起 14 天）' }}
+        成员 / 任务
+        <template v-if="allWin">（全部时间轴）</template>
+        <template v-else-if="resOffset">
+          （{{ fmtMD(winS) }} → {{ fmtMD(winE) }}）
+          <button class="res-today-btn" @click="panBy(-resOffset)">回到今天</button>
+        </template>
+        <template v-else>（今天起 14 天）</template>
+        <span
+          v-if="!allWin"
+          class="res-pan-hint"
+          data-tip="时间窗平移||触控板双指左右滑动，或点两端「更早 / 更晚」角标||窗口长度不变（14 天）"
+        >⟷</span>
       </div>
       <div class="res-days">
         <template v-if="allWin">
@@ -164,20 +466,21 @@ async function commitRename(m: TeamMember) {
             <b>{{ mo.y }}-{{ String(mo.m + 1).padStart(2, '0') }}</b>
           </div>
         </template>
-        <template v-else>
+        <div v-else ref="headPanEl" class="res-days-pan">
           <div
-            v-for="i in days"
+            v-for="i in days + BUF * 2"
             :key="i"
             class="res-day"
+            :style="{ left: `${((i - 1 - BUF) / days) * 100}%`, width: `${100 / days}%` }"
             :class="{
-              today: diffD(addD(winS, i - 1), today) === 0,
-              wkd: addD(winS, i - 1).getDay() % 6 === 0,
+              today: diffD(addD(rangeS, i - 1), today) === 0,
+              wkd: addD(rangeS, i - 1).getDay() % 6 === 0,
             }"
           >
-            <b>{{ addD(winS, i - 1).getDate() }}</b>
-            {{ ['日', '一', '二', '三', '四', '五', '六'][addD(winS, i - 1).getDay()] }}
+            <b>{{ addD(rangeS, i - 1).getDate() }}</b>
+            {{ ['日', '一', '二', '三', '四', '五', '六'][addD(rangeS, i - 1).getDay()] }}
           </div>
-        </template>
+        </div>
       </div>
     </div>
 
@@ -190,8 +493,9 @@ async function commitRename(m: TeamMember) {
 
     <div
       v-for="row in [...rows, ...(unassigned.tasks.length ? [unassigned] : [])]"
-      :key="row.virtual ? 'unassigned' : row.m!.id"
+      :key="personKeyOf(row)"
       class="res-row"
+      :class="{ focusing: isFocusing(personKeyOf(row)) }"
     >
       <div class="res-person">
         <span
@@ -221,6 +525,22 @@ async function commitRename(m: TeamMember) {
             {{ row.tasks.length }} 个任务 · 共 {{ row.tasks.reduce((a, t) => a + (t.s.days || 0), 0) }}d
           </div>
           <span v-else class="rp-idle">空闲</span>
+          <div v-if="isFocusing(personKeyOf(row))" class="rp-focus">
+            <span class="rpf-line">
+              ✓ 正在做 {{ resSel.ids.size }} · 待延至下周 {{ moversOf(row, personKeyOf(row)).length }}
+            </span>
+            <div class="rpf-btns">
+              <button
+                class="rpf-go"
+                :disabled="!movableOf(row, personKeyOf(row)).length"
+                data-tip="把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、标记「正在做」的、已结束的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点（虚线影子）；延完再按一次不会继续往后推"
+                @mouseenter="previewPerson = personKeyOf(row)"
+                @mouseleave="previewPerson = null"
+                @click="runDefer(row, personKeyOf(row))"
+              >其余延至下周 →</button>
+              <button class="rpf-x" data-tip="退出聚焦（Esc / 点空白处）" @click="clearResSel()">✕</button>
+            </div>
+          </div>
         </div>
         <button
           v-if="!row.virtual && !row.tasks.length && state.editable.value"
@@ -231,17 +551,18 @@ async function commitRename(m: TeamMember) {
         </button>
       </div>
       <div class="res-strip" :style="{ minHeight: `${row.stripH}px` }">
+      <div class="res-pan" :ref="(el) => setRowPanEl(personKeyOf(row), el)">
         <template v-if="!allWin">
           <div
-            v-for="i in days"
-            v-show="i > 1"
+            v-for="i in days + BUF * 2"
+            v-show="i > BUF + 1 || allWin"
             :key="`g-${i}`"
             class="res-gridline"
-            :style="{ left: `${((i - 1) / days) * 100}%` }"
+            :style="{ left: `${((i - 1 - BUF) / days) * 100}%` }"
           />
         </template>
         <div
-          v-if="dateMs(today) >= dateMs(winS) && dateMs(today) <= dateMs(winE)"
+          v-if="dateMs(today) >= dateMs(rangeS) && dateMs(today) <= dateMs(rangeE)"
           class="res-gridline today"
           :style="{ left: `${((diffD(winS, today) + 0.5) / days) * 100}%` }"
         />
@@ -252,34 +573,87 @@ async function commitRename(m: TeamMember) {
             :class="[
               s.temp ? 'draft' : colorCls(s.start!, s.days!),
               {
-                'clip-l': dateMs(s.start!) < dateMs(winS),
-                'clip-r': dateMs(end) > dateMs(winE),
+                'clip-l': dateMs(s.start!) < dateMs(rangeS),
+                'clip-r': dateMs(end) > dateMs(rangeE),
+                'epic-hl': state.hoveredEpicKey.value === it.key,
+                dim: !!state.hoveredEpicKey.value && state.hoveredEpicKey.value !== it.key,
+                sel: resSel.person === personKeyOf(row) && resSel.ids.has(s.id),
+                'will-move':
+                  resSel.person === personKeyOf(row) &&
+                  resSel.ids.size > 0 &&
+                  !resSel.ids.has(s.id) &&
+                  isDeferCandidate(s),
+                'at-cap':
+                  resSel.person === personKeyOf(row) &&
+                  !resSel.ids.has(s.id) &&
+                  isDeferCandidate(s) &&
+                  deferPlan(s, it).shift < deferPlan(s, it).want,
               },
             ]"
             :style="{
-              left: `${pct(dateMs(s.start!) < dateMs(winS) ? winS : s.start!)}%`,
-              width: `${((diffD(dateMs(s.start!) < dateMs(winS) ? winS : s.start!, dateMs(end) > dateMs(winE) ? winE : end) + 1) / days) * 100}%`,
+              left: `${pct(barSpan(s, end).cs)}%`,
+              width: `${barSpan(s, end).frac * 100}%`,
               top: `${8 + li * 27}px`,
             }"
-            :data-tip="`${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start!)} → ${fmtMD(end)} · ${s.days}d||${s.title}||${tooltipHintLine(s.description, `主任务：${it.alias || it.title}`)}`"
+            :data-tip="`${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start!)} → ${fmtMD(end)} · ${s.days}d||${s.title}||${tooltipHintLine(s.description, focusTipHint(s, it, personKeyOf(row)))}`"
+            @mouseenter="state.hoveredEpicKey.value = it.key"
+            @mouseleave="state.hoveredEpicKey.value = null"
+            @click="onBarClick(s, personKeyOf(row))"
           >
+            <i class="rb-stripe" :style="{ background: epicColor(orderedEpicKeys, it.key) }" />
+            <span
+              v-if="showEpicPrefix(barSpan(s, end).frac)"
+              class="rb-parent"
+              :style="{ color: epicColor(orderedEpicKeys, it.key) }"
+            >{{ epicShort(it) }}</span>
             <span class="rb-label">{{ s.alias || s.title }}</span>
+            <span
+              v-if="
+                resSel.person === personKeyOf(row) &&
+                resSel.ids.size > 0 &&
+                !resSel.ids.has(s.id) &&
+                isDeferCandidate(s)
+              "
+              class="rb-shift"
+            >{{
+              deferPlan(s, it).shift <= 0
+                ? '✕'
+                : deferPlan(s, it).shift < deferPlan(s, it).want
+                  ? `→${fmtMD(addD(s.start!, deferPlan(s, it).shift))}`
+                  : '→下周一'
+            }}</span>
           </div>
         </template>
-        <span
+        <div
+          v-for="g in deferGhosts(row, personKeyOf(row))"
+          :key="`ghost-${g.id}`"
+          class="res-bar ghost"
+          :class="{ clamped: g.clamped }"
+          :style="{ left: `${pct(g.cs)}%`, width: `${g.frac * 100}%`, top: `${8 + g.li * 27}px` }"
+        >
+          <span class="rb-label">→ {{ fmtMD(g.newStart) }}{{ g.clamped ? ' · 未到下周一（Epic 限制）' : '' }}</span>
+        </div>
+      </div>
+        <button
           v-if="overflowCounts(row.placed).before"
           class="res-chip"
+          :class="{ 'res-chip-btn': !allWin }"
           style="left: 6px"
+          :data-tip="allWin ? undefined : '点击向前平移两周（也可双指左右滑动）'"
+          @click="!allWin && panBy(-14)"
         >
           ◂ {{ overflowCounts(row.placed).before }} 更早
-        </span>
-        <span
+        </button>
+        <button
           v-if="overflowCounts(row.placed).after"
           class="res-chip"
+          :class="{ 'res-chip-btn': !allWin }"
           style="right: 6px"
+          :data-tip="allWin ? undefined : '点击向后平移两周（也可双指左右滑动）'"
+          @click="!allWin && panBy(14)"
         >
           {{ overflowCounts(row.placed).after }} 更晚 ▸
-        </span>
+        </button>
       </div>
     </div>
 

@@ -157,7 +157,13 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .bl-empty b{color:var(--ink)}
 
 /* ---- Gantt 面板 ---- */
-.gantt-panel{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+.gantt-panel{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+/* ---- 时间轴缩放提示（捏合/滚轮/标尺滑动时短暂出现） ---- */
+.zoom-hint{position:absolute;top:58px;right:32px;z-index:14;background:rgba(32,36,42,.9);color:#fff;
+  font-family:var(--mono);font-size:11px;border-radius:99px;padding:5px 13px;pointer-events:none;
+  opacity:0;transform:translateY(-4px);transition:all .18s;white-space:nowrap}
+.zoom-hint.show{opacity:1;transform:none}
+.zoom-hint b{color:#FFB25C}
 .g-toolbar{display:flex;align-items:center;gap:16px;padding:10px 18px;flex:none}
 .legend{display:flex;align-items:center;gap:14px;font-size:11.5px;color:var(--muted)}
 .lg{display:flex;align-items:center;gap:6px}
@@ -202,7 +208,26 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-head{display:grid;grid-template-columns:236px 1fr;position:sticky;top:0;z-index:6;
   background:rgba(255,255,255,.94);backdrop-filter:blur(4px);border-bottom:1px solid var(--line)}
 .res-corner{padding:11px 16px;font-size:11.5px;font-weight:600;color:var(--muted)}
-.res-days{display:flex}
+.res-days{display:flex;position:relative;overflow:hidden;border-left:1px solid var(--line2)}
+/* ---- 时间窗平移（近 2 周模式）：双指左右滑 / 点角标；平移后表头出现「回到今天」 ----
+   3 倍窗宽渲染缓冲，滑动时只对 .res-days-pan / .res-pan 写 transform（见组件里的
+   onResWheel/commitResPan），不重建 DOM；停手后落格到整天，亚天残差用 settle 归零。 */
+/* Same coordinate convention as .res-pan below: the box is exactly the
+   visible-window's width (inset:0, NOT a 3x box with a margin trick) —
+   buffer cells just get percentages outside 0–100%. Keeping both header and
+   strip on one convention is what keeps them pixel-aligned; a 3x/margin-trick
+   header and a 0-100%-window strip silently drift apart by tens of px. */
+.res-days-pan{position:absolute;inset:0;will-change:transform}
+.res-days-pan .res-day{position:absolute;top:0;bottom:0}
+.res-pan{position:absolute;inset:0;will-change:transform}
+.res-days-pan.settle,.res-pan.settle{transition:transform .18s cubic-bezier(.25,.9,.35,1)}
+.res-chip-btn{cursor:pointer;transition:all .13s;z-index:5}
+.res-chip-btn:hover{color:var(--ink);border-color:#C9C6BB;background:#EFEEE8}
+.res-today-btn{margin-left:8px;font-size:10.5px;font-weight:600;color:var(--cur-deep);
+  background:#FFF4E5;border:1px solid #FFD9A8;border-radius:6px;padding:2px 8px;
+  transition:all .13s;vertical-align:1px}
+.res-today-btn:hover{background:#FFE9CC;border-color:var(--cur)}
+.res-pan-hint{margin-left:6px;font-size:11px;color:#B3B9C0;cursor:default}
 .res-day{flex:1;padding:7px 0 6px;text-align:center;font-family:var(--mono);font-size:9.5px;
   color:var(--muted);border-left:1px solid var(--line2);line-height:1.5}
 .res-day b{display:block;font-size:10.5px;color:var(--past-ink)}
@@ -224,11 +249,11 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .rp-del:hover{background:var(--danger);color:#fff}
 .rp-name-edit{border:1.5px solid var(--cur);border-radius:6px;padding:3px 8px;font-size:13px;
   font-weight:600;outline:none;width:130px}
-.res-strip{position:relative;border-left:1px solid var(--line2);min-height:56px}
+.res-strip{position:relative;border-left:1px solid var(--line2);min-height:56px;overflow:hidden}
 .res-gridline{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
 .res-gridline.today{width:2px;background:var(--danger);opacity:.55}
 .res-bar{position:absolute;height:22px;border-radius:6px;display:flex;align-items:center;
-  overflow:hidden;cursor:default;transition:filter .13s}
+  overflow:hidden;cursor:default;transition:filter .13s,opacity .15s}
 .res-bar:hover{filter:brightness(1.05)}
 .res-bar .rb-label{padding:0 8px;font-size:10.5px;font-weight:500;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -241,6 +266,48 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
   border-left:2px dashed rgba(0,0,0,.25)}
 .res-bar.clip-r{border-top-right-radius:0;border-bottom-right-radius:0;
   border-right:2px dashed rgba(0,0,0,.25)}
+/* ---- 主任务归属：左侧色条 + 前缀 chip（hover 联动高亮同主任务） ---- */
+.res-bar .rb-stripe{position:absolute;left:0;top:0;bottom:0;width:4px;flex:none}
+.res-bar .rb-parent{flex:none;max-width:42%;margin-left:9px;padding:1px 6px;border-radius:4px;
+  font-size:9px;font-weight:600;background:rgba(255,255,255,.6);color:rgba(0,0,0,.6);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.res-bar .rb-parent + .rb-label{padding-left:5px}
+.res-bar.draft .rb-parent{background:rgba(32,36,42,.09)}
+.res-bar.dim{opacity:.22;filter:grayscale(.5)}
+.res-bar.epic-hl{box-shadow:0 0 0 1.5px rgba(32,36,42,.35),var(--sh)}
+.epic-legend{gap:12px;flex-wrap:wrap}
+.epic-legend .lg{cursor:default;padding:2px 6px;border-radius:6px;transition:background .13s}
+.epic-legend .lg:hover{background:#EFEEE8}
+.epic-legend .ep-dot{width:5px;height:13px;border-radius:3px;flex:none}
+/* ---- 聚焦当前任务：单击多选「正在做」，其余任务一键延至下周 ---- */
+.res-bar{cursor:pointer}
+.res-row.focusing{background:#FFFCF4}
+.res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 2px 10px rgba(255,136,0,.35);z-index:4}
+.res-bar.sel::after{content:"✓";position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  width:13px;height:13px;border-radius:50%;background:var(--cur-deep);color:#fff;font-size:9px;
+  font-weight:700;display:flex;align-items:center;justify-content:center}
+.res-row.focusing .res-bar:not(.sel):not(.will-move):not(.ghost){opacity:.4}
+.res-bar.will-move{outline:1.5px dashed #C9842A;outline-offset:1.5px}
+.rb-shift{position:absolute;right:4px;top:50%;transform:translateY(-50%);font-family:var(--mono);
+  font-size:8.5px;font-weight:700;background:#C9842A;color:#fff;border-radius:4px;padding:1px 4px;
+  pointer-events:none}
+.res-bar.will-move.at-cap{outline-color:var(--danger)}
+.res-bar.will-move.at-cap .rb-shift{background:var(--danger)}
+.res-bar.ghost{opacity:.6;border:1.5px dashed #C9842A;box-shadow:none;pointer-events:none;
+  background:repeating-linear-gradient(45deg,#fff 0 4px,#FBEFD9 4px 8px);color:#8A5A12;z-index:2;
+  transition:none}
+.res-bar.ghost.clamped{border-color:var(--danger);color:#8F2F1F}
+.rp-focus{margin-top:7px;display:flex;flex-direction:column;gap:6px;align-items:flex-start;
+  animation:chipIn .2s ease}
+.rpf-line{font-family:var(--mono);font-size:10px;color:#8A5A12;background:#FBF3E2;
+  border-radius:5px;padding:2px 7px}
+.rpf-btns{display:flex;gap:6px}
+.rpf-go{font-size:11px;font-weight:600;color:#fff;background:var(--cur);border-radius:7px;
+  padding:4px 11px;transition:all .13s;box-shadow:0 2px 8px rgba(255,136,0,.3)}
+.rpf-go:hover{background:var(--cur-deep);transform:translateY(-1px)}
+.rpf-go[disabled]{opacity:.45;pointer-events:none;box-shadow:none}
+.rpf-x{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:4px 9px}
+.rpf-x:hover{background:var(--bg);color:var(--ink)}
 .res-chip{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--mono);
   font-size:9.5px;color:var(--muted);background:var(--bg);border:1px solid var(--line);
   border-radius:99px;padding:2px 8px;white-space:nowrap}

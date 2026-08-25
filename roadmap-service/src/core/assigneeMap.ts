@@ -42,12 +42,12 @@ function fmtIso(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function addDaysIso(iso: string, n: number): string {
+export function addDaysIso(iso: string, n: number): string {
   const d = parseIso(iso);
   return fmtIso(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n));
 }
 
-function diffDaysIso(a: string, b: string): number {
+export function diffDaysIso(a: string, b: string): number {
   const ms = 86_400_000;
   return Math.round((parseIso(b).getTime() - parseIso(a).getTime()) / ms);
 }

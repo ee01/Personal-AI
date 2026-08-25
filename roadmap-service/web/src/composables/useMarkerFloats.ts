@@ -297,12 +297,12 @@ export function markerDragStart(
         scrolled -= before - gsEl.scrollLeft;
       }
     }
-    const dd = Math.round((dx + scrolled) / DAY_W);
+    const dd = Math.round((dx + scrolled) / DAY_W.value);
     cur = addD(
       origDate,
       clamp(dd, diffD(origDate, tl.start), diffD(origDate, tl.end)),
     );
-    const px = X(tl, cur) + DAY_W / 2;
+    const px = X(tl, cur) + DAY_W.value / 2;
     el.style.left = `${px}px`;
     if (guide) guide.style.left = `${px}px`;
     if (hint) {
@@ -334,7 +334,7 @@ export function markerDragStart(
 
     const next = fmtISO(cur);
     if (next === marker.date) {
-      el.style.left = `${X(tl, marker.date) + DAY_W / 2}px`;
+      el.style.left = `${X(tl, marker.date) + DAY_W.value / 2}px`;
       return;
     }
     try {
@@ -352,7 +352,7 @@ export function markerDragStart(
           : `<span class="ok">✓</span> 外部依赖 ETA 已改到 ${fmtMD(next)}（手动调整）`,
       );
     } catch {
-      el.style.left = `${X(tl, marker.date) + DAY_W / 2}px`;
+      el.style.left = `${X(tl, marker.date) + DAY_W.value / 2}px`;
     }
   };
 
