@@ -53,6 +53,8 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 
 `resolve_item` 不校验版本，是因为发它的时候 Jira issue 已经真的建出来了：用户在创建期间拖一下 bar 就让回填失败的话，key 会永久丢失。`resolve_item` 与 `resolve_draft` 都是幂等的——重复写同一个 mapping 不会二次 bump version，也不会写第二条 activity（创建弹窗与扩展会各写一次子任务 mapping）。
 
+**回填顺带把草稿名固化成备注名**：两者都会 `alias = COALESCE(alias, title)`——只在 `alias` 还没被用户手动设过时才写。原因是 `refresh_from_jira` 只覆盖 `title`（镶入真实 Jira summary），从不动 `alias`；Agent 模式创建时系统 Prompt 明确允许改写 summary（见下），若不固化，用户手打的草稿名会在创建后第一次静默刷新时被换成 Agent 生成的措辞。固化后甘特上展示的名字（`alias || title`）在创建、Agent 改写、后续刷新之间保持不变，hover 才看到正式 summary。备注名换行渲染（`GanttRow.vue` 的 `wrapMode`/`free-h`）只对 ≤40 字符的 alias 生效（`shouldWrapAlias`，`useRoadmapContract.ts`）——固化进来的英文草稿名通常很长，走单行省略而不是把 bar 撑高。
+
 ### Backlog 排序：新建的排最前面
 
 服务端仍按 `ORDER BY quarter, key` 下发 items（没有 `sort_order` 字段），排序规则集中在前端 `buildBacklogGroups()`（`web/src/composables/useRoadmapContract.ts`），依赖 snapshot 新增的 `item.createdAt`（epoch ms，来自 `items.created_at`）：
@@ -184,6 +186,18 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 - 导入 Task：`importedTaskSpan` 兜底（双端齐全按 Target；都缺则同主任务；只一端则两周并钳制进主任务范围）
 - 打开 Jira：hover 左上 ↗，或 ⌘/Ctrl+单击；base URL 来自服务端 `JIRA_BASE_URL`
 - 子任务（含已导入）可单独 × 从 Roadmap 移除，需要时可再导入
+
+### 时间轴缩放
+
+甘特的天宽 `DAY_W`（`useGeometry.ts`）是响应式 `ref`（默认 7px/天，范围 `[2.2, 24]`），不是常量；缩放不用按钮，走手势：
+
+| 手势 | 触发条件 | 行为 |
+|---|---|---|
+| 触控板双指捏合 / ⌘+滚轮 | `ctrlKey \|\| metaKey` 的 wheel 事件，甘特任意位置 | 以光标所在日期为锚点缩放（缩放前后该日期钉在同一屏幕像素） |
+| 双指上下滑动 | wheel 落在 `.g-header` / `.g-relruler`（时间标尺）上，且 `|deltaY| > |deltaX|` | 同样触发缩放；标尺没有纵向内容，纵向滑动无歧义。横向滑动仍是平移，不拦截 |
+| 双击标尺 | — | 非 100% → 复位默认；已是 100% → 缩到刚好容纳整条时间轴（`clientWidth / tl.days`） |
+
+连续 wheel 事件按 16ms 合帧成一次缩放，避免每帧都重算几何。缩放级别按 `roadmap.zoom.<teamId>` 存 `localStorage`，只影响本人视图、下次打开恢复；右上角浮出「缩放 143% · 视野约 3.1 个月」提示，900ms 后淡出。人员视图是百分比布局，不受 `DAY_W` 影响。
 
 ### 两阶段回写（直连路径）
 
@@ -381,6 +395,38 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 - 人员视图：近 2 周 / 全部、并行车道堆叠、窗口外「更早/更晚」角标；双击成员名 `update_member`（级联改所有 sub.owner）。窗口重叠用毫秒时间戳比较（ISO 字符串不能和 `Date` 直接 `<=`，否则窗口内 bar 全部不渲染）。
 - 清理过期：Epic 回退 Backlog；未过期 Epic 下的过期子任务 `cleared=1`（Gantt/人员视图隐藏，Backlog 仍计「↺ n 个子任务记录」）。Epic 再次拖入 Gantt（`schedule`）时清空 `cleared` 还原。
 
+### 车道装箱必须先按开始日排序
+
+人员视图把一个人名下的子任务贪心装进车道（`placeLanes`，`ResourceView.vue`）：遍历时找一条「结束日早于本任务开始日」的车道复用，找不到才新开一条。这个贪心算法**要求输入按开始日升序**，否则会在本可以横向接排的任务之间无谓多开车道——`tasksOf()` 收集完任务后必须先 `sort`（同日开始的长任务排前面，短任务更容易接进其他车道尾部），不能直接把 Epic 遍历顺序喂给 `placeLanes`。
+
+### 主任务归属可视化
+
+人员视图只显示子任务，看不出这条属于哪个 Epic。三层递进呈现（`ResourceView.vue` + `useRoadmapContract.ts` 的 `epicColor`/`epicShort`）：
+
+- **左侧色条**（恒在）：每个 Epic 按它在甘特行序（`state.scheduledItems`）里的位置从一个 8 色色板取一个稳定颜色，与任务条本身的过去/当前/未来配色分层
+- **前缀 chip**（条足够宽才出现，实际像素宽 > 110px）：备注名优先，超 14 字截断
+- **hover 联动**：hover 任一任务条或工具栏「主任务」图例项，同 Epic 的所有条一起高亮（`.epic-hl`）、其余压暗（`.dim`）——高亮状态是 `useRoadmapState` 里的共享 `hoveredEpicKey`，图例在 `GanttPanel.vue` 工具栏，条在 `ResourceView.vue`，两处都读写同一个 ref
+
+### 时间窗平移
+
+「近 2 周」窗口默认从今天起算，看不到前后。可以整窗平移，窗口长度不变：
+
+- **触控板双指左右滑动**：`wheel` 的 `|deltaX| > |deltaY|` 时触发。渲染时按 **3 倍窗宽**出内容（可视窗两侧各预渲染一个窗口宽的缓冲），滑动期间只对缓冲层写 `transform`（不重建 DOM），继承触控板原生惯性；手势停 140ms 后落格：偏移量按天取整、重渲染重居中，亚天残差用 0.18s 过渡弹性归零
+- **点两端「◂ 更早 / 更晚 ▸」角标**：动画平移 14 天
+- 平移后表头出现「回到今天」按钮；切「近 2 周 / 全部」或切团队都会回到今天
+- 表头与任务条必须用同一套坐标换算（都是 `position:absolute;inset:0` + 百分比，而不是「表头 3 倍宽 + 负 margin，任务条 0–100% 窗口」两套体系混用）——否则两者会有几像素到几十像素的静默错位
+
+### 聚焦「正在做」+ 一键顺延到下周
+
+人员视图**单击**一个子任务条把它标成「正在做」（可继续单击多选）；点到**另一个成员**的任务，会对那个人重新开始多选。选中后该成员名下出现操作面板：
+
+- 「其余延至下周 →」：把**该成员未选中、开始日在下周一之前、且尚未结束**的任务（已开始未做完的算，已结束的历史记录不算，下周及以后的远任务不算）统一延到下周一开始，**长度不变**
+- hover 该按钮会在每条待顺延任务的落点位置画虚线「影子」预览，钳制到 Epic 结束日的会标注「未到下周一（Epic 限制）」
+- 执行后 toast 汇总移动/受限/顶死的数量；再点一次是幂等的（已经落在下周一的不会继续被推）
+- Esc、点击空白处、切团队或切「近 2 周 / 全部」都会退出聚焦
+
+后端新 intent **`{ op: 'defer_subs', subIds: string[], targetStart: 'YYYY-MM-DD' }`**（`TeamService.ts` `applyIntent` 分支）：`targetStart` 由前端算好下周一显式传入，避免服务端时区歧义；服务端逐条按 `shift = min(diffDays(sub.start, targetStart), diffDays(subEnd, epicEnd))` 移动 `start_date`（`days` 不变），`shift > 0` 才算移动，一条聚合 activity；返回 `{ moved, capped, stuck }`（**subId 数组**，供前端精确定位需要回写 Jira Target 的那几条，而不只是计数）。服务端只按 Epic 跨度钳制，**不**检查「是否已过期」——那是纯前端的 `isDeferCandidate` 概念，调用方要自己先过滤掉不该顺延的任务再拼 `subIds`。为避免批量竞态与 N 条 activity/SSE 噪音，这里刻意不复用逐条 `update_sub`，也没有做乐观并发的 `baseVersions` 参数（这是低风险的批量整理操作，真发生并发冲突时下一次刷新自然纠正）。执行成功后 `ResourceView.vue` 把移动的 subId 上抛给 `GanttPanel.vue`，复用已有的 `scheduleTargetDateSync` 防抖队列回写 Jira Target Start/End。
+
 ## 阶段节点与外部依赖（Markers）
 
 主任务统一用 **Marker** 体系：`phase`（Design/Stage/Production/自定义，必有日期）与 `dep`（外部依赖，ETA 可空）。有日期的落在 bar 下方标记轨；缺 ETA 的 dep 在 bar 右上角红色脉动 `🔗N` 角标提醒。ETA 与镜像的 Jira Target End 不一致时角标改琥珀色（不脉动）。右侧 ◆＋ 添加入口。Epic 退回 Backlog 时 markers 保留。拖动 marker 可改日期（`update_marker`）。
@@ -480,11 +526,14 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 源码入口
 
 - `roadmap-service/`（`src/core/JqlIntrospect.ts`、`JiraClient.ts`、`TargetSync.ts`、`src/storage/Database.ts` 的迁移表）
-- `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker）
+- `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker、`epicColor`/`epicShort`/`shouldWrapAlias`）
 - `roadmap-service/web/src/composables/useExtensionBridge.ts`（直连 / Agent create bridge）
 - `roadmap-service/web/src/components/modals/AiCreateModal.vue`（双路径创建弹窗）
 - `roadmap-service/web/src/composables/useMarkerFloats.ts`（阶段节点 / 外部依赖浮层；依赖 Jira 缓存确认写 ETA）
-- `roadmap-service/web/src/composables/useRoadmapApi.ts`（known-teams / edit token localStorage）
+- `roadmap-service/web/src/composables/useRoadmapApi.ts`（known-teams / edit token localStorage、`deferSubs`）
+- `roadmap-service/web/src/composables/useGeometry.ts`（`DAY_W` 响应式天宽、时间轴几何换算）
+- `roadmap-service/web/src/components/ResourceView.vue`（人员视图：车道装箱、Epic 归属可视化、时间窗平移、聚焦顺延）
+- `roadmap-service/web/src/components/GanttPanel.vue`（缩放手势、工具栏图例、Jira Target 回写队列）
 - `roadmap-service/web/src/components/TopBar.vue`
 - `src/contentScriptRoadmap.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
 - `src/watchRules.ts`（`source: 'project'`）
@@ -497,7 +546,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的整体移动/Epic 端钳制/幂等/跳过无效 id、`resolve_item`/`resolve_draft` 的 alias 固化）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
 - Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）
