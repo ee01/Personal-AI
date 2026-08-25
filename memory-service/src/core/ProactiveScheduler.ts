@@ -25,11 +25,14 @@ import { UserContextManager } from './UserContextManager.js';
 import { getAnalyticsStore } from '../analytics/AnalyticsStore.js';
 import { runWithUsageContext } from '../analytics/usageContext.js';
 import { KeystoneBriefComposerService } from './KeystoneBriefComposerService.js';
+import { tickAutoBackups } from './AutoBackupService.js';
+import { sweepExpiredExportJobs } from './ExportJobService.js';
 
 // Usage-analytics rollup cron schedules (independent of proactive features).
 const USAGE_ROLLUP_HOURLY_CRON = '0 * * * *';
 const USAGE_ROLLUP_DAILY_CRON = '20 0 * * *';
 const DEFAULT_KEYSTONE_COMPOSER_INTERVAL_MS = 15 * 60 * 1000;
+const AUTO_BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // ProactiveScheduler
@@ -47,6 +50,7 @@ export class ProactiveScheduler {
   private usageRollupHourlyTask: ReturnType<typeof cron.schedule> | null = null;
   private usageRollupDailyTask: ReturnType<typeof cron.schedule> | null = null;
   private keystoneComposerIntervalId: ReturnType<typeof setInterval> | null = null;
+  private autoBackupIntervalId: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
   constructor(ucm: UserContextManager) {
@@ -82,6 +86,15 @@ export class ProactiveScheduler {
       startedLoops.push(`outreach every ${config.outreachIntervalMs}ms`);
     } else {
       console.log('[ProactiveScheduler] Outreach scheduler disabled');
+    }
+
+    if (process.env.AUTO_BACKUP_SCHEDULER_ENABLED !== 'false') {
+      this.autoBackupIntervalId = setInterval(() => {
+        this.safeRun('autoBackup', () => this.runAutoBackupCycle());
+      }, AUTO_BACKUP_INTERVAL_MS);
+      startedLoops.push(`autoBackup every ${AUTO_BACKUP_INTERVAL_MS}ms`);
+    } else {
+      console.log('[ProactiveScheduler] Auto backup scheduler disabled');
     }
 
     if (!config.proactiveSchedulerEnabled) {
@@ -155,6 +168,11 @@ export class ProactiveScheduler {
       this.outreachIntervalId = null;
     }
 
+    if (this.autoBackupIntervalId !== null) {
+      clearInterval(this.autoBackupIntervalId);
+      this.autoBackupIntervalId = null;
+    }
+
     if (this.dailyTask) {
       this.dailyTask.stop();
       this.dailyTask = null;
@@ -226,6 +244,11 @@ export class ProactiveScheduler {
         );
       }
     }
+  }
+
+  private async runAutoBackupCycle(): Promise<void> {
+    await sweepExpiredExportJobs();
+    await tickAutoBackups(this.ucm);
   }
 
   // ---- Daily consolidation (all users) -----------------------------------

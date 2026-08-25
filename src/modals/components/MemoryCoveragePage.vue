@@ -121,6 +121,60 @@
       <p>{{ backupDownloadFailureReceiptText }}</p>
     </section>
 
+    <section
+      class="backup-status-center"
+      aria-label="自动备份状态"
+    >
+      <div>
+        <span>自动备份状态中心</span>
+        <strong>{{ backupStatusHeadline }}</strong>
+      </div>
+      <div class="backup-status-stats">
+        <div>
+          <span>上次备份</span>
+          <strong>{{ backupLastText }}</strong>
+        </div>
+        <div>
+          <span>备份大小 / 库体积</span>
+          <strong>{{ backupSizeText }}</strong>
+        </div>
+        <div>
+          <span>下次预计</span>
+          <strong>{{ backupNextText }}</strong>
+        </div>
+        <div>
+          <span>连续失败</span>
+          <strong>{{ backupFailText }}</strong>
+        </div>
+      </div>
+      <table v-if="backupHistoryRows.length" class="backup-history-table">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>通道</th>
+            <th>耗时</th>
+            <th>大小</th>
+            <th>对象</th>
+            <th>结果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in backupHistoryRows" :key="row.at + row.channel">
+            <td>{{ row.time }}</td>
+            <td>{{ row.channelLabel }}</td>
+            <td>{{ row.duration }}</td>
+            <td>{{ row.size }}</td>
+            <td class="mono">{{ row.object }}</td>
+            <td>{{ row.result }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="backup-status-note">
+        手动「记忆备份」走异步作业轮询后下载到本机。恢复仍需录入 → 备份 zip → dry-run。
+        加密快照先用 <code>npx tsx tools/backup-crypt.ts decrypt</code> 再导入。
+      </p>
+    </section>
+
     <template v-if="coverage">
       <section
         class="snapshot-receipt"
@@ -1207,6 +1261,8 @@ import {
   type MemoryCoverageState,
   type SmartMemoryImportCommitResponse,
   type SmartMemoryImportInspectResponse,
+  type MemoryBackupStatusResponse,
+  type MemoryExportJob,
 } from '../../services/MemoryServiceClient';
 
 type ImportMode = 'paste' | 'file' | 'backup';
@@ -1270,6 +1326,8 @@ const repairScope = ref<'selected' | 'all'>('selected');
 const platformSortMode = ref<'default' | 'lowScore'>('default');
 const exportingBackup = ref(false);
 const backupExportRequestedAt = ref<number | null>(null);
+const backupExportJob = ref<MemoryExportJob | null>(null);
+const backupStatus = ref<MemoryBackupStatusResponse | null>(null);
 const backupDownloadReceipt = ref<BackupDownloadReceipt | null>(null);
 const backupDownloadFailureReceipt = ref<BackupDownloadFailureReceipt | null>(null);
 const toastText = ref('');
@@ -2780,7 +2838,15 @@ const backupDownloadPendingReceiptItems = computed(() => {
   return [
     {
       label: '请求状态',
-      value: `${requestedText} 已向当前 Memory Service 发起 POST /export；完成前还没有新文件名、大小或 manifest 摘要。`,
+      value: `${requestedText} 已向当前 Memory Service 创建导出作业${
+        backupExportJob.value
+          ? `（${backupExportJob.value.status}${
+              backupExportJob.value.bytesWritten
+                ? ` · ${formatByteSize(backupExportJob.value.bytesWritten)}`
+                : ''
+            }）`
+          : ''
+      }；完成前还没有新文件名、大小或 manifest 摘要。`,
     },
     {
       label: '当前屏幕',
@@ -2798,6 +2864,62 @@ const backupDownloadPendingReceiptItems = computed(() => {
     },
   ];
 });
+
+function formatByteSize(bytes: number | undefined | null): string {
+  if (!bytes) return '—';
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function channelLabel(channel?: string): string {
+  if (channel === 'webdav') return 'WebDAV';
+  if (channel === 's3') return 'S3';
+  if (channel === 'desktop_pull') return '桌面拉取';
+  if (channel === 'manual_export') return '手动导出';
+  return channel || '—';
+}
+
+const backupStatusHeadline = computed(() =>
+  backupStatus.value?.enabled ? '服务端推送已开启' : '自动备份未开启',
+);
+const backupLastText = computed(() => {
+  const last = backupStatus.value?.lastBackup;
+  if (!last?.at) return '尚无';
+  return `${last.at.replace('T', ' ').slice(0, 16)} · ${last.status || ''}`;
+});
+const backupSizeText = computed(() => {
+  const size = formatByteSize(backupStatus.value?.lastBackup?.sizeBytes);
+  const db = formatByteSize(backupStatus.value?.volume?.dbBytes);
+  const share = backupStatus.value?.volume?.vectorShare;
+  const shareText =
+    typeof share === 'number' ? ` · 向量占 ${Math.round(share * 100)}%` : '';
+  return `${size} / 库 ${db}${shareText}`;
+});
+const backupNextText = computed(
+  () => backupStatus.value?.nextEstimatedAt?.replace('T', ' ').slice(0, 16) || '—',
+);
+const backupFailText = computed(() => {
+  const n = backupStatus.value?.consecutiveFailures ?? 0;
+  return n >= 3 ? `${n}（已通知）` : String(n);
+});
+const backupHistoryRows = computed(() =>
+  (backupStatus.value?.history || []).slice(0, 8).map((item) => ({
+    at: item.at,
+    time: item.at.replace('T', ' ').slice(5, 16),
+    channel: item.channel,
+    channelLabel: channelLabel(item.channel),
+    duration:
+      typeof item.durationMs === 'number'
+        ? `${Math.max(1, Math.round(item.durationMs / 1000))}s`
+        : '—',
+    size: formatByteSize(item.sizeBytes),
+    object: item.objectKey || item.localPath || '—',
+    result: item.status === 'success' ? '成功' : item.error || '失败',
+  })),
+);
 
 const backupZipModeActionBoundary = computed(() => {
   const fileName = selectedFileName.value;
@@ -3542,6 +3664,7 @@ async function loadCoverage(
         '';
     }
     await loadCoverageDiagnostics();
+    await loadBackupStatus();
     return true;
   } catch (error) {
     console.error('加载记忆覆盖地图失败:', error);
@@ -3570,11 +3693,25 @@ async function refreshCoverageManually(): Promise<void> {
   await loadCoverage({ manual: true });
 }
 
+async function loadBackupStatus(): Promise<void> {
+  try {
+    backupStatus.value = await getMemoryServiceClient().getBackupStatus();
+  } catch {
+    backupStatus.value = null;
+  }
+}
+
 async function exportBackup() {
   exportingBackup.value = true;
   backupExportRequestedAt.value = Math.floor(Date.now() / 1000);
+  backupExportJob.value = null;
   try {
-    const result = await getMemoryServiceClient().exportMemory();
+    const result = await getMemoryServiceClient().waitAndDownloadExport(
+      {},
+      (job) => {
+        backupExportJob.value = job;
+      },
+    );
     const url = URL.createObjectURL(result.blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -3899,6 +4036,7 @@ onMounted(() => {
 .backup-download-pending-receipt,
 .backup-download-receipt,
 .backup-download-failure-receipt,
+.backup-status-center,
 .quality-focus,
 .legend-bar,
 .sort-receipt {
@@ -4352,6 +4490,71 @@ code {
   margin: 0;
   color: #cbd5e1;
   text-align: right;
+}
+
+.backup-status-center {
+  padding: 1rem 1.1rem;
+  margin: 0 0 1rem;
+}
+
+.backup-status-center > div:first-child span {
+  display: block;
+  color: #93c5fd;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.backup-status-center > div:first-child strong {
+  display: block;
+  margin-top: 0.2rem;
+  color: #f8fafc;
+}
+
+.backup-status-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+}
+
+.backup-status-stats span {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.68rem;
+}
+
+.backup-status-stats strong {
+  display: block;
+  margin-top: 0.15rem;
+  color: #e0f2fe;
+  font-size: 0.86rem;
+}
+
+.backup-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.85rem;
+  font-size: 0.75rem;
+}
+
+.backup-history-table th,
+.backup-history-table td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.backup-history-table .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.backup-status-note {
+  margin: 0.7rem 0 0;
+  color: #94a3b8;
+  font-size: 0.72rem;
 }
 
 .backup-download-pending-receipt dl {

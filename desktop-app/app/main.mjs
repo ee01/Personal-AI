@@ -569,11 +569,18 @@ async function ensureWorkerProcess() {
     args.push('--cwd', settings.cwd);
   }
 
+  const extraPath = [
+    path.join(os.homedir(), '.local', 'bin'),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    process.env.PATH || '',
+  ].join(path.delimiter);
   const child = utilityProcess.fork(entry, args, {
     serviceName: 'personal-ai-worker',
     stdio: 'pipe',
     env: {
       ...process.env,
+      PATH: extraPath,
       WORKER_HOST_KIND: 'desktop',
     },
   });
@@ -1833,12 +1840,44 @@ ipcMain.handle('quick-ask:set-layout', async (_event, payload) => {
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('personal-ai', process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
+  }
+} else {
+  app.setAsDefaultProtocolClient('personal-ai');
+}
+
+function handlePersonalAiUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('personal-ai://')) return;
+  if (!mainWindow) createWindow();
+  mainWindow?.show();
+  mainWindow?.focus();
+  if (url.includes('backup')) {
+    void mainWindow?.webContents.executeJavaScript(
+      "location.hash='backup'; document.getElementById('backup-pull-settings')?.scrollIntoView({behavior:'smooth',block:'center'});",
+    );
+  }
+}
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  handlePersonalAiUrl(url);
+});
+
 if (!hasSingleInstanceLock) {
   allowQuit = true;
   app.quit();
 }
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  const protocolUrl = argv.find((item) => String(item).startsWith('personal-ai://'));
+  if (protocolUrl) {
+    handlePersonalAiUrl(protocolUrl);
+    return;
+  }
   showAskWindow();
 });
 

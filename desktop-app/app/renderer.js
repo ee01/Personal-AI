@@ -50,6 +50,14 @@ const elements = {
   workerCwd: document.getElementById('worker-cwd'),
   workerCodexCommand: document.getElementById('worker-codex-command'),
   workerClaudeCommand: document.getElementById('worker-claude-command'),
+  workerCursorCommand: document.getElementById('worker-cursor-command'),
+  workerCursorAgentCommand: document.getElementById('worker-cursor-agent-command'),
+  backupPullEnabled: document.getElementById('backup-pull-enabled'),
+  backupPullHour: document.getElementById('backup-pull-hour'),
+  backupPullRetention: document.getElementById('backup-pull-retention'),
+  backupPullDirectory: document.getElementById('backup-pull-directory'),
+  backupPullEncrypt: document.getElementById('backup-pull-encrypt'),
+  backupPullNow: document.getElementById('backup-pull-now'),
   testMemoryButton: document.getElementById('test-memory-button'),
   settingsMessage: document.getElementById('settings-message'),
   loginButton: document.getElementById('login-button'),
@@ -2158,6 +2166,15 @@ function collectRuntimeSettings() {
       cwd: elements.workerCwd?.value.trim() || undefined,
       acpCodexCommand: elements.workerCodexCommand?.value.trim() || undefined,
       acpClaudeCommand: elements.workerClaudeCommand?.value.trim() || undefined,
+      acpCursorCommand: elements.workerCursorCommand?.value.trim() || undefined,
+      cursorAgentCommand: elements.workerCursorAgentCommand?.value.trim() || undefined,
+    },
+    backupPull: {
+      enabled: !!elements.backupPullEnabled?.checked,
+      hour: Number(elements.backupPullHour?.value || 8),
+      retentionCount: Number(elements.backupPullRetention?.value || 7),
+      directory: elements.backupPullDirectory?.value.trim() || undefined,
+      encrypt: !!elements.backupPullEncrypt?.checked,
     },
   };
 }
@@ -2306,6 +2323,30 @@ function applyRuntimeSettings(settings, { force = false } = {}) {
   }
   if (elements.workerClaudeCommand) {
     elements.workerClaudeCommand.value = settings.worker?.acpClaudeCommand || '';
+  }
+  if (elements.workerCursorCommand) {
+    elements.workerCursorCommand.value = settings.worker?.acpCursorCommand || '';
+  }
+  if (elements.workerCursorAgentCommand) {
+    elements.workerCursorAgentCommand.value =
+      settings.worker?.cursorAgentCommand || '';
+  }
+  if (elements.backupPullEnabled) {
+    elements.backupPullEnabled.checked = !!settings.backupPull?.enabled;
+  }
+  if (elements.backupPullHour) {
+    elements.backupPullHour.value = String(settings.backupPull?.hour ?? 8);
+  }
+  if (elements.backupPullRetention) {
+    elements.backupPullRetention.value = String(
+      settings.backupPull?.retentionCount ?? 7,
+    );
+  }
+  if (elements.backupPullDirectory) {
+    elements.backupPullDirectory.value = settings.backupPull?.directory || '';
+  }
+  if (elements.backupPullEncrypt) {
+    elements.backupPullEncrypt.checked = settings.backupPull?.encrypt !== false;
   }
   clearSettingsDirty();
 }
@@ -4244,6 +4285,46 @@ elements.testMemoryButton.addEventListener('click', () => {
       );
     }
   });
+});
+
+if (elements.backupPullNow) {
+  elements.backupPullNow.addEventListener('click', () => {
+    void withAction(elements.backupPullNow, '拉取中...', async () => {
+      try {
+        await saveRuntimeSettings({ silent: true });
+        const result = await bridgeApi.pullBackupNow();
+        setMessage(
+          elements.settingsMessage,
+          result.status === 'success'
+            ? '已拉取备份到本机目录'
+            : result.error || result.status,
+          result.status === 'success' ? 'success' : 'error',
+        );
+      } catch (error) {
+        setMessage(
+          elements.settingsMessage,
+          error instanceof Error ? error.message : '拉取备份失败',
+          'error',
+        );
+      }
+    });
+  });
+}
+
+function focusBackupSettings() {
+  const card = document.getElementById('backup-pull-settings');
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+if (
+  window.location.hash === '#backup' ||
+  window.location.hash === '#/backup'
+) {
+  focusBackupSettings();
+}
+window.addEventListener('hashchange', () => {
+  if (window.location.hash.includes('backup')) focusBackupSettings();
 });
 
 elements.loginButton.addEventListener('click', () => {

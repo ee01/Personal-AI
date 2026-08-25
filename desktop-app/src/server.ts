@@ -49,6 +49,7 @@ import {
   isTrustedWorkerPairOrigin,
   WorkerSupervisor,
 } from './workerSupervisor.js';
+import type { BackupPuller } from './backupPuller.js';
 
 function readToken(
   request: Pick<FastifyRequest, 'headers'>,
@@ -128,6 +129,7 @@ interface BridgeServerDependencies {
   explorerManager?: ExplorerManager;
   localSkillSyncManager?: LocalSkillSyncManager;
   workerSupervisor?: WorkerSupervisor;
+  backupPuller?: BackupPuller;
   version: string;
 }
 
@@ -551,6 +553,17 @@ export async function createBridgeServer(
         error instanceof Error ? error.message : 'Memory Service test failed';
       return reply.code(400).send({ ok: false, error: message });
     }
+  });
+
+  app.post('/backup/pull-now', async (_request, reply) => {
+    if (!deps.backupPuller) {
+      return reply.code(501).send({ error: 'Backup puller is not available.' });
+    }
+    const result = await deps.backupPuller.tick(true);
+    if (result.status === 'failed') {
+      return reply.code(400).send(result);
+    }
+    return result;
   });
 
   app.post<{

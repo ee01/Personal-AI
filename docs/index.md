@@ -12,7 +12,7 @@
 |---|---|---|---|
 | Ask | 主动问答 | [ask.md](./features/ask.md) | 含 Quick Ask 服务端语义 |
 | Memory Capture | 记忆捕捉 | [memory_capture.md](./features/memory_capture.md) | |
-| Memory Coverage Map | 记忆覆盖地图 | [memory_coverage_map.md](./features/memory_coverage_map.md) | 含记忆导入/导出/备份入口 |
+| Memory Coverage Map | 记忆覆盖地图 | [memory_coverage_map.md](./features/memory_coverage_map.md) | 含记忆导入/导出/备份入口与自动备份状态；专题 [memory_auto_backup.md](./features/memory_auto_backup.md) |
 | Memory Lens | 记忆提示 | [memory_lens.md](./features/memory_lens.md) | 含 Keystone Memory Brief（关键记忆简报）展示侧 |
 | Compose Assist | 回复助手 | [assist.md](./features/assist.md) | 主文档已更名为 `assist.md`（旧名 `compose_assist.md`）；含 Draft Compose / Draft Refine |
 | User Profile | 用户画像 | [user_profile_system.md](./features/user_profile_system.md) | |
@@ -73,7 +73,8 @@
 | 智能资料录入 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | 粘贴/文档/普通 zip 先显示范围回执，入口和主按钮 hover/读屏说明 dry-run/提交边界，提交中保留写入回执并锁定关闭/取消 |
 | 外部 AI 历史基础录入 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | 用户主动上传 ChatGPT / Claude `conversations.json` zip；提交中/完成后显示写入与事实边界回执 |
 | Coverage 质量分 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | 平台状态、新鲜度和健康贡献项计算 `qualityScore`，详情与排序 / 查看 / 切片刷新控件都标明当前快照和只读边界 |
-| 备份下载与恢复入口 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | Coverage 页面下载前/提交中/下载后都有边界回执，抽屉内识别备份 zip、archive 指纹并 merge/replace |
+| 备份下载与恢复入口 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | Coverage 页面经 `/export/jobs` 下载前/提交中/下载后都有边界回执，抽屉内识别备份 zip、archive 指纹并 merge/replace |
+| 记忆自动备份 | Memory Coverage Map / Doubao Bridge | [memory_auto_backup.md](./features/memory_auto_backup.md) | 流式导出作业、WebDAV/S3 加密推送、Desktop 拉取、Coverage 状态中心；口令不回传前端 |
 | 记忆捕捉 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 选区/网页/外部输入的低打扰入库层 |
 | 选中文字保存为资料记忆 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 右侧半露出 `+ 记住`，复核面板显示选区快照、保存 `source_memory_capsule` 和 `web` 记忆信号 |
 | 整页资料保存 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 确定性候选后由 memory-service 专用路由做单次无工具 LLM 筛选；内容 hash、阈值评分、single-flight、成功缓存和 5/10/15 分钟失败退避覆盖 DOM 抖动/刷新/多标签页，写入仍只走 `+ 记住` 复核或强意图自动入库 |
@@ -81,7 +82,7 @@
 | Source Memory 蒸馏器 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 保存/补备注同步生成 P0，后台 deep worker 以 evidence spans 生成 scene cards、来源候选、Skill/Storyline seeds 和强锚点来源簇；失败保留 P0，详情页显示状态与零高责任写入边界 |
 | 变化脉络 | Ask / Memory Lens / Compose Assist / Memory Capture | [change_memory_ledger.md](./features/change_memory_ledger.md) | 为稳定对象保存带前后值、来源和时间的状态事件链；区分已确认当前、最后观测、冲突、页面新值和仅历史，并供 Source Memory、Lens、Ask、Compose 使用 |
 | Memory Capture API | Memory Capture | [memory_capture.md](./features/memory_capture.md) | `/source-memory/candidates/*` 与 `/source-memory/capsules`；保存/详情返回写入与召回信号回执，详情控件点击前说明只读、刷新、撤销和无外部副作用边界 |
-| 记忆导入/导出/备份 | Memory Coverage Map | [memory_system.md](./memory_system.md) | `/import`、`/export`、backup archive 指纹、验证脚本与备份/恢复入口按钮边界 |
+| 记忆导入/导出/备份 | Memory Coverage Map | [memory_system.md](./memory_system.md) / [memory_auto_backup.md](./features/memory_auto_backup.md) | `/import`、`/export/jobs`、backup archive 指纹、定时加密快照与备份/恢复入口按钮边界 |
 | 用户画像条目 | User Profile | [user_profile_system.md](./features/user_profile_system.md) | Profile item 管理、展示、手动录入、搜索筛选控制点、加载全部只读回执、已排除审计和等待服务确认回执 |
 | 写作风格画像条目 | User Profile / Compose Assist | [user_profile_system.md](./features/user_profile_system.md) / [assist.md](./features/assist.md) | `writing_style.*` 来自 redacted diff 重复证据；按 surface/audience/task/language 分 scope |
 | 语言偏好画像条目 | User Profile / Memory Lens | [user_profile_system.md](./features/user_profile_system.md) / [memory_lens.md](./features/memory_lens.md#options-语言读取与后端同步链路) | 当前值独立存于 `personalAiUiPreferences.language`；请求 header 控制即时展示，画像投影约束后台生成，`envConfig` 仅提供服务连接参数 |

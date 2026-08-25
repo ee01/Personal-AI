@@ -1087,19 +1087,71 @@ export class BridgeMemoryServiceClient {
     );
   }
 
-  async createProfileItem(body: {
-    itemType: string;
-    itemKey: string;
-    itemValue: string;
-    evidenceRefs?: unknown[];
-    confidence?: number;
-  }): Promise<{
-    id?: string;
-    itemType?: string;
-    itemKey?: string;
-    itemValue?: string;
+  async createExportJob(body: {
+    includeDerived?: boolean;
+    includeVectors?: boolean;
+    encrypt?: boolean;
+  } = {}): Promise<{
+    id: string;
+    status: string;
+    fileName: string;
+    error?: string;
+    archiveSha256?: string;
+    sizeBytes?: number;
   }> {
-    this.ensureWriteIdentity();
-    return this.request('POST', '/api/v1/profile/items', body);
+    return this.request('POST', '/api/v1/export/jobs', body);
+  }
+
+  async getExportJob(jobId: string): Promise<{
+    id: string;
+    status: string;
+    fileName: string;
+    error?: string;
+    archiveSha256?: string;
+    sizeBytes?: number;
+  }> {
+    return this.request('GET', `/api/v1/export/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  async downloadExportJobToFile(
+    jobId: string,
+    targetPath: string,
+  ): Promise<{ sizeBytes: number; sha256?: string; fileName: string }> {
+    const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
+    if (!baseUrl) {
+      throw new Error('MEMORY_SERVICE_BASE_URL is not configured');
+    }
+    const response = await fetch(
+      `${baseUrl}/api/v1/export/jobs/${encodeURIComponent(jobId)}/download`,
+      { method: 'GET', headers: this.buildHeaders() },
+    );
+    if (!response.ok || !response.body) {
+      throw new Error(`Export download failed (${response.status})`);
+    }
+    const { createWriteStream } = await import('node:fs');
+    const { pipeline } = await import('node:stream/promises');
+    const { Readable } = await import('node:stream');
+    await pipeline(Readable.fromWeb(response.body as never), createWriteStream(targetPath));
+    const { stat } = await import('node:fs/promises');
+    const sizeBytes = (await stat(targetPath)).size;
+    return {
+      sizeBytes,
+      sha256: response.headers.get('x-personal-ai-backup-archive-sha256') || undefined,
+      fileName:
+        response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] ||
+        'personal-ai-memory.zip',
+    };
+  }
+
+  async postBackupPullReceipt(body: {
+    jobId: string;
+    deviceName?: string;
+    localPath: string;
+    sizeBytes: number;
+    sha256?: string;
+    status: 'success' | 'failed';
+    error?: string;
+  }): Promise<void> {
+    await this.request('POST', '/api/v1/backup/pull-receipt', body);
   }
 }

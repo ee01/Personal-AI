@@ -83,11 +83,35 @@ interface UpdatableConfig {
   botTeamId?: string;
   botTargetEmail?: string;
   clearBotToken?: boolean;
+  autoBackupEnabled?: boolean;
+  autoBackupScheduleType?: 'daily' | 'every_x_hours' | 'weekly';
+  autoBackupPreferredHour?: number;
+  autoBackupIntervalHours?: number;
+  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupWebdavUrl?: string;
+  autoBackupWebdavUsername?: string;
+  autoBackupWebdavPassword?: string;
+  autoBackupS3Endpoint?: string;
+  autoBackupS3Region?: string;
+  autoBackupS3Bucket?: string;
+  autoBackupS3AccessKeyId?: string;
+  autoBackupS3SecretAccessKey?: string;
+  autoBackupPrefix?: string;
+  autoBackupEncryptionEnabled?: boolean;
+  autoBackupEncryptionPassphrase?: string;
+  autoBackupRetentionCount?: number;
+  autoBackupIncludeDerived?: boolean;
+  autoBackupIncludeVectors?: boolean;
+  clearAutoBackupWebdavPassword?: boolean;
+  clearAutoBackupS3AccessKeyId?: boolean;
+  clearAutoBackupS3SecretAccessKey?: boolean;
+  clearAutoBackupEncryptionPassphrase?: boolean;
 }
 
 /** Keys that must never be returned to the client. */
 const SENSITIVE_KEYS = new Set([
   'openaiApiKey',
+  'claudeApiKey',
   'groqApiKey',
   'difyApiKey',
   'apiKey',
@@ -95,6 +119,10 @@ const SENSITIVE_KEYS = new Set([
   'openClawApiKey',
   'ringCentralClientSecret',
   'ringCentralJwt',
+  'autoBackupWebdavPassword',
+  'autoBackupS3AccessKeyId',
+  'autoBackupS3SecretAccessKey',
+  'autoBackupEncryptionPassphrase',
 ]);
 
 function normalizePushTarget(
@@ -221,13 +249,26 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
     typeof raw.ringCentralJwt === 'string' && raw.ringCentralJwt.trim().length > 0;
   clean.botTokenConfigured =
     typeof raw.botToken === 'string' && raw.botToken.trim().length > 0;
+  clean.autoBackupWebdavPasswordConfigured =
+    typeof raw.autoBackupWebdavPassword === 'string' &&
+    raw.autoBackupWebdavPassword.trim().length > 0;
+  clean.autoBackupS3AccessKeyIdConfigured =
+    typeof raw.autoBackupS3AccessKeyId === 'string' &&
+    raw.autoBackupS3AccessKeyId.trim().length > 0;
+  clean.autoBackupS3SecretAccessKeyConfigured =
+    typeof raw.autoBackupS3SecretAccessKey === 'string' &&
+    raw.autoBackupS3SecretAccessKey.trim().length > 0;
+  clean.autoBackupEncryptionPassphraseConfigured =
+    typeof raw.autoBackupEncryptionPassphrase === 'string' &&
+    raw.autoBackupEncryptionPassphrase.trim().length > 0;
 
   // Expand agentExecutors with legacy OpenClaw synthesis + strip apiKeys.
   const openClawExecutorType: AgentExecutorType =
     raw.openClawExecutorType === 'openclaw-responses' ||
     raw.openClawExecutorType === 'openclaw-gateway' ||
     raw.openClawExecutorType === 'acp-codex' ||
-    raw.openClawExecutorType === 'acp-claude-code'
+    raw.openClawExecutorType === 'acp-claude-code' ||
+    raw.openClawExecutorType === 'acp-cursor'
       ? raw.openClawExecutorType
       : 'openclaw-gateway';
   const runtimeLike = {
@@ -320,6 +361,7 @@ const updateConfigBodySchema = {
               'openclaw-gateway',
               'acp-codex',
               'acp-claude-code',
+              'acp-cursor',
               'openclaw',
             ],
           },
@@ -365,6 +407,32 @@ const updateConfigBodySchema = {
     botTeamId: { type: 'string' as const },
     botTargetEmail: { type: 'string' as const },
     clearBotToken: { type: 'boolean' as const },
+    autoBackupEnabled: { type: 'boolean' as const },
+    autoBackupScheduleType: {
+      type: 'string' as const,
+      enum: ['daily', 'every_x_hours', 'weekly'],
+    },
+    autoBackupPreferredHour: { type: 'number' as const, minimum: 0, maximum: 23 },
+    autoBackupIntervalHours: { type: 'number' as const, minimum: 1 },
+    autoBackupProvider: { type: 'string' as const, enum: ['webdav', 's3'] },
+    autoBackupWebdavUrl: { type: 'string' as const },
+    autoBackupWebdavUsername: { type: 'string' as const },
+    autoBackupWebdavPassword: { type: 'string' as const },
+    autoBackupS3Endpoint: { type: 'string' as const },
+    autoBackupS3Region: { type: 'string' as const },
+    autoBackupS3Bucket: { type: 'string' as const },
+    autoBackupS3AccessKeyId: { type: 'string' as const },
+    autoBackupS3SecretAccessKey: { type: 'string' as const },
+    autoBackupPrefix: { type: 'string' as const },
+    autoBackupEncryptionEnabled: { type: 'boolean' as const },
+    autoBackupEncryptionPassphrase: { type: 'string' as const },
+    autoBackupRetentionCount: { type: 'number' as const, minimum: 1 },
+    autoBackupIncludeDerived: { type: 'boolean' as const },
+    autoBackupIncludeVectors: { type: 'boolean' as const },
+    clearAutoBackupWebdavPassword: { type: 'boolean' as const },
+    clearAutoBackupS3AccessKeyId: { type: 'boolean' as const },
+    clearAutoBackupS3SecretAccessKey: { type: 'boolean' as const },
+    clearAutoBackupEncryptionPassphrase: { type: 'boolean' as const },
   },
   additionalProperties: false,
 };
@@ -596,6 +664,96 @@ export async function configRoutes(
       }
       if (updates.clearBotToken === true) {
         delete persisted.botToken;
+      }
+      if (updates.autoBackupEnabled !== undefined) {
+        persisted.autoBackupEnabled = updates.autoBackupEnabled;
+      }
+      if (updates.autoBackupScheduleType !== undefined) {
+        persisted.autoBackupScheduleType = updates.autoBackupScheduleType;
+      }
+      if (updates.autoBackupPreferredHour !== undefined) {
+        persisted.autoBackupPreferredHour = Math.min(
+          23,
+          Math.max(0, Math.floor(updates.autoBackupPreferredHour)),
+        );
+      }
+      if (updates.autoBackupIntervalHours !== undefined) {
+        persisted.autoBackupIntervalHours = Math.max(
+          1,
+          Math.floor(updates.autoBackupIntervalHours),
+        );
+      }
+      if (updates.autoBackupProvider !== undefined) {
+        persisted.autoBackupProvider = updates.autoBackupProvider;
+      }
+      if (updates.autoBackupWebdavUrl !== undefined) {
+        persisted.autoBackupWebdavUrl = updates.autoBackupWebdavUrl.trim();
+      }
+      if (updates.autoBackupWebdavUsername !== undefined) {
+        persisted.autoBackupWebdavUsername = updates.autoBackupWebdavUsername.trim();
+      }
+      if (updates.autoBackupWebdavPassword !== undefined) {
+        const trimmed = updates.autoBackupWebdavPassword.trim();
+        if (trimmed.length > 0) {
+          persisted.autoBackupWebdavPassword = trimmed;
+        }
+      }
+      if (updates.autoBackupS3Endpoint !== undefined) {
+        persisted.autoBackupS3Endpoint = updates.autoBackupS3Endpoint.trim();
+      }
+      if (updates.autoBackupS3Region !== undefined) {
+        persisted.autoBackupS3Region = updates.autoBackupS3Region.trim();
+      }
+      if (updates.autoBackupS3Bucket !== undefined) {
+        persisted.autoBackupS3Bucket = updates.autoBackupS3Bucket.trim();
+      }
+      if (updates.autoBackupS3AccessKeyId !== undefined) {
+        const trimmed = updates.autoBackupS3AccessKeyId.trim();
+        if (trimmed.length > 0) {
+          persisted.autoBackupS3AccessKeyId = trimmed;
+        }
+      }
+      if (updates.autoBackupS3SecretAccessKey !== undefined) {
+        const trimmed = updates.autoBackupS3SecretAccessKey.trim();
+        if (trimmed.length > 0) {
+          persisted.autoBackupS3SecretAccessKey = trimmed;
+        }
+      }
+      if (updates.autoBackupPrefix !== undefined) {
+        persisted.autoBackupPrefix = updates.autoBackupPrefix.trim() || 'personal-ai-backups';
+      }
+      if (updates.autoBackupEncryptionEnabled !== undefined) {
+        persisted.autoBackupEncryptionEnabled = updates.autoBackupEncryptionEnabled;
+      }
+      if (updates.autoBackupEncryptionPassphrase !== undefined) {
+        const trimmed = updates.autoBackupEncryptionPassphrase.trim();
+        if (trimmed.length > 0) {
+          persisted.autoBackupEncryptionPassphrase = trimmed;
+        }
+      }
+      if (updates.autoBackupRetentionCount !== undefined) {
+        persisted.autoBackupRetentionCount = Math.max(
+          1,
+          Math.floor(updates.autoBackupRetentionCount),
+        );
+      }
+      if (updates.autoBackupIncludeDerived !== undefined) {
+        persisted.autoBackupIncludeDerived = updates.autoBackupIncludeDerived;
+      }
+      if (updates.autoBackupIncludeVectors !== undefined) {
+        persisted.autoBackupIncludeVectors = updates.autoBackupIncludeVectors;
+      }
+      if (updates.clearAutoBackupWebdavPassword === true) {
+        delete persisted.autoBackupWebdavPassword;
+      }
+      if (updates.clearAutoBackupS3AccessKeyId === true) {
+        delete persisted.autoBackupS3AccessKeyId;
+      }
+      if (updates.clearAutoBackupS3SecretAccessKey === true) {
+        delete persisted.autoBackupS3SecretAccessKey;
+      }
+      if (updates.clearAutoBackupEncryptionPassphrase === true) {
+        delete persisted.autoBackupEncryptionPassphrase;
       }
 
       // One-time / keep-alive import of legacy OpenClaw into agentExecutors.

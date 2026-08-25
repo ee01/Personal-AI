@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -7,6 +8,7 @@ import path from 'node:path';
 import AdmZip from 'adm-zip';
 import BetterSqlite3 from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
+import yazl from 'yazl';
 
 import type { UserContext } from './UserContextManager.js';
 
@@ -101,6 +103,21 @@ export interface MemoryBackupExportResult {
   buffer: Buffer;
   manifest: MemoryBackupManifest;
   archiveSha256: string;
+}
+
+export type BackupExportStage = 'exporting' | 'packaging' | 'ready';
+
+export interface MemoryBackupExportFileOptions {
+  includeDerived?: boolean;
+  includeVectors?: boolean;
+}
+
+export interface MemoryBackupExportFileResult {
+  fileName: string;
+  filePath: string;
+  manifest: MemoryBackupManifest;
+  archiveSha256: string;
+  sizeBytes: number;
 }
 
 export interface MemoryImportResult {
@@ -258,7 +275,31 @@ const REPLACE_STYLE_MERGE_TABLES = new Set<string>([
 
 export async function exportMemoryBackupZip(
   userContext: UserContext,
+  options: MemoryBackupExportFileOptions = {},
 ): Promise<MemoryBackupExportResult> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'personal-ai-memory-export-'));
+  const zipPath = path.join(tempRoot, 'archive.zip');
+  try {
+    const streamed = await exportMemoryBackupToFile(userContext, zipPath, options);
+    return {
+      fileName: streamed.fileName,
+      buffer: await fs.readFile(zipPath),
+      manifest: streamed.manifest,
+      archiveSha256: streamed.archiveSha256,
+    };
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+export async function exportMemoryBackupToFile(
+  userContext: UserContext,
+  outputPath: string,
+  options: MemoryBackupExportFileOptions = {},
+  onProgress?: (stage: BackupExportStage, bytesWritten?: number) => void,
+): Promise<MemoryBackupExportFileResult> {
+  const includeDerived = options.includeDerived !== false;
+  const includeVectors = options.includeVectors !== false;
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'personal-ai-memory-export-'));
   const packageRoot = path.join(tempRoot, 'package');
   const userExportDir = path.join(packageRoot, 'user');
@@ -275,7 +316,12 @@ export async function exportMemoryBackupZip(
   const derivedSkipped: string[] = [];
 
   try {
-    await userContext.db.backup(path.join(userExportDir, SQLITE_FILE_NAME));
+    onProgress?.('exporting');
+    const sqliteTarget = path.join(userExportDir, SQLITE_FILE_NAME);
+    await snapshotSqliteDatabase(userContext.db, sqliteTarget);
+    if (!includeVectors) {
+      dropDerivedIndexes(sqliteTarget);
+    }
     layerAFiles.push(`user/${SQLITE_FILE_NAME}`);
 
     const sourceConfigPath = path.join(userDir, CONFIG_FILE_NAME);
@@ -314,35 +360,37 @@ export async function exportMemoryBackupZip(
       }
     }
 
-    const derivedSnapshots = [
-      {
-        path: DERIVED_SNAPSHOTS[0],
-        generator: () => generateMessagesOverview(userContext.db),
-      },
-      {
-        path: DERIVED_SNAPSHOTS[1],
-        generator: () => generateProfileOverview(userContext.db),
-      },
-      {
-        path: DERIVED_SNAPSHOTS[2],
-        generator: () => generateEntityTimelineOverview(userContext.db),
-      },
-      {
-        path: DERIVED_SNAPSHOTS[3],
-        generator: () => generateRelationshipOverview(userContext.db),
-      },
-    ] as const;
+    if (includeDerived) {
+      const derivedSnapshots = [
+        {
+          path: DERIVED_SNAPSHOTS[0],
+          generator: () => generateMessagesOverview(userContext.db),
+        },
+        {
+          path: DERIVED_SNAPSHOTS[1],
+          generator: () => generateProfileOverview(userContext.db),
+        },
+        {
+          path: DERIVED_SNAPSHOTS[2],
+          generator: () => generateEntityTimelineOverview(userContext.db),
+        },
+        {
+          path: DERIVED_SNAPSHOTS[3],
+          generator: () => generateRelationshipOverview(userContext.db),
+        },
+      ] as const;
 
-    for (const snapshot of derivedSnapshots) {
-      try {
-        const content = await snapshot.generator();
-        await writeTextFile(path.join(packageRoot, snapshot.path), content);
-        layerCFiles.push(snapshot.path);
-      } catch (error) {
-        derivedFailures.push({
-          path: snapshot.path,
-          reason: error instanceof Error ? error.message : String(error),
-        });
+      for (const snapshot of derivedSnapshots) {
+        try {
+          const content = await snapshot.generator();
+          await writeTextFile(path.join(packageRoot, snapshot.path), content);
+          layerCFiles.push(snapshot.path);
+        } catch (error) {
+          derivedFailures.push({
+            path: snapshot.path,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
 
@@ -367,12 +415,18 @@ export async function exportMemoryBackupZip(
       `${JSON.stringify(manifest, null, 2)}\n`,
     );
 
-    const zipBuffer = await createZipBuffer(packageRoot);
+    onProgress?.('packaging');
+    await createZipFile(packageRoot, outputPath);
+    const archiveSha256 = await sha256File(outputPath);
+    const sizeBytes = (await fs.stat(outputPath)).size;
+    const fileName = `personal-ai-memory-${userContext.userId}-${formatFileTimestamp(manifest.exportedAt)}.zip`;
+    onProgress?.('ready', sizeBytes);
     return {
-      fileName: `personal-ai-memory-${userContext.userId}-${formatFileTimestamp(manifest.exportedAt)}.zip`,
-      buffer: zipBuffer,
+      fileName,
+      filePath: outputPath,
       manifest,
-      archiveSha256: sha256(zipBuffer),
+      archiveSha256,
+      sizeBytes,
     };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -452,6 +506,17 @@ export async function importMemoryBackupZip(
       currentUserDir,
       stageUserDir,
     );
+
+    try {
+      const reopened = app.userContextManager.getContext(userContext.userId);
+      ensureDerivedIndexes(reopened.db, warnings);
+    } catch (error) {
+      warnings.push(
+        `Failed to ensure derived indexes after import: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
 
     return {
       mode,
@@ -620,7 +685,6 @@ async function buildManifest(
 
     const absolutePath = path.join(packageRoot, relativePath);
     const stat = await fs.stat(absolutePath);
-    const buffer = await fs.readFile(absolutePath);
     let layer: BackupLayer = 'C';
     let required = false;
 
@@ -636,7 +700,7 @@ async function buildManifest(
       layer,
       sizeBytes: stat.size,
       modifiedAt: Math.floor(stat.mtimeMs),
-      sha256: sha256(buffer),
+      sha256: await sha256File(absolutePath),
       required,
     });
   }
@@ -666,16 +730,120 @@ async function buildManifest(
   };
 }
 
-async function createZipBuffer(packageRoot: string): Promise<Buffer> {
-  const zip = new AdmZip();
+async function createZipFile(packageRoot: string, outputPath: string): Promise<void> {
   const files = await listFilesRecursive(packageRoot);
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
-  for (const relativePath of files) {
-    const absolutePath = path.join(packageRoot, relativePath);
-    zip.addFile(relativePath, await fs.readFile(absolutePath));
+  await new Promise<void>((resolve, reject) => {
+    const zipfile = new yazl.ZipFile();
+    const output = createWriteStream(outputPath);
+    const fail = (error: Error) => {
+      output.destroy();
+      reject(error);
+    };
+    output.on('error', fail);
+    zipfile.outputStream.on('error', fail);
+    output.on('close', () => resolve());
+    zipfile.outputStream.pipe(output);
+
+    for (const relativePath of files) {
+      zipfile.addFile(path.join(packageRoot, relativePath), relativePath);
+    }
+    zipfile.end();
+  });
+}
+
+async function snapshotSqliteDatabase(
+  liveDb: BetterSqlite3.Database,
+  targetPath: string,
+): Promise<void> {
+  await fs.rm(targetPath, { force: true });
+  try {
+    liveDb.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    // WAL checkpoint is best-effort; VACUUM INTO remains online-safe.
+  }
+  try {
+    const escaped = targetPath.replace(/'/g, "''");
+    liveDb.exec(`VACUUM INTO '${escaped}'`);
+    return;
+  } catch {
+    await fs.rm(targetPath, { force: true });
+    await liveDb.backup(targetPath);
+  }
+}
+
+function dropDerivedIndexes(snapshotPath: string): void {
+  const snapshot = new BetterSqlite3(snapshotPath);
+  try {
+    snapshot.exec('DROP TABLE IF EXISTS chunks_vec');
+    snapshot.exec('DROP TABLE IF EXISTS messages_vec');
+    snapshot.exec('DROP TABLE IF EXISTS chunks_fts');
+    snapshot.exec('VACUUM');
+  } finally {
+    snapshot.close();
+  }
+}
+
+export function ensureDerivedIndexes(
+  db: BetterSqlite3.Database,
+  warnings: string[] = [],
+): void {
+  try {
+    const fts = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'`,
+      )
+      .get() as { name: string } | undefined;
+    if (!fts) {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+          content,
+          content='chunks',
+          content_rowid='chunk_id',
+          tokenize='porter unicode61'
+        );
+      `);
+    }
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')`).run();
+  } catch (error) {
+    warnings.push(
+      `Failed to rebuild chunks_fts: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
-  return zip.toBuffer();
+  for (const table of VECTOR_TABLES) {
+    try {
+      const exists = db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+        )
+        .get(table.name) as { name: string } | undefined;
+      if (exists) continue;
+      if (table.name === 'chunks_vec') {
+        db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+            chunk_id INTEGER PRIMARY KEY,
+            embedding float[384]
+          );
+        `);
+      } else {
+        db.exec(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS messages_vec USING vec0(
+            message_id TEXT PRIMARY KEY,
+            embedding float[384]
+          );
+        `);
+      }
+      warnings.push(
+        `Restored empty ${table.name}; vector recall will fill in as memories are re-embedded.`,
+      );
+    } catch (error) {
+      warnings.push(
+        `Could not recreate ${table.name}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 }
 
 async function extractAndValidateBackup(
@@ -1699,6 +1867,13 @@ function sha256(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-async function sha256File(filePath: string): Promise<string> {
-  return sha256(await fs.readFile(filePath));
+export async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+  return hash.digest('hex');
 }

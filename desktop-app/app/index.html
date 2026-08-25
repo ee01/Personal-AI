@@ -259,6 +259,57 @@
                   placeholder="npx -y @agentclientprotocol/claude-code-acp"
                 />
               </label>
+              <label class="compact-field compact-field-wide">
+                <span>Cursor ACP 命令</span>
+                <input
+                  id="worker-cursor-command"
+                  type="text"
+                  placeholder="留空则使用内置 cursor-acp shim"
+                />
+              </label>
+              <label class="compact-field compact-field-wide">
+                <span>cursor-agent 路径</span>
+                <input
+                  id="worker-cursor-agent-command"
+                  type="text"
+                  placeholder="~/.local/bin/cursor-agent"
+                />
+              </label>
+            </fieldset>
+
+            <fieldset
+              id="backup-pull-settings"
+              class="settings-compact-group settings-compact-group-service"
+            >
+              <legend>自动备份拉取</legend>
+              <label class="compact-toggle">
+                <input id="backup-pull-enabled" type="checkbox" />
+                <span>开启后按点从 Memory Service 拉备份到本机</span>
+              </label>
+              <label class="compact-field">
+                <span>每天几点</span>
+                <input id="backup-pull-hour" type="number" min="0" max="23" />
+                <small>小时</small>
+              </label>
+              <label class="compact-field">
+                <span>保留份数</span>
+                <input id="backup-pull-retention" type="number" min="1" />
+              </label>
+              <label class="compact-field compact-field-wide">
+                <span>保存目录</span>
+                <input
+                  id="backup-pull-directory"
+                  type="text"
+                  placeholder="~/Library/CloudStorage/iCloud Drive/personal-ai-backups"
+                />
+              </label>
+              <label class="compact-toggle">
+                <input id="backup-pull-encrypt" type="checkbox" />
+                <span>下载加密快照（.zip.enc）</span>
+              </label>
+              <button id="backup-pull-now" type="button" class="secondary">
+                现在拉取一次
+              </button>
             </fieldset>
           </div>
 

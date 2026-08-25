@@ -33,6 +33,7 @@ import {
   BridgeSettingsStore,
 } from './settings.js';
 import { WorkerSupervisor } from './workerSupervisor.js';
+import { BackupPuller } from './backupPuller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,12 +164,15 @@ async function main(): Promise<void> {
     dataDir: path.join(config.dataDir, 'worker'),
     logFile: path.join(config.dataDir, 'worker', 'worker.log'),
   });
+  const backupPuller = new BackupPuller(settingsStore, memoryClient);
   const persistWorkerSettings = async () => {
     const worker = settingsStore.get().worker || {};
     await workerSupervisor.writeLocalSettings({
       cwd: worker.cwd,
       acpCodexCommand: worker.acpCodexCommand,
       acpClaudeCommand: worker.acpClaudeCommand,
+      acpCursorCommand: worker.acpCursorCommand,
+      cursorAgentCommand: worker.cursorAgentCommand,
     });
   };
   await persistWorkerSettings();
@@ -184,9 +188,11 @@ async function main(): Promise<void> {
     explorerManager,
     localSkillSyncManager,
     workerSupervisor,
+    backupPuller,
     version,
   });
   const shutdown = async () => {
+    backupPuller.stop();
     syncManager.stop();
     await workerSupervisor.stop();
     await explorerManager.close();
@@ -204,6 +210,7 @@ async function main(): Promise<void> {
 
   await app.listen({ host: config.host, port: config.port });
   syncManager.start();
+  backupPuller.start();
   app.log.info(
     {
       cwd: process.cwd(),

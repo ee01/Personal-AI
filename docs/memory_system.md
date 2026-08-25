@@ -1468,14 +1468,15 @@ Memory Service 可以给豆包等外部入口渲染不同类型的 context packa
 | 主动询问  | `GET /outreach/targets/search`                                     | 检索 RingCentral 用户/群组候选                                                                      |
 | 梦境报表  | `POST /dream-digest/push-now`                                      | 手动立即推送一次梦境报表                                                                            |
 | 巩固      | `POST /consolidate`                                                | 手动触发巩固                                                                                        |
-| 导出      | `POST /export`                                                     | 生成可恢复的 backup ZIP，包含 `manifest.json`、用户 SQLite/config/Markdown 与只读 derived snapshots |
+| 导出      | `POST /export/jobs`、`POST /export`                                | 异步流式作业生成可恢复 backup ZIP（大库）；同步 `POST /export` 仅适合小库。含 `manifest.json`、用户 SQLite/config/Markdown 与 derived snapshots |
+| 自动备份  | `/backup/status` `/backup/run` `/backup/test-connection`           | 定时加密推送到 WebDAV/S3，或由 Desktop 拉取；见 [memory_auto_backup.md](./features/memory_auto_backup.md) |
 | 导入      | `POST /import`                                                     | Multipart 上传 backup ZIP；支持 `mode=merge/replace` 与 `dryRun=true` 预检                          |
 | 健康      | `GET /health`                                                      | 服务状态                                                                                            |
 
 ### 记忆导入 / 导出 / 备份
 
-- `/export` 默认返回 `backup_zip`，manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。下载响应同时带回 manifest 摘要头和整个 archive 的 SHA-256；Coverage 页面下载回执会显示备份用户、导出时间、清单路径数、format version、A/B/C 层计数和短指纹。这只是下载审计，不会恢复、删除、同步或外发。
-- Coverage 页面顶层 `记忆备份` 按钮也会把同一边界写进 hover / 读屏文案：点击只请求当前 Memory Service 的 `/export` 并保存本机 zip；进行中、上次成功、上次失败都不会被读成新备份或恢复结果。录入抽屉里的 `备份 zip` 模式按钮会说明它只打开文件选择并做备份 schema 识别 / restore dry-run，不使用普通资料 work/personal 范围，也不会直接写入、恢复、替换或外发。
+- 大库应走 `/export/jobs`（流式落盘 + 轮询下载）。同步 `/export` 仍返回 `backup_zip`，但只适合小库。manifest 会列出 A 层 SQLite/config、B 层用户 Markdown 文件、C 层 derived 快照，并记录 size / sha256 用于导入校验。下载响应同时带回 manifest 摘要头和整个 archive 的 SHA-256；Coverage 页面下载回执会显示备份用户、导出时间、清单路径数、format version、A/B/C 层计数和短指纹。这只是下载审计，不会恢复、删除、同步或外发。
+- Coverage 页面顶层 `记忆备份` 按钮也会把同一边界写进 hover / 读屏文案：点击只创建导出作业并保存本机 zip；进行中、上次成功、上次失败都不会被读成新备份或恢复结果。页面同时展示自动备份状态中心（推送/拉取历史、体积分解）。录入抽屉里的 `备份 zip` 模式按钮会说明它只打开文件选择并做备份 schema 识别 / restore dry-run，不使用普通资料 work/personal 范围，也不会直接写入、恢复、替换或外发。加密远端快照需先 `tools/backup-crypt.ts decrypt`。
 - B 层会包含核心 Markdown、daily / dreams / entities / reflections / reflection-threads / reports / projects / rehearsals / source-memory / skills / agent 目录下的 `.md` 文件，保证 Rehearsal 审计快照和 Source Memory 资料卡不会在备份恢复后丢失。
 - `/import` 的默认模式是 `merge`，会合并数据库行并覆盖备份内同名文件，保留备份外的本地文件；`mode=replace` 会用备份目录替换当前用户目录。dry-run 和正式导入结果都会返回同一 archive SHA-256、备份用户、目标用户、导出时间和清单数量，用来核对预览与写入是否来自同一份 zip。
 - 导入前可以先用同一个 multipart 请求加 `dryRun=true`，服务只校验 ZIP、manifest 和数据库可读性，并返回将写入、覆盖、保留、删除的路径及数据库表行数预览，不会修改当前用户数据。

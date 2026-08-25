@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<!-- Archived interaction prototype. Canonical behavior: docs/features/memory_auto_backup.md -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆自动备份 · 交互演示</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --ink: #1f2430; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb; --accent-soft: #eff6ff;
+    --ok: #059669; --warn: #d97706; --err: #dc2626;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 32px 16px 64px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 20px 24px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+  .row label.k { width: 130px; color: var(--muted); flex-shrink: 0; }
+  input[type=text], input[type=password], input[type=number], select {
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+    font: inherit; min-width: 240px; background: #fff;
+  }
+  input[type=number] { min-width: 80px; width: 80px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .pill {
+    display: inline-block; font-size: 12px; border-radius: 999px; padding: 2px 10px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .pill.ok { background: #ecfdf5; color: var(--ok); }
+  .pill.warn { background: #fffbeb; color: var(--warn); }
+  .pill.err { background: #fef2f2; color: var(--err); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    border: 0; background: #fff; padding: 7px 16px; cursor: pointer; font: inherit; color: var(--muted);
+  }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .btn {
+    border: 1px solid var(--line); background: #fff; border-radius: 7px;
+    padding: 7px 16px; cursor: pointer; font: inherit;
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .warnbox {
+    background: #fef2f2; border: 1px solid #fecaca; color: var(--err);
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-top: 8px;
+  }
+  .switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+  .switch input { display: none; }
+  .switch i {
+    position: absolute; inset: 0; background: #d1d5db; border-radius: 999px;
+    transition: .18s; cursor: pointer;
+  }
+  .switch i::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+    background: #fff; border-radius: 50%; transition: .18s;
+  }
+  .switch input:checked + i { background: var(--accent); }
+  .switch input:checked + i::after { left: 20px; }
+  /* pipeline */
+  .flow { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 0 14px; }
+  .step {
+    min-width: 118px; text-align: center; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 8px; background: #fff; position: relative; margin-right: 28px; transition: .25s;
+  }
+  .step:last-child { margin-right: 0; }
+  .step::after {
+    content: "→"; position: absolute; right: -22px; top: 50%; transform: translateY(-50%);
+    color: #9ca3af; font-size: 15px;
+  }
+  .step:last-child::after { content: none; }
+  .step b { display: block; font-size: 13px; }
+  .step span { font-size: 11px; color: var(--muted); }
+  .step.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px #dbeafe; }
+  .step.done { border-color: var(--ok); }
+  .step.done b::before { content: "✓ "; color: var(--ok); }
+  .log {
+    font-family: var(--mono); font-size: 12px; background: #0f172a; color: #cbd5e1;
+    border-radius: 8px; padding: 12px 14px; min-height: 120px; max-height: 220px;
+    overflow-y: auto; white-space: pre-wrap; margin-top: 12px;
+  }
+  .log .ok { color: #34d399; } .log .err { color: #f87171; } .log .dim { color: #64748b; }
+  /* status */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 15px; font-weight: 600; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 14px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.mono { font-family: var(--mono); font-size: 12px; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>记忆自动备份 <span class="pill">交互原型</span></h1>
+  <div class="sub">服务端推送（WebDAV/S3）+ 桌面端拉取两条通道，共享流式导出作业。配置在 options，状态在 coverage 页。配套 plan：<code>memory-auto-backup-plan.md</code></div>
+
+  <!-- ═══════════ 配置区块原型 ═══════════ -->
+  <div class="card">
+    <h2>① options 页配置原型（对应 PUT /config 新增键）</h2>
+
+    <div class="row">
+      <label class="k">自动备份</label>
+      <label class="switch"><input type="checkbox" id="enabled" checked><i></i></label>
+      <span class="hint">autoBackupEnabled —— 关闭后调度器 tick 直接跳过该用户</span>
+    </div>
+
+    <div class="row push-only">
+      <label class="k">备份周期</label>
+      <select id="schedule">
+        <option value="daily" selected>每天（凌晨 3 点，可改）</option>
+        <option value="every_x_hours">每 N 小时</option>
+        <option value="weekly">每周</option>
+      </select>
+      <span class="hint">tick+state 判定，服务重启/错过时窗自动补跑</span>
+    </div>
+
+    <div class="row">
+      <label class="k">备份通道</label>
+      <div class="seg" id="providerSeg">
+        <button data-p="webdav" class="on">WebDAV 推送</button>
+        <button data-p="s3">S3 兼容推送</button>
+        <button data-p="local">个人电脑拉取</button>
+      </div>
+    </div>
+
+    <!-- provider fields -->
+    <div id="f-webdav">
+      <div class="row"><label class="k">WebDAV 地址</label><input type="text" value="https://dav.jianguoyun.com/dav/personal-ai/"></div>
+      <div class="row"><label class="k">用户名</label><input type="text" value="esone@example.com"></div>
+      <div class="row"><label class="k">密码</label><input type="password" placeholder="已配置 ●●●●●●（留空保持不变）"><button class="btn">清除</button>
+        <span class="hint">坚果云请用「应用密码」；SENSITIVE_KEYS，GET 只回 configured 标志</span></div>
+    </div>
+    <div id="f-s3" style="display:none">
+      <div class="row"><label class="k">Endpoint</label><input type="text" placeholder="https://<accountid>.r2.cloudflarestorage.com"></div>
+      <div class="row"><label class="k">Region</label><input type="text" value="auto"></div>
+      <div class="row"><label class="k">Bucket</label><input type="text" placeholder="personal-ai-backup"></div>
+      <div class="row"><label class="k">Access Key ID</label><input type="text"></div>
+      <div class="row"><label class="k">Secret Key</label><input type="password" placeholder="未配置"><span class="hint">覆盖 AWS S3 / R2 / B2 / MinIO / OSS / COS</span></div>
+    </div>
+    <div id="f-local" style="display:none">
+      <div style="border:1px solid var(--line); border-radius:8px; padding:14px 18px; background:#fafbfc; margin:10px 0">
+        <div style="font-weight:600; margin-bottom:6px">此通道在 desktop-app 中配置，这里只做引导</div>
+        <div class="hint" style="margin-bottom:10px">desktop-app 用已有的服务地址 + 设备密钥定时把备份拉回本机（outbound HTTPS）。
+          Mac <b>不开任何入站端口/系统权限</b>，唯一交互是选择保存目录（建议 iCloud Drive，顺带离站）。</div>
+        <ol style="margin:0 0 10px; padding-left:20px; line-height:2">
+          <li>安装 Personal AI 桌面端 <a href="#" onclick="return false">下载 desktop-app ↗</a></li>
+          <li>桌面端已连接本服务（memoryServiceBaseUrl + 设备密钥，与插件同账号）</li>
+          <li>在桌面端 <b>设置 → 自动备份拉取</b> 里配置周期、保存目录与本地保留份数</li>
+        </ol>
+        <div class="row" style="margin:0">
+          <button class="btn" onclick="return false">在 desktop-app 中配置 ↗</button>
+          <span class="hint">deep link personal-ai://settings/backup，未安装时退化为下载链接</span>
+        </div>
+      </div>
+      <div class="row"><label class="k">拉取状态</label>
+        <span>最近拉取：2026-08-25 08:00 · Esone 的 MacBook Pro · <span class="pill ok">成功 612 MB</span></span>
+        <span class="hint">只读，来自 POST /backup/pull-receipt；从未拉取则显示「尚未配置」</span></div>
+    </div>
+
+    <div class="row push-only">
+      <label class="k">端到端加密</label>
+      <label class="switch"><input type="checkbox" id="enc" checked><i></i></label>
+      <input type="password" id="pass" placeholder="加密口令（scrypt → AES-256-GCM）">
+    </div>
+    <div class="hint push-only" id="encHint" style="margin-left:142px">⚠️ 请抄写保存口令：<b>口令丢失 = 备份不可恢复</b>。更换口令只影响之后的备份。</div>
+    <div class="warnbox push-only" id="encWarn" style="display:none">
+      ⛔ 已关闭加密：备份中的 config.json 含 OpenClaw / RingCentral / Bot 等 <b>API 密钥明文</b>，
+      将直接暴露给远端存储。仅建议在完全私有的存储上关闭。（保存时需二次确认）
+    </div>
+
+    <div class="row push-only" style="margin-top:12px">
+      <label class="k">保留策略</label>
+      最近 <input type="number" value="7" min="1"> 份
+      <span class="hint">P2 升级 GFS：最近 N 天 + 每周 1 份 × 4；新备份验证通过前绝不清理旧份</span>
+    </div>
+
+    <div class="row push-only" style="margin-top:16px">
+      <span style="width:130px"></span>
+      <button class="btn" id="btnTest">测试连接</button>
+      <button class="btn primary" id="btnRun">立即备份</button>
+      <span id="testResult"></span>
+    </div>
+  </div>
+
+  <!-- ═══════════ pipeline ═══════════ -->
+  <div class="card">
+    <h2>② 单次备份流水线（流式导出作业 · 1.4G 大库不超时不 OOM）</h2>
+    <div class="flow" id="flow">
+      <div class="step" data-s="0"><b>export</b><span>VACUUM INTO<br>+ yazl 流式落盘</span></div>
+      <div class="step" data-s="1"><b>encrypt</b><span>AES-256-GCM 流式<br>.zip.enc</span></div>
+      <div class="step" data-s="2"><b>upload</b><span>provider.put<br>文件流 body</span></div>
+      <div class="step" data-s="3"><b>verify</b><span>head 校验 size<br>先验证</span></div>
+      <div class="step" data-s="4"><b>prune</b><span>keep-last-N<br>后清理</span></div>
+      <div class="step" data-s="5"><b>state</b><span>state.json<br>+ 失败≥3 通知</span></div>
+    </div>
+    <div class="hint">coverage 页手动导出与桌面端拉取走同一条 <code>POST /export/jobs</code> 异步作业（创建 → 轮询进度 → 流式下载），内存峰值 O(MB)，HTTP 不再同步等待分钟级打包。</div>
+    <div class="log" id="log"><span class="dim"># 点击「立即备份」查看模拟运行日志（对应 POST /backup/run）</span></div>
+  </div>
+
+  <!-- ═══════════ status ═══════════ -->
+  <div class="card">
+    <h2>③ 状态中心（memory-exploring.html#/coverage · GET /backup/status）</h2>
+    <div class="hint" style="margin-bottom:12px">落位在 coverage 页既有「记忆备份」按钮旁 —— options 只放配置 + 测试连接 + 一行精简状态。两条通道历史合并展示（state.json 单一来源）。</div>
+    <div class="stats">
+      <div class="stat"><div class="k">上次备份</div><div class="v" id="stLast">2026-08-25 03:00 <span class="pill ok">成功</span></div></div>
+      <div class="stat"><div class="k">备份大小</div><div class="v" id="stSize">612 MB <span class="hint">库 1.38G · 向量占 46%</span></div></div>
+      <div class="stat"><div class="k">下次预计</div><div class="v" id="stNext">2026-08-26 03:00</div></div>
+      <div class="stat"><div class="k">连续失败</div><div class="v" id="stFail">0 <span class="hint">≥3 走通知中心</span></div></div>
+    </div>
+    <table>
+      <thead><tr><th>时间</th><th>通道</th><th>耗时</th><th>大小</th><th>对象</th><th>结果</th></tr></thead>
+      <tbody id="histBody">
+        <tr><td>08-25 08:00</td><td>桌面拉取</td><td>2m10s</td><td>612 MB</td><td class="mono">~/iCloud Drive/…08-25.zip.enc</td><td><span class="pill ok">成功</span></td></tr>
+        <tr><td>08-25 03:00</td><td>WebDAV</td><td>3m24s</td><td>612 MB</td><td class="mono">…esone-2026-08-25T03-00-12Z.zip.enc</td><td><span class="pill ok">成功</span></td></tr>
+        <tr><td>08-24 03:00</td><td>WebDAV</td><td>3m19s</td><td>609 MB</td><td class="mono">…esone-2026-08-24T03-00-09Z.zip.enc</td><td><span class="pill ok">成功</span></td></tr>
+        <tr><td>08-23 03:00</td><td>WebDAV</td><td>—</td><td>—</td><td class="mono">—</td><td><span class="pill err">上传失败 (网络)，03:15 已补跑</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note">恢复路径：下载最新 .zip.enc → <code>npx tsx tools/backup-crypt.ts decrypt</code>（输入口令）→ POST /import（dryRun 预览 → 确认）。P2 在此卡片下方提供「远端列表 + 一键恢复」；开 slim 模式的备份恢复后自动重建 FTS + 向量回填。</div>
+  </div>
+</div>
+
+<script>
+  // provider 切换
+  const seg = document.getElementById('providerSeg');
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    ['webdav','s3','local'].forEach(p =>
+      document.getElementById('f-' + p).style.display = (b.dataset.p === p ? '' : 'none'));
+    // 拉取通道是引导卡：隐藏所有服务端推送专属配置（周期/加密/保留/按钮）
+    const isPull = b.dataset.p === 'local';
+    document.querySelectorAll('.push-only').forEach(el => {
+      if (el.id === 'encWarn') { el.style.display = 'none'; return; } // 由加密开关控制，拉取时恒隐
+      if (el.id === 'encHint') {
+        el.style.display = isPull ? 'none' : (document.getElementById('enc').checked ? '' : 'none');
+        return;
+      }
+      el.style.display = isPull ? 'none' : '';
+    });
+    if (!isPull && !document.getElementById('enc').checked) {
+      document.getElementById('encWarn').style.display = '';
+    }
+  });
+
+  // 加密开关警告
+  const enc = document.getElementById('enc');
+  enc.addEventListener('change', () => {
+    document.getElementById('encWarn').style.display = enc.checked ? 'none' : '';
+    document.getElementById('encHint').style.display = enc.checked ? '' : 'none';
+    document.getElementById('pass').disabled = !enc.checked;
+  });
+
+  // 测试连接
+  document.getElementById('btnTest').addEventListener('click', function () {
+    const r = document.getElementById('testResult');
+    this.disabled = true;
+    r.innerHTML = '<span class="hint">探针对象 写入→读回→删除 …</span>';
+    setTimeout(() => {
+      r.innerHTML = '<span class="pill ok">连接正常，可写可删</span>';
+      this.disabled = false;
+    }, 900);
+  });
+
+  // 立即备份：流水线动画 + 日志
+  const steps = [...document.querySelectorAll('.step')];
+  const log = document.getElementById('log');
+  const lines = [
+    ['dim', '[AutoBackup] manual trigger — user esone (lock acquired, job b7f2 created)'],
+    ['',    'export  : VACUUM INTO 1.38 GB → yazl stream → 612 MB zip (A:2 B:317 C:4, manifest ok, RSS +180MB)'],
+    ['',    'encrypt : scrypt(salt=…) → AES-256-GCM stream → 612 MB .zip.enc (tag @EOF)'],
+    ['',    'upload  : PUT(stream) personal-ai-backups/esone/personal-ai-memory-esone-2026-08-25T07-41-03Z.zip.enc'],
+    ['ok',  'verify  : HEAD size=641,728,412 ✓ 与本地一致'],
+    ['',    'prune   : 8 objects on remote, retention=7 → delete oldest (08-18) ✓'],
+    ['ok',  'state   : backups/state.json updated — status=success, consecutiveFailures=0'],
+  ];
+  document.getElementById('btnRun').addEventListener('click', function () {
+    this.disabled = true;
+    log.innerHTML = '';
+    steps.forEach(s => s.className = 'step');
+    let i = 0;
+    const tick = () => {
+      if (i > 0) steps[Math.min(i - 1, 5)].classList.replace('active', 'done') || steps[Math.min(i-1,5)].classList.add('done');
+      if (i < lines.length) {
+        if (i < 6) { steps[i].classList.add('active'); }
+        const [cls, text] = lines[i];
+        log.innerHTML += `<span class="${cls}">${text}</span>\n`;
+        log.scrollTop = log.scrollHeight;
+        i++; setTimeout(tick, 550);
+      } else {
+        steps[5].classList.add('done'); steps[5].classList.remove('active');
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        document.getElementById('stLast').innerHTML =
+          `2026-08-25 ${pad(now.getHours())}:${pad(now.getMinutes())} <span class="pill ok">成功</span>`;
+        document.getElementById('histBody').insertAdjacentHTML('afterbegin',
+          `<tr><td>08-25 ${pad(now.getHours())}:${pad(now.getMinutes())}</td><td>WebDAV</td><td>3m21s</td><td>612 MB</td>` +
+          `<td class="mono">…esone-2026-08-25T07-41-03Z.zip.enc</td><td><span class="pill ok">成功（手动）</span></td></tr>`);
+        this.disabled = false;
+      }
+    };
+    tick();
+  });
+</script>
+</body>
+</html>

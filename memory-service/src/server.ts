@@ -34,6 +34,7 @@ import { eventsRoutes } from './routes/events.js';
 import { ingestBatchRoutes } from './routes/ingestBatch.js';
 import { memoryRoutes } from './routes/memories.js';
 import { exportRoutes } from './routes/export.js';
+import { exportJobRoutes } from './routes/exportJobs.js';
 import { importRoutes } from './routes/import.js';
 import { statsRoutes } from './routes/stats.js';
 import { entityRoutes } from './routes/entities.js';
@@ -71,6 +72,7 @@ import { publicSkillRoutes, skillRoutes } from './routes/skills.js';
 import { relationshipRoutes } from './routes/relationships.js';
 import { dayPilotRoutes } from './routes/dayPilot.js';
 import { coverageRoutes } from './routes/coverage.js';
+import { backupRoutes } from './routes/backup.js';
 import { rehearsalRoutes } from './routes/rehearsals.js';
 import { storylineRoutes } from './routes/storylines.js';
 import { sourceMemoryRoutes } from './routes/sourceMemory.js';
@@ -199,7 +201,7 @@ export async function buildApp(
   await app.register(multipart, {
     limits: {
       files: 1,
-      fileSize: 512 * 1024 * 1024,
+      fileSize: 4 * 1024 * 1024 * 1024,
     },
   });
 
@@ -308,6 +310,7 @@ export async function buildApp(
       await instance.register(ingestBatchRoutes);
       await instance.register(memoryRoutes);
       await instance.register(exportRoutes);
+      await instance.register(exportJobRoutes);
       await instance.register(importRoutes);
       await instance.register(statsRoutes);
       await instance.register(entityRoutes);
@@ -345,6 +348,7 @@ export async function buildApp(
       await instance.register(skillRoutes);
       await instance.register(dayPilotRoutes);
       await instance.register(coverageRoutes);
+      await instance.register(backupRoutes);
       await instance.register(rehearsalRoutes);
       await instance.register(storylineRoutes);
       await instance.register(sourceMemoryRoutes);

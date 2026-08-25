@@ -19,6 +19,7 @@ import {
   type CalendarEventsSyncResponse,
 } from './services/MemoryServiceClient';
 import { AgentExecutorsSettings } from './components/AgentExecutorsSettings';
+import { AutoBackupSettings } from './components/AutoBackupSettings';
 import { ToggleField } from './components/ToggleField';
 import { syncUserLanguagePreferenceProfileItem } from './services/UserLanguagePreferenceSync';
 import { DEVICE_KEY_STORAGE } from './deviceApiKey';
@@ -4316,6 +4317,7 @@ const Options = () => {
             对 ask 等长耗时接口建议 {'>='} 60000。保存后会写入扩展配置。
           </small>
         </div>
+        <AutoBackupSettings />
         {currentUsername.toLowerCase() === 'esone.qiu' && (
           <div className="form-group">
             <label htmlFor="ANALYTICS_ADMIN_TOKEN">用量分析 Admin Token</label>

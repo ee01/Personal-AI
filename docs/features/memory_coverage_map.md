@@ -1,6 +1,6 @@
 # Memory Coverage Map / 记忆覆盖地图
 
-*最后更新: 2026-07-15*
+*最后更新: 2026-08-25*
 
 ## 是什么
 
@@ -18,7 +18,7 @@ Coverage Map 会从 Memory Service 的真实数据表里聚合消息、chunks、
 2. 最近 `staleAfterDays` 天内是否仍有新信号。
 3. 平台对 Personal AI 的贡献是 ingest、push、sync 还是内部 derive。
 4. 如果缺数据、同步失败、信号太少或积压过高，页面会给出可解释的修复项。
-5. 用户手里有资料时，可以从同一页面右上角 `录入` 入口主动导入；需要备份时，`记忆备份` 直接下载 zip。
+5. 用户手里有资料时，可以从同一页面右上角 `录入` 入口主动导入；需要备份时，`记忆备份` 创建异步导出作业后下载 zip。同一页也展示自动备份状态（上次/下次、体积分解、推送与桌面拉取历史）。定时加密快照见 [memory_auto_backup.md](./memory_auto_backup.md)。
 6. 每个平台返回 `qualityScore`，用于快速判断覆盖健康度；它来自平台状态、新鲜度和健康贡献项，不替代证据详情。
 
 结果主要受这些因素影响：
@@ -143,7 +143,9 @@ Coverage 页面会在主快照下方展示 `P0 只读诊断切片` 面板，把 
 
 ### 备份下载与恢复
 
-右上角 `记忆备份` 直接调用 `POST /api/v1/export` 下载 Personal AI backup zip，不再进入 Options 设置页。点击前页面会先显示 `备份操作前回执`，说明这个按钮只会请求并保存本机 backup zip，不会恢复、删除、替换、同步或外发；请求等待期间会显示 `备份下载提交中回执`，把当前未确认的新 zip、旧成功/失败回执和无副作用边界分开；真正恢复必须从 `录入 > 备份 zip` 重新选择文件，先 dry-run，再按 merge/replace 影响预览确认。下载成功后页面会保留 `备份下载回执`，展示文件名、下载时间、zip 类型/大小、manifest 摘要和 archive SHA-256 短指纹；这只是本机保存的备份文件，不会自动恢复、删除、同步或外发。如果下载失败，页面会保留 `备份下载失败回执` 并替换旧的成功回执，明确本次没有生成或保存 backup zip，也没有恢复、删除、同步或外发任何记忆，用户需要确认 Memory Service 可用后重试。
+右上角 `记忆备份` 调用 `POST /api/v1/export/jobs`，轮询作业就绪后流式下载 Personal AI backup zip（未加密，可直接导入）。旧 `POST /api/v1/export` 仅适合小库。点击前页面会先显示 `备份操作前回执`，说明这个按钮只会请求并保存本机 backup zip，不会恢复、删除、替换、同步或外发；请求等待期间会显示 `备份下载提交中回执`，把当前未确认的新 zip、旧成功/失败回执和无副作用边界分开；真正恢复必须从 `录入 > 备份 zip` 重新选择文件，先 dry-run，再按 merge/replace 影响预览确认。下载成功后页面会保留 `备份下载回执`，展示文件名、下载时间、zip 类型/大小、manifest 摘要和 archive SHA-256 短指纹；这只是本机保存的备份文件，不会自动恢复、删除、同步或外发。如果下载失败，页面会保留 `备份下载失败回执` 并替换旧的成功回执，明确本次没有生成或保存 backup zip，也没有恢复、删除、同步或外发任何记忆，用户需要确认 Memory Service 可用后重试。
+
+同一入口旁的状态卡读取 `GET /api/v1/backup/status`：上次备份时间/大小/通道、下次预计、连续失败、库体积分解（含向量占比），以及服务端推送与桌面拉取合并历史。加密远端快照需先用 `memory-service/tools/backup-crypt.ts` 解密再导入。自动备份配置在 Options，不在 Coverage 页写入凭证；完整契约见 [memory_auto_backup.md](./memory_auto_backup.md)。
 
 备份恢复共用 `录入` 抽屉：
 
@@ -170,7 +172,11 @@ Coverage 页面会在主快照下方展示 `P0 只读诊断切片` 面板，把 
 | `GET /api/v1/coverage/skills-sync` | 技能平台同步状态；响应带 `receipt.summary`，说明平台设置数、绑定数、启用数、失败探测数和最新探测时间；不会启用平台、拉取外部技能或写入 active skill truth |
 | `POST /api/v1/import/inspect` | 智能录入 dry-run，识别普通资料或备份 zip |
 | `POST /api/v1/import/commit` | 普通资料确认写入 shadow memory |
-| `POST /api/v1/export` | 下载 Personal AI 备份 zip |
+| `POST /api/v1/export/jobs` | 创建流式导出作业；Coverage「记忆备份」走此路径 |
+| `GET /api/v1/export/jobs/:id` | 导出作业进度 |
+| `GET /api/v1/export/jobs/:id/download` | 流式下载 backup zip |
+| `GET /api/v1/backup/status` | 自动备份状态、历史与体积分解 |
+| `POST /api/v1/export` | 同步下载 backup zip，仅适合小库 |
 | `POST /api/v1/import` | merge / replace 恢复 Personal AI 备份 zip |
 
 ## 数据模型
@@ -196,6 +202,7 @@ Coverage 页面会在主快照下方展示 `P0 只读诊断切片` 面板，把 
 - Smart import route: `memory-service/src/routes/import.ts`
 - Smart import service: `memory-service/src/core/SmartMemoryImportService.ts`
 - Import batch migration: `memory-service/src/storage/migrations/025_memory_import_batches.sql`
+- Auto backup status / jobs: `memory-service/src/routes/backup.ts`、`memory-service/src/routes/exportJobs.ts`；专题文档 [memory_auto_backup.md](./memory_auto_backup.md)
 
 ## 边界
 

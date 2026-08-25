@@ -183,6 +183,7 @@ contextBridge.exposeInMainWorld('bridgeApi', {
   getSettings: () => request('GET', '/settings'),
   updateSettings: (payload) => request('PUT', '/settings', payload),
   testMemoryService: () => request('POST', '/settings/test-memory-service', {}),
+  pullBackupNow: () => request('POST', '/backup/pull-now', {}),
   openLogin: () => request('POST', '/auth/open-login', {}),
   createMemorySyncThread: () =>
     request('POST', '/threads/create-memory-sync', {}),

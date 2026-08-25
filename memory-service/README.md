@@ -95,7 +95,13 @@ All endpoints are prefixed with `/api/v1`. A top-level `/health` is also availab
 | `POST` | `/notifications/:id/action` | Process notification action (click/dismiss) |
 | `GET` | `/notifications/stats` | Notification statistics |
 | `GET` | `/events` | SSE stream for real-time push events |
-| `POST` | `/export` | Export memory data as markdown manifest |
+| `POST` | `/export` | Synchronous backup zip download (small libraries only) |
+| `POST` | `/export/jobs` | Create a streaming backup export job |
+| `GET` | `/export/jobs/:id` | Export job progress |
+| `GET` | `/export/jobs/:id/download` | Stream the finished backup zip |
+| `GET` | `/backup/status` | Auto-backup status, history, and DB volume |
+| `POST` | `/backup/run` | Trigger a server-side encrypted push now |
+| `POST` | `/backup/test-connection` | Probe WebDAV/S3 write-read-delete |
 | `GET` | `/stats` | Aggregate counts across all tables |
 | `POST` | `/consolidate` | Manually trigger daily or weekly consolidation |
 | `GET` | `/confirm-requests` | List pending confirm requests |

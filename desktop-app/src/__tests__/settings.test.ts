@@ -235,3 +235,35 @@ test('BridgeSettingsStore persists explorer settings safely across reloads', asy
     askDefaultScope: 'work',
   });
 });
+
+test('BridgeSettingsStore preserves backupPull across reloads', async () => {
+  const tempDir = await createTempDir('bridge-settings-backup-pull-');
+  const settingsFile = path.join(tempDir, 'bridge-settings.json');
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+  });
+
+  const store = new BridgeSettingsStore(config, settingsFile);
+  await store.init();
+  await store.update({
+    backupPull: {
+      enabled: true,
+      hour: 8,
+      directory: '~/Library/CloudStorage/iCloud Drive/personal-ai-backups',
+      retentionCount: 5,
+      encrypt: false,
+    },
+  });
+
+  const reloaded = new BridgeSettingsStore(config, settingsFile);
+  await reloaded.init();
+
+  assert.equal(reloaded.get().backupPull.enabled, true);
+  assert.equal(reloaded.get().backupPull.hour, 8);
+  assert.equal(
+    reloaded.get().backupPull.directory,
+    '~/Library/CloudStorage/iCloud Drive/personal-ai-backups',
+  );
+  assert.equal(reloaded.get().backupPull.retentionCount, 5);
+  assert.equal(reloaded.get().backupPull.encrypt, false);
+});

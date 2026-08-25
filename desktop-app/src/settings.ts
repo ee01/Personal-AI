@@ -80,13 +80,23 @@ export interface BridgeUserSettings {
     cwd?: string;
     acpCodexCommand?: string;
     acpClaudeCommand?: string;
+    acpCursorCommand?: string;
+    cursorAgentCommand?: string;
+  };
+  backupPull: {
+    enabled: boolean;
+    hour: number;
+    directory?: string;
+    retentionCount: number;
+    encrypt: boolean;
   };
 }
 
 export interface BridgeUserSettingsPatch
-  extends Partial<Omit<BridgeUserSettings, 'explorer' | 'worker'>> {
+  extends Partial<Omit<BridgeUserSettings, 'explorer' | 'worker' | 'backupPull'>> {
   explorer?: Partial<ExplorerSettings>;
   worker?: Partial<BridgeUserSettings['worker']>;
+  backupPull?: Partial<BridgeUserSettings['backupPull']>;
 }
 
 type SettingsListener = (settings: BridgeUserSettings) => void;
@@ -346,6 +356,41 @@ function normalizeSettings(
       acpClaudeCommand: Object.hasOwn(input.worker || {}, 'acpClaudeCommand')
         ? cleanOptional(input.worker?.acpClaudeCommand)
         : defaults.worker.acpClaudeCommand,
+      acpCursorCommand: Object.hasOwn(input.worker || {}, 'acpCursorCommand')
+        ? cleanOptional(input.worker?.acpCursorCommand)
+        : defaults.worker.acpCursorCommand,
+      cursorAgentCommand: Object.hasOwn(input.worker || {}, 'cursorAgentCommand')
+        ? cleanOptional(input.worker?.cursorAgentCommand)
+        : defaults.worker.cursorAgentCommand,
+    },
+    backupPull: {
+      enabled:
+        typeof input.backupPull?.enabled === 'boolean'
+          ? input.backupPull.enabled
+          : defaults.backupPull.enabled,
+      hour: Math.min(
+        23,
+        Math.max(
+          0,
+          Math.floor(
+            typeof input.backupPull?.hour === 'number' &&
+              Number.isFinite(input.backupPull.hour)
+              ? input.backupPull.hour
+              : defaults.backupPull.hour,
+          ),
+        ),
+      ),
+      directory: Object.hasOwn(input.backupPull || {}, 'directory')
+        ? cleanOptional(input.backupPull?.directory)
+        : defaults.backupPull.directory,
+      retentionCount: positiveOrFallback(
+        input.backupPull?.retentionCount,
+        defaults.backupPull.retentionCount,
+      ),
+      encrypt:
+        typeof input.backupPull?.encrypt === 'boolean'
+          ? input.backupPull.encrypt
+          : defaults.backupPull.encrypt,
     },
   };
 }
@@ -414,6 +459,13 @@ export function createDefaultBridgeUserSettings(
       askDefaultScope: 'work',
     },
     worker: {},
+    backupPull: {
+      enabled: false,
+      hour: 8,
+      directory: undefined,
+      retentionCount: 7,
+      encrypt: true,
+    },
   };
 }
 
@@ -527,6 +579,12 @@ export class BridgeSettingsStore {
             ...patch.worker,
           }
         : this.userOverrides.worker,
+      backupPull: patch.backupPull
+        ? {
+            ...(this.userOverrides.backupPull ?? {}),
+            ...patch.backupPull,
+          }
+        : this.userOverrides.backupPull,
     };
     await this.save(next);
     return this.getPayload();

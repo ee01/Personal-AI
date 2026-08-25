@@ -3592,6 +3592,25 @@ export interface RuntimeConfigResponse {
   botTeamId?: string;
   botTargetEmail?: string;
   botTokenConfigured?: boolean;
+  autoBackupEnabled?: boolean;
+  autoBackupScheduleType?: 'daily' | 'every_x_hours' | 'weekly';
+  autoBackupPreferredHour?: number;
+  autoBackupIntervalHours?: number;
+  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupWebdavUrl?: string;
+  autoBackupWebdavUsername?: string;
+  autoBackupWebdavPasswordConfigured?: boolean;
+  autoBackupS3Endpoint?: string;
+  autoBackupS3Region?: string;
+  autoBackupS3Bucket?: string;
+  autoBackupS3AccessKeyIdConfigured?: boolean;
+  autoBackupS3SecretAccessKeyConfigured?: boolean;
+  autoBackupPrefix?: string;
+  autoBackupEncryptionEnabled?: boolean;
+  autoBackupEncryptionPassphraseConfigured?: boolean;
+  autoBackupRetentionCount?: number;
+  autoBackupIncludeDerived?: boolean;
+  autoBackupIncludeVectors?: boolean;
 }
 
 export interface UpdateRuntimeConfigPayload {
@@ -3649,6 +3668,29 @@ export interface UpdateRuntimeConfigPayload {
   botTeamId?: string;
   botTargetEmail?: string;
   clearBotToken?: boolean;
+  autoBackupEnabled?: boolean;
+  autoBackupScheduleType?: 'daily' | 'every_x_hours' | 'weekly';
+  autoBackupPreferredHour?: number;
+  autoBackupIntervalHours?: number;
+  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupWebdavUrl?: string;
+  autoBackupWebdavUsername?: string;
+  autoBackupWebdavPassword?: string;
+  autoBackupS3Endpoint?: string;
+  autoBackupS3Region?: string;
+  autoBackupS3Bucket?: string;
+  autoBackupS3AccessKeyId?: string;
+  autoBackupS3SecretAccessKey?: string;
+  autoBackupPrefix?: string;
+  autoBackupEncryptionEnabled?: boolean;
+  autoBackupEncryptionPassphrase?: string;
+  autoBackupRetentionCount?: number;
+  autoBackupIncludeDerived?: boolean;
+  autoBackupIncludeVectors?: boolean;
+  clearAutoBackupWebdavPassword?: boolean;
+  clearAutoBackupS3AccessKeyId?: boolean;
+  clearAutoBackupS3SecretAccessKey?: boolean;
+  clearAutoBackupEncryptionPassphrase?: boolean;
 }
 
 // ============================================================================
@@ -4371,6 +4413,71 @@ export interface MemoryBackupDownloadResponse {
   fileName: string;
   contentType: string;
   manifest?: MemoryBackupDownloadManifestSummary;
+}
+
+export type MemoryExportJobStatus =
+  | 'queued'
+  | 'exporting'
+  | 'packaging'
+  | 'encrypting'
+  | 'ready'
+  | 'failed';
+
+export interface MemoryExportJob {
+  id: string;
+  userId: string;
+  status: MemoryExportJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  fileName: string;
+  sizeBytes?: number;
+  bytesWritten?: number;
+  archiveSha256?: string;
+  encrypted: boolean;
+  error?: string;
+}
+
+export interface MemoryBackupStatusResponse {
+  enabled: boolean;
+  provider: 'webdav' | 's3';
+  scheduleType: 'daily' | 'every_x_hours' | 'weekly';
+  preferredHour: number;
+  intervalHours: number;
+  retentionCount: number;
+  encryptionEnabled: boolean;
+  encryptionConfigured: boolean;
+  includeDerived: boolean;
+  includeVectors: boolean;
+  prefix: string;
+  lastBackup: {
+    at: string;
+    sizeBytes?: number;
+    channel?: string;
+    status?: string;
+    objectKey?: string;
+  } | null;
+  lastAttemptAt: string | null;
+  nextEstimatedAt: string | null;
+  consecutiveFailures: number;
+  history: Array<{
+    at: string;
+    channel: string;
+    status: string;
+    durationMs?: number;
+    sizeBytes?: number;
+    objectKey?: string;
+    localPath?: string;
+    deviceName?: string;
+    error?: string;
+    trigger?: string;
+  }>;
+  volume: {
+    dbBytes: number;
+    tables: Array<{ name: string; bytes: number }>;
+    vectorBytes: number;
+    vectorShare: number;
+  };
 }
 
 export interface MemoryBackupDownloadManifestSummary {
@@ -5199,6 +5306,7 @@ export class MemoryServiceClient {
     method: string,
     path: string,
     body?: any,
+    timeoutMs?: number,
   ): Promise<MemoryBackupDownloadResponse> {
     await this.ensureConfigLoaded();
     await this.ensureUserIdResolved();
@@ -5220,7 +5328,8 @@ export class MemoryServiceClient {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeout = timeoutMs ?? this.timeout;
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
       const response = await fetch(url, {
@@ -5261,7 +5370,7 @@ export class MemoryServiceClient {
       if (err.name === 'AbortError') {
         throw new MemoryServiceError(
           0,
-          `Request to ${path} timed out after ${this.timeout}ms`,
+          `Request to ${path} timed out after ${timeout}ms`,
         );
       }
 
@@ -7090,12 +7199,80 @@ export class MemoryServiceClient {
   // --------------------------------------------------------------------------
 
   /**
-   * Export memory data as a manifest of markdown files.
+   * Export memory data as a backup zip.
+   * Large libraries use async jobs so the HTTP request does not sit idle.
    */
   async exportMemory(): Promise<MemoryBackupDownloadResponse> {
-    return this.requestBlob('POST', '/export', {
-      format: 'backup_zip',
-    });
+    return this.waitAndDownloadExport();
+  }
+
+  async createExportJob(
+    body: {
+      includeDerived?: boolean;
+      includeVectors?: boolean;
+      encrypt?: boolean;
+    } = {},
+  ): Promise<MemoryExportJob> {
+    return this.request<MemoryExportJob>('POST', '/export/jobs', body);
+  }
+
+  async getExportJob(jobId: string): Promise<MemoryExportJob> {
+    return this.request<MemoryExportJob>(
+      'GET',
+      `/export/jobs/${encodeURIComponent(jobId)}`,
+    );
+  }
+
+  async downloadExportJob(jobId: string): Promise<MemoryBackupDownloadResponse> {
+    return this.requestBlob(
+      'GET',
+      `/export/jobs/${encodeURIComponent(jobId)}/download`,
+      undefined,
+      30 * 60 * 1000,
+    );
+  }
+
+  async waitAndDownloadExport(
+    body: {
+      includeDerived?: boolean;
+      includeVectors?: boolean;
+      encrypt?: boolean;
+    } = {},
+    onProgress?: (job: MemoryExportJob) => void,
+  ): Promise<MemoryBackupDownloadResponse> {
+    const created = await this.createExportJob(body);
+    onProgress?.(created);
+    const started = Date.now();
+    while (Date.now() - started < 30 * 60 * 1000) {
+      const job = await this.getExportJob(created.id);
+      onProgress?.(job);
+      if (job.status === 'ready') {
+        return this.downloadExportJob(job.id);
+      }
+      if (job.status === 'failed') {
+        throw new MemoryServiceError(500, job.error || 'Export job failed');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new MemoryServiceError(0, 'Export job timed out');
+  }
+
+  async getBackupStatus(): Promise<MemoryBackupStatusResponse> {
+    return this.request<MemoryBackupStatusResponse>('GET', '/backup/status');
+  }
+
+  async runAutoBackup(): Promise<{
+    status: 'success' | 'failed' | 'skipped';
+    objectKey?: string;
+    sizeBytes?: number;
+    durationMs: number;
+    error?: string;
+  }> {
+    return this.request('POST', '/backup/run');
+  }
+
+  async testBackupConnection(): Promise<{ ok: true; detail: string }> {
+    return this.request('POST', '/backup/test-connection');
   }
 
   async importMemory(

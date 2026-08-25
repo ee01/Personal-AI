@@ -1,10 +1,8 @@
 /**
  * Memory export route.
  *
- * POST /export - returns a zip backup that contains:
- * - manifest.json
- * - user/*
- * - derived/*
+ * POST /export - synchronous zip download. Suitable for small libraries only;
+ * large databases should use POST /export/jobs (async, streaming).
  */
 
 import type { FastifyInstance } from 'fastify';
