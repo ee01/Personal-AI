@@ -1,6 +1,6 @@
 # Personal AI Desktop App Memory Flow
 
-_最后更新: 2026-07-11_
+_最后更新: 2026-08-25_
 
 ## 概述
 
@@ -271,6 +271,10 @@ Desktop App 现在还承接 explorer 输入链路，用来把受支持来源中�
   - 历史未完成待办每天 `09:00` 推送一次完整摘要
 
 这些默认值来源于 `desktop-app/.env` 或代码默认值，但普通用户应在 `Personal AI.app` 中修改，而不是手改 `.env`。
+
+### 记忆备份拉取
+
+Desktop App 还可以按用户配置，把 Memory Service 的备份 zip 拉到本机目录（可选 iCloud Drive）。这是出站 HTTPS，不开入站端口。周期、目录、本地保留份数只存在 Desktop 设置（`personal-ai://settings/backup`），不进服务端 `config.json`。Options 里对应 tab 只是安装/跳转引导。完整契约见 [memory_auto_backup.md](./memory_auto_backup.md)。
 
 ---
 
@@ -706,5 +710,6 @@ Desktop App 本机默认监听：
 - [desktop-app/src/browserSession.ts](/Users/Esone/git/personal-ai/desktop-app/src/browserSession.ts)
   - [desktop-app/src/bridgeService.ts](/Users/Esone/git/personal-ai/desktop-app/src/bridgeService.ts)
   - [desktop-app/src/server.ts](/Users/Esone/git/personal-ai/desktop-app/src/server.ts)
+  - [desktop-app/src/backupPuller.ts](/Users/Esone/git/personal-ai/desktop-app/src/backupPuller.ts)（记忆备份拉取）
 - extension 状态页：
 - [src/modals/desktop-app.tsx](/Users/Esone/git/personal-ai/src/modals/desktop-app.tsx)
