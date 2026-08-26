@@ -112,6 +112,31 @@ export function getDeviceKeyRequest(
   return row ? toRecord(row) : null;
 }
 
+/**
+ * Find the most recent approved-but-unconsumed request for a device.
+ *
+ * `deviceLabel` is a stable per-device fingerprint (platform + a slice of a
+ * device id persisted in chrome.storage), unlike a single request's id: an
+ * admin decision is durable for the device even if the client that made the
+ * original request never carries its requestId forward (e.g. an MV3 service
+ * worker that got evicted and restarted before it could poll/consume it).
+ */
+export function findApprovedDeviceKeyRequestByLabel(
+  db: BetterSqlite3.Database,
+  deviceLabel: string,
+): DeviceKeyRequestRecord | null {
+  ensureDeviceKeyRequestTable(db);
+  const row = db
+    .prepare(
+      `SELECT * FROM device_key_requests
+       WHERE device_label = ? AND status = 'approved'
+       ORDER BY decided_at DESC, rowid DESC
+       LIMIT 1`,
+    )
+    .get(deviceLabel) as DeviceKeyRequestRow | undefined;
+  return row ? toRecord(row) : null;
+}
+
 export function listDeviceKeyRequests(
   db: BetterSqlite3.Database,
   options: { status?: DeviceKeyRequestStatus } = {},

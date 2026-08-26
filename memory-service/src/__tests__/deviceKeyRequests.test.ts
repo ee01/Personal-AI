@@ -331,4 +331,66 @@ describe('Device key claim gate + approval', () => {
       );
     expect(stillPendingForDevice).toHaveLength(0);
   });
+
+  it('auto-issues a key on the next bootstrap retry (no requestId) once the device is approved', async () => {
+    const DEVICE_LABEL = 'Chrome · MacIntel · f00d42';
+
+    const seed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${SERVICE}`,
+        'x-user-id': 'sw-restart.user',
+      },
+      payload: { label: 'seed', scopes: ['memory.read', 'memory.write'] },
+    });
+    expect(seed.statusCode).toBe(201);
+
+    // First attempt: no requestId yet, gets a pending approval.
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'sw-restart.user',
+      },
+      payload: { label: DEVICE_LABEL },
+    });
+    expect(first.statusCode).toBe(409);
+    const requestId = first.json().requestId as string;
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/sw-restart.user/${requestId}/approve?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(approve.statusCode).toBe(200);
+
+    // Simulate an MV3 service-worker restart: the client retries the exact
+    // same bootstrap call, still with no requestId (it never got to poll or
+    // consume the approval before it was evicted). It should now succeed
+    // instead of opening yet another pending request.
+    const retryWithoutRequestId = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'sw-restart.user',
+      },
+      payload: { label: DEVICE_LABEL },
+    });
+    expect(retryWithoutRequestId.statusCode).toBe(201);
+    expect(retryWithoutRequestId.json().token).toMatch(/^pak\./);
+
+    // The approved request is now consumed, not left dangling.
+    const requestAfter = await app.inject({
+      method: 'GET',
+      url: `/api/v1/users/me/key-requests/${requestId}`,
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'sw-restart.user',
+      },
+    });
+    expect(requestAfter.json().request.status).toBe('consumed');
+  });
 });

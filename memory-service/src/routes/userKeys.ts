@@ -39,6 +39,7 @@ import {
 import {
   consumeDeviceKeyRequest,
   createDeviceKeyRequest,
+  findApprovedDeviceKeyRequestByLabel,
   getDeviceKeyRequest,
 } from '../core/auth/deviceKeyRequests.js';
 import { getConfig } from '../config.js';
@@ -294,6 +295,36 @@ export async function userKeyRoutes(app: FastifyInstance): Promise<void> {
 
     // ---- Path C: bootstrap / service / user_key / anonymous-dev ----
     if (request.authMode === 'bootstrap_key' && !claimable) {
+      // The client may not have carried the requestId from its original
+      // attempt forward (e.g. an MV3 service worker that got evicted and
+      // restarted before it polled/consumed the approval). deviceLabel is a
+      // stable per-device fingerprint, so check for an approval under it
+      // before opening yet another pending request for the same device.
+      const approved = label
+        ? findApprovedDeviceKeyRequestByLabel(db, label)
+        : null;
+      if (approved) {
+        const issued = issueUserApiKey(db, userId, {
+          label,
+          scopes,
+          issuedFromIp: ip,
+          issuedFromUa: ua,
+        });
+        consumeDeviceKeyRequest(db, approved.id, issued.record.id);
+        if (approved.googleEmail) {
+          upsertIdentityAlias(db, approved.googleEmail, {
+            addedBy: approved.decidedBy || 'admin',
+            source: 'admin_approval',
+          });
+        }
+        recordClaim(db, { issuedFromIp: ip, issuedFromUa: ua });
+        return reply.code(201).send({
+          userId,
+          token: issued.token,
+          key: issued.record,
+        });
+      }
+
       const created = createDeviceKeyRequest(db, {
         deviceLabel: label,
         ip,
