@@ -616,8 +616,6 @@ async function commitRename(m: TeamMember) {
               {
                 'clip-l': dateMs(s.start!) < dateMs(rangeS),
                 'clip-r': dateMs(end) > dateMs(rangeE),
-                'epic-hl': state.hoveredEpicKey.value === it.key,
-                dim: !!state.hoveredEpicKey.value && state.hoveredEpicKey.value !== it.key,
                 sel: resSel.person === personKeyOf(row) && resSel.ids.has(s.id),
                 'will-move':
                   resSel.person === personKeyOf(row) &&
@@ -637,8 +635,6 @@ async function commitRename(m: TeamMember) {
               top: `${8 + li * 27}px`,
             }"
             :data-tip="`${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start!)} → ${fmtMD(end)} · ${s.days}d||${s.title}||${tooltipHintLine(s.description, focusTipHint(s, it, personKeyOf(row)))}`"
-            @mouseenter="state.hoveredEpicKey.value = it.key"
-            @mouseleave="state.hoveredEpicKey.value = null"
             @click="onBarClick(s, personKeyOf(row))"
           >
             <i class="rb-stripe" :style="{ background: epicColor(orderedEpicKeys, it.key) }" />

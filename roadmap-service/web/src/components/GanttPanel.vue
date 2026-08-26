@@ -1037,9 +1037,7 @@ onUnmounted(() => {
           v-for="ep in epicLegend"
           :key="ep.key"
           class="lg"
-          :data-tip="`${ep.key}||${ep.title}||hover 高亮该主任务名下所有任务条`"
-          @mouseenter="state.hoveredEpicKey.value = ep.key"
-          @mouseleave="state.hoveredEpicKey.value = null"
+          :data-tip="`${ep.key}||${ep.title}`"
         >
           <span class="ep-dot" :style="{ background: ep.color }" />{{ ep.short }}
         </span>

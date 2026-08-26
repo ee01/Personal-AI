@@ -247,7 +247,7 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-bar:hover{filter:brightness(1.05)}
 .res-bar .rb-label{padding:0 8px;font-size:10.5px;font-weight:500;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-/* ---- 主任务归属：左侧色条 + 前缀 chip（hover 联动高亮同主任务） ---- */
+/* ---- 主任务归属：左侧色条 + 前缀 chip ---- */
 .res-bar .rb-stripe{position:absolute;left:0;top:0;bottom:0;width:4px;flex:none}
 /* 标题分组（前缀 chip + 备注名/标题）：bar 左侧被裁到可视范围外时，这一组会被
    平移「粘」在可视范围最左侧，不随 bar 本身滚出视野；见 updateStickyLabels() */
@@ -257,11 +257,8 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .res-bar .rb-parent + .rb-label{padding-left:5px}
 .res-bar.draft .rb-parent{background:rgba(32,36,42,.09)}
-.res-bar.dim{opacity:.22;filter:grayscale(.5)}
-.res-bar.epic-hl{box-shadow:0 0 0 1.5px rgba(32,36,42,.35),var(--sh)}
 .epic-legend{gap:12px;flex-wrap:wrap}
-.epic-legend .lg{cursor:default;padding:2px 6px;border-radius:6px;transition:background .13s}
-.epic-legend .lg:hover{background:#EFEEE8}
+.epic-legend .lg{cursor:default;padding:2px 6px;border-radius:6px}
 .epic-legend .ep-dot{width:5px;height:13px;border-radius:3px;flex:none}
 /* ---- 聚焦当前任务：单击多选「正在做」，其余未开始任务一键顺延 ---- */
 .res-row.focusing{background:#FFFCF4}
@@ -3851,15 +3848,6 @@ function epicColor(t, key){
   return EPIC_PALETTE[(idx >= 0 ? idx : key.length) % EPIC_PALETTE.length];
 }
 const epicShort = it => clipTxt(it.alias || it.title, 14);
-/* hover 联动：同主任务的条一起亮，其余压暗 */
-function epicHl(key){
-  document.querySelectorAll('#resView .res-bar[data-epic]').forEach(b => {
-    b.classList.toggle('epic-hl', !!key && b.dataset.epic === key);
-    b.classList.toggle('dim', !!key && b.dataset.epic !== key);
-  });
-  document.querySelectorAll('#epicLegend .lg').forEach(l =>
-    l.style.background = (!!key && l.dataset.epic === key) ? '#EFEEE8' : '');
-}
 /* ---- 聚焦当前任务：单击多选「正在做」，其余任务一键延至下周 ----
    选中集按成员隔离：点到另一个成员的任务 = 对那个人重新开始多选。
    顺延语义 = 延至下周一开始（不是 +7d）：
@@ -4127,8 +4115,6 @@ function renderResource(){
         }
       } else tipTail += '||单击标记「正在做」，可多选；其余任务可一键延至下周';
       b.dataset.tip = `${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start)} → ${fmtMD(e)} · ${s.days}d||${s.title}||${tipTail}`;
-      b.onmouseenter = () => epicHl(it.key);
-      b.onmouseleave = () => epicHl(null);
       b.onclick = ev => {
         ev.stopPropagation();
         if (resSel.person !== personKey){
@@ -4226,17 +4212,13 @@ function renderResource(){
   };
   rows.forEach(({m, tasks}) => rv.appendChild(buildRow(m, tasks, false)));
   if (unassigned.length) rv.appendChild(buildRow(null, unassigned, true));
-  /* 工具栏图例：主任务色 ↔ 备注名（hover 联动高亮该主任务的所有条） */
+  /* 工具栏图例：主任务色 ↔ 备注名（静态对照，不再 hover 联动高亮） */
   const legend = $('#epicLegend');
   const seenEpics = new Map();
   [...rows.flatMap(r => r.tasks), ...unassigned].forEach(({it}) => { if (!seenEpics.has(it.key)) seenEpics.set(it.key, it); });
   legend.innerHTML = (seenEpics.size ? '<span style="font-weight:600">主任务</span>' : '')
     + [...seenEpics.values()].map(it =>
-      `<span class="lg" data-epic="${it.key}" data-tip="${esc(it.key)}||${esc(clipTxt(it.title, 90))}||hover 高亮该主任务名下所有任务条"><span class="ep-dot" style="background:${epicColor(t, it.key)}"></span>${esc(epicShort(it))}</span>`).join('');
-  legend.querySelectorAll('.lg').forEach(el => {
-    el.onmouseenter = () => epicHl(el.dataset.epic);
-    el.onmouseleave = () => epicHl(null);
-  });
+      `<span class="lg" data-epic="${it.key}" data-tip="${esc(it.key)}||${esc(clipTxt(it.title, 90))}"><span class="ep-dot" style="background:${epicColor(t, it.key)}"></span>${esc(epicShort(it))}</span>`).join('');
   /* 底部：添加成员 */
   const add = document.createElement('div'); add.className = 'res-add';
   add.innerHTML = `<button class="add-ghost">${ICON.plus.replace('viewBox','width="11" height="11" viewBox')} 添加成员</button>`;

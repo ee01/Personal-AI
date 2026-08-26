@@ -82,8 +82,6 @@ export function createRoadmapState() {
 
   const view = ref<ViewMode>('gantt');
   const resWin = ref<ResWindow>('2w');
-  /** Resource-view hover: highlights every bar for this Epic across all rows + the toolbar legend. */
-  const hoveredEpicKey = ref<string | null>(null);
   const focusQuarter = ref(CURQ);
   /** Session-only Sprint↔month toggle; not persisted / not synced. */
   const rulerMode = ref<RulerMode>('release');
@@ -524,7 +522,6 @@ export function createRoadmapState() {
     toasts,
     view,
     resWin,
-    hoveredEpicKey,
     focusQuarter,
     rulerMode,
     modals,
