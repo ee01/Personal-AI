@@ -181,17 +181,47 @@ export function decideDeviceKeyRequest(
 }
 
 /**
- * Resolve other still-pending requests for the same device with the same
- * decision. A retrying client (e.g. the extension hitting a claimed
- * namespace repeatedly before it gets an approval) creates a new pending row
- * per attempt; once an admin decides on the most recent one, the older
- * pending rows for that device are stale and should not linger forever.
+ * Revoke a still-'approved'-but-unconsumed grant (e.g. an admin changes
+ * their mind before the device redeems it, or an ops cleanup of stray
+ * grants). No-op if the request was already consumed, denied, or is still
+ * pending — this only targets a live, unredeemed approval.
+ */
+export function revokeApprovedDeviceKeyRequest(
+  db: BetterSqlite3.Database,
+  id: string,
+  decidedBy: string,
+  now = Math.floor(Date.now() / 1000),
+): DeviceKeyRequestRecord | null {
+  ensureDeviceKeyRequestTable(db);
+  const result = db
+    .prepare(
+      `UPDATE device_key_requests
+       SET status = 'denied', decided_at = ?, decided_by = ?
+       WHERE id = ? AND status = 'approved'`,
+    )
+    .run(now, decidedBy.slice(0, 128), id);
+  if (result.changes === 0) return null;
+  return getDeviceKeyRequest(db, id);
+}
+
+/**
+ * Resolve other still-pending requests for the same device as 'denied'. A
+ * retrying client (e.g. the extension hitting a claimed namespace
+ * repeatedly before it gets an approval) creates a new pending row per
+ * attempt; once an admin decides on the most recent one, the older pending
+ * rows for that device are stale and should not linger forever.
+ *
+ * These are always denied, never mirrored to the primary's 'approved'
+ * decision: exactly one row should ever carry a redeemable grant for a
+ * given admin click. Fanning 'approved' out to every duplicate would create
+ * N independently-redeemable grants for what was a single decision — and
+ * since approval is consumed by deviceLabel (see findApprovedDeviceKeyRequestByLabel),
+ * each one mints a brand-new key on the device's next retry.
  */
 export function decideSiblingDeviceKeyRequests(
   db: BetterSqlite3.Database,
   deviceLabel: string,
   excludeId: string,
-  decision: 'approved' | 'denied',
   decidedBy: string,
   now = Math.floor(Date.now() / 1000),
 ): number {
@@ -199,10 +229,10 @@ export function decideSiblingDeviceKeyRequests(
   const result = db
     .prepare(
       `UPDATE device_key_requests
-       SET status = ?, decided_at = ?, decided_by = ?
+       SET status = 'denied', decided_at = ?, decided_by = ?
        WHERE device_label = ? AND id != ? AND status = 'pending'`,
     )
-    .run(decision, now, decidedBy.slice(0, 128), deviceLabel, excludeId);
+    .run(now, decidedBy.slice(0, 128), deviceLabel, excludeId);
   return result.changes;
 }
 

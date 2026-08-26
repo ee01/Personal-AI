@@ -393,4 +393,154 @@ describe('Device key claim gate + approval', () => {
     });
     expect(requestAfter.json().request.status).toBe('consumed');
   });
+
+  it('approving one duplicate does not turn the others into extra redeemable grants', async () => {
+    const DEVICE_LABEL = 'Chrome · MacIntel · aaaa11';
+
+    const seed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${SERVICE}`,
+        'x-user-id': 'no-storm.user',
+      },
+      payload: { label: 'seed', scopes: ['memory.read', 'memory.write'] },
+    });
+    expect(seed.statusCode).toBe(201);
+
+    const requestIds: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const attempt = await app.inject({
+        method: 'POST',
+        url: '/api/v1/users/me/keys',
+        headers: {
+          authorization: `Bearer ${BOOTSTRAP}`,
+          'x-user-id': 'no-storm.user',
+        },
+        payload: { label: DEVICE_LABEL },
+      });
+      expect(attempt.statusCode).toBe(409);
+      requestIds.push(attempt.json().requestId as string);
+    }
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/no-storm.user/${requestIds[requestIds.length - 1]}/approve?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(approve.statusCode).toBe(200);
+
+    // The two superseded duplicates must be denied, not fanned out to
+    // 'approved' — only the one the admin actually decided on should be
+    // redeemable. (Regression: an earlier version of this cascade mirrored
+    // the primary's decision, which meant approving one duplicate turned
+    // every other pending duplicate into an independently-redeemable
+    // 'approved' grant — each of which would mint a brand-new key on the
+    // device's next retry.)
+    const dashboard = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/key-requests?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    const forDevice = dashboard
+      .json()
+      .requests.filter(
+        (r: { userId: string; deviceLabel: string | null }) =>
+          r.userId === 'no-storm.user' && r.deviceLabel === DEVICE_LABEL,
+      );
+    expect(forDevice).toHaveLength(3);
+    const approvedCount = forDevice.filter(
+      (r: { status: string }) => r.status === 'approved',
+    ).length;
+    expect(approvedCount).toBe(1);
+    const deniedCount = forDevice.filter(
+      (r: { status: string }) => r.status === 'denied',
+    ).length;
+    expect(deniedCount).toBe(2);
+
+    // First retry (no requestId) redeems the one approved grant...
+    const firstRetry = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'no-storm.user',
+      },
+      payload: { label: DEVICE_LABEL },
+    });
+    expect(firstRetry.statusCode).toBe(201);
+
+    // ...and the next retry must NOT mint yet another key — there's nothing
+    // left to redeem, so it goes back to a fresh pending request.
+    const secondRetry = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'no-storm.user',
+      },
+      payload: { label: DEVICE_LABEL },
+    });
+    expect(secondRetry.statusCode).toBe(409);
+  });
+
+  it('lets an admin revoke an approved-but-unredeemed grant before it is consumed', async () => {
+    const seed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${SERVICE}`,
+        'x-user-id': 'revoke-approval.user',
+      },
+      payload: { label: 'seed', scopes: ['memory.read', 'memory.write'] },
+    });
+    expect(seed.statusCode).toBe(201);
+
+    const attempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'revoke-approval.user',
+      },
+      payload: { label: 'Chrome · MacIntel · bbbb22' },
+    });
+    expect(attempt.statusCode).toBe(409);
+    const requestId = attempt.json().requestId as string;
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/revoke-approval.user/${requestId}/approve?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(approve.statusCode).toBe(200);
+
+    const revoke = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/revoke-approval.user/${requestId}/revoke?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(revoke.statusCode).toBe(200);
+    expect(revoke.json().request.status).toBe('denied');
+
+    // Revoking twice is a no-op (already denied, not 'approved' anymore).
+    const revokeAgain = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/revoke-approval.user/${requestId}/revoke?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(revokeAgain.statusCode).toBe(404);
+
+    // The device gets nothing for it — no key issued, back to pending.
+    const retry = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'revoke-approval.user',
+      },
+      payload: { label: 'Chrome · MacIntel · bbbb22' },
+    });
+    expect(retry.statusCode).toBe(409);
+  });
 });

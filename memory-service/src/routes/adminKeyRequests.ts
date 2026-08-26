@@ -14,6 +14,7 @@ import {
   decideDeviceKeyRequest,
   decideSiblingDeviceKeyRequests,
   listDeviceKeyRequests,
+  revokeApprovedDeviceKeyRequest,
   type DeviceKeyRequestRecord,
 } from '../core/auth/deviceKeyRequests.js';
 import { upsertIdentityAlias } from '../core/auth/identityAliases.js';
@@ -153,7 +154,11 @@ function renderDashboard(token: string, rows: ListedRequest[]): string {
          <form method="POST" action="/api/v1/admin/key-requests/${encodeURIComponent(row.userId)}/${encodeURIComponent(row.id)}/deny?token=${encodeURIComponent(token)}" style="display:inline">
            <button type="submit">Deny</button>
          </form>`
-      : escapeHtml(row.status);
+      : row.status === 'approved'
+        ? `${escapeHtml(row.status)} <form method="POST" action="/api/v1/admin/key-requests/${encodeURIComponent(row.userId)}/${encodeURIComponent(row.id)}/revoke?token=${encodeURIComponent(token)}" style="display:inline">
+             <button type="submit">Revoke (not yet redeemed)</button>
+           </form>`
+        : escapeHtml(row.status);
     return `<tr>
       <td><code>${escapeHtml(row.userId)}</code></td>
       <td><code>${escapeHtml(row.id.slice(0, 8))}…</code></td>
@@ -269,7 +274,6 @@ export async function adminKeyRequestRoutes(
         ctx.db,
         updated.deviceLabel,
         updated.id,
-        decision,
         'admin',
       );
     }
@@ -322,4 +326,31 @@ export async function adminKeyRequestRoutes(
   }>('/admin/key-requests/:userId/:id/deny', async (request, reply) =>
     decide(request, reply, 'denied'),
   );
+
+  app.post<{
+    Params: { userId: string; id: string };
+    Querystring: { token?: string };
+  }>('/admin/key-requests/:userId/:id/revoke', async (request, reply) => {
+    if (!requireAdmin(request, reply)) return reply;
+    const userId = String(request.params.userId || '').trim();
+    const id = String(request.params.id || '').trim();
+    if (!userId || !id) {
+      return reply.code(400).send({ error: 'invalid_params' });
+    }
+    const ctx = ucm.getContext(userId);
+    const updated = revokeApprovedDeviceKeyRequest(ctx.db, id, 'admin');
+    if (!updated) {
+      return reply
+        .code(404)
+        .send({ error: 'request_not_found_or_not_approved' });
+    }
+    const accept = String(request.headers.accept || '');
+    if (accept.includes('json')) {
+      return reply.send({ userId, request: updated });
+    }
+    const token = readProvidedToken(request);
+    return reply.redirect(
+      `/api/v1/admin/key-requests?token=${encodeURIComponent(token)}`,
+    );
+  });
 }
