@@ -254,4 +254,81 @@ describe('Device key claim gate + approval', () => {
 
     spy.mockRestore();
   });
+
+  it('collapses repeated pending requests from the same device into one dashboard row, and approving it resolves the rest', async () => {
+    const DEVICE_LABEL = 'Chrome · MacIntel · d6fad5';
+
+    const seed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${SERVICE}`,
+        'x-user-id': 'retrying.device.user',
+      },
+      payload: { label: 'seed', scopes: ['memory.read', 'memory.write'] },
+    });
+    expect(seed.statusCode).toBe(201);
+
+    // Same device retries the bootstrap-on-claimed-namespace path several
+    // times (e.g. the extension polling before it has an approved
+    // requestId) — each attempt creates its own pending row server-side.
+    const requestIds: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const attempt = await app.inject({
+        method: 'POST',
+        url: '/api/v1/users/me/keys',
+        headers: {
+          authorization: `Bearer ${BOOTSTRAP}`,
+          'x-user-id': 'retrying.device.user',
+        },
+        payload: { label: DEVICE_LABEL },
+      });
+      expect(attempt.statusCode).toBe(409);
+      requestIds.push(attempt.json().requestId as string);
+    }
+    expect(new Set(requestIds).size).toBe(5);
+
+    const dashboard = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/key-requests?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(dashboard.statusCode).toBe(200);
+    const pendingForDevice = dashboard
+      .json()
+      .requests.filter(
+        (r: { userId: string; deviceLabel: string | null; status: string }) =>
+          r.userId === 'retrying.device.user' &&
+          r.deviceLabel === DEVICE_LABEL &&
+          r.status === 'pending',
+      );
+    // Only the most recent attempt is surfaced; the other 4 are collapsed into it.
+    expect(pendingForDevice).toHaveLength(1);
+    expect(pendingForDevice[0].id).toBe(requestIds[requestIds.length - 1]);
+    expect(pendingForDevice[0].duplicatePendingCount).toBe(5);
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/retrying.device.user/${pendingForDevice[0].id}/approve?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    expect(approve.statusCode).toBe(200);
+
+    // Approving the collapsed row also resolves the other pending duplicates
+    // for that device, so none of them are left stuck in "pending" forever.
+    const after = await app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/key-requests?token=${ADMIN}`,
+      headers: { accept: 'application/json' },
+    });
+    const stillPendingForDevice = after
+      .json()
+      .requests.filter(
+        (r: { userId: string; deviceLabel: string | null; status: string }) =>
+          r.userId === 'retrying.device.user' &&
+          r.deviceLabel === DEVICE_LABEL &&
+          r.status === 'pending',
+      );
+    expect(stillPendingForDevice).toHaveLength(0);
+  });
 });

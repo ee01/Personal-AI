@@ -117,16 +117,19 @@ export function listDeviceKeyRequests(
   options: { status?: DeviceKeyRequestStatus } = {},
 ): DeviceKeyRequestRecord[] {
   ensureDeviceKeyRequestTable(db);
+  // requested_at has second precision, so rapid retries from the same
+  // device can tie; break ties by rowid (insertion order) so "most recent"
+  // is well-defined instead of depending on SQLite's unspecified tie order.
   const rows = (
     options.status
       ? db
           .prepare(
-            `SELECT * FROM device_key_requests WHERE status = ? ORDER BY requested_at DESC`,
+            `SELECT * FROM device_key_requests WHERE status = ? ORDER BY requested_at DESC, rowid DESC`,
           )
           .all(options.status)
       : db
           .prepare(
-            `SELECT * FROM device_key_requests ORDER BY requested_at DESC`,
+            `SELECT * FROM device_key_requests ORDER BY requested_at DESC, rowid DESC`,
           )
           .all()
   ) as DeviceKeyRequestRow[];
@@ -150,6 +153,32 @@ export function decideDeviceKeyRequest(
     .run(decision, now, decidedBy.slice(0, 128), id);
   if (result.changes === 0) return null;
   return getDeviceKeyRequest(db, id);
+}
+
+/**
+ * Resolve other still-pending requests for the same device with the same
+ * decision. A retrying client (e.g. the extension hitting a claimed
+ * namespace repeatedly before it gets an approval) creates a new pending row
+ * per attempt; once an admin decides on the most recent one, the older
+ * pending rows for that device are stale and should not linger forever.
+ */
+export function decideSiblingDeviceKeyRequests(
+  db: BetterSqlite3.Database,
+  deviceLabel: string,
+  excludeId: string,
+  decision: 'approved' | 'denied',
+  decidedBy: string,
+  now = Math.floor(Date.now() / 1000),
+): number {
+  ensureDeviceKeyRequestTable(db);
+  const result = db
+    .prepare(
+      `UPDATE device_key_requests
+       SET status = ?, decided_at = ?, decided_by = ?
+       WHERE device_label = ? AND id != ? AND status = 'pending'`,
+    )
+    .run(decision, now, decidedBy.slice(0, 128), deviceLabel, excludeId);
+  return result.changes;
 }
 
 /** Mark an approved request as consumed after a successful key issue. */

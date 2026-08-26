@@ -12,6 +12,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { getConfig } from '../config.js';
 import {
   decideDeviceKeyRequest,
+  decideSiblingDeviceKeyRequests,
   listDeviceKeyRequests,
   type DeviceKeyRequestRecord,
 } from '../core/auth/deviceKeyRequests.js';
@@ -79,6 +80,8 @@ interface ListedRequest extends DeviceKeyRequestRecord {
   hasUserContent: boolean;
   keyCount: number;
   activeKeyPrefixes: string[];
+  /** How many pending requests from this same device were collapsed into this row. */
+  duplicatePendingCount: number;
 }
 
 function collectRequests(ucm: UserContextManager): ListedRequest[] {
@@ -94,11 +97,44 @@ function collectRequests(ucm: UserContextManager): ListedRequest[] {
         hasUserContent: hasUserContent(ctx.db),
         keyCount: countAllUserApiKeys(ctx.db),
         activeKeyPrefixes: keys.map((k) => k.keyPrefix),
+        duplicatePendingCount: 1,
       });
     }
   }
   listed.sort((a, b) => b.requestedAt - a.requestedAt);
-  return listed;
+  return dedupePendingByDevice(listed);
+}
+
+/**
+ * A retrying client (e.g. the extension hitting a claimed namespace
+ * repeatedly) creates a new pending device-key request every attempt, so the
+ * same device can pile up dozens of otherwise-identical pending rows.
+ * Collapse those down to the single most recent pending request per
+ * (userId, deviceLabel) — that's the only one an admin needs to act on.
+ * Decided (approved/denied/consumed) rows are left as-is; they're history,
+ * not a queue to act on.
+ */
+function dedupePendingByDevice(rows: ListedRequest[]): ListedRequest[] {
+  const pendingCounts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.status !== 'pending' || !row.deviceLabel) continue;
+    const key = `${row.userId}::${row.deviceLabel}`;
+    pendingCounts.set(key, (pendingCounts.get(key) || 0) + 1);
+  }
+
+  const seenPendingDevices = new Set<string>();
+  const result: ListedRequest[] = [];
+  for (const row of rows) {
+    if (row.status === 'pending' && row.deviceLabel) {
+      const key = `${row.userId}::${row.deviceLabel}`;
+      if (seenPendingDevices.has(key)) continue; // superseded by a newer pending request, same device
+      seenPendingDevices.add(key);
+      result.push({ ...row, duplicatePendingCount: pendingCounts.get(key)! });
+      continue;
+    }
+    result.push(row);
+  }
+  return result;
 }
 
 function renderDashboard(token: string, rows: ListedRequest[]): string {
@@ -123,7 +159,7 @@ function renderDashboard(token: string, rows: ListedRequest[]): string {
       <td><code>${escapeHtml(row.id.slice(0, 8))}…</code></td>
       <td>${escapeHtml(when)}</td>
       <td>${escapeHtml(row.googleEmail || '—')}</td>
-      <td>${escapeHtml(row.deviceLabel || '—')}</td>
+      <td>${escapeHtml(row.deviceLabel || '—')}${row.duplicatePendingCount > 1 ? ` <em>(×${row.duplicatePendingCount} attempts)</em>` : ''}</td>
       <td>${escapeHtml(row.ip || '—')}</td>
       <td>${row.hasUserContent ? 'yes' : 'no'} / ${row.keyCount}</td>
       <td>${escapeHtml(row.activeKeyPrefixes.join(', ') || '—')}</td>
@@ -226,6 +262,16 @@ export async function adminKeyRequestRoutes(
     );
     if (!updated) {
       return reply.code(404).send({ error: 'request_not_found_or_not_pending' });
+    }
+
+    if (updated.deviceLabel) {
+      decideSiblingDeviceKeyRequests(
+        ctx.db,
+        updated.deviceLabel,
+        updated.id,
+        decision,
+        'admin',
+      );
     }
 
     if (decision === 'approved') {
