@@ -91,14 +91,14 @@ async function runImport() {
           <template v-if="!hasQuarterField">
             {{
               overwrite
-                ? '覆盖模式：将按当前 JQL 重新拉取，并重置已有 Jira 导入数据（包括已排期位置）。'
+                ? '覆盖模式：将按当前 JQL 重新拉取，清除 JQL 结果中已不存在的 Jira 导入数据；已排期到 Gantt 的条目及其子任务始终保留。'
                 : '增量模式：按当前 JQL 拉取，已存在的 issue 不受影响。'
             }}
           </template>
           <template v-else>
             {{
               overwrite
-                ? '覆盖模式：以下 quarters 的数据将重新拉取并重置（包括已排期位置）。'
+                ? '覆盖模式：以下 quarters 中 JQL 结果已不存在的数据将被清除；已排期到 Gantt 的条目及其子任务始终保留。'
                 : '增量模式：仅导入尚未导入的 quarters，已存在的 issue 不受影响。'
             }}
           </template>

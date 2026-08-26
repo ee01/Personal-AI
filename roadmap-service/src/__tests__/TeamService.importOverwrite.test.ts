@@ -91,7 +91,7 @@ describe('overwrite import with rows that have no quarter', () => {
     expect(after.subs).toHaveLength(1);
   });
 
-  it('still rebuilds rows that do carry a matching quarter', () => {
+  it('keeps a scheduled row even when it carries a matching quarter', () => {
     importItems([
       { key: 'NOVA-1', type: 'Epic', title: 'q3 epic', quarter: '2026-Q3' },
     ]);
@@ -107,9 +107,29 @@ describe('overwrite import with rows that have no quarter', () => {
     importItems([
       { key: 'NOVA-1', type: 'Epic', title: 'q3 epic', quarter: '2026-Q3' },
     ]);
-    expect(snapshot().items.find((i) => i.key === 'NOVA-1')!.scheduled).toBe(
-      false,
-    );
+    const after = snapshot().items.find((i) => i.key === 'NOVA-1')!;
+    expect(after.scheduled).toBe(true);
+    expect(after.start).toBe('2026-07-01');
+    expect(after.days).toBe(10);
+  });
+
+  it('never sweeps a scheduled row, even once it disappears from the JQL', () => {
+    importItems([{ key: 'NOVA-1', type: 'Epic', title: 'scheduled epic' }]);
+    const before = snapshot().items.find((i) => i.key === 'NOVA-1')!;
+    apply({
+      op: 'schedule',
+      itemKey: 'NOVA-1',
+      baseVersion: before.version,
+      start: '2026-07-01',
+      days: 10,
+    });
+    apply({ op: 'add_sub', itemKey: 'NOVA-1', title: 'child' });
+
+    importItems([]);
+    const after = snapshot().items.find((i) => i.key === 'NOVA-1')!;
+    expect(after).toBeDefined();
+    expect(after.scheduled).toBe(true);
+    expect(after.subs).toHaveLength(1);
   });
 
   it('leaves manual items alone even though they may have no quarter', () => {

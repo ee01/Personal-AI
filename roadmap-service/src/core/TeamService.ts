@@ -834,8 +834,7 @@ export function applyIntent(
     const quarters = Array.isArray(intent.quarters)
       ? intent.quarters.map(String)
       : [];
-    if (overwrite && quarters.length) {
-      const placeholders = quarters.map(() => '?').join(',');
+    if (overwrite) {
       const payloadKeys = new Set(
         items
           .map((raw) => String((raw as Record<string, unknown>).key || '').trim())
@@ -843,51 +842,39 @@ export function applyIntent(
       );
       // Manual items are never owned by the import, so an overwrite must leave
       // them (and their subs) alone even when they sit in the same quarter.
-      const candidates = db
-        .prepare(
-          `SELECT key, quarter, jira_key FROM items
-           WHERE team_id = ? AND source = 'jira'
-             AND (quarter IN (${placeholders}) OR quarter IS NULL)`,
-        )
-        .all(teamId, ...quarters) as Array<{
-        key: string;
-        quarter: string | null;
-        jira_key: string | null;
-      }>;
-      // Rows without a quarter need care. The quarter filter usually sits on the
-      // parent Initiative, so imports used to leave every child row's quarter
-      // empty — and such a row can never be matched by a quarter-scoped delete,
-      // which is how it becomes a ghost no overwrite can clear. But dropping all
-      // of them would also wipe the schedule, subs and markers of rows that are
-      // still perfectly valid, because a deleted row comes back unscheduled.
-      // So only sweep the ones this JQL no longer returns.
+      const candidates = quarters.length
+        ? (db
+            .prepare(
+              `SELECT key, jira_key, scheduled FROM items
+               WHERE team_id = ? AND source = 'jira'
+                 AND (quarter IN (${quarters.map(() => '?').join(',')}) OR quarter IS NULL)`,
+            )
+            .all(teamId, ...quarters) as Array<{
+            key: string;
+            jira_key: string | null;
+            scheduled: number;
+          }>)
+        : (db
+            .prepare(
+              `SELECT key, jira_key, scheduled FROM items WHERE team_id = ? AND source = 'jira'`,
+            )
+            .all(teamId) as Array<{
+            key: string;
+            jira_key: string | null;
+            scheduled: number;
+          }>);
+      // A row this JQL no longer returns is a ghost the Backlog would otherwise
+      // keep forever — sweep it. But a row already scheduled onto the Gantt is
+      // never swept, no matter what the JQL returns: its placement and subs are
+      // local state the import can't reconstruct, so deleting it means losing
+      // them for good with no way back (re-importing just creates a fresh,
+      // unscheduled row under the same key).
       const stillInJql = (row: { key: string; jira_key: string | null }) =>
         payloadKeys.has(row.key) ||
         Boolean(row.jira_key && payloadKeys.has(row.jira_key));
       const doomed = candidates
-        .filter((row) => (row.quarter ? true : !stillInJql(row)))
+        .filter((row) => !row.scheduled && !stillInJql(row))
         .map((row) => row.key);
-      if (doomed.length) {
-        const keyPlaceholders = doomed.map(() => '?').join(',');
-        db.prepare(
-          `DELETE FROM subs WHERE team_id = ? AND item_key IN (${keyPlaceholders})`,
-        ).run(teamId, ...doomed);
-        db.prepare(
-          `DELETE FROM item_markers WHERE team_id = ? AND item_key IN (${keyPlaceholders})`,
-        ).run(teamId, ...doomed);
-        db.prepare(
-          `DELETE FROM items WHERE team_id = ? AND key IN (${keyPlaceholders})`,
-        ).run(teamId, ...doomed);
-      }
-    } else if (overwrite && !quarters.length) {
-      // No Target Delivery Quarter in JQL: overwrite clears all jira-sourced rows.
-      const doomed = (
-        db
-          .prepare(
-            `SELECT key FROM items WHERE team_id = ? AND source = 'jira'`,
-          )
-          .all(teamId) as Array<{ key: string }>
-      ).map((row) => row.key);
       if (doomed.length) {
         const keyPlaceholders = doomed.map(() => '?').join(',');
         db.prepare(
