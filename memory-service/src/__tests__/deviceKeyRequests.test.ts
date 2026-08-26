@@ -200,4 +200,58 @@ describe('Device key claim gate + approval', () => {
 
     spy.mockRestore();
   });
+
+  it('accepts the admin dashboard "Approve keep keys" <form> POST (x-www-form-urlencoded)', async () => {
+    const spy = vi.spyOn(googleIdentity, 'verifyGoogleAccessToken').mockResolvedValue({
+      ok: true,
+      identity: {
+        email: 'other.person2@ringcentral.com',
+        emailVerified: true,
+        aud: 'ext-client.apps.googleusercontent.com',
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      },
+    });
+
+    const seed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${SERVICE}`,
+        'x-user-id': 'formpost.user',
+      },
+      payload: { label: 'seed', scopes: ['memory.read', 'memory.write'] },
+    });
+    expect(seed.statusCode).toBe(201);
+
+    const mismatch = await app.inject({
+      method: 'POST',
+      url: '/api/v1/users/me/keys',
+      headers: {
+        authorization: `Bearer ${BOOTSTRAP}`,
+        'x-user-id': 'formpost.user',
+      },
+      payload: {
+        label: 'other-device',
+        verification: { provider: 'google', accessToken: 'fake' },
+      },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    const requestId = mismatch.json().requestId as string;
+    expect(requestId).toBeTruthy();
+
+    // This is what a browser actually sends when the admin dashboard's
+    // plain HTML <form method="POST"> button is clicked: no `accept:
+    // application/json`, and a browser-default urlencoded content type.
+    // Before registering the urlencoded content-type parser, this 415'd.
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/key-requests/formpost.user/${requestId}/approve?token=${ADMIN}`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: '',
+    });
+    expect(approve.statusCode).not.toBe(415);
+    expect(approve.statusCode).toBe(302);
+
+    spy.mockRestore();
+  });
 });

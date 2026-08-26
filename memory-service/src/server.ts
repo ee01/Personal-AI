@@ -11,6 +11,8 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { parse as parseQueryString } from 'node:querystring';
+
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -205,6 +207,22 @@ export async function buildApp(
       fileSize: 4 * 1024 * 1024 * 1024,
     },
   });
+
+  // The admin key-request approval page (adminKeyRequests.ts) submits plain
+  // HTML <form method="POST"> buttons, which browsers send as
+  // application/x-www-form-urlencoded. Fastify has no parser for that
+  // content type by default, so without this it 415s.
+  app.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_request, body, done) => {
+      try {
+        done(null, parseQueryString(body as string));
+      } catch (err) {
+        done(err as Error, undefined);
+      }
+    },
+  );
 
   await app.register(swagger, {
     openapi: {
