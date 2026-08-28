@@ -27,9 +27,13 @@ export interface OwnerAuthoredLearningPayload {
   metadata: Record<string, unknown>;
 }
 
-const MAX_VISIBLE_MESSAGES = 8;
-const MAX_MESSAGE_TEXT = 280;
-const MAX_PRIMARY_TEXT = 1800;
+// Keep a hard cap: 8 unbounded Glip cards can be megabytes of pasted logs.
+export const MAX_VISIBLE_MESSAGES = 8;
+// 4000 ≈ one long Glip technical post. Distinctive tokens (Jira keys, build
+// versions, WAC/download tails) often sit after a short-paragraph 280 cut.
+export const MAX_MESSAGE_TEXT = 4000;
+// Joined thread summary: ~two long posts or several medium ones.
+export const MAX_PRIMARY_TEXT = 8000;
 const MAX_GENERIC_TEXT = 600;
 const COMPOSER_SELECTOR = [
   'textarea',
@@ -285,10 +289,14 @@ export function isRingCentralComposerCard(card: HTMLElement): boolean {
   return Boolean(card.querySelector(RINGCENTRAL_COMPOSER_SELECTOR));
 }
 
-function clip(text: string, maxLength: number): string {
+export function clipSiteContextText(text: string, maxLength: number): string {
   const normalized = normalizeText(text);
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength).trimEnd()}...`;
+}
+
+function clip(text: string, maxLength: number): string {
+  return clipSiteContextText(text, maxLength);
 }
 
 function signature(text: string): string {

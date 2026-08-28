@@ -417,6 +417,8 @@ Compose Assist 使用 `SiteContextAdapter` 把不同网站归一成 `SiteContext
 主会话回复框：
 
 - 只读取当前会话底部可见近期消息，默认最多 8 条。
+- 每条消息文本硬顶 4000 字（约一篇带链接/版本号的长 Glip 帖）。旧值 280 大约只够一段，会丢掉帖子后半的 Jira key、生产版本、WAC/下载链等检索锚点。仍保留硬顶，避免 8 条全量无上限把粘贴日志打进 Assist JSON。
+- `primaryText` 拼接硬顶 8000 字。
 - 不读取隐藏缓存卡片。
 - 不混入打开的 thread reply tree。
 - 传入 `conversationId`、`groupId`、conversation title、visible senders。
@@ -498,7 +500,7 @@ agent 会话不能按普通聊天全文入库。`agent_session` 抽取模式会�
 | 来源 | 用途 | 当前限制/权重 |
 | --- | --- | --- |
 | `contextItems` | 优先的结构化上下文。RingCentral 是可见消息/thread root/replies/附件 metadata；Jira 是 summary/description/comments/attachments metadata；Web AI 是最近可见 turns。 | 召回主 query 最多取 12 条；生成 prompt 最多取 14 条。超过上限时取尾部最近项；如果有 `thread_root`，固定保留 root，再取最近尾部。 |
-| `primaryText` | 兼容旧调用；当没有 `contextItems` 时作为 fallback。 | 召回主 query 最多 1600 chars。前端 RingCentral/Jira/Web AI 构造时最多 1800 chars。 |
+| `primaryText` | 兼容旧调用；当没有 `contextItems` 时作为 fallback。 | 召回主 query 最多 1600 chars。前端 RingCentral/Jira/Web AI 构造时最多 8000 chars。 |
 | `secondaryTexts` | 召回辅助文本，主要补 thread root、status、最近 turns 或旧字段。 | 后端从 context items 取最多 8 条文本，再叠加请求里的 `secondaryTexts`，总数最多 10；进入 `ContextRecallService` 时最多保留 8 条，每条最多 160 chars。 |
 | `audience` | 生成 prompt 里的“对象”，用于语气/对象判断；conversation/group/issue/provider 也会转成 entity hints。 | 不直接拼进 recall `primaryText`，但会通过 `entityHints` 影响 recall anchor；生成 prompt 中以一行“对象”出现。 |
 | `identifiers` | conversationId、groupId、threadRootPostId、issueKey、provider。 | 转成 recall `entityHints`，并在 evidence 过滤时作为 source anchor；不是百分比权重，而是强相关锚点。 |
@@ -521,7 +523,7 @@ Compose Assist 复用 `ContextRecallService` 的 fast path，不跑 LLM recall�
 
 | 阶段 | 规则/权重 |
 | --- | --- |
-| Recall 通道 | 只启用 `vector + fts`；不启用 graph/time。不受 Memory Lens 的 `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 杀开关影响。Compose Assist 默认最终返回 3 条；`ContextRecallService` 会先 over-fetch `3 * 6 = 18` 条交给 `RecallEngine`，`RecallEngine` 每个通道再 over-fetch `18 * 3 = 54` 条。嵌入未加载时跳过 vector，只保留 FTS。 |
+| Recall 通道 | 只启用 `vector + fts`；不启用 graph/time。不受 Memory Lens 的 `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 杀开关影响。`composer_guard` 不在 `PASSIVE_FAST_MODE_SURFACES` 里，因此 **不会** 再被压成 12 token / 240 字的 passive compact query。实际搜索串仍经 `normalizeContextQuery`：`primaryText` 取有意义前 360 字、每条 `secondaryTexts` 160 字、总计最多 600 字；FTS 和 vector 都吃这串压缩 query，不是客户端原文。前端把单条消息放到 4000 字，是为了让帖尾的 Jira key / 版本号 / 下载锚点还能进入 `keywords`、`entityHints` 和 expansion，而不是把整帖拿去 embedding。Compose Assist 默认最终返回 3 条；`ContextRecallService` 会先 over-fetch `3 * 6 = 18` 条交给 `RecallEngine`，`RecallEngine` 每个通道再 over-fetch `18 * 3 = 54` 条。嵌入未加载时跳过 vector，只保留 FTS。 |
 | Vector 初始分 | `1 / (1 + distance)`。 |
 | FTS 初始分 | `abs(rank) / maxAbsRank`。 |
 | 多通道命中 bonus | 同一候选同时命中多个通道时保留最高分，并加 `0.05 * (channels - 1)`，最高不超过 `1.0`。 |

@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  MAX_MESSAGE_TEXT,
+  MAX_PRIMARY_TEXT,
+  MAX_VISIBLE_MESSAGES,
   WEB_AGENT_SOURCE_TYPES,
   buildInteractionSceneSnapshot,
   buildJiraOwnerCommentLearningPayloads,
+  clipSiteContextText,
   getWebAgentSourceTypesForProvider,
   isIgnoredComposerContextMedia,
   isRingCentralComposerCard,
@@ -329,4 +333,37 @@ test('buildInteractionSceneSnapshot: classifies Jira reading, RingCentral estima
   assert.equal(commentScene.userMode, 'comment');
   assert.equal(commentScene.surface, 'compose_assist');
   assert.equal(commentScene.admission?.state, 'composer_ready');
+});
+
+test('RingCentral site context keeps a large per-message cap and still hard-clips megabyte posts', () => {
+  assert.equal(MAX_VISIBLE_MESSAGES, 8);
+  assert.equal(MAX_MESSAGE_TEXT, 4000);
+  assert.equal(MAX_PRIMARY_TEXT, 8000);
+
+  const filler = 'Weekly Sync status. '.repeat(20);
+  const tail =
+    'WAC DF production 2.4.1 MTR-148115 https://example.com/download/build.zip';
+  const longPost = `${filler}${tail}`;
+  assert.ok(longPost.length > 280);
+  assert.ok(longPost.length < MAX_MESSAGE_TEXT);
+
+  const kept = clipSiteContextText(longPost, MAX_MESSAGE_TEXT);
+  assert.equal(kept.includes('...'), false);
+  assert.match(kept, /WAC DF/);
+  assert.match(kept, /MTR-148115/);
+  assert.match(kept, /2\.4\.1/);
+  assert.match(kept, /download\/build\.zip/);
+
+  const oversized = `${'x'.repeat(MAX_MESSAGE_TEXT + 80)} UNIQUE_TAIL_TOKEN`;
+  const clipped = clipSiteContextText(oversized, MAX_MESSAGE_TEXT);
+  assert.equal(clipped.endsWith('...'), true);
+  assert.equal(clipped.includes('UNIQUE_TAIL_TOKEN'), false);
+  assert.ok(clipped.length <= MAX_MESSAGE_TEXT + 3);
+
+  const joined = Array.from({ length: 8 }, (_, index) =>
+    clipSiteContextText(`${'n'.repeat(MAX_MESSAGE_TEXT)} msg-${index}`, MAX_MESSAGE_TEXT),
+  ).join('\n');
+  const primary = clipSiteContextText(joined, MAX_PRIMARY_TEXT);
+  assert.equal(primary.endsWith('...'), true);
+  assert.ok(primary.length <= MAX_PRIMARY_TEXT + 3);
 });
