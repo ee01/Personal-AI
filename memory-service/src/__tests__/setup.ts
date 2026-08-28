@@ -73,7 +73,16 @@ export function getTestDb(): BetterSqlite3.Database {
       // Execute each statement individually so that IF NOT EXISTS
       // and virtual table statements that may fail do not abort
       // the whole migration.
+      //
+      // Comment lines are dropped before splitting: Database.splitStatements
+      // skips them in production, so a semicolon inside a `--` comment must not
+      // split a statement here either. Splitting on it would truncate the real
+      // statement, and the catch below would swallow the syntax error, leaving
+      // tests running against a schema production does not have.
       const statements = sql
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
         .split(';')
         .map((s) => s.trim())
         .filter((s) => s.length > 0);

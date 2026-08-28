@@ -13,6 +13,27 @@ export type ActionQueueStatus =
   | 'dead_letter'
   | 'input_required';
 
+/**
+ * Which scheduler owns a task's trigger.
+ * - memory_cron: this service's due-scan runs it.
+ * - jira_sheet: a mirrored Sheet row is picked up by Jira Automation instead,
+ *   so the due-scan must skip it even though the row lives in this ledger.
+ */
+export const TASK_LANES = ['memory_cron', 'jira_sheet'] as const;
+export type TaskLane = (typeof TASK_LANES)[number];
+
+export const TASK_KINDS = ['push', 'agent', 'remind', 'dev', 'reflection'] as const;
+export type TaskKind = (typeof TASK_KINDS)[number];
+
+/** Rows predating Task Center have no lane; they were always locally scheduled. */
+export function normalizeTaskLane(value: unknown): TaskLane | undefined {
+  return TASK_LANES.includes(value as TaskLane) ? (value as TaskLane) : undefined;
+}
+
+export function normalizeTaskKind(value: unknown): TaskKind | undefined {
+  return TASK_KINDS.includes(value as TaskKind) ? (value as TaskKind) : undefined;
+}
+
 export interface QueuedActionRecord {
   id: string;
   type: string;
@@ -48,6 +69,16 @@ export interface QueuedActionRecord {
   utilityScore?: number;
   urgencyScore?: number;
   targetWorkerId?: string;
+  /** Task Center: subtask tree parent. */
+  parentActionId?: string;
+  /** Task Center: scheduleSpec for the next occurrence; absent = one-shot. */
+  recurrenceSpec?: Record<string, unknown>;
+  /** Task Center: which scheduler owns the trigger. Absent rows behave as memory_cron. */
+  lane?: TaskLane;
+  /** Task Center: which editor/semantics this row uses. */
+  taskKind?: TaskKind;
+  /** Task Center: mirrored Sheet row for lane='jira_sheet'. */
+  mirrorRef?: Record<string, unknown>;
 }
 
 interface ActionRow {
@@ -85,6 +116,11 @@ interface ActionRow {
   utility_score: number | null;
   urgency_score: number | null;
   target_worker_id?: string | null;
+  parent_action_id?: string | null;
+  recurrence_spec?: string | null;
+  lane?: string | null;
+  task_kind?: string | null;
+  mirror_ref_json?: string | null;
 }
 
 interface CountRow {
@@ -144,6 +180,11 @@ export interface CreateQueuedActionInput {
   queueStatus?: ActionQueueStatus;
   utilityScore?: number;
   urgencyScore?: number;
+  parentActionId?: string;
+  recurrenceSpec?: Record<string, unknown>;
+  lane?: TaskLane;
+  taskKind?: TaskKind;
+  mirrorRef?: Record<string, unknown>;
 }
 
 export interface ActionListFilters {
@@ -154,6 +195,9 @@ export interface ActionListFilters {
   actionType?: string;
   sourceKind?: string;
   sourceRefId?: string;
+  lane?: TaskLane;
+  taskKind?: TaskKind;
+  parentActionId?: string;
   limit?: number;
   offset?: number;
 }
@@ -204,6 +248,17 @@ export class ActionRepository {
       utilityScore: row.utility_score ?? undefined,
       urgencyScore: row.urgency_score ?? undefined,
       targetWorkerId: row.target_worker_id ?? undefined,
+      parentActionId: row.parent_action_id ?? undefined,
+      recurrenceSpec: safeJsonParse<Record<string, unknown> | undefined>(
+        row.recurrence_spec ?? null,
+        undefined,
+      ),
+      lane: normalizeTaskLane(row.lane),
+      taskKind: normalizeTaskKind(row.task_kind),
+      mirrorRef: safeJsonParse<Record<string, unknown> | undefined>(
+        row.mirror_ref_json ?? null,
+        undefined,
+      ),
     };
   }
 
@@ -223,8 +278,9 @@ export class ActionRepository {
             (id, type, title, description, params_json, risk_level, confidence, evidence_refs_json,
              requires_approval, state, source, expires_at, created_at, thread_id, run_id,
              action_type, execution_mode, priority, idempotency_key, depends_on_json,
-             scheduled_at, source_kind, source_ref_id, queue_status, utility_score, urgency_score)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             scheduled_at, source_kind, source_ref_id, queue_status, utility_score, urgency_score,
+             parent_action_id, recurrence_spec, lane, task_kind, mirror_ref_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -253,6 +309,11 @@ export class ActionRepository {
           input.queueStatus ?? 'queued',
           input.utilityScore ?? null,
           input.urgencyScore ?? null,
+          input.parentActionId ?? null,
+          input.recurrenceSpec ? JSON.stringify(input.recurrenceSpec) : null,
+          input.lane ?? null,
+          input.taskKind ?? null,
+          input.mirrorRef ? JSON.stringify(input.mirrorRef) : null,
         );
     } catch (error) {
       // UNIQUE idempotency race: another insert won; reuse that row.
@@ -423,6 +484,23 @@ export class ActionRepository {
            AND execution_mode = 'auto'
            AND requires_approval = 0
            AND (scheduled_at IS NULL OR scheduled_at <= ?)
+           -- Task Center: jira_sheet rows are triggered by Jira Automation via a
+           -- mirrored Sheet row. They live in this ledger for reporting only, so
+           -- the local due-scan must not also run them (double execution).
+           AND (lane IS NULL OR lane <> 'jira_sheet')
+           -- Task Center: hold a task until every dependency has succeeded.
+           -- depends_on_json has been persisted since migration 005 but had no
+           -- consumer; a dependency that is cancelled or dead_letter blocks
+           -- forever on purpose, so a broken chain surfaces instead of running
+           -- downstream work against a missing prerequisite.
+           AND NOT EXISTS (
+             SELECT 1
+             FROM json_each(COALESCE(proposed_actions.depends_on_json, '[]')) AS dep
+             LEFT JOIN proposed_actions AS dep_action
+               ON dep_action.id = dep.value
+             WHERE dep_action.id IS NULL
+                OR dep_action.queue_status <> 'succeeded'
+           )
            AND NOT EXISTS (
              SELECT 1
              FROM action_readiness_links readiness_links
