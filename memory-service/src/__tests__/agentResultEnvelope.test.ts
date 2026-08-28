@@ -110,4 +110,47 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.status).toBe('succeeded');
     expect(parsed.artifacts[0]?.metadata?.entityKey).toBe('MTR-144628');
   });
+
+  it('accepts a zero-match query_result receipt as a verified negative outcome', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary:
+          '所有 INIT 的 Team 字段都有多个值（2~10 个），没有 INIT 是刚好 1 个 Team 的，因此没有任何 Epic 需要更新。',
+        artifacts: [
+          {
+            kind: 'query_result',
+            title: 'Epic 父 INIT Team 分析结果',
+            content:
+              'NOVA-17391 ← INIT-28986: 3 个 Team；NOVA-17368 ← INIT-30072: 10 个 Team。均不满足恰好 1 个 Team 的条件。',
+            metadata: {
+              sourceSystem: 'jira',
+              query:
+                "issueFunction in portfolioChildrenOf('filter=153978') and issuetype = Epic and cf[17553] is EMPTY",
+              verification: 'jql_requery',
+              matchCount: 0,
+            },
+          },
+        ],
+      }),
+      { mode: 'write', targetSystem: 'agent_task', task: 'Nova 缺少 Team 的 Epics 自动填 INIT' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
+  });
+
+  it('still rejects success with only a bare note and no query proof', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary: '看了一下，应该没问题。',
+        artifacts: [{ kind: 'note', title: '检查结果', content: '看起来都对' }],
+      }),
+      { mode: 'write' },
+    );
+
+    expect(parsed.status).toBe('error');
+    expect(parsed.summary).toContain('缺少可验证 artifact');
+  });
 });

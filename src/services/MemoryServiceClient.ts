@@ -6863,6 +6863,30 @@ export class MemoryServiceClient {
     return this.request('POST', '/agent-tasks/execute', body);
   }
 
+  async upsertAgentTaskNotifyConfig(body: {
+    sheetMessageId: string;
+    notifyTarget?: {
+      type?: 'private' | 'group';
+      targetGroupId?: string;
+      glipTeamId?: string;
+      targetUserId?: string;
+      glipUserName?: string;
+      glipUser?: string;
+    } | null;
+    successReceipt?: 'Y' | 'N';
+    notifyVia?: 'bot' | 'asme';
+    notifyTemplate?: string;
+  }): Promise<{ ok: boolean; config: Record<string, any> }> {
+    return this.request('POST', '/agent-tasks/notify-config', body);
+  }
+
+  async deleteAgentTaskNotifyConfig(sheetMessageId: string): Promise<{ ok: boolean }> {
+    return this.request(
+      'DELETE',
+      `/agent-tasks/notify-config/${encodeURIComponent(sheetMessageId)}`,
+    );
+  }
+
   async upsertOutreachTemplate(body: {
     id?: string;
     sourceKind: string;

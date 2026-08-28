@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildAgentTaskResultAnnouncementBody,
   deliverAgentTaskAsMeNotice,
   normalizeAgentTaskNotifyTarget,
   normalizeAgentTaskNotifyVia,
@@ -375,5 +376,26 @@ describe('AgentTask notifyVia', () => {
     });
     expect(result.sent).toBe(false);
     expect(result.error).toMatch(/RingCentral not configured/i);
+  });
+});
+
+describe('buildAgentTaskResultAnnouncementBody', () => {
+  it('never includes the owner receipt boilerplate (Run id, trigger source, Sheet boundary)', () => {
+    const body = buildAgentTaskResultAnnouncementBody({
+      title: 'Nova 缺少 Assignee 的 INIT',
+      summary: '对于2026-Q3，Nova teams filter 中共有111个INIT Initiative，但全部已有assignee，无需更新。',
+    });
+
+    expect(body).toBe(
+      'Nova 缺少 Assignee 的 INIT\n对于2026-Q3，Nova teams filter 中共有111个INIT Initiative，但全部已有assignee，无需更新。',
+    );
+    expect(body).not.toMatch(/Run:/);
+    expect(body).not.toMatch(/触发:/);
+    expect(body).not.toMatch(/边界:/);
+    expect(body).not.toMatch(/状态:/);
+  });
+
+  it('falls back to just the title when there is no summary', () => {
+    expect(buildAgentTaskResultAnnouncementBody({ title: 'Daily sync' })).toBe('Daily sync');
   });
 });

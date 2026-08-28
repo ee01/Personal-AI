@@ -105,10 +105,12 @@ export function buildAgentResultSystemPrompt(
     '- 读任务：metadata.observedFields；写任务：metadata.operation + metadata.changedFields。',
     '- content：短证据，例如 Committed=Yes after update。',
     '- 不能回读确认就不要 success。缺工具用 capability_missing；缺权限用 auth_error；需人选择用 need_human_decision，并带 payload.question / payload.options。',
+    '- 查询/扫描类任务正确地查到 0 个符合条件的对象，是合法的 success，不是失败：交一张 kind="query_result" 的收据（不需要 entityKey），metadata.sourceSystem + metadata.query（实际查询语句，如 JQL）+ metadata.verification（如 jql_requery）+ metadata.matchCount=0，content 里说明检查过哪些候选、为什么都不满足条件。',
     '',
     '例子（Jira 写）：每个更新的 issue 一张收据，sourceSystem=jira, entityKey=NOVA-17023, verification=rest_api_readback, operation=update, changedFields=["Committed"]。',
     '例子（浏览器读）：sourceSystem=chrome, entityKey=页面 URL, verification=page_url, observedFields=["url","title"]。',
     '例子（文件/代码）：sourceSystem=filesystem, entityKey=路径, verification=git_status 或 file_read。',
+    '例子（查询 0 匹配）：kind=query_result, sourceSystem=jira, query="issueFunction in portfolioChildrenOf(...)", verification=jql_requery, matchCount=0。',
     '',
     'Keep the summary concise and factual. Do not ask the user to specify this format.',
   ]

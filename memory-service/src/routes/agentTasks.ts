@@ -14,6 +14,8 @@ import {
 } from '../integrations/executors/executorRegistry.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
+import { ChannelDeliveryRepository } from '../repositories/ChannelDeliveryRepository.js';
+import { AgentTaskNotifyConfigRepository } from '../repositories/AgentTaskNotifyConfigRepository.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { now } from '../utils/time.js';
@@ -436,6 +438,27 @@ function buildDefaultNotificationBody(input: {
   return lines.filter(Boolean).join('\n');
 }
 
+/**
+ * Fallback body for a 'result' delivery — the one sent to whatever target the
+ * task owner configured (a group, or someone else's private chat) — when no
+ * template is set, or template formatting didn't produce a usable summary.
+ *
+ * This audience never asked "帮我做" and isn't the task owner, so it must not
+ * see the receipt body's internal bookkeeping (Run id, trigger source, the
+ * Sheet-boundary disclaimer) that `buildDefaultNotificationBody` is for. That
+ * receipt body was previously reused unconditionally as the pre-template
+ * baseline for every delivery kind, including 'result' — so any group without
+ * a configured template, or whose template formatting silently fell back, got
+ * the raw internal receipt text instead of a presentable announcement.
+ */
+export function buildAgentTaskResultAnnouncementBody(input: {
+  title: string;
+  summary?: string;
+}): string {
+  const lines = [input.title, input.summary ? compactText(input.summary, 1200) : ''];
+  return lines.filter(Boolean).join('\n');
+}
+
 function getExecutionSummary(result?: Record<string, unknown>): string | undefined {
   const summary = result?.summary;
   return typeof summary === 'string' && summary.trim() ? summary.trim() : undefined;
@@ -475,6 +498,13 @@ export interface AgentTaskRuntimeStatusItem {
   evidence?: AgentTaskEvidencePreview;
   /** Queued action blocked by ActionReadiness (OpenClaw config/auth); not a terminal queue_status. */
   readinessBlocked?: boolean;
+  /**
+   * Status of the templated result notification sent to the configured notify
+   * target (group/private), independent of the run's own success/failure.
+   * Undefined when no such delivery was attempted (e.g. no notify target
+   * configured, or the run failed and only a failure receipt went out).
+   */
+  resultNotifyDelivery?: { delivered: boolean; error?: string };
 }
 
 function enrichRuntimeStatusWithReadiness(
@@ -582,7 +612,20 @@ export function buildAgentTaskRuntimeStatusItem(action: {
   };
 }
 
-async function formatSuccessNotificationWithTemplate(input: {
+interface FormatSuccessNotificationLogger {
+  warn: (obj: Record<string, unknown>, msg: string) => void;
+}
+
+/**
+ * Formats the group/private result notification through an OpenClaw delegate
+ * call so it follows the user's template. Every non-usable outcome (thrown
+ * error, non-success delegation status, or an empty summary) is logged before
+ * falling back to the default body — a prior version fell back silently on
+ * everything except a thrown error, which meant a delegate call that merely
+ * returned a non-success status (e.g. the OpenClaw gateway's own readiness
+ * gate blocking it) left no trace of why the template never applied.
+ */
+export async function formatSuccessNotificationWithTemplate(input: {
   template: string;
   title: string;
   task: string;
@@ -590,38 +633,59 @@ async function formatSuccessNotificationWithTemplate(input: {
   result?: Record<string, unknown>;
   userDataManager: any;
   userId: string;
+  taskId: string;
+  actionId: string;
+  log: FormatSuccessNotificationLogger;
 }): Promise<string> {
   const template = input.template.trim();
   if (!template) return input.defaultBody;
 
   const formatter = new OpenClawDelegationService(input.userDataManager, input.userId);
-  const outcome = await formatter.delegate({
-    task: [
-      '你只负责把 Agent task 执行结果整理成通知文案，不执行外部操作，不改变 artifact。',
-      '请按用户给出的模板风格输出可以直接私发给用户的中文通知。',
-      '返回 JSON envelope，其中 summary 字段就是最终通知正文，并附带一个 artifact 说明这是通知格式化结果。',
-      '',
-      `任务标题: ${input.title}`,
-      `任务内容: ${input.task}`,
-      `用户通知模板: ${template}`,
-      `默认摘要:\n${input.defaultBody}`,
-      `原始结果 JSON:\n${JSON.stringify(input.result ?? {}, null, 2)}`,
-    ].join('\n'),
-    mode: 'read',
-    targetSystem: 'agent_task_notification',
-    threadId: `agent-task-notification:${input.title}`,
-    actionId: `agent-task-notification:${randomUUID()}`,
-    sessionKey: `agent-task-notification:${input.title}:${Date.now()}`,
-    metadata: {
-      notificationOnly: true,
-      template,
-    },
-  });
+  let outcome;
+  try {
+    outcome = await formatter.delegate({
+      task: [
+        '你只负责把 Agent task 执行结果整理成通知文案，不执行外部操作，不改变 artifact。',
+        '请按用户给出的模板风格输出可以直接私发给用户的中文通知。',
+        '返回 JSON envelope，其中 summary 字段就是最终通知正文，并附带一个 artifact 说明这是通知格式化结果。',
+        '',
+        `任务标题: ${input.title}`,
+        `任务内容: ${input.task}`,
+        `用户通知模板: ${template}`,
+        `默认摘要:\n${input.defaultBody}`,
+        `原始结果 JSON:\n${JSON.stringify(input.result ?? {}, null, 2)}`,
+      ].join('\n'),
+      mode: 'read',
+      targetSystem: 'agent_task_notification',
+      threadId: `agent-task-notification:${input.title}`,
+      actionId: `agent-task-notification:${randomUUID()}`,
+      sessionKey: `agent-task-notification:${input.title}:${Date.now()}`,
+      metadata: {
+        notificationOnly: true,
+        template,
+      },
+    });
+  } catch (error) {
+    input.log.warn(
+      { err: error, taskId: input.taskId, actionId: input.actionId },
+      'AgentTask notification template formatting threw; using default body',
+    );
+    return input.defaultBody;
+  }
 
   if (outcome.status === 'success' && outcome.summary?.trim()) {
     return outcome.summary.trim();
   }
 
+  input.log.warn(
+    {
+      taskId: input.taskId,
+      actionId: input.actionId,
+      delegationStatus: outcome.status,
+      hasSummary: Boolean(outcome.summary?.trim()),
+    },
+    'AgentTask notification template formatting did not return a usable summary; using default body',
+  );
   return input.defaultBody;
 }
 
@@ -631,6 +695,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
   }>('/agent-tasks/runtime-status', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const repo = new ActionRepository(db);
+    const deliveryRepo = new ChannelDeliveryRepository(db);
     const readinessService = new ActionReadinessService(
       db,
       userDataManager,
@@ -661,11 +726,29 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
 
     const byRef = new Map<string, AgentTaskRuntimeStatusItem>();
     for (const action of actions) {
-      const item = enrichRuntimeStatusWithReadiness(
+      let item = enrichRuntimeStatusWithReadiness(
         buildAgentTaskRuntimeStatusItem(action),
         action,
         readinessService,
       );
+      if (action.queueStatus === 'succeeded') {
+        // Result-kind deliveries are always planned first when present — see
+        // planAgentTaskNotifications — so index 0 is where to look.
+        const deliveryRecord = deliveryRepo.getRecord(
+          `agent_task:${action.id}:result:0`,
+          'glip',
+          'notice',
+        );
+        if (deliveryRecord) {
+          item = {
+            ...item,
+            resultNotifyDelivery: {
+              delivered: deliveryRecord.status === 'delivered',
+              error: deliveryRecord.status === 'delivered' ? undefined : deliveryRecord.lastError,
+            },
+          };
+        }
+      }
       const keys = [item.sourceRefId, item.sheetMessageId, item.taskId].filter(
         (value): value is string => Boolean(value),
       );
@@ -753,11 +836,24 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           nonEmptyString(body.scheduleSpec) || 'adhoc',
         ].join(':');
       const sourceRefId = nonEmptyString(body.sheetMessageId) || taskId;
-      const notifyTarget = normalizeAgentTaskNotifyTarget(body.notifyTarget);
+      // A request body field always wins; this row only fills in what the caller
+      // omitted. It exists because the deployed Apps Script version is what
+      // decides which fields actually get sent — see migration 064.
+      const storedNotifyConfig = new AgentTaskNotifyConfigRepository(db).get(sourceRefId);
+      const notifyTarget = normalizeAgentTaskNotifyTarget(
+        body.notifyTarget !== undefined ? body.notifyTarget : storedNotifyConfig?.notifyTarget,
+      );
       const timeoutMs = normalizeAgentTaskTimeoutMs(body.timeoutMs);
       const shouldNotify = body.notify !== false;
-      const successReceipt = body.successReceipt !== false;
-      const notifyVia = normalizeAgentTaskNotifyVia(body.notifyVia);
+      const successReceipt =
+        body.successReceipt !== undefined
+          ? body.successReceipt !== false
+          : storedNotifyConfig?.successReceipt !== undefined
+            ? storedNotifyConfig.successReceipt !== 'N'
+            : true;
+      const notifyVia = normalizeAgentTaskNotifyVia(
+        body.notifyVia !== undefined ? body.notifyVia : storedNotifyConfig?.notifyVia,
+      );
       const asmeSender = normalizeAsMeSenderCredentials(body.asmeSender);
       const resultTarget = resolveExplicitAgentTaskResultTarget(notifyTarget);
       // API response: prefer explicit result target; otherwise report owner receipt fallback.
@@ -850,7 +946,8 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       // Block A: enqueue-and-return. Execution + notification run in background
       // (HeartbeatLoop also drains due auto actions). Result and notification are
       // independent — notification failure must not rewrite run status.
-      const notifyTemplate = nonEmptyString(body.notifyTemplate);
+      const notifyTemplate =
+        nonEmptyString(body.notifyTemplate) ?? nonEmptyString(storedNotifyConfig?.notifyTemplate);
       setImmediate(() => {
         void (async () => {
           try {
@@ -880,38 +977,43 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
               arBindingId: nonEmptyString(body.arBindingId),
             });
 
-            let templatedResultBody = defaultBody;
+            const resultAnnouncementBody = buildAgentTaskResultAnnouncementBody({
+              title,
+              summary,
+            });
+
+            let templatedResultBody = resultAnnouncementBody;
             const needsTemplate =
               Boolean(notifyTemplate) &&
               succeeded &&
               deliveries.some((item) => item.useTemplate);
             if (needsTemplate && notifyTemplate) {
-              try {
-                templatedResultBody = await formatSuccessNotificationWithTemplate({
-                  template: notifyTemplate,
-                  title,
-                  task,
-                  defaultBody,
-                  result: execution.result,
-                  userDataManager,
-                  userId,
-                });
-              } catch (error) {
-                request.log.warn(
-                  { err: error, taskId, actionId: action.id },
-                  'AgentTask notification template formatting failed; using default body',
-                );
-              }
+              templatedResultBody = await formatSuccessNotificationWithTemplate({
+                template: notifyTemplate,
+                title,
+                task,
+                defaultBody: resultAnnouncementBody,
+                result: execution.result,
+                userDataManager,
+                userId,
+                taskId,
+                actionId: action.id,
+                log: request.log,
+              });
             }
 
             const notificationService = new NotificationCenterService(db);
             for (const [index, delivery] of deliveries.entries()) {
-              const bodyText =
-                delivery.useTemplate && succeeded ? templatedResultBody : defaultBody;
+              // Receipt kinds (success/failure) are private to the task owner and
+              // always use the internal receipt body. 'result' is the only kind
+              // that ever reaches a configured target audience, templated or not.
+              const bodyText = delivery.kind === 'result' ? templatedResultBody : defaultBody;
               const noticeTitle =
                 delivery.kind === 'failure_receipt'
                   ? `帮我做失败: ${title}`
-                  : `帮我做完成: ${title}`;
+                  : delivery.kind === 'result'
+                    ? `任务完成: ${title}`
+                    : `帮我做完成: ${title}`;
               const deliveryVia = resolveAgentTaskDeliveryVia(delivery.kind, notifyVia);
               if (deliveryVia === 'asme') {
                 if (!asmeSender) {
@@ -941,7 +1043,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
                 }
                 continue;
               }
-              await notificationService.deliverNoticeToGlip({
+              const botResult = await notificationService.deliverNoticeToGlip({
                 sourceRef: `agent_task:${action.id}:${delivery.kind}:${index}`,
                 title: noticeTitle,
                 body: bodyText,
@@ -949,6 +1051,43 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
                 targetUserId: delivery.targetUserId,
                 targetGroupId: delivery.targetGroupId,
               });
+              if (!botResult.sent) {
+                request.log.warn(
+                  {
+                    err: botResult.error,
+                    taskId,
+                    actionId: action.id,
+                    kind: delivery.kind,
+                    targetUserId: delivery.targetUserId,
+                    targetGroupId: delivery.targetGroupId,
+                  },
+                  'AgentTask Bot result notify failed',
+                );
+                // The result delivery (templated, to the configured target) failing
+                // silently is exactly what made Case 2b/3 take three sessions to
+                // diagnose: the run showed success, the owner got nothing that said
+                // otherwise. Escalate to an owner private notice so the failure is
+                // visible without needing to read server logs or the delivery
+                // ledger. Receipt kinds (success/failure) are already the owner's
+                // own private channel, so escalating them again would just repeat
+                // the same failure — only escalate the target-facing result kind.
+                const ownerUserId =
+                  userId && userId !== 'default' ? userId : undefined;
+                if (delivery.kind === 'result' && ownerUserId) {
+                  await notificationService.deliverNoticeToGlip({
+                    sourceRef: `agent_task:${action.id}:result_delivery_failed:${index}`,
+                    title: `帮我做通知投递失败: ${title}`,
+                    body: [
+                      '结果已产生，但推送到指定通知目标失败：',
+                      botResult.error || '未知错误',
+                      '',
+                      '任务本身的执行结果不受影响，仅通知投递失败。',
+                    ].join('\n'),
+                    mention: true,
+                    targetUserId: ownerUserId,
+                  });
+                }
+              }
             }
           } catch (error) {
             request.log.error(
@@ -976,6 +1115,65 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           notifyVia,
         },
       });
+    },
+  );
+
+  /**
+   * Registers AgentTask notification preferences directly, so they don't depend
+   * on a triggering caller's request body carrying every field — the deployed
+   * Apps Script version decides which fields it forwards, and can lag the
+   * template that defines them. Values sent here are consumed as a fallback by
+   * /agent-tasks/execute whenever the body omits the corresponding field.
+   */
+  app.post<{
+    Body: {
+      sheetMessageId?: string;
+      notifyTarget?: AgentTaskNotifyTarget | null;
+      successReceipt?: 'Y' | 'N' | boolean;
+      notifyVia?: 'bot' | 'asme';
+      notifyTemplate?: string;
+    };
+  }>('/agent-tasks/notify-config', async (request, reply) => {
+    const body = request.body ?? {};
+    const sheetMessageId = nonEmptyString(body.sheetMessageId);
+    if (!sheetMessageId) {
+      return reply.status(400).send({ error: 'sheetMessageId is required' });
+    }
+
+    const { db } = request.userContext;
+    const repo = new AgentTaskNotifyConfigRepository(db);
+    const notifyTarget = normalizeAgentTaskNotifyTarget(body.notifyTarget) || undefined;
+    const successReceipt =
+      body.successReceipt === 'Y' || body.successReceipt === true
+        ? 'Y'
+        : body.successReceipt === 'N' || body.successReceipt === false
+          ? 'N'
+          : undefined;
+    const notifyVia =
+      body.notifyVia === 'asme' ? 'asme' : body.notifyVia === 'bot' ? 'bot' : undefined;
+
+    repo.upsert({
+      sheetMessageId,
+      notifyTarget,
+      successReceipt,
+      notifyVia,
+      notifyTemplate: nonEmptyString(body.notifyTemplate),
+    });
+
+    return reply.status(200).send({ ok: true, config: repo.get(sheetMessageId) });
+  });
+
+  app.delete<{ Params: { sheetMessageId: string } }>(
+    '/agent-tasks/notify-config/:sheetMessageId',
+    async (request, reply) => {
+      const sheetMessageId = nonEmptyString(request.params.sheetMessageId);
+      if (!sheetMessageId) {
+        return reply.status(400).send({ error: 'sheetMessageId is required' });
+      }
+
+      const { db } = request.userContext;
+      new AgentTaskNotifyConfigRepository(db).delete(sheetMessageId);
+      return reply.status(200).send({ ok: true });
     },
   );
 }

@@ -84,44 +84,82 @@ export function hasMetadataObservedFields(
   return keys.some((key) => normalizeObservedFieldLabels(metadata[key]).length > 0);
 }
 
+/**
+ * A task can legitimately touch zero entities — a conditional sync that finds no
+ * qualifying record, a scan that comes back clean. That is a verified negative
+ * result, not a missing receipt, so it needs its own artifact shape: `kind:
+ * 'query_result'` (or an explicit `metadata.matchCount === 0`) backed by the
+ * query that was run and how it was executed, instead of an entity identity.
+ */
+export function isVerifiedEmptyResultArtifact(artifact: AgentResultArtifact): boolean {
+  const metadata = artifact.metadata;
+  const kind = typeof artifact.kind === 'string' ? artifact.kind.trim().toLowerCase() : '';
+  const matchCount = metadata?.matchCount;
+  const isZeroMatch =
+    kind === 'query_result' ||
+    matchCount === 0 ||
+    matchCount === '0';
+  if (!isZeroMatch) return false;
+
+  const sourceSystem = getMetadataString(metadata, ['sourceSystem', 'targetSystem', 'system']);
+  const query = getMetadataString(metadata, ['query', 'jql', 'queryText']);
+  const verification =
+    metadata?.verified === true ||
+    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
+  const hasBody =
+    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
+    (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
+
+  return Boolean(sourceSystem && query && verification && hasBody);
+}
+
+function hasVerifiableEntityArtifact(
+  artifact: AgentResultArtifact,
+  options: { targetSystem?: string },
+): boolean {
+  const metadata = artifact.metadata;
+  const sourceSystem =
+    getMetadataString(metadata, ['sourceSystem', 'targetSystem', 'system']) ??
+    options.targetSystem?.trim();
+  const entityId = getMetadataString(metadata, [
+    'entityId',
+    'entityKey',
+    'recordId',
+    'resourceId',
+    'ticketId',
+    'ticketKey',
+    'issueKey',
+  ]);
+  const verification =
+    metadata?.verified === true ||
+    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
+  const hasObservedFields = hasMetadataObservedFields(metadata);
+  const hasOperation = Boolean(
+    getMetadataString(metadata, ['operation', 'operationType', 'action']),
+  );
+  const hasObservedAt = Boolean(
+    getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']),
+  );
+  const hasBody =
+    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
+    (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
+
+  return Boolean(
+    sourceSystem &&
+      entityId &&
+      verification &&
+      hasBody &&
+      (hasObservedFields || hasOperation || hasObservedAt),
+  );
+}
+
 export function hasVerifiableArtifact(
   artifacts: AgentResultArtifact[],
   options: { targetSystem?: string } = {},
 ): boolean {
-  return artifacts.some((artifact) => {
-    const metadata = artifact.metadata;
-    const sourceSystem =
-      getMetadataString(metadata, ['sourceSystem', 'targetSystem', 'system']) ??
-      options.targetSystem?.trim();
-    const entityId = getMetadataString(metadata, [
-      'entityId',
-      'entityKey',
-      'recordId',
-      'resourceId',
-      'ticketId',
-      'ticketKey',
-      'issueKey',
-    ]);
-    const verification =
-      metadata?.verified === true ||
-      Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
-    const hasObservedFields = hasMetadataObservedFields(metadata);
-    const hasOperation = Boolean(
-      getMetadataString(metadata, ['operation', 'operationType', 'action']),
-    );
-    const hasObservedAt = Boolean(
-      getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']),
-    );
-    const hasBody =
-      (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
-      (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
-
-    return Boolean(
-      sourceSystem &&
-        entityId &&
-        verification &&
-        hasBody &&
-        (hasObservedFields || hasOperation || hasObservedAt),
-    );
-  });
+  return artifacts.some(
+    (artifact) =>
+      hasVerifiableEntityArtifact(artifact, options) ||
+      isVerifiedEmptyResultArtifact(artifact),
+  );
 }
