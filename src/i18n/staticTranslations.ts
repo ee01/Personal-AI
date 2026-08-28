@@ -309,6 +309,9 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '优先用 RingCentral app 加会': 'Prefer RingCentral app for joining',
   '开启后会拦截 RingCentral Web 中的 Video Join 链接和部分 Join 按钮，改用本机 RingCentral app 打开会议；若 app 没有接管，页面会保留浏览器加入兜底，也可在兜底浮层里改为默认使用浏览器。':
     'When enabled, Video Join links and some Join buttons in RingCentral Web open through the local RingCentral app. If the app does not take over, the browser join fallback remains available.',
+  '启用 Memory Lens / 情境召回': 'Enable Memory Lens / context recall',
+  '在网页、消息会话、会议和 popup 上显示被动关联记忆气泡。关闭后停止这些被动召回，不影响写作护航或会前准备；主动划词检索仍可用。':
+    'Show passive related-memory bubbles on webpages, message threads, meetings, and the popup. Turning this off stops those passive recalls without disabling Writing Assist or meeting prep. Explicit selected-text search still works.',
   '启用 Context Assist': 'Enable Context Assist',
   '统一启用会前准备和写作护航的场景化记忆提示。':
     'Enable scene-aware memory prompts for meeting prep and writing assist.',

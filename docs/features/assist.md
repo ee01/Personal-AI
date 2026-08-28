@@ -69,7 +69,7 @@ Compose Assist 只替用户判断两件事：当前输入框旁是否值得出�
 
 - 前端：`src/composer-guard/ComposerGuardController.ts`（`REQUEST_FOCUS_SETTLE_MS=700`、`REQUEST_BLUR_SETTLE_MS=0`、`MIN_WEB_AI_DRAFT_CHARACTERS` 仅 refine、`buildComposerAssistRequestSignature(...|intent:)`）
 - 开关：`src/composer-guard/assistConfig.ts` 的 `COMPOSE_DRAFT_ENABLED` / `COMPOSE_REFINE_ENABLED`；`src/background.ts` 的 `COMPOSER_ASSIST_REQUEST` 按 intent 门控
-- 召回：`composer_guard` 不在 `PASSIVE_FAST_MODE_SURFACES` 里。`CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 只控制 Memory Lens / `web_passive` 等旁路检索（生产默认 `true`），**禁止**再把 Compose Assist 一起杀掉
+- 召回：`composer_guard` 不在 `PASSIVE_FAST_MODE_SURFACES` 里。`CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 只控制 Memory Lens / `web_passive` 等旁路检索（未配置时默认开启；仅显式 `false`/`0`/`off`/`no` 关闭），**禁止**再把 Compose Assist 一起杀掉。用户侧另有独立 Options 开关 `CONTEXT_LENS_ENABLED`；关掉 Lens 只停被动气泡，不关写作护航。
 
 ### 2. 契约字段不可丢
 
@@ -185,7 +185,8 @@ Compose Assist 不做：
 
 ### 阈值与开关
 
-- 总开关：`CONTEXT_ASSIST_ENABLED` 与 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动。
+- 总开关：`CONTEXT_ASSIST_ENABLED` 与 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动。二者默认打开（`!== false` / 环境变量不是 `'false'`）。
+- Memory Lens 被动召回另有独立用户开关 `CONTEXT_LENS_ENABLED`（同样默认打开）。关闭 Lens 不会关掉 Compose Assist 或会前准备。
 - 子开关：`COMPOSE_DRAFT_ENABLED` / `COMPOSE_REFINE_ENABLED` 分别门控 Draft Compose / Draft Refine；挂在 Compose Assist 总开关之下。
 - 自适应阈值按 `surface:intent` 复合 key 读写（例如 `chatgpt:draft_refine`）；裸 `surface` 作为兼容 fallback。ChatGPT 拒绝一次 prompt 优化不会连累 Glip 起草。
 - thumb-down / accepted 反馈同样写入复合 key。
@@ -645,7 +646,7 @@ POST /api/v1/extractor/from-chat
 
 1. 解析 `assistIntent`（显式或向后兼容推导）。判断 owner 是否已在当前上下文末尾回复；完整回复则直接不展示。
 2. 构造 `ContextRecallRequest`。RingCentral/Jira 的主 query 来自当前场景和 audience；Web AI Draft Refine 把冻结的 draft 放在召回 query 前部，但召回为空也不阻止完整 prompt rewrite；Web AI Draft Compose 以页面可见 turns / 场景为主。
-3. `ContextRecallService` 走 fast path：`vector + fts`，limit 默认 3，并在最终展示前执行第一道 Cohesion Gate；随后执行 Web AI 低信息过滤、相关性准入、来源/id/内容去重和最多 3 条限制。如果显示预算把 matches 静音，但 context match 已锁定并携带 evidence ids，会先解析最多 6 条原始候选，再复用同一过滤链，最终仍最多 3 条。Compose Assist 的 `composer_guard` surface **不受** `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 控制；该开关只关掉 Memory Lens / `web_passive` 等页面旁路检索。Lens 的向量通道另由 `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` 控制（生产默认 `true`）。嵌入未加载时 vector 通道会跳过，FTS 仍会跑。
+3. `ContextRecallService` 走 fast path：`vector + fts`，limit 默认 3，并在最终展示前执行第一道 Cohesion Gate；随后执行 Web AI 低信息过滤、相关性准入、来源/id/内容去重和最多 3 条限制。如果显示预算把 matches 静音，但 context match 已锁定并携带 evidence ids，会先解析最多 6 条原始候选，再复用同一过滤链，最终仍最多 3 条。Compose Assist 的 `composer_guard` surface **不受** `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 控制；该开关只关掉 Memory Lens / `web_passive` 等页面旁路检索。Lens 的向量通道另由 `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` 控制（未配置时默认开启；仅显式 `false`/`0`/`off`/`no` 关闭）。嵌入未加载时 vector 通道会跳过，FTS 仍会跑。
 4. Compose 对最终 evidence 执行第二道 Cohesion Gate，覆盖 change projection 和 locked-context fallback；后续分支只能读取 gated evidence。共享前置管道（recall / cohesion / persona projection）对所有象限相同。
 5. 二维策略路由：`assistIntent × contextType` 选择生成器。
    - `draft_compose` + Glip/Jira → 既有回复/issue 起草（`reply_context` / `issue_context`）。

@@ -5052,6 +5052,14 @@ const Options = () => {
 
       <div className="form-section">
         <h2>{t('options.sections.memoryLens')}</h2>
+        <ToggleField
+          id="CONTEXT_LENS_ENABLED"
+          name="CONTEXT_LENS_ENABLED"
+          checked={config.CONTEXT_LENS_ENABLED !== false}
+          onChange={handleInputChange}
+          label="启用 Memory Lens / 情境召回"
+          description="在网页、消息会话、会议和 popup 上显示被动关联记忆气泡。关闭后停止这些被动召回，不影响写作护航或会前准备；主动划词检索仍可用。"
+        />
         <ContextSiteMuteSettings />
       </div>
 

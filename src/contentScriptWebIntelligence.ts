@@ -38,6 +38,8 @@ import {
     sanitizeExploreRoute,
 } from './web-intelligence/contextRecallGuards';
 import { startComposerGuardController } from './composer-guard/ComposerGuardController';
+import { ENV_CONFIG_KEY } from './composer-guard/assistConfig';
+import { isContextLensEnabledFromConfig } from './context-lens/lensConfig';
 import {
     buildJiraOwnerCommentLearningPayloads,
     buildInteractionSceneSnapshot,
@@ -2429,6 +2431,7 @@ class WebIntelligenceContentScript {
     private siteAllowlistLoadPromise: Promise<void> | null = null;
     private siteControlSyncToastSuppressedUntil = 0;
     private sentOwnerLearningKeys = new Set<string>();
+    private contextLensEnabled = true;
 
     constructor() {
         this.initialize();
@@ -2455,6 +2458,8 @@ class WebIntelligenceContentScript {
         startComposerGuardController();
         this.setupEventListeners();
         this.setupSiteControlStorageListener();
+        this.setupLensConfigListener();
+        void this.loadContextLensConfig();
         void this.loadSiteControls().then(() => this.scheduleContextMatch(200));
 
         this.scheduleContextMatch(2000);
@@ -3455,6 +3460,11 @@ class WebIntelligenceContentScript {
     private async tryContextMatch(): Promise<void> {
         if (this.isSensitiveContextPage()) {
             this.clearContextBubble();
+            return;
+        }
+
+        if (!this.contextLensEnabled) {
+            this.clearPassiveContextBubble();
             return;
         }
 
@@ -6210,6 +6220,58 @@ class WebIntelligenceContentScript {
         } catch (_error) {
             // Storage change updates are a convenience; reload still reads controls.
         }
+    }
+
+    private setupLensConfigListener(): void {
+        try {
+            if (!chrome.storage?.onChanged?.addListener) {
+                return;
+            }
+            chrome.storage.onChanged.addListener((changes, areaName) => {
+                if (areaName !== 'local' || !changes[ENV_CONFIG_KEY]) {
+                    return;
+                }
+                this.applyContextLensConfig(
+                    changes[ENV_CONFIG_KEY]?.newValue as Record<string, unknown> | null,
+                );
+            });
+        } catch (_error) {
+            // Storage change updates are a convenience; reload still reads config.
+        }
+    }
+
+    private loadContextLensConfig(): Promise<void> {
+        return new Promise((resolve) => {
+            try {
+                chrome.storage.local.get([ENV_CONFIG_KEY], (result) => {
+                    this.contextLensEnabled = isContextLensEnabledFromConfig(
+                        (result?.[ENV_CONFIG_KEY] || null) as Record<string, unknown> | null,
+                    );
+                    if (!this.contextLensEnabled) {
+                        this.clearPassiveContextBubble();
+                    }
+                    resolve();
+                });
+            } catch (_error) {
+                this.contextLensEnabled = true;
+                resolve();
+            }
+        });
+    }
+
+    private applyContextLensConfig(config: Record<string, unknown> | null | undefined): void {
+        const nextEnabled = isContextLensEnabledFromConfig(config);
+        if (nextEnabled === this.contextLensEnabled) {
+            return;
+        }
+        this.contextLensEnabled = nextEnabled;
+        this.invalidatePendingContextRequest();
+        this.resetContextStability();
+        if (!nextEnabled) {
+            this.clearPassiveContextBubble();
+            return;
+        }
+        this.scheduleContextMatch(0);
     }
 
     private applySiteControlStorageChanges(

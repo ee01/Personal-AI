@@ -38,6 +38,7 @@ import {
   getMeetingTranscriptionMode,
   isMeetingRingCentralTranscriptEnabled,
 } from '../utils';
+import { shouldRequestPassiveContextRecall } from '../context-lens/lensConfig';
 import {
   isMainLLMConfiguredForMeetingAnalysis,
   runMeetingIntelligenceLLM,
@@ -3578,6 +3579,14 @@ async function refreshMeetingMemory(tabId: number): Promise<void> {
 
   const envConfig = await getEnvConfig();
   if (!envConfig.MEETING_MEMORY_CONTEXT_ENABLED) {
+    return;
+  }
+  if (
+    !shouldRequestPassiveContextRecall(
+      { surface: 'meeting_passive' },
+      envConfig,
+    )
+  ) {
     return;
   }
 

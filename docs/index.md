@@ -173,6 +173,7 @@
 | 记忆提示预演提醒 | Memory Lens | [rehearsal.md](./features/rehearsal.md) | 当前网页/会话/issue 命中 Rehearsal 时低打扰展示 |
 | 划词查找关联记忆 | Memory Lens | [memory_lens.md](./features/memory_lens.md) | selected_text context recall；卡片显示已命中候选与无二次召回边界，顶部选区 tooltip 不裁切 |
 | 站点静默/屏蔽/白名单 | Memory Lens | [memory_lens.md](./features/memory_lens.md) | 本地 storage 控制；Options 状态、操作结果和按钮 hover/读屏区分白名单静默、实时重新评估、主动划词仍可用与无写入外发 |
+| Options Memory Lens 总开关 | Memory Lens | [memory_lens.md](./features/memory_lens.md) | `CONTEXT_LENS_ENABLED` 默认打开；关闭后停止网页/会议/popup/消息会话被动召回，不影响写作护航或会前准备；与服务器 `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 两层门 |
 | AR 数据网页叠加 | Personal AI AR Data | [ar_data_overlay.md](./features/ar_data_overlay.md) | 右键创建 AR binding，历史结果先展示；badge 隐藏仅影响本页会话，重复执行的开启/取消都有 AgentTask 写入边界 |
 | 人脉关系人物雷达 | Relationship Radar | [relationship_radar.md](./features/relationship_radar.md) | 首屏显示当前范围、优先人物、数据质量和控件级只读/写入边界 |
 | 人脉关系人物详情与证据 | Relationship Radar | [relationship_radar.md](./features/relationship_radar.md) | 互动时间线、open loops、确认/推断事实与安全证据跳转；切换人物清空旧 brief/草稿 |

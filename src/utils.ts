@@ -154,6 +154,7 @@ export interface EnvConfigType {
   MEETING_PILOT_ENABLED: boolean;
   MEETING_PILOT_FLOATING_ICON_VISIBLE: boolean;
   CONTEXT_ASSIST_ENABLED: boolean;
+  CONTEXT_LENS_ENABLED: boolean;
   SCENE_REHEARSAL_DISPLAY_ENABLED: boolean;
   COMPOSE_ASSIST_ENABLED: boolean;
   MEETING_PREP_ENABLED: boolean;
@@ -492,6 +493,7 @@ export function normalizeEnvConfigShape(
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
       normalizedMeetingPilotFloatingIconVisible,
     CONTEXT_ASSIST_ENABLED: config.CONTEXT_ASSIST_ENABLED !== false,
+    CONTEXT_LENS_ENABLED: config.CONTEXT_LENS_ENABLED !== false,
     SCENE_REHEARSAL_DISPLAY_ENABLED:
       config.CONTEXT_ASSIST_ENABLED !== false &&
       config.SCENE_REHEARSAL_DISPLAY_ENABLED !== false,
@@ -672,6 +674,7 @@ export const defaultEnvConfig: EnvConfigType = {
   MEETING_PILOT_FLOATING_ICON_VISIBLE:
     process.env.MEETING_PILOT_FLOATING_ICON_VISIBLE !== 'false',
   CONTEXT_ASSIST_ENABLED: process.env.CONTEXT_ASSIST_ENABLED !== 'false',
+  CONTEXT_LENS_ENABLED: process.env.CONTEXT_LENS_ENABLED !== 'false',
   SCENE_REHEARSAL_DISPLAY_ENABLED:
     process.env.CONTEXT_ASSIST_ENABLED !== 'false' &&
     process.env.SCENE_REHEARSAL_DISPLAY_ENABLED !== 'false',

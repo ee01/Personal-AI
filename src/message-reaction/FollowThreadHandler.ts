@@ -11,6 +11,8 @@ import {
 } from '../types/followThread';
 import { TopicItemWithAutoReply } from './AutoReplyHandler';
 import { getMemoryServiceClient } from '../services/MemoryServiceClient';
+import { getEnvConfig } from '../utils';
+import { shouldRequestPassiveContextRecall } from '../context-lens/lensConfig';
 import { digestQueueService } from '../services/DigestQueueService';
 import {
   DigestQueueItem,
@@ -153,6 +155,12 @@ async function checkSemanticSimilarity(
   }
 
   try {
+    const envConfig = await getEnvConfig();
+    if (
+      !shouldRequestPassiveContextRecall({ surface: 'follow_thread' }, envConfig)
+    ) {
+      return 0;
+    }
     const client = getMemoryServiceClient();
 
     // Use the fast passive contextRecall API for semantic similarity probe.

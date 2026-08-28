@@ -1283,6 +1283,7 @@ Rehearsal 没有独立的“系统启用”开关。它的产生和消费分别�
 
 - `SELF_REFLECTION_ENABLED` 关闭时，Reflection 心跳不再自动产出新的 `rehearsal_candidate`；手动创建和已存在 Rehearsal 不受影响。
 - `CONTEXT_ASSIST_ENABLED`、`COMPOSE_ASSIST_ENABLED`、`MEETING_PREP_ENABLED`、`MEETING_PILOT_ENABLED` 等关闭对应 surface 后，对应前端不会请求或展示 Rehearsal。
+- `CONTEXT_LENS_ENABLED` 关闭后，Memory Lens 被动 surface（网页、会议、popup、消息会话）不再请求 `/context-recall`，因此也不会展示被动 Rehearsal 气泡；Compose Assist 和会前准备不受影响。
 - `SCENE_REHEARSAL_DISPLAY_ENABLED` 是 Options 里 Context Assist 区域的展示总闸。关闭后，扩展会在现场消费入口过滤 `rehearsal` source，但不会删除已有 Rehearsal，也不会关闭 Reflection 的候选生成能力。
 - 即使 surface 开启，调用 `/context-recall` 时 `sourceTypes` 也必须包含 `rehearsal`，否则 `RehearsalActivationService` 会直接跳过。
 

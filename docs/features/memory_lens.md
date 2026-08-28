@@ -1,6 +1,6 @@
 # Memory Lens
 
-*最后更新: 2026-08-03（含 Lens 展示地图、关键简报自动生成、Options 语言同步链路、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
+*最后更新: 2026-08-29（含 Options `CONTEXT_LENS_ENABLED` 用户总开关、两层被动召回门禁、Lens 展示地图、关键简报自动生成、Options 语言同步链路、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
 
 ## 概述
 
@@ -29,10 +29,11 @@ Memory Lens 的逻辑是“当前页面像什么，就去记忆库里找你以�
 2. 场景锚点：同群、同会话、同会议、同 issue 的来源锚点会明显提高相关性。
 3. 记忆本身质量：有明确摘要、实体、来源和时间的记忆更容易展示；低信息标题或泛泛会议记录会被压低。
 4. 敏感页面和输入状态：密码、支付、账号、隐私输入等场景不会显示。
-5. 与 Compose Assist 的互斥：用户正在输入框附近写回复时，Compose Assist 优先，Memory Lens 右下角入口会隐藏。
-6. 精准 cue：少数结构足够明确的场景会把相关记忆编译成一句可行动只读提示，例如用户在 RingCentral 群聊或 Jira comment 中讨论 MTR-148115 估算时提示“上次 original estimate 口径是人天”。这仍然只是展示旧记忆，不插入、不提交；如果同一句 cue 在同类场景被重复标成不相关，Outcome Loop 会让后续同类场景静默。
-7. 关键简报：如果同一工作对象已有至少两条独立来源、非纯派生权威和可回溯的 claim，`/context-recall` 可以在不改变原始召回排序的前提下附带一份 `keystoneBrief`。符合 `ready` 的简报会替换 Expanded Card 首屏的零散记忆；原始记忆不会消失，而是移到“来源与原始记忆”里供复核。
-8. [记忆主张归属](./memory_claim_attribution.md)：context recall 在展示前按句内 claim 移除假设/未知归属等 block 证据，并把 AI 建议或他人转述降为背景。普通 single-self 结果完全无新增 UI；只有后果变化时，Expanded Card metadata 才显示一个归属 chip，Rest / Hover Peek 保持不变。
+5. 用户总开关：Options「记忆提示控制」里的 `CONTEXT_LENS_ENABLED` 默认打开。关掉后，网页 / 消息会话 / 会议 / popup 不再发起被动 `/context-recall`，已打开页上的被动气泡会立刻清掉；写作护航和会前准备不受影响。主动划词检索仍可用。
+6. 与 Compose Assist 的互斥：用户正在输入框附近写回复时，Compose Assist 优先，Memory Lens 右下角入口会隐藏。
+7. 精准 cue：少数结构足够明确的场景会把相关记忆编译成一句可行动只读提示，例如用户在 RingCentral 群聊或 Jira comment 中讨论 MTR-148115 估算时提示“上次 original estimate 口径是人天”。这仍然只是展示旧记忆，不插入、不提交；如果同一句 cue 在同类场景被重复标成不相关，Outcome Loop 会让后续同类场景静默。
+8. 关键简报：如果同一工作对象已有至少两条独立来源、非纯派生权威和可回溯的 claim，`/context-recall` 可以在不改变原始召回排序的前提下附带一份 `keystoneBrief`。符合 `ready` 的简报会替换 Expanded Card 首屏的零散记忆；原始记忆不会消失，而是移到“来源与原始记忆”里供复核。
+9. [记忆主张归属](./memory_claim_attribution.md)：context recall 在展示前按句内 claim 移除假设/未知归属等 block 证据，并把 AI 建议或他人转述降为背景。普通 single-self 结果完全无新增 UI；只有后果变化时，Expanded Card metadata 才显示一个归属 chip，Rest / Hover Peek 保持不变。
 
 ## 产品边界
 
@@ -247,6 +248,24 @@ Options 会把当前语言同步为 active `user_profile_items.language_preferen
 
 Memory Lens 默认把“用户可以看见记忆”和“可以把记忆外发给其他 AI”分开。Lens 只在当前页面展示已有记忆，不自动复制、不注入输入框、不外发给第三方 AI。需要生成回复或把上下文交给外部 AI 时，应进入 Compose Assist / Context Passport / egress firewall 等后续能力。
 
+### 用户总开关与服务器杀开关（两层门）
+
+被动情境召回有两层独立门，必须同时打开才会真正检索：
+
+| 层 | 开关 | 作用范围 | 默认 |
+|---|---|---|---|
+| 每用户 Options | `chrome.storage.local.envConfig.CONTEXT_LENS_ENABLED` | 扩展客户端：网页 `web_passive`、会议 `meeting_passive`、popup `popup_passive`、消息会话 `follow_thread` 的被动 Lens 气泡 / 旁路召回 | 打开（`!== false`） |
+| 部署级服务器 | `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` | memory-service：上述被动 surface 即使收到请求也直接空结果 | 打开（未配置时默认开启；仅显式 `false`/`0`/`off`/`no` 关闭） |
+
+关闭 Options 的 Memory Lens 开关后：
+
+- 客户端不再为被动 surface 发 `/context-recall`；background `CONTEXT_RECALL_REQUEST` 也会在发出前拦截并返回空结果。
+- 已打开页面上的被动气泡会立刻清掉；重新打开开关后会重新评估当前页。
+- **不会**关闭 Compose Assist（`CONTEXT_ASSIST_ENABLED` / `COMPOSE_ASSIST_ENABLED`）或会前准备 / Meeting Pilot。Lens 不是 Assist 的子开关。
+- 主动划词检索（`contextType=selected_text`）仍可用，继续受敏感页、敏感表单和低信息/密钥选区拦截。
+
+服务器 `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED=false` 时，即使用户 Options 仍打开，服务端也会对被动 surface 返回空结果。两层可以同时存在：用户关 Lens，客户端不发请求；服务器关被动检索，即使请求到达也是空结果。Compose Assist 的 `composer_guard` 不受这两层被动门控制。
+
 站点控制存在扩展本地 storage：
 
 - `pai-context-muted-sites-v1`
@@ -378,9 +397,11 @@ Memory Lens 可消费 `/context-recall.changeProjections`，详见 [Change Memor
 - `npm --prefix memory-service test -- --run src/__tests__/api-context-recall.test.ts`
 - `npm run eval:run -- --suite scene-memory-autopilot --no-repair`
 - `npm start` 到首次 successful compile 后停止
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/context-lens/__tests__/lensConfig.test.ts`
 
 重点回归场景：
 
+- Options「记忆提示控制」有独立的 `启用 Memory Lens / 情境召回` 开关，默认打开；关闭后网页/会议/popup/消息会话不再请求被动召回，写作护航和会前准备仍可用。
 - `displayPriority=hidden` 不展示。
 - `displayPriority=p2` 且带有 `whyRelevant` 时可显示 Rest icon 和 Hover Peek，但不使用 fresh/强相关动效；缺少解释锚点的 `p2` 不展示。
 - 同页 hash 刷新、焦点恢复或缓存重显时，缓存里的 `p2` 结果仍保持 `可能相关` 低打扰状态，不重新触发召回或显示 fresh 动效。

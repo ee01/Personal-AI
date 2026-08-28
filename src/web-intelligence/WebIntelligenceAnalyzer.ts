@@ -7,6 +7,8 @@
 
 import { ChromeBuiltInAIAnalyzer } from './ChromeBuiltInAI';
 import { getMemoryServiceClient, MemoryServiceClient } from '../services/MemoryServiceClient';
+import { getEnvConfig } from '../utils';
+import { shouldRequestPassiveContextRecall } from '../context-lens/lensConfig';
 
 export interface PageContent {
   title: string;
@@ -902,6 +904,12 @@ ${pageContent.mainContent.substring(0, 2000)}
    */
   private async findRelevantMemories(content: string): Promise<DetailedAnalysisResult['relevantMemories']> {
     try {
+      const envConfig = await getEnvConfig();
+      if (
+        !shouldRequestPassiveContextRecall({ surface: 'web_passive' }, envConfig)
+      ) {
+        return [];
+      }
       const trimmed = content.substring(0, 500);
       const recallResult = await this.client.contextRecall({
         surface: 'web_passive',

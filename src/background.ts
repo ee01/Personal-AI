@@ -6,6 +6,10 @@ import {
   getEnvConfig,
   normalizeConcernedItemsDigestHour,
 } from './utils';
+import {
+  emptyPassiveContextRecallResponse,
+  shouldRequestPassiveContextRecall,
+} from './context-lens/lensConfig';
 import { syncRoadmapContentScript } from './roadmapContentScriptRegistry';
 import {
   ROADMAP_MEMORY_REQUEST,
@@ -2647,6 +2651,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           readExtensionUiPreferences(),
           chrome.storage.local.get(['userinfo']),
         ]);
+        if (!shouldRequestPassiveContextRecall(request.request, envConfig)) {
+          sendResponse(emptyPassiveContextRecallResponse());
+          return;
+        }
         const contextRequest = {
           ...(request.request || {}),
           sourceTypes: filterSceneRehearsalSourceTypes(
