@@ -1,6 +1,10 @@
-# 定时消息统一管理功能
+# 定时消息统一管理功能（任务中心 ☁️ jira_sheet lane）
 
-*最后更新: 2026-08-21*
+*最后更新: 2026-08-28*
+
+> **定位**：本文是[任务中心](task_center.md)的 **Level 2 / ☁️ `jira_sheet` lane** 子文档，覆盖 Google Sheet + App Script + Jira Automation 这条云端 24/7 调度链路的全部实现细节（数据模型、执行匹配与幂等、Config 同步、Timeline 缓存、App Script 自动更新）。
+>
+> 任务中心的总体设计——两条 lane 如何共存、任务类型与编辑器、分层激活、人工节点、反思候选——见 [`task_center.md`](task_center.md)。本文描述的能力对存量用户**照常运行、无需迁移**。
 
 ## 功能概述
 
@@ -223,6 +227,11 @@
 - 部署生效确认未确认返回目标版本时，不会把配置标记为最新
 - 如果 deployment 已提交但版本端点无法确认目标版本，系统会尝试把 deployment 回退到升级前的 versionNumber，并在 UI 中保留可恢复的错误说明
 - 用户执行“升级调度系统”后，页面会留下“App Script 升级结果回执”：汇总 Sheet、App Script、Jira Automation 三段结果，说明“已是最新时跳过脚本写入、失败项保留现有版本”的边界；如果需要清理 Project History、检查 deployment 或确认版本端点，回执会保留检查入口，避免只靠弹窗记忆恢复步骤
+- **Google Workspace 域策略可以整体禁用 Web App 的匿名访问**（`webapp.access: ANYONE_ANONYMOUS`），此时升级会收到 Google 400 `"ANYONE access has been disabled by your domain administrator"`（`AppScriptDomainPolicyAccessError`，errorCode `APP_SCRIPT_DOMAIN_POLICY_ACCESS`）。已部署的旧版本可能仍在“祖父条款”豁免下继续匿名可用（`?action=getVersion` 仍能匿名访问），但**新部署会被拒绝**——这不是一次性故障，域策略没变之前每次升级都会复现
+  - manifest 里的 `executionApi` 字段是死配置（项目只走 `/v1/projects` API 和 Web App `/exec`，从不调 `scripts.run`），升级不再声明它；升级写 manifest 时会**保留线上已部署的 `webapp.access` 原值**而不是重新声明成 `ANYONE_ANONYMOUS`，因为已部署的值可能正处在豁免状态，重新声明反而更容易被拒
+  - 遇到这类域策略拒绝后，自动升级会退避 24 小时（写 `appScriptDomainPolicyBlockedUntil`），避免反复失败白白消耗 Project History 200 个版本的额度；手动点击“升级调度系统”不受此退避限制，域管理员刚放开时可以立即重试
+  - 之所以 Web App 必须匿名：真正的调用方是 Jira Automation（`jira-rule-template.json`），它只能发静态请求头，无法完成 Google OAuth、也拿不到/刷新不了短期 access token。这意味着只要 Jira 还需要直接读写这个 Web App，匿名访问就是硬需求，域策略和这个需求天然冲突
+  - **风险**：现有部署的匿名豁免可能随时被 Workspace 回收，届时整条「Jira Automation → Apps Script → memory-service」触发链路会立即中断，且在域策略不变的前提下无法重新部署恢复。根治方向是让 Jira 直接带鉴权头调用 memory-service、不再依赖 Apps Script 做匿名中转——这条迁移在 [agent-task-ledger-plan.md](../progressing/agent-task-ledger-plan.md) 里展开，本文档只记录域策略本身的行为事实
 
 ## 使用方法
 
@@ -620,8 +629,11 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
   - 失败回执：始终 Bot 私发本人（不可关）；唯一例外是 API 级 `notify: false`（AR 等程序化调用），UI 永不产生该值。
   - 成功结果通知的发送身份由 `Agent_Notify_Via` 决定：`bot`（默认）走 SM AI Bot API；`asme` 走与顶部 AsMe 发消息 tab 同一套 Sheet RingCentral sender（`ringcentral_sender_client_id/secret/jwt`）。回执始终 Bot。AsMe 投递失败不会静默改成 Bot。
   - 帮我做弹窗可选 AsMe；Sheet RingCentral sender 未就绪时标「可预览 · 待配置」，保存会被拦截。入口与顶部 AsMe tab 的「配置 @ 人发送能力」相同。
+- **通知配置不再单靠 Apps Script 转发**：管理页保存/编辑 AgentTask 行时，除了写 Sheet 列，还会把 `notifyTarget`/`Agent_Notify_Success_Receipt`/`Agent_Notify_Via`/`Agent_Notify_Template` 通过 `SYNC_AGENT_TASK_NOTIFY_CONFIG` 直接注册到 memory-service（`POST /agent-tasks/notify-config`，按 `sheetMessageId` 存表）；`Push_Method` 从 AgentTask 切走时会调用 `DELETE .../notify-config/:sheetMessageId` 清掉这条。`/agent-tasks/execute` 收到请求时，body 里没带的字段会回落读这张表，body 显式给的值仍优先。这样即使线上 Apps Script 版本落后（某个字段还没加进模板转发逻辑），通知配置依然正确——不需要先升级脚本。保存回执里会提示这次同步是否成功。
 - `Agent_Notify_Template` 只影响成功结果通知文案；原始 OpenClaw task、artifact 和 payload 不会被通知模板改写。成功回执（无结果目标时）与失败回执均用默认摘要，不套模板。
+- **发到结果通知目标的正文，绝不会是回执体**：没配模板、或模板格式化失败时，`result` 类型的兜底文案只有「标题 + 结果摘要」两行，不含 `Run: <uuid>`/`触发: jira_rule`/`边界: Sheet 只记录计划...` 这类只对 owner 有意义的内部记账字段——那套字段专属 `success_receipt`/`failure_receipt` 两种私密回执。模板格式化本身经一次内部 OpenClaw 委派调用；调用抛异常、返回非 `success`、或摘要为空，都会记录 warn（附具体原因）后回落到这个纯公告文本，不会静默换成回执体。
 - 推送在 memory-service 拿到 OpenClaw 输出后由代码层完成：Bot 走 `NotificationCenterService` → Bot API；AsMe 走 Sheet RingCentral sender JWT（`RingCentralClient` 显式凭据，不写进 action 账本）。**不会**把“通知到某群”写进任务 prompt。
+- 结果投递（`result` 类型）成功与否会写进 `channel_delivery_records`；管理页 `GET /agent-tasks/runtime-status` 会带回 `resultNotifyDelivery: { delivered, error? }`。投递失败（例如 SM AI Bot 不在目标群）时，除了记录，还会私发 owner 一条「通知投递失败: <原因>」——避免"任务回执显示 success、目标群却什么都没收到"这种情况只能靠翻服务端日志才能发现。
 
 #### 7. AR 绑定来源
 
@@ -842,6 +854,7 @@ A:
 
 ## 最近更新
 
+- 2026-08-28：AgentTask 结果通知配置由插件在保存时直接注册到 memory-service（`agent_task_notify_configs`），不再单靠 Apps Script 版本转发；`result` 类型投递（发到群组/目标）不配模板或模板格式化失败时，兜底文案改成「标题 + 摘要」的纯公告，不再误发只给 owner 看的回执体（Run id / 触发来源 / Sheet 账本边界）；模板格式化失败会记录具体原因，不再静默；结果投递失败会写入 `channel_delivery_records` 并私发 owner 说明，`runtime-status` 一并暴露 `resultNotifyDelivery`；查询/扫描类任务查到 0 个匹配现在算合法 success（`query_result` 收据），不再被判成缺证据的 error。
 - 2026-08-21：已完成的单次任务改成仍有下次执行的重复任务时，会自动从 `Done` 恢复为 `Active` 并把 `Exec_Count` 归零；执行器只领取 Active 行，已完成行没有单独的“恢复”按钮。
 - 2026-08-21：托管 JiraAutomation 行编辑保存会保留 `Automation_Link`；`undefined` 不再把规则入口整行写空。改 Topic 继续同步 Jira Rule 名称，不再只在托管后第一次编辑生效。
 

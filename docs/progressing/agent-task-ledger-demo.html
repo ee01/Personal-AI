@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Task Ledger — 任务账本（交互原型）</title>
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+      --panel: rgba(15, 23, 42, 0.6);
+      --panel-border: rgba(148, 163, 184, 0.12);
+      --ink: #fff; --ink-secondary: #cbd5e1; --ink-muted: #94a3b8; --ink-dim: #64748b;
+      --blue: #60a5fa; --blue-bg: rgba(59,130,246,.18);
+      --purple: #a78bfa; --purple-bg: rgba(147,51,234,.18);
+      --green: #34d399; --green-bg: rgba(34,197,94,.16);
+      --amber: #fbbf24; --amber-bg: rgba(245,158,11,.14);
+      --rose: #fb7185; --rose-bg: rgba(244,63,94,.14);
+      --cyan: #22d3ee; --cyan-bg: rgba(34,211,238,.12);
+      --radius: .75rem; --radius-sm: .5rem;
+      --font: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg-gradient); color: var(--ink); min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased; padding: 1.25rem; }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+
+    .hero { background: linear-gradient(135deg, rgba(59,130,246,.12), rgba(147,51,234,.12)); border: 1px solid var(--panel-border); border-radius: var(--radius); padding: .9rem 1.2rem; margin-bottom: .8rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .hero h1 { font-size: 1.15rem; }
+    .hero h1 small { font-size: .7rem; color: var(--ink-dim); font-weight: 400; margin-left: .4rem; }
+    .scenario { display: flex; align-items: center; gap: .5rem; font-size: .72rem; color: var(--ink-muted); }
+    .seg { display: inline-flex; border: 1px solid var(--panel-border); border-radius: 999px; overflow: hidden; }
+    .seg button { border: 0; background: transparent; color: var(--ink-muted); padding: .35rem .85rem; font-size: .74rem; cursor: pointer; font-family: var(--font); }
+    .seg button.on { background: var(--blue-bg); color: var(--blue); font-weight: 600; }
+
+    .tabs { display: flex; gap: .4rem; margin-bottom: .8rem; flex-wrap: wrap; }
+    .vtab { border: 1px solid var(--panel-border); background: var(--panel); color: var(--ink-muted); border-radius: 999px; padding: .4rem 1rem; font-size: .8rem; cursor: pointer; font-family: var(--font); position: relative; }
+    .vtab.on { background: var(--blue-bg); border-color: rgba(59,130,246,.45); color: var(--blue); font-weight: 600; }
+    .vtab .dot { position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; border-radius: 50%; background: var(--rose); color: #fff; font-size: .6rem; display: flex; align-items: center; justify-content: center; font-weight: 700; padding: 0 3px; }
+    .view { display: none; }
+    .view.on { display: block; }
+    .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--radius); padding: .95rem 1.1rem; backdrop-filter: blur(10px); margin-bottom: .8rem; }
+    .panel h2 { font-size: .9rem; margin-bottom: .6rem; color: var(--ink-secondary); display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+    .panel h2 .count { font-size: .66rem; color: var(--ink-dim); font-weight: 400; }
+
+    .chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
+    .chip { border: 1px solid var(--panel-border); background: transparent; color: var(--ink-muted); border-radius: 999px; padding: .22rem .7rem; font-size: .7rem; cursor: pointer; font-family: var(--font); }
+    .chip.on { background: rgba(255,255,255,.08); color: var(--ink); border-color: rgba(148,163,184,.35); }
+
+    .tl-head { font-size: .74rem; font-weight: 700; color: var(--ink-secondary); padding: .3rem 0; border-bottom: 1px solid var(--panel-border); margin: .6rem 0 .25rem; }
+    .tl-head .c { font-size: .64rem; color: var(--ink-dim); font-weight: 400; margin-left: .4rem; }
+    .row { display: flex; align-items: center; gap: .5rem; padding: .32rem .45rem; border-radius: 6px; font-size: .78rem; cursor: pointer; }
+    .row:hover { background: rgba(59,130,246,.08); }
+    .row .t { font-family: var(--font-mono); font-size: .7rem; color: var(--ink-dim); width: 78px; flex-shrink: 0; }
+    .row .title { flex: 1; color: var(--ink-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row .edit-ic { opacity: 0; font-size: .68rem; color: var(--blue); }
+    .row:hover .edit-ic { opacity: 1; }
+    .row.dim .title, .row.dim .t { opacity: .55; }
+    .b { display: inline-flex; padding: .08rem .45rem; border-radius: 999px; font-size: .62rem; white-space: nowrap; flex-shrink: 0; }
+    .b.ai { background: var(--cyan-bg); color: var(--cyan); } .b.jira { background: var(--amber-bg); color: var(--amber); }
+    .b.agent { background: var(--purple-bg); color: var(--purple); } .b.bot { background: var(--blue-bg); color: var(--blue); }
+    .b.asme { background: rgba(255,255,255,.08); color: var(--ink-muted); }
+    .b.remind { background: var(--green-bg); color: var(--green); } .b.dev { background: var(--cyan-bg); color: var(--cyan); }
+    .b.refl { background: var(--purple-bg); color: var(--purple); } .b.push { background: var(--cyan-bg); color: var(--cyan); }
+    .lane-ic { font-size: .7rem; flex-shrink: 0; }
+    .st { font-size: .62rem; padding: .08rem .5rem; border-radius: 999px; font-weight: 600; flex-shrink: 0; }
+    .st.ok { background: var(--green-bg); color: var(--green); } .st.wait { background: rgba(148,163,184,.15); color: var(--ink-muted); }
+    .st.run { background: var(--blue-bg); color: var(--blue); } .st.warn { background: var(--rose-bg); color: var(--rose); }
+    .st.rev { background: var(--purple-bg); color: var(--purple); } .st.paused { background: rgba(148,163,184,.12); color: var(--ink-dim); }
+
+    .btn { border: 1px solid var(--panel-border); background: var(--panel); color: var(--ink); border-radius: 999px; padding: .38rem .95rem; font-size: .76rem; cursor: pointer; font-family: var(--font); }
+    .btn.primary { background: var(--blue-bg); border-color: rgba(59,130,246,.45); color: var(--blue); font-weight: 600; }
+    .btn.approve { background: rgba(34,197,94,.15); border-color: rgba(52,211,153,.45); color: var(--green); font-weight: 600; }
+    .btn.ghost { color: var(--ink-muted); }
+    .btn.sm { padding: .22rem .7rem; font-size: .68rem; }
+    .btn:disabled { opacity: .35; cursor: not-allowed; }
+
+    .gate { border: 1px solid rgba(245,158,11,.35); border-radius: var(--radius-sm); background: var(--amber-bg); padding: .7rem .85rem; margin-bottom: .55rem; }
+    .gate.done { opacity: .5; border-color: rgba(52,211,153,.4); background: var(--green-bg); }
+    .gate-title { font-size: .8rem; font-weight: 600; }
+    .gate-body { font-size: .72rem; color: var(--ink-secondary); margin: .25rem 0 .5rem; }
+    .gate .stamp { font-size: .7rem; color: var(--green); font-weight: 600; display: none; }
+    .gate.done .stamp { display: inline; } .gate.done .gate-actions { display: none; }
+    .gate-actions { display: flex; gap: .45rem; }
+
+    .agg { border: 1px solid var(--panel-border); border-radius: var(--radius-sm); background: rgba(255,255,255,.02); padding: .65rem .8rem; margin-bottom: .5rem; }
+    .agg-top { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    .agg-title { font-size: .8rem; font-weight: 600; flex: 1; min-width: 200px; }
+    .xn { font-size: .64rem; padding: .08rem .5rem; border-radius: 999px; background: var(--rose-bg); color: var(--rose); font-weight: 700; }
+    .xn.mild { background: var(--amber-bg); color: var(--amber); }
+
+    .type-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: .7rem; }
+    @media (max-width: 860px) { .type-cards { grid-template-columns: repeat(2, 1fr); } }
+    .tcard { border: 1px solid var(--panel-border); border-radius: var(--radius-sm); background: rgba(255,255,255,.02); padding: .9rem; cursor: pointer; transition: all .15s; }
+    .tcard:hover { border-color: rgba(59,130,246,.5); background: rgba(59,130,246,.06); }
+    .tcard .ic { font-size: 1.3rem; }
+    .tcard b { display: block; font-size: .82rem; margin: .3rem 0 .15rem; }
+    .tcard small { font-size: .66rem; color: var(--ink-dim); display: block; line-height: 1.4; }
+    .tcard .lanes { margin-top: .4rem; font-size: .64rem; color: var(--ink-muted); }
+
+    .step { border: 1px solid var(--panel-border); border-radius: var(--radius-sm); padding: .75rem .9rem; margin-bottom: .55rem; background: rgba(255,255,255,.02); }
+    .step.done { border-color: rgba(52,211,153,.35); }
+    .step-top { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+    .step-num { width: 22px; height: 22px; border-radius: 50%; background: rgba(148,163,184,.15); color: var(--ink-muted); font-size: .7rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .step.done .step-num { background: var(--green-bg); color: var(--green); }
+    .step-title { font-size: .84rem; font-weight: 600; flex: 1; }
+    .step-body { font-size: .72rem; color: var(--ink-muted); margin: .35rem 0 0 1.9rem; }
+    .substeps { margin: .45rem 0 0 1.9rem; }
+    .substep { display: flex; align-items: center; gap: .5rem; font-size: .74rem; color: var(--ink-secondary); padding: .3rem 0; }
+    .substep .sd { width: 15px; text-align: center; color: var(--ink-dim); }
+    .substep.done .sd { color: var(--green); }
+    .warn-line { font-size: .68rem; color: var(--amber); margin-top: .3rem; }
+    .detect { border: 1px solid rgba(52,211,153,.35); background: var(--green-bg); border-radius: var(--radius-sm); padding: .8rem .95rem; margin-bottom: .6rem; font-size: .78rem; }
+    .detect b { color: var(--green); }
+    .detect .meta { font-size: .7rem; color: var(--ink-secondary); margin-top: .3rem; font-family: var(--font-mono); }
+
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); backdrop-filter: blur(3px); display: none; align-items: flex-start; justify-content: center; padding: 3vh 1rem; z-index: 50; overflow-y: auto; }
+    .modal-bg.on { display: flex; }
+    .modal { background: #111a2e; border: 1px solid rgba(148,163,184,.25); border-radius: var(--radius); width: 640px; max-width: 100%; }
+    .m-head { display: flex; align-items: center; gap: .6rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--panel-border); }
+    .m-head .m-title { font-size: .95rem; font-weight: 700; flex: 1; }
+    .m-x { cursor: pointer; color: var(--ink-dim); font-size: 1rem; }
+    .m-body { padding: 1rem 1.1rem; max-height: 62vh; overflow-y: auto; }
+    .m-foot { display: flex; align-items: center; gap: .6rem; padding: .75rem 1.1rem; border-top: 1px solid var(--panel-border); }
+    .m-foot .sync-hint { flex: 1; font-size: .68rem; color: var(--ink-dim); }
+    .fg { margin-bottom: .85rem; }
+    .fg label { display: block; font-size: .74rem; font-weight: 600; color: var(--ink-secondary); margin-bottom: .3rem; }
+    .fg label .req { color: var(--rose); }
+    .fg input[type=text], .fg textarea, .fg select {
+      width: 100%; background: rgba(255,255,255,.05); border: 1px solid var(--panel-border); border-radius: 8px;
+      color: var(--ink); font-size: .78rem; padding: .5rem .65rem; font-family: var(--font); outline: none;
+    }
+    .fg textarea { font-family: var(--font-mono); font-size: .72rem; resize: vertical; }
+    .fg input:focus, .fg textarea:focus, .fg select:focus { border-color: rgba(59,130,246,.5); }
+    .fg .hint { font-size: .66rem; color: var(--ink-dim); margin-top: .25rem; display: block; }
+    .inline-fields { display: flex; gap: .6rem; flex-wrap: wrap; }
+    .inline-fields .fg { flex: 1; min-width: 140px; }
+    .segline { display: flex; gap: .45rem; flex-wrap: wrap; }
+    .opt { border: 1px solid var(--panel-border); background: rgba(255,255,255,.03); color: var(--ink-muted); border-radius: 8px; padding: .45rem .8rem; font-size: .74rem; cursor: pointer; font-family: var(--font); text-align: left; }
+    .opt.on { background: var(--blue-bg); border-color: rgba(59,130,246,.5); color: var(--blue); font-weight: 600; }
+    .opt.off { opacity: .38; cursor: not-allowed; }
+    .opt small { display: block; font-size: .62rem; font-weight: 400; color: var(--ink-dim); margin-top: .1rem; }
+    .opt.on small { color: rgba(96,165,250,.75); }
+    .lane-note { margin-top: .4rem; font-size: .68rem; padding: .4rem .6rem; border-radius: 6px; }
+    .lane-note.home { background: var(--green-bg); color: var(--green); }
+    .lane-note.cloud { background: var(--amber-bg); color: var(--amber); }
+    .lane-note.locked { background: rgba(148,163,184,.1); color: var(--ink-muted); }
+    .lane-note.blocked { background: var(--rose-bg); color: var(--rose); }
+    .lane-note .lk { color: var(--blue); cursor: pointer; text-decoration: underline; }
+    .quote { border-left: 3px solid var(--blue); background: rgba(59,130,246,.06); padding: .45rem .6rem; font-size: .72rem; color: var(--ink-secondary); border-radius: 0 6px 6px 0; }
+    .quote small { color: var(--ink-dim); display: block; }
+    .ck { display: flex; align-items: center; gap: .45rem; font-size: .76rem; color: var(--ink-secondary); cursor: pointer; }
+
+    #toast { position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%); background: #0e2a1c; border: 1px solid rgba(52,211,153,.45); color: var(--green); font-size: .76rem; padding: .55rem 1.1rem; border-radius: 999px; display: none; z-index: 99; max-width: 90vw; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <h1>🧾 任务账本<small>交互原型 · 点任意任务行可编辑</small></h1>
+    <div class="scenario">
+      模拟用户：
+      <span class="seg">
+        <button id="sc-new" onclick="setScenario('new')">新用户（仅 L0）</button>
+        <button id="sc-legacy" class="on" onclick="setScenario('legacy')">存量用户（L0+L1+L2）</button>
+      </span>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="vtab on" data-v="list" onclick="showView(this)">📋 任务列表</button>
+    <button class="vtab" data-v="inbox" onclick="showView(this)">📥 收件箱<span class="dot" id="inboxDot">3</span></button>
+    <button class="vtab" data-v="refl" onclick="showView(this)">🌙 反思候选</button>
+    <button class="vtab" data-v="create" onclick="showView(this)">＋ 新建任务</button>
+    <button class="vtab" data-v="setup" onclick="showView(this)">🚀 初始化</button>
+  </div>
+
+  <div class="view on" id="v-list">
+    <div class="panel">
+      <h2 id="list-title">执行时间轴</h2>
+      <div class="chips" id="filter-chips">
+        <button class="chip on" data-f="all" onclick="setFilter(this)">全部</button>
+        <button class="chip" data-f="push" onclick="setFilter(this)">⏰ 定时推送</button>
+        <button class="chip" data-f="agent" onclick="setFilter(this)">🤖 AgentTask</button>
+        <button class="chip" data-f="remind" onclick="setFilter(this)">⏳ 提醒</button>
+        <button class="chip" data-f="dev" onclick="setFilter(this)">🛠 开发</button>
+        <button class="chip" data-f="paused" onclick="setFilter(this)">⏸ 已暂停</button>
+      </div>
+      <div id="tl"></div>
+    </div>
+  </div>
+
+  <div class="view" id="v-inbox">
+    <div class="panel">
+      <h2>📥 收件箱</h2>
+      <div class="gate" id="g1">
+        <div class="gate-title">🛠 Plan 审批：worker lease 心跳续租</div>
+        <div class="gate-body">计划：① lease renew 接口 ② 心跳携带续租 ③ 回归 >5min report 不再 409。</div>
+        <div class="gate-actions"><button class="btn approve sm" onclick="doneGate('g1')">✓ 批准执行</button><button class="btn ghost sm">✎ 修改计划</button></div>
+        <span class="stamp">✓ 已批准 — 入队 mac-mini</span>
+      </div>
+      <div class="gate" id="g2">
+        <div class="gate-title">📄 Review：research/sqlite-vec-vs-lancedb.md</div>
+        <div class="gate-body">p95 延迟差 4 倍，迁移成本约两周。通过后任务完成入账。</div>
+        <div class="gate-actions"><button class="btn approve sm" onclick="doneGate('g2')">✓ Review 通过</button><button class="btn ghost sm">✎ 要求补充</button></div>
+        <span class="stamp">✓ Review 通过</span>
+      </div>
+      <div class="gate" id="g3">
+        <div class="gate-title">⚠️ 执行失败：Nova 缺少 Team 的 Epics（昨天 17:30）</div>
+        <div class="gate-body">就绪检查拦截（openclaw:global 鉴权失败）。建议检查 OpenClaw 网关 API Key。</div>
+        <div class="gate-actions"><button class="btn approve sm" onclick="doneGate('g3')">↻ 立即重试</button><button class="btn ghost sm">查看 run 账本</button></div>
+        <span class="stamp">✓ 已重试 — 排队执行</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="v-refl">
+    <div class="panel">
+      <h2>🌙 反思候选 <span class="count">queued 205 条 → 聚合 5 张卡</span></h2>
+      <div id="refl-list"></div>
+    </div>
+  </div>
+
+  <div class="view" id="v-create">
+    <div class="panel">
+      <h2>选择任务类型</h2>
+      <div class="type-cards">
+        <div class="tcard" onclick="openEditor({type:'push',create:true})">
+          <span class="ic">⏰</span><b>定时推送</b>
+          <small>定时把消息 / JQL 报表推送到 Glip</small>
+          <div class="lanes">调度器：🏠 / ☁️ 可选</div>
+        </div>
+        <div class="tcard" onclick="openEditor({type:'agent',create:true})">
+          <span class="ic">🤖</span><b>Agent 任务</b>
+          <small>让 agent 定期执行外部操作（查/改 Jira 等）</small>
+          <div class="lanes">触发：🏠 / ☁️ 可选 · 执行：memory-service</div>
+        </div>
+        <div class="tcard" onclick="openEditor({type:'remind',create:true})">
+          <span class="ic">⏳</span><b>稍后提醒</b>
+          <small>把一条消息 / 网页放到指定时间提醒自己</small>
+          <div class="lanes">调度器：🏠 固定</div>
+        </div>
+        <div class="tcard" onclick="openEditor({type:'dev',create:true})">
+          <span class="ic">🛠</span><b>开发委派</b>
+          <small>定稿的开发 / 调研工作单，交给 coding agent</small>
+          <div class="lanes">调度器：🏠 固定 · plan gate 默认开</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="v-setup">
+    <div class="panel">
+      <h2>🚀 初始化 <span class="count" id="setup-sub"></span></h2>
+      <div id="wizard"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <div class="m-head">
+      <span id="m-badge" class="b ai">定时推送</span>
+      <span class="m-title" id="m-title">编辑任务</span>
+      <span class="m-x" onclick="closeEd()">✕</span>
+    </div>
+    <div class="m-body" id="m-body"></div>
+    <div class="m-foot">
+      <span class="sync-hint" id="m-sync"></span>
+      <button class="btn ghost" onclick="closeEd()">取消</button>
+      <button class="btn primary" onclick="saveEd()">保存</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ================= state ================= */
+let scenario = 'legacy';                       // 'new' = 仅 L0；'legacy' = L0+L1+L2
+const newUserState = { l1: false, l2: false }; // 新用户可通过向导点亮
+const env = () => scenario === 'legacy' ? { l1: true, l2: true } : { l1: newUserState.l1, l2: newUserState.l2 };
+let curFilter = 'all';
+let ed = null;
+
+const $ = (id) => document.getElementById(id);
+const B = { ai:'AI 报表', jira:'Jira 规则', agent:'AgentTask', bot:'Bot', asme:'AsMe', remind:'稍后提醒', dev:'开发委派', push:'定时推送', refl:'反思' };
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 3400); }
+
+/* ================= 任务数据（存量=真实 Sheet 导出）================= */
+const LEGACY = [
+  { g:'今天已执行 · 08-28 周五', rows:[
+    { t:'08:00', m:'jira', kind:'push', lane:'cloud', title:'[Esone] AI analyze release bugs', st:'ok', stt:'✓', ed:{ method:'jira', content:'（Jira Automation 规则内置 JQL）', target:'', rep:'daily', time:'08:00', jiraRule:true } },
+    { t:'08:02', m:'ai', kind:'push', lane:'cloud', title:'快看看！这些新建来的 bug 没 Assignee', st:'ok', stt:'✓', ed:{ method:'ai', content:'project in (mThor) AND issuetype = Bug AND "Vertical Track" in (Video, webinar) AND ... AND assignee is null', target:'54490570758', rep:'daily', time:'08:02' } },
+    { t:'08:28', m:'jira', kind:'push', lane:'cloud', title:'[Esone] AI notify daily report from Pep', st:'ok', stt:'✓', ed:{ method:'jira', content:'（规则内置）', target:'', rep:'weekly', time:'08:28', jiraRule:true } },
+    { t:'08:55', m:'ai', kind:'push', lane:'cloud', title:'每天查找 SDK 新建无 Assignee ticket', st:'ok', stt:'✓', ed:{ method:'ai', content:'project=rcvsdk and assignee is null and created > startOfDay(-1) and filter=define-reporter-is-not-rcvsdk', target:'160731095046', rep:'daily', time:'08:55' } },
+    { t:'13:30', m:'jira', kind:'push', lane:'cloud', title:'[Esone] Nova Initiative Missing Epics', st:'ok', stt:'✓', ed:{ method:'jira', content:'（规则内置）', target:'', rep:'daily', time:'13:30', jiraRule:true } },
+    { t:'14:41', m:'agent', kind:'agent', lane:'cloud', title:'Nova 缺少 Assignee 的 INIT', st:'ok', stt:'✓ 设置 4 个', ed:{ task:'用下方 JQL 查询当前季度匹配的 INIT，并将每个 issue 的 assignee 设置为其 Request owner（customfield_21662）。\n\nJQL：project = INIT AND filter=define-team-is-nova-teams AND "Target Delivery Quarter" in (2026-Q3) AND issuetype = Initiative AND status not in (Cancelled) and assignee is EMPTY', mode:'write', exec:'openclaw-gateway', target:'164506140678', receipt:false, rep:'daily', time:'14:41' } },
+    { t:'15:01', m:'ai', kind:'push', lane:'cloud', title:'Nova 没加 Team 的 INIT', st:'ok', stt:'✓', ed:{ method:'ai', content:'filter=153978 AND status not in (Cancelled) and Committed != No and cf[17553] is empty', target:'164506140678', rep:'daily', time:'15:00' } },
+  ]},
+  { g:'今天待执行', rows:[
+    { t:'17:30', m:'agent', kind:'agent', lane:'cloud', title:'Nova 缺少 Team 的 Epics', st:'wait', stt:'queued', ed:{ task:'查找如下 JQL，然后读取每张 Epic 的 parent link 指向的 INIT issue，读取 INIT 的 assignee\n\nissueFunction in portfolioChildrenOf(\'filter=153978\') and issuetype = Epic and status not in (Cancelled) and project=NOVA and cf[17553] is EMPTY', mode:'read', exec:'openclaw-gateway', target:'164506140678', receipt:true, rep:'daily', time:'17:30' } },
+    { t:'19:00', m:'agent', kind:'agent', lane:'cloud', title:'Nova 缺少 Team 的 Epics（自动填入 INIT）', st:'wait', stt:'queued', ed:{ task:'查找一下 Epics，读取其 parent link 的 INIT 如果有且只有一个 Team，则设置下列 Epic 为 INIT 同一个 Team 值\n\nissueFunction in portfolioChildrenOf(\'filter=153978\') and issuetype = Epic and status not in (Cancelled) and project=NOVA and cf[17553] is EMPTY', mode:'write', exec:'openclaw-gateway', target:'1589731221506', receipt:true, rep:'daily', time:'19:00' } },
+    { t:'20:00', m:'agent', kind:'agent', lane:'cloud', title:'Nova Committed 的 INIT 同步 Epic Commit=Yes', st:'wait', stt:'queued', ed:{ task:'找到如下 JQL，并对所有匹配 issue，将 Committed 字段(customfield_31650) 更新为 {"value":"Yes"}…', mode:'write', exec:'openclaw-gateway', target:'164506140678', receipt:false, rep:'daily', time:'20:00' } },
+  ]},
+  { g:'个人（🏠 memory_cron）', rows:[
+    { t:'19:00', m:'remind', kind:'remind', lane:'home', title:'回复 Kenny 的 API review 请求', st:'wait', stt:'今晚', ed:{ quote:'Kenny Hu: 那个 recall API 的分页参数你看下我这样改行不行？', src:'Glip · AI Enablement 群 · 今天 11:32', when:'今晚 19:00', channel:'plugin' } },
+    { t:'—', m:'dev', kind:'dev', lane:'home', title:'worker lease 心跳续租', st:'rev', stt:'plan 待批准', ed:{ spec:'AgentWorkerService 增加 lease renew；worker 心跳携带续租；>5min 任务 report 不再 409。', accept:'一个 30 分钟任务在远程 worker 跑完 report 返回 200', exec:'acp-claude-code', cwd:'~/git/personal-ai', gate:true, dep:'' } },
+    { t:'—', m:'dev', kind:'dev', lane:'home', title:'修复 usage-analytics 对账时区偏移', st:'rev', stt:'PR 待 review', ed:{ spec:'对账脚本按 Asia/Shanghai 计算日界，UTC 环境下漂移一天。', accept:'对账脚本在 Asia/Shanghai 与 UTC 环境输出一致，新增时区用例通过', exec:'acp-codex', cwd:'worker mac-mini · ~/git/personal-ai', gate:true, dep:'' } },
+  ]},
+  { g:'本周之后（recurring 摘要）', dim:true, rows:[
+    { t:'一 09:28', m:'bot', kind:'push', lane:'cloud', title:'weekly slide 提醒编辑', st:'wait', stt:'08-31', ed:{ method:'bot', content:'`slide可以进会前更新下`\n@Team 收集下今天大家有什么要讨论的topic？\n@esone.qiu @fred.gu @nasen.you @jia.zhang', target:'110560968710', rep:'weekly', time:'09:28', channel:'group' } },
+    { t:'一 09:40', m:'ai', kind:'push', lane:'cloud', title:'PEP report - mobile', st:'wait', stt:'08-31', ed:{ method:'ai', content:'project = MTR and issuetype in ("User Story", Improvement, "Technical task", Bug) and filter=define-team-is-video-mobile ...', target:'1497300893698', rep:'weekly', time:'09:40' } },
+    { t:'一 14:58', m:'ai', kind:'push', lane:'cloud', title:'Nova 需要给评估的 INIT', st:'wait', stt:'08-31', ed:{ method:'ai', content:'project = INIT AND filter=define-team-is-nova-teams AND "Target Delivery Quarter" in (2026-Q3) ...', target:'146265923590', rep:'monthly', time:'14:58' } },
+    { t:'三 15:00', m:'ai', kind:'push', lane:'cloud', title:'Nova No committed INIT - PM', st:'wait', stt:'09-02', ed:{ method:'ai', content:'filter=153978 and Committed = No and "Primary category" in ("PM - ...")', target:'164506140678', rep:'weekly', time:'15:00' } },
+    { t:'15日', m:'ai', kind:'push', lane:'cloud', title:'15号 idea（Scrum Master ideas 提醒）', st:'wait', stt:'09-15', ed:{ method:'ai', content:'key=MTR-1', target:'35165069318', rep:'monthly', time:'11:20' } },
+    { t:'FF 0', m:'ai', kind:'push', lane:'cloud', title:'今天FF（Timeline 待命）', st:'wait', stt:'待命', ed:{ method:'ai', content:'filter=130387', target:'54490570758', rep:'timeline', time:'', tlProject:'mThor', tlMilestone:'FF', tlOffset:'0' } },
+    { t:'Emb 0', m:'ai', kind:'push', lane:'cloud', title:'Nova 缺少评估的 Epics（Timeline 待命）', st:'wait', stt:'待命', ed:{ method:'ai', content:'issueFunction in portfolioChildrenOf(...) and "DEV Estimate" is EMPTY', target:'164506140678', rep:'timeline', time:'', tlProject:'Nova', tlMilestone:'Embedded', tlOffset:'0' } },
+  ]},
+  { g:'已暂停', dim:true, rows:[
+    { t:'—', m:'jira', kind:'push', lane:'cloud', paused:true, title:'[Esone] DF notify weekly', st:'paused', stt:'paused', ed:{ method:'jira', content:'（规则内置）', target:'', rep:'weekly', time:'08:25', jiraRule:true } },
+    { t:'—', m:'agent', kind:'agent', lane:'cloud', paused:true, title:'Nova 自动关闭 Epics 全 closed 的 INIT', st:'paused', stt:'paused', ed:{ task:'查找如下 JQL…把有 Epics 且全为 closed 的 INIT move 成 closed', mode:'write', exec:'openclaw-gateway', target:'164506140678', receipt:true, rep:'monthly', time:'13:35' } },
+  ]},
+];
+const FRESH = [
+  { g:'我的任务（仅 L0 · 全部 🏠 memory_cron）', rows:[
+    { t:'19:00', m:'remind', kind:'remind', lane:'home', title:'回复 Kenny 的 API review 请求', st:'wait', stt:'今晚', ed:{ quote:'Kenny Hu: 那个 recall API 的分页参数你看下我这样改行不行？', src:'Glip · AI Enablement 群 · 今天 11:32', when:'今晚 19:00', channel:'plugin' } },
+    { t:'每天 18:00', m:'push', kind:'push', lane:'home', title:'整理今日 memory 收件箱（定时任务）', st:'wait', stt:'今天', ed:{ method:'bot', content:'去 memory-exploring 清一遍今日捕获的记忆', target:'', rep:'daily', time:'18:00', channel:'plugin' } },
+    { t:'—', m:'dev', kind:'dev', lane:'home', title:'sqlite-vec vs LanceDB 检索延迟对比', st:'run', stt:'running', ed:{ spec:'对比两者在 384 维 55MB 库上的检索延迟。', accept:'p50/p95 对比数据 + 迁移成本结论，输出 md 报告', exec:'acp-claude-code', cwd:'~/git/personal-ai', gate:true, dep:'' } },
+  ]},
+];
+
+/* ================= list ================= */
+function renderList() {
+  const data = scenario === 'legacy' ? LEGACY : FRESH;
+  $('list-title').textContent = scenario === 'legacy'
+    ? '执行时间轴 · 存量 ☁️ 37 条 + 个人 🏠'
+    : '执行时间轴 · 仅 L0 也能创建定时任务（全部 🏠 调度）';
+  $('tl').innerHTML = data.map((gr, gi) => {
+    const rows = gr.rows.filter(r => {
+      if (curFilter === 'all') return true;
+      if (curFilter === 'paused') return r.paused;
+      return r.kind === curFilter && !r.paused;
+    });
+    if (!rows.length) return '';
+    return `<div class="tl-head">${gr.g}<span class="c">${rows.length} 条</span></div>` +
+      rows.map(r => `
+        <div class="row${gr.dim ? ' dim' : ''}" onclick="editRow(${gi},${gr.rows.indexOf(r)})">
+          <span class="t">${r.t}</span>
+          <span class="b ${r.m}">${B[r.m]}</span>
+          <span class="lane-ic">${r.lane === 'cloud' ? '☁️' : '🏠'}</span>
+          <span class="title">${r.title}</span>
+          <span class="edit-ic">✎ 编辑</span>
+          <span class="st ${r.st}">${r.stt}</span>
+        </div>`).join('');
+  }).join('');
+}
+function setFilter(btn) {
+  document.querySelectorAll('#filter-chips .chip').forEach(c => c.classList.remove('on'));
+  btn.classList.add('on'); curFilter = btn.dataset.f; renderList();
+}
+function editRow(gi, ri) {
+  const data = scenario === 'legacy' ? LEGACY : FRESH;
+  const r = data[gi].rows[ri];
+  openEditor({ type: r.kind, create: false, title: r.title, lane: r.lane, ...r.ed });
+}
+
+/* ================= reflection ================= */
+const REFL = [
+  { t:'「部署检查不稳定的判定标准」写入记忆', n:'×35 → 5 主题', bad:true },
+  { t:'MTR-144628 查证系列', n:'×18 → 3 事项', bad:true },
+  { t:'外部查询候选（query_external_tool）', n:'×62 → 23 主题', bad:false },
+  { t:'通知候选（notify_user）', n:'×87 → 37 主题', bad:false },
+  { t:'外呼候选：确认 Jira 工单最新信息', n:'×1', bad:false },
+];
+$('refl-list').innerHTML = REFL.map((r, i) => `
+  <div class="agg">
+    <div class="agg-top">
+      <span class="b refl">反思</span>
+      <span class="agg-title">${r.t}</span>
+      <span class="xn ${r.bad ? '' : 'mild'}">${r.n}</span>
+      <button class="btn sm approve" onclick="promoteRefl(${i})">↗ 转正为任务</button>
+      <button class="btn sm ghost" onclick="this.closest('.agg').style.opacity=.35;toast('已整批清理该主题候选')">清理</button>
+    </div>
+  </div>`).join('');
+function promoteRefl(i) {
+  if (i === 1 || i === 4) {
+    openEditor({ type:'agent', create:true, title:'查证 MTR-144628 最终状态', task:'只读查询 MTR-144628 的最终标题与状态，回填对应记忆。', mode:'read', exec:'openclaw-gateway', target:'', receipt:true, rep:'once', time:'' });
+  } else {
+    openEditor({ type:'dev', create:true, title: REFL[i].t.replace(/（.*）/, ''), spec:'（由反思候选转正，自动带入证据链）', accept:'', exec:'acp-claude-code', cwd:'~/git/personal-ai', gate:true, dep:'' });
+  }
+}
+
+/* ================= editor ================= */
+function hashCode(s){let h=0;for(let i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0}return h}
+function setLane(l) { ed.lane = l; renderEditor(); }
+function setEd(k, v) { ed[k] = v; renderEditor(); }
+
+function laneBlock(allowCloud, locked, lockReason) {
+  const e = env();
+  if (locked) {
+    return `<div class="fg"><label>调度器</label>
+      <div class="segline"><button class="opt on" type="button">🏠 memory_cron<small>本地到期队列 · 秒级</small></button></div>
+      <div class="lane-note locked">🔒 ${lockReason}</div></div>`;
+  }
+  const cloudOk = e.l2;
+  const isCloud = ed.lane === 'cloud' && cloudOk;
+  return `<div class="fg"><label>调度器</label>
+    <div class="segline">
+      <button class="opt ${!isCloud ? 'on' : ''}" type="button" onclick="setLane('home')">🏠 memory_cron<small>本地到期队列 · 秒级入队</small></button>
+      <button class="opt ${isCloud ? 'on' : ''} ${cloudOk ? '' : 'off'}" type="button" ${cloudOk ? `onclick="setLane('cloud')"` : ''}>☁️ jira_sheet<small>${cloudOk ? 'Jira Automation 云端触发 · 24/7' : '未启用 Level 2'}</small></button>
+    </div>
+    ${isCloud
+      ? `<div class="lane-note cloud">☁️ 保存后自动同步到 Google Sheet${ed.create ? '（新建行）' : '（行 msg_' + String(Math.abs(hashCode(ed.title || 'new'))).slice(0, 10) + '）'}，由 Jira Automation 每分钟云端领取；memory-service 宕机不影响此任务。</div>`
+      : cloudOk
+        ? `<div class="lane-note home">🏠 由 memory-service 调度。切到 ☁️ 会创建 Sheet 镜像行交给 Jira 调度。</div>`
+        : `<div class="lane-note blocked">☁️ 需要 Level 2（Google Sheet + Jira Automation）。<span class="lk" onclick="closeEd();gotoSetup()">去启用 →</span> 现在保存将使用 🏠 调度，之后可随时切换。</div>`}
+  </div>`;
+}
+
+function channelBlock() {
+  const e = env();
+  const ch = ed.channel || (e.l1 ? 'bot' : 'plugin');
+  ed.channel = ch;
+  return `<div class="fg"><label>通知通道</label>
+    <div class="segline">
+      <button class="opt ${ch === 'plugin' ? 'on' : ''}" type="button" onclick="setEd('channel','plugin')">🔔 插件通知<small>Chrome 通知 · 零配置</small></button>
+      <button class="opt ${ch === 'bot' ? 'on' : ''} ${e.l1 ? '' : 'off'}" type="button" ${e.l1 ? `onclick="setEd('channel','bot')"` : ''}>🤖 Glip Bot 私发<small>${e.l1 ? 'SM AI 机器人' : '需 Level 1'}</small></button>
+      <button class="opt ${ch === 'group' ? 'on' : ''} ${e.l1 ? '' : 'off'}" type="button" ${e.l1 ? `onclick="setEd('channel','group')"` : ''}>👥 Glip 群组<small>${e.l1 ? '需 Bot 在群' : '需 Level 1'}</small></button>
+    </div>
+    ${e.l1 ? '' : '<div class="lane-note blocked">Glip 通道需要 Level 1（Bot 凭据）。<span class="lk" onclick="closeEd();gotoSetup()">去配置 →</span></div>'}
+  </div>`;
+}
+
+function repBlock() {
+  const rep = ed.rep || 'daily';
+  return `<div class="inline-fields">
+    <div class="fg"><label>重复规则</label>
+      <select onchange="setEd('rep',this.value)">
+        <option value="once" ${rep === 'once' ? 'selected' : ''}>一次性</option>
+        <option value="daily" ${rep === 'daily' ? 'selected' : ''}>每天</option>
+        <option value="weekly" ${rep === 'weekly' ? 'selected' : ''}>每周</option>
+        <option value="monthly" ${rep === 'monthly' ? 'selected' : ''}>每月</option>
+        <option value="timeline" ${rep === 'timeline' ? 'selected' : ''}>Timeline 里程碑</option>
+      </select></div>
+    ${rep === 'timeline'
+      ? `<div class="fg"><label>项目</label><select><option>${ed.tlProject || 'mThor'}</option><option>Nova</option></select></div>
+         <div class="fg"><label>里程碑</label><select><option>${ed.tlMilestone || 'FF'}</option><option>CF</option><option>Embedded</option><option>Regression</option></select></div>
+         <div class="fg"><label>偏移(天)</label><input type="text" value="${ed.tlOffset || '0'}"></div>`
+      : `<div class="fg"><label>时间</label><input type="text" value="${ed.time || '09:00'}" placeholder="HH:mm"></div>`}
+  </div>`;
+}
+
+const EDITORS = {
+  push() {
+    return `
+      ${ed.jiraRule ? `<div class="quote">🔗 此任务关联 Jira Automation 规则（内容与触发都在 Jira 侧维护）<small>可编辑：暂停/恢复、通知目标；规则本体去 Jira 修改</small></div><div style="height:.7rem"></div>` : ''}
+      <div class="fg"><label>标题</label><input type="text" id="f-title" value="${ed.title || ''}" placeholder="例如：每天检查无 Assignee 的新 bug"></div>
+      <div class="fg"><label>内容 / JQL</label><textarea rows="4" ${ed.jiraRule ? 'disabled' : ''}>${ed.content || ''}</textarea></div>
+      ${channelBlock()}
+      ${(ed.channel === 'group') || ed.target ? `<div class="fg"><label>群组 ID</label><input type="text" value="${ed.target || ''}" placeholder="例如 164506140678"></div>` : ''}
+      ${repBlock()}
+      ${laneBlock(true, ed.jiraRule, 'Jira 规则任务固定 ☁️（触发源就是 Jira Automation）')}`;
+  },
+  agent() {
+    const mode = ed.mode || 'read';
+    return `
+      <div class="fg"><label>标题</label><input type="text" id="f-title" value="${ed.title || ''}" placeholder="例如：Nova 缺少 Assignee 的 INIT"></div>
+      <div class="fg"><label>任务描述 <span class="req">*</span></label><textarea rows="5">${ed.task || ''}</textarea>
+        <small class="hint">只描述要做什么；回报格式由系统契约规定（零匹配也是合法成功）。</small></div>
+      <div class="fg"><label>执行边界</label>
+        <div class="segline">
+          <button class="opt ${mode === 'read' ? 'on' : ''}" type="button" onclick="setEd('mode','read')">🔍 只读查询</button>
+          <button class="opt ${mode === 'write' ? 'on' : ''}" type="button" onclick="setEd('mode','write')">✍️ 允许外部写入<small>首次保存需你审批</small></button>
+        </div></div>
+      <div class="inline-fields">
+        <div class="fg"><label>执行器</label><select><option ${ed.exec === 'openclaw-gateway' ? 'selected' : ''}>openclaw-gateway</option><option ${ed.exec === 'acp-claude-code' ? 'selected' : ''}>acp-claude-code</option><option ${ed.exec === 'acp-codex' ? 'selected' : ''}>acp-codex</option></select>
+          <small class="hint">执行永远在 memory-service（🏠）；下面的调度器只决定"谁按时触发"。</small></div>
+        <div class="fg"><label>结果通知群组</label><input type="text" value="${ed.target || ''}" placeholder="群组 ID，留空则仅回执"></div>
+      </div>
+      <div class="fg"><label class="ck"><input type="checkbox" ${ed.receipt !== false ? 'checked' : ''}> 成功时也私发回执给我（失败回执始终开启）</label></div>
+      ${repBlock()}
+      ${laneBlock(true, false)}`;
+  },
+  remind() {
+    return `
+      ${ed.quote ? `<div class="fg"><label>来源</label><div class="quote">${ed.quote}<small>${ed.src || ''}</small></div></div>` : ''}
+      <div class="fg"><label>标题</label><input type="text" id="f-title" value="${ed.title || ''}" placeholder="提醒我做什么"></div>
+      <div class="fg"><label>提醒时间</label>
+        <div class="segline">
+          ${['1 小时后', '今晚 19:00', '明早 9:00', '下周一 9:00'].map(x => `<button class="opt ${ed.when === x ? 'on' : ''}" type="button" onclick="setEd('when','${x}')">${x}</button>`).join('')}
+        </div>
+        <input type="text" value="${ed.when && !['1 小时后', '今晚 19:00', '明早 9:00', '下周一 9:00'].includes(ed.when) ? ed.when : ''}" placeholder="或自定义：2026-08-29 14:00" style="margin-top:.4rem"></div>
+      ${channelBlock()}
+      ${laneBlock(false, true, '个人提醒固定本地调度（零云端配置；点掉即完成）')}`;
+  },
+  dev() {
+    return `
+      <div class="fg"><label>标题</label><input type="text" id="f-title" value="${ed.title || ''}" placeholder="一个明确方向的工作单"></div>
+      <div class="fg"><label>任务说明</label><textarea rows="3">${ed.spec || ''}</textarea></div>
+      <div class="fg"><label>验收标准 <span class="req">*</span></label><textarea rows="2" placeholder="怎样算完成？（说不清 → 先回 Codex/Claude Code 对话里聊，定稿再委派）">${ed.accept || ''}</textarea></div>
+      <div class="inline-fields">
+        <div class="fg"><label>执行器</label><select><option ${ed.exec === 'acp-claude-code' ? 'selected' : ''}>acp-claude-code</option><option ${ed.exec === 'acp-codex' ? 'selected' : ''}>acp-codex</option><option>acp-cursor</option><option>远程 worker（空闲领取）</option></select></div>
+        <div class="fg"><label>工作目录</label><input type="text" value="${ed.cwd || '~/git/personal-ai'}"></div>
+      </div>
+      <div class="fg"><label class="ck"><input type="checkbox" ${ed.gate !== false ? 'checked' : ''}> Plan gate：执行前先出计划，等我批准</label></div>
+      <div class="fg"><label>依赖任务（可选）</label>
+        <select><option ${!ed.dep ? 'selected' : ''}>无</option><option ${ed.dep ? 'selected' : ''}>worker lease 心跳续租（完成后解锁）</option><option>sqlite-vec 对比（review 通过后解锁）</option></select></div>
+      ${laneBlock(false, true, '开发委派需要 plan gate / 依赖 / 产物能力，固定 memory-service 调度')}`;
+  },
+};
+
+function openEditor(init) {
+  ed = { lane: init.lane || 'home', ...init };
+  $('m-badge').className = 'b ' + (ed.type === 'push' ? (ed.method || 'push') : ed.type);
+  $('m-badge').textContent = B[ed.type === 'push' ? (ed.method || 'push') : ed.type];
+  $('m-title').textContent = (ed.create ? '新建：' : '编辑：') + (B[ed.type] || '');
+  renderEditor();
+  $('modal').classList.add('on');
+}
+function renderEditor() {
+  $('m-body').innerHTML = EDITORS[ed.type]();
+  const e = env();
+  const cloud = ed.lane === 'cloud' && e.l2 && ed.type !== 'remind' && ed.type !== 'dev';
+  $('m-sync').textContent = cloud
+    ? '保存 → 写入账本 + 扩展同步器写 Sheet 行 → Jira Automation 调度'
+    : '保存 → 写入账本 → memory_cron 到期队列';
+}
+function closeEd() { $('modal').classList.remove('on'); }
+function saveEd() {
+  const e = env();
+  const titleEl = $('f-title');
+  const name = (titleEl && titleEl.value.trim()) || ed.title || '未命名任务';
+  const cloud = ed.lane === 'cloud' && e.l2 && ed.type !== 'remind' && ed.type !== 'dev';
+  closeEd();
+  toast(cloud
+    ? `已保存「${name}」· 已同步 Google Sheet · 由 Jira Automation 调度 ☁️`
+    : `已保存「${name}」· 已入 memory_cron 队列 🏠`);
+}
+
+/* ================= wizard ================= */
+function gotoSetup() { document.querySelector('[data-v="setup"]').click(); }
+function renderWizard() {
+  const e = env();
+  $('setup-sub').textContent = scenario === 'legacy' ? '老用户视角：检测到存量配置' : '新用户视角：分层激活';
+  if (scenario === 'legacy') {
+    $('wizard').innerHTML = `
+      <div class="detect">✅ <b>检测到存量 Jira + Google Sheet 配置</b>
+        <div class="meta">Sheet「Esone - 定时消息管理」· 37 条任务 · GAS v2.9.1 · Jira Executor Rule + Timeline Sync Rule</div>
+      </div>
+      <div class="step done"><div class="step-top"><span class="step-num">✓</span><span class="step-title">Level 0 · 任务账本</span><span class="st ok">已就绪</span></div>
+        <div class="step-body">memory-service 本地账本已可用（稍后提醒 / 反思候选 / 开发委派已可创建）。</div></div>
+      <div class="step done"><div class="step-top"><span class="step-num">✓</span><span class="step-title">Level 1 · 推送通道</span><span class="st ok">Bot 已配置</span></div></div>
+      <div class="step done"><div class="step-top"><span class="step-num">✓</span><span class="step-title">Level 2 · 云端可靠 lane</span><span class="st ok">存量自动识别</span></div>
+        <div class="step-body">原 Sheet / Jira 规则照常运行，无需迁移。</div></div>
+      <div class="step" id="adopt-step"><div class="step-top"><span class="step-num">→</span><span class="step-title">把存量任务接入账本视图</span>
+        <button class="btn primary sm" onclick="adoptLegacy(this)">一键接入</button></div>
+        <div class="step-body">37 条任务以 ☁️ lane 出现在账本列表（只读镜像同步），每条之后可在编辑器里单独切到 🏠。</div></div>`;
+  } else {
+    $('wizard').innerHTML = `
+      <div class="step done"><div class="step-top"><span class="step-num">✓</span><span class="step-title">Level 0 · 任务账本</span><span class="st ok">已自动就绪</span></div>
+        <div class="step-body">零配置。现在就可以创建全部四类任务（调度器用 🏠 memory_cron）。<button class="btn sm" style="margin-left:.4rem" onclick="document.querySelector('[data-v=create]').click()">＋ 建一个试试</button></div></div>
+      <div class="step ${e.l1 ? 'done' : ''}"><div class="step-top"><span class="step-num">${e.l1 ? '✓' : '2'}</span><span class="step-title">Level 1 · Glip 推送通道</span>
+        ${e.l1 ? '<span class="st ok">已配置</span>' : '<button class="btn sm" onclick="enableL1()">配置 Bot 凭据</button><button class="btn sm ghost">跳过</button>'}</div>
+        <div class="step-body">配置 SM AI Bot（或 AsMe）后，提醒和推送可发到 Glip；不配置则使用插件通知。</div></div>
+      <div class="step ${e.l2 ? 'done' : ''}"><div class="step-top"><span class="step-num">${e.l2 ? '✓' : '3'}</span><span class="step-title">Level 2 · 云端可靠 lane（☁️ jira_sheet）</span>
+        ${e.l2 ? '<span class="st ok">已启用</span>' : '<button class="btn sm" onclick="enableL2(this)">启用</button><button class="btn sm ghost">稍后</button>'}</div>
+        <div class="step-body">给团队推送上 24/7 云端保险：memory-service 关机也照发。需要 Google 授权 + Jira 项目 admin。</div>
+        ${e.l2 ? '' : `<div class="substeps">
+          <div class="substep" id="ss1"><span class="sd">①</span>Google 授权并创建「定时消息管理」Sheet</div>
+          <div class="substep" id="ss2"><span class="sd">②</span>部署 App Script（<span style="color:var(--amber)">受管账号域策略可能禁止匿名 Web App</span>）</div>
+          <div class="substep" id="ss3"><span class="sd">③</span>安装 Jira Automation 规则（需项目 admin 权限）</div>
+          <div class="warn-line">⚠️ 公司域被禁时的逃生舱：用个人 Google 账号部署（数据将存于个人账号，谨慎用于公司数据）。</div>
+        </div>`}</div>
+      <div class="step"><div class="step-top"><span class="step-num">∑</span><span class="step-title">当前可用调度器</span>
+        <span class="st ok">🏠 memory_cron</span>${e.l2 ? '<span class="st ok">☁️ jira_sheet</span>' : '<span class="st wait">☁️ 未启用</span>'}</div></div>`;
+  }
+}
+function enableL1() { newUserState.l1 = true; renderWizard(); toast('Bot 凭据已保存 · Glip 通道解锁'); }
+function enableL2(btn) {
+  btn.disabled = true; btn.textContent = '启用中…';
+  ['ss1', 'ss2', 'ss3'].forEach((id, i) => setTimeout(() => {
+    const el = $(id); if (el) { el.classList.add('done'); el.querySelector('.sd').textContent = '✓'; }
+    if (i === 2) { newUserState.l2 = true; renderWizard(); toast('Level 2 已启用 · 编辑器里 ☁️ 调度器已解锁'); }
+  }, 600 * (i + 1)));
+}
+function adoptLegacy(btn) {
+  btn.disabled = true;
+  $('adopt-step').classList.add('done');
+  $('adopt-step').querySelector('.step-num').textContent = '✓';
+  toast('37 条存量任务已出现在账本（☁️ lane）· 原 Sheet / Jira 照常运行');
+}
+
+/* ================= misc ================= */
+function showView(btn) {
+  document.querySelectorAll('.vtab').forEach(b => b.classList.remove('on'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
+  btn.classList.add('on'); $('v-' + btn.dataset.v).classList.add('on');
+  if (btn.dataset.v === 'setup') renderWizard();
+}
+function setScenario(s) {
+  scenario = s;
+  $('sc-new').classList.toggle('on', s === 'new');
+  $('sc-legacy').classList.toggle('on', s === 'legacy');
+  renderList(); renderWizard();
+  toast(s === 'new' ? '切换到新用户视角：仅 L0，编辑器中 ☁️ 调度器置灰' : '切换到存量用户视角：L0+L1+L2 全解锁');
+}
+function doneGate(id) {
+  $(id).classList.add('done');
+  const dot = $('inboxDot');
+  if (dot) { const n = parseInt(dot.textContent) - 1; n > 0 ? dot.textContent = n : dot.remove(); }
+}
+
+renderList(); renderWizard();
+</script>
+</body>
+</html>

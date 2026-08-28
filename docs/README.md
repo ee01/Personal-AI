@@ -20,6 +20,12 @@
 - [`google_slides_analyzer.md`](features/google_slides_analyzer.md) - Google幻灯片分析器
 - [`memory_lens.md`](features/memory_lens.md) - 网页、消息、Jira、会议上下文里的关联记忆提示
 
+### 任务与调度
+- [`task_center.md`](features/task_center.md) - **任务中心**：定时推送 / Agent 任务 / 稍后提醒 / 开发委派 / 反思候选统一账本，两条调度 lane
+  - [`scheduled_messages_manager.md`](features/scheduled_messages_manager.md) - ☁️ jira_sheet lane（Google Sheet + App Script + Jira Automation）
+  - [`agent_executor_runtime.md`](features/agent_executor_runtime.md) - 执行器运行时（OpenClaw / ACP / worker）
+- [`task_scheduler_api.md`](features/task_scheduler_api.md) - 扩展后台 Chrome alarm 调度器（与任务中心无关）
+
 ### 集成功能
 - [`jira_automation_import.md`](features/jira_automation_import.md) - Jira自动化导入
 - [`jira_design_links.md`](features/jira_design_links.md) - Jira设计链接功能

@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>任务账本 · 一周三车道旅程</title>
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+      --panel: rgba(15, 23, 42, 0.6);
+      --panel-border: rgba(148, 163, 184, 0.12);
+      --ink: #fff; --ink-secondary: #cbd5e1; --ink-muted: #94a3b8; --ink-dim: #64748b;
+      --blue: #60a5fa; --blue-bg: rgba(59,130,246,.18);
+      --purple: #a78bfa; --purple-bg: rgba(147,51,234,.18);
+      --green: #34d399; --green-bg: rgba(34,197,94,.16);
+      --amber: #fbbf24; --amber-bg: rgba(245,158,11,.14);
+      --rose: #fb7185; --rose-bg: rgba(244,63,94,.14);
+      --cyan: #22d3ee; --cyan-bg: rgba(34,211,238,.12);
+      --radius: .75rem; --radius-sm: .5rem;
+      --font: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg-gradient); color: var(--ink); min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased; padding: 1.1rem; }
+    .wrap { max-width: 1150px; margin: 0 auto; }
+
+    /* ===== narration bar ===== */
+    .nav {
+      background: linear-gradient(135deg, rgba(59,130,246,.14), rgba(147,51,234,.14));
+      border: 1px solid var(--panel-border); border-radius: var(--radius);
+      padding: .9rem 1.2rem; margin-bottom: .9rem;
+      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    }
+    .nav .story { flex: 1; min-width: 300px; }
+    .nav .day { font-size: .68rem; color: var(--blue); font-weight: 700; letter-spacing: .05em; }
+    .nav h1 { font-size: 1.02rem; margin: .1rem 0; }
+    .nav .desc { font-size: .76rem; color: var(--ink-secondary); max-width: 720px; }
+    .nav .desc b { color: var(--amber); }
+    .ctrl { display: flex; align-items: center; gap: .6rem; }
+    .btn { border: 1px solid var(--panel-border); background: var(--panel); color: var(--ink); border-radius: 999px; padding: .45rem 1.15rem; font-size: .82rem; cursor: pointer; font-family: var(--font); }
+    .btn.primary { background: var(--blue-bg); border-color: rgba(59,130,246,.5); color: var(--blue); font-weight: 700; }
+    .btn:disabled { opacity: .3; cursor: default; }
+    .dots { display: flex; gap: .3rem; }
+    .dots i { width: 7px; height: 7px; border-radius: 50%; background: rgba(148,163,184,.25); }
+    .dots i.on { background: var(--blue); }
+
+    /* ===== layout ===== */
+    .stage { display: grid; grid-template-columns: 350px 1fr; gap: 1rem; align-items: start; }
+    @media (max-width: 880px) { .stage { grid-template-columns: 1fr; } }
+
+    /* ===== phone ===== */
+    .phone {
+      background: #0a0f1c; border: 1px solid rgba(148,163,184,.25); border-radius: 2rem;
+      padding: .8rem .7rem 1rem; box-shadow: 0 8px 40px rgba(0,0,0,.5);
+      position: sticky; top: 1rem;
+    }
+    .phone .notch { width: 90px; height: 5px; border-radius: 999px; background: rgba(148,163,184,.3); margin: 0 auto .6rem; }
+    .phone .statusbar { display: flex; justify-content: space-between; font-size: .62rem; color: var(--ink-dim); padding: 0 .6rem .4rem; font-family: var(--font-mono); }
+    .chat { height: 560px; overflow-y: auto; padding: .3rem .45rem; display: flex; flex-direction: column; gap: .5rem; }
+    .daysep { text-align: center; font-size: .62rem; color: var(--ink-dim); margin: .5rem 0 .1rem; }
+    .msg { max-width: 88%; padding: .5rem .7rem; border-radius: .9rem; font-size: .76rem; line-height: 1.45; }
+    .msg.user { align-self: flex-end; background: rgba(59,130,246,.32); color: #eaf2ff; border-bottom-right-radius: .25rem; }
+    .msg.ai { align-self: flex-start; background: rgba(255,255,255,.06); color: var(--ink-secondary); border-bottom-left-radius: .25rem; border: 1px solid var(--panel-border); }
+    .msg.sys { align-self: center; background: transparent; color: var(--ink-dim); font-size: .66rem; text-align: center; }
+    .judge { display: inline-flex; align-items: center; gap: .3rem; padding: .12rem .55rem; border-radius: 999px; font-size: .64rem; font-weight: 700; margin-bottom: .3rem; }
+    .judge.fast { background: var(--green-bg); color: var(--green); }
+    .judge.slow { background: var(--amber-bg); color: var(--amber); }
+    .judge.deep { background: rgba(59,130,246,.2); color: var(--blue); }
+    .pcard { border: 1px dashed rgba(148,163,184,.3); border-radius: .5rem; padding: .45rem .55rem; margin-top: .35rem; font-size: .7rem; }
+    .pcard .k { color: var(--ink-dim); }
+    .pbtns { display: flex; gap: .4rem; margin-top: .45rem; }
+    .pbtn { border: 1px solid rgba(52,211,153,.4); background: rgba(34,197,94,.12); color: var(--green); border-radius: 999px; padding: .2rem .7rem; font-size: .68rem; font-weight: 600; }
+    .pbtn.ghost { border-color: var(--panel-border); background: transparent; color: var(--ink-dim); }
+    .pbtn.blue { border-color: rgba(59,130,246,.45); background: var(--blue-bg); color: var(--blue); }
+    .tapped { outline: 2px solid rgba(52,211,153,.5); outline-offset: 1px; }
+
+    /* ===== right panels ===== */
+    .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--radius); padding: .85rem 1rem; backdrop-filter: blur(10px); margin-bottom: .8rem; }
+    .panel h2 { font-size: .84rem; margin-bottom: .55rem; color: var(--ink-secondary); display: flex; gap: .4rem; align-items: center; }
+    .panel h2 .count { font-size: .64rem; color: var(--ink-dim); font-weight: 400; }
+    .hidden { display: none; }
+
+    .lanes3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
+    @media (max-width: 700px) { .lanes3 { grid-template-columns: 1fr; } }
+    .lane3 { border: 1px solid var(--panel-border); border-radius: var(--radius-sm); padding: .65rem .75rem; font-size: .7rem; color: var(--ink-muted); background: rgba(255,255,255,.02); }
+    .lane3 b { display: block; font-size: .8rem; margin-bottom: .2rem; }
+    .lane3.f b { color: var(--green); } .lane3.s b { color: var(--amber); } .lane3.d b { color: var(--blue); }
+    .lane3 .stat { margin-top: .35rem; font-size: .66rem; color: var(--ink-secondary); }
+
+    .row { display: flex; align-items: center; gap: .5rem; padding: .3rem .4rem; border-radius: 6px; font-size: .76rem; }
+    .row .title { flex: 1; color: var(--ink-secondary); }
+    .row .sub { font-size: .64rem; color: var(--ink-dim); }
+    .b { display: inline-flex; padding: .08rem .45rem; border-radius: 999px; font-size: .6rem; white-space: nowrap; flex-shrink: 0; }
+    .b.dev { background: var(--cyan-bg); color: var(--cyan); }
+    .b.hand { background: var(--blue-bg); color: var(--blue); }
+    .st { font-size: .6rem; padding: .08rem .5rem; border-radius: 999px; font-weight: 600; flex-shrink: 0; }
+    .st.ok { background: var(--green-bg); color: var(--green); }
+    .st.wait { background: rgba(148,163,184,.15); color: var(--ink-muted); }
+    .st.run { background: var(--blue-bg); color: var(--blue); }
+    .st.rev { background: var(--purple-bg); color: var(--purple); }
+    .flash { animation: fl 1.6s ease; }
+    @keyframes fl { 0% { background: rgba(59,130,246,.25); } 100% { background: transparent; } }
+
+    .theme { border: 1px solid var(--panel-border); border-radius: var(--radius-sm); padding: .6rem .75rem; background: rgba(255,255,255,.02); }
+    .theme.lit { border-color: rgba(52,211,153,.45); box-shadow: 0 0 16px rgba(52,211,153,.08); }
+    .theme .tt { display: flex; align-items: center; gap: .5rem; font-size: .78rem; font-weight: 600; }
+    .meter { height: 5px; border-radius: 999px; background: rgba(148,163,184,.15); margin: .45rem 0 .3rem; overflow: hidden; }
+    .meter i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--amber), var(--green)); transition: width .6s ease; }
+    .theme .miss { font-size: .68rem; color: var(--ink-dim); }
+    .frag { font-size: .68rem; color: var(--ink-muted); padding: .15rem 0 .15rem .6rem; border-left: 2px solid rgba(148,163,184,.2); margin-top: .25rem; }
+
+    .confirm { border: 1px solid rgba(96,165,250,.4); border-radius: var(--radius-sm); padding: .7rem .85rem; background: rgba(59,130,246,.05); }
+    .confirm h3 { font-size: .8rem; margin-bottom: .35rem; }
+    .as { display: flex; gap: .45rem; align-items: flex-start; font-size: .72rem; margin-top: .35rem; color: var(--ink-secondary); }
+    .as input { margin-top: .2rem; }
+    .as .src { color: var(--ink-dim); font-size: .64rem; }
+    .as.infer { color: var(--rose); }
+    .as .mini { display: inline-flex; gap: .3rem; margin-left: .4rem; }
+    .as .mini button { border: 1px solid var(--panel-border); background: transparent; color: var(--ink-muted); border-radius: 999px; padding: 0 .5rem; font-size: .62rem; cursor: pointer; }
+    .as .mini button.sel { border-color: rgba(244,63,94,.5); color: var(--rose); }
+    .approve-btn { margin-top: .55rem; }
+    .stamp { font-size: .7rem; color: var(--green); font-weight: 700; }
+
+    /* session mock */
+    .session { border: 1px solid rgba(34,211,238,.3); border-radius: var(--radius-sm); background: rgba(10,16,28,.7); padding: .7rem .85rem; font-size: .74rem; }
+    .session .shead { font-family: var(--font-mono); font-size: .66rem; color: var(--cyan); margin-bottom: .5rem; display: flex; justify-content: space-between; }
+    .srow { margin: .4rem 0; }
+    .srow .who { font-size: .62rem; font-weight: 700; color: var(--ink-dim); }
+    .srow.you .who { color: var(--blue); }
+    .srow.ai2 .who { color: var(--purple); }
+    .srow p { color: var(--ink-secondary); font-size: .72rem; }
+    .spec { border: 1px dashed rgba(52,211,153,.4); border-radius: .5rem; padding: .5rem .6rem; margin-top: .5rem; font-size: .7rem; background: rgba(34,197,94,.05); }
+    .spec b { color: var(--green); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="nav">
+    <div class="story">
+      <div class="day" id="nDay"></div>
+      <h1 id="nTitle"></h1>
+      <div class="desc" id="nDesc"></div>
+    </div>
+    <div class="ctrl">
+      <div class="dots" id="dots"></div>
+      <button class="btn" id="prevBtn" onclick="go(-1)">← 上一步</button>
+      <button class="btn primary" id="nextBtn" onclick="go(1)">下一步 →</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <!-- ===== phone ===== -->
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="statusbar"><span id="phTime">18:30</span><span>Personal AI</span><span>🔋</span></div>
+      <div class="chat" id="chat"></div>
+    </div>
+
+    <!-- ===== right ===== -->
+    <div>
+      <div class="panel" id="pLanes">
+        <h2>三车道 <span class="count">一个账本，三种进门方式——按需求的成熟度分流，不按流程</span></h2>
+        <div class="lanes3">
+          <div class="lane3 f"><b>🚀 快车道</b>一句话说得清验收标准 → 直接进账本<div class="stat" id="statF"></div></div>
+          <div class="lane3 s"><b>💡 慢车道</b>想法说不全 → 收集箱攒着，AI 聚类合成<div class="stat" id="statS"></div></div>
+          <div class="lane3 d"><b>🌊 深水道</b>目标本身未定 → 会话来回讨论，定稿 handoff<div class="stat" id="statD"></div></div>
+        </div>
+      </div>
+
+      <div class="panel" id="pIntent">
+        <h2>💡 意图收集箱 <span class="count">慢车道 · 不催你、不自动执行</span></h2>
+        <div class="theme" id="themeCard">
+          <div class="tt">主题：依赖阻塞的可视化与提醒 <span class="st wait" id="themeSt">积累中</span></div>
+          <div class="meter"><i id="themeBar" style="width:0%"></i></div>
+          <div class="miss" id="themeMiss"></div>
+          <div id="themeFrags"></div>
+        </div>
+      </div>
+
+      <div class="panel" id="pConfirm">
+        <h2>📥 收件箱 · 方案确认 <span class="count">结构化确认，不是放行按钮</span></h2>
+        <div class="confirm" id="confirmCard">
+          <h3>📋 依赖阻塞的可视化与提醒 <span style="font-size:.64rem;color:var(--ink-dim)">（🌙 昨夜由 3 个碎片合成 · 附可点 demo：dep-block-demo.html）</span></h3>
+          <div style="font-size:.7rem;color:var(--ink-muted)">拆分为 3 个任务：①账本任务行显示"被谁挡住"（依赖①）→ ②阻塞详情含负责人 → ③阻塞超 3 天 Bot 私发提醒。逐条确认假设——<b style="color:var(--rose)">AI 补的已标红</b>：</div>
+          <label class="as"><input type="checkbox" class="ck" onchange="ckChange()"/><span>阻塞行显示挡路任务与其负责人 <span class="src">溯源：你周二 09:30 的原话</span></span></label>
+          <label class="as"><input type="checkbox" class="ck" onchange="ckChange()"/><span>阻塞超过 3 天 → Bot 私发提醒 <span class="src">溯源：你周三 08:15 的原话</span></span></label>
+          <div class="as infer">⚠<span>AI 推断：同时自动通知<b>被依赖任务的负责人</b>——来自 AI 周二的追问，你当时没回答
+            <span class="mini"><button id="adoptBtn" onclick="pick('adopt')">采纳</button><button id="dropBtn" onclick="pick('drop')">去掉</button></span></span></div>
+          <div class="approve-btn">
+            <button class="btn primary" id="okBtn" disabled onclick="approveB()">✓ 批准 → 3 个任务入账本</button>
+            <span class="stamp hidden" id="okStamp">✓ 已入账（AI 推断项已按你的选择处理）</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="pSession">
+        <h2>🌊 深水道 <span class="count">不在账本界面里——就是你现在的 Claude Code / Codex 会话</span></h2>
+        <div class="session">
+          <div class="shead"><span>claude · ~/git/personal-ai · 会话 #recall-quality</span><span>12 分钟 · 4 轮</span></div>
+          <div class="srow you"><div class="who">你</div><p>recall 有时候召回一堆不相关的旧记忆，我觉得整个召回架构可能要重想。先帮我看看到底是哪种坏法。</p></div>
+          <div class="srow ai2"><div class="who">CLAUDE（分析了 recall 日志与打分器）</div><p>不是架构级问题：topN 结果里 41% 来自 90 天前的低置信记忆，rerank 阶段没有时间维度。三个候选方案：①时间衰减因子 ②置信门槛 ③改双阶段检索（重）。建议 ①+②，改动最小、可 A/B。</p></div>
+          <div class="srow you"><div class="who">你</div><p>衰减会不会误伤长期有效的偏好类记忆？</p></div>
+          <div class="srow ai2"><div class="who">CLAUDE</div><p>会。所以衰减只作用于 episodic 类型，semantic/preference 豁免——这是方案里最关键的取舍，已写进 SPEC。</p></div>
+          <div class="spec"><b>📄 定稿 SPEC（讨论的产物）</b>：episodic 记忆按 90 天半衰期衰减 + 置信 &lt;0.4 出 topN 需二次确认；preference/semantic 豁免。验收：回归集 recall@10 不降、90 天前低置信记忆出现率 &lt;10%。
+            <div style="margin-top:.4rem"><button class="btn" style="font-size:.68rem;padding:.25rem .8rem" id="handoffBtn" onclick="handoff()">⇢ handoff：定稿为账本任务</button><span class="stamp hidden" id="handStamp">✓ 已交接入账本（plan gate 待批）</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="pLedger">
+        <h2>🧾 账本 <span class="count" id="ledgerCount"></span></h2>
+        <div id="ledger"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ---------------- steps ----------------
+const STEPS = [
+  { day:'开场', time:'—', title:'一周旅程：三个真实需求，三条车道', desc:'接下来 8 步走完一周：需求 A（快车道，30 秒）、需求 B（慢车道，三天三句话）、需求 C（深水道，一场 12 分钟的会话讨论）。右侧是账本的真实界面区域。' },
+  { day:'周一 18:30 · 咖啡厅', time:'18:30', title:'需求 A：一句话带着验收标准 → 🚀 快车道', desc:'你顺手在手机上说了一个想清楚了的需求。AI 检测到<b>验收标准齐全</b>，结构化回显给你确认——没有讨论，没有文档，点一下就入账。' },
+  { day:'周一 21:14 · 沙发上', time:'21:14', title:'需求 B 碎片 1：一个念头 → 💡 慢车道', desc:'这句只是个念头：没有行为定义、没有验收。AI 不追问长问卷，也不立即立项——<b>存进收集箱攒着</b>，右侧出现主题卡（35%）。' },
+  { day:'周二 09:30 · 通勤地铁', time:'09:30', title:'需求 B 碎片 2：想到哪说到哪', desc:'第二句补上了展示层的期望。主题卡涨到 60%，AI 顺势追问了一个缺口——<b>你可以不理它</b>，这不是表单。' },
+  { day:'周三 08:15 · 早餐', time:'08:15', title:'需求 B 碎片 3：够了，卡片点亮', desc:'第三句把提醒规则说清了。覆盖度 80%，卡片<b>点亮</b>——AI 只点亮不自动合成（阈值判断实测 F1 才 66%，所以保守）。你选"今晚整理"。' },
+  { day:'周三 23:41 · 你已入睡', time:'23:41', title:'sleep-time：夜里 AI 干活', desc:'夜间反思周期把 3 个碎片聚类、对照账本已有的依赖机制、合成一页方案 + 一个可点的 demo，放进收件箱。<b>没有打扰你</b>。' },
+  { day:'周四 08:30 · 晨间', time:'08:30', title:'结构化确认：AI 补的标红，你逐条处理', desc:'两条假设有你的<b>原话溯源</b>；第三条是 AI 从追问里推断的、你从没确认过——标红。勾完两条、处理掉红色那条，批准按钮才会亮。<b>试试：先把红色项选"去掉"，再勾两条，再批准。</b>' },
+  { day:'周四 10:00 · 工位', time:'10:00', title:'需求 C：目标本身没想清 → 🌊 深水道', desc:'"recall 架构可能要重想"——这种问题攒碎片攒不出答案，AI 判定转深水道：<b>就是你熟悉的 Claude Code 会话</b>，来回 4 轮把问题从"重想架构"收敛成一个小改动 SPEC。点 handoff 交回账本。' },
+  { day:'周五 · 回顾', time:'09:00', title:'一周结束：一个账本，三种进门', desc:'快车道 1 个任务（你花 30 秒）；慢车道 3 句话 → 1 方案 → 3 任务（你花 <b>3 句话 + 1 次晨间确认</b>）；深水道 1 场讨论 → 1 任务（12 分钟）。说话的成本由需求成熟度决定，不由流程决定。' },
+];
+
+// ---------------- phone messages ----------------
+const MSGS = [
+  { s:1, sep:'周一 18:30' },
+  { s:1, who:'user', h:'AgentTask 群组通知失败时是静默的，帮我修掉：投递失败要写进任务记录，并且 Bot 私发提醒我。验收：群组投递失败时我能收到提醒和失败原因。' },
+  { s:1, who:'ai', h:`<span class="judge fast">🚀 快车道 · 检测到验收标准</span><br/>识别为 well-scoped 开发任务，已结构化：
+    <div class="pcard"><span class="k">标题</span> 修复群组通知静默失败<br/><span class="k">执行器</span> acp-codex @ memory-service · 🏠 memory_cron<br/><span class="k">验收</span> Bot 投递失败 → metadata 记录 + owner 私发提醒<br/><span class="k">模式</span> write（入账后需 plan gate）</div>
+    <div class="pbtns"><span class="pbtn tapped">✓ 入账本</span><span class="pbtn ghost">先攒着</span><span class="pbtn ghost">改一下</span></div>` },
+  { s:1, who:'sys', h:'✓ 已入账本 · 30 秒，全程结束' },
+
+  { s:2, sep:'周一 21:14' },
+  { s:2, who:'user', h:'roadmap 上画的依赖线要是能真的拦住 agent 执行就好了' },
+  { s:2, who:'ai', h:`<span class="judge slow">💡 慢车道 · 想法还不完整</span><br/>听起来是个方向：缺行为定义（拦住之后呢？）和验收。<b>已存入收集箱</b>，主题「依赖阻塞」35%。不催你，想到再说。` },
+
+  { s:3, sep:'周二 09:30' },
+  { s:3, who:'user', h:'对了，被依赖挡住的任务，账本里要能看到是谁挡的' },
+  { s:3, who:'ai', h:`归入主题「依赖阻塞」→ 60%。<br/><span style="color:var(--ink-dim);font-size:.68rem">顺便问一句（可不答）：任务被阻塞时，要不要自动通知被依赖任务的负责人？</span>` },
+
+  { s:4, sep:'周三 08:15' },
+  { s:4, who:'user', h:'阻塞超过 3 天就提醒我' },
+  { s:4, who:'ai', h:`→ 80% ✨ <b>主题已可整理</b>。今晚睡眠期整理成方案，还是现在就整理？<div class="pbtns"><span class="pbtn tapped">🌙 今晚</span><span class="pbtn ghost">现在整理</span></div>` },
+
+  { s:5, sep:'周三 23:41' },
+  { s:5, who:'sys', h:'🌙 后台：聚类 3 碎片 → 检索账本依赖机制 → 合成方案 + demo → 放入收件箱。你在睡觉。' },
+
+  { s:6, sep:'周四 08:30' },
+  { s:6, who:'sys', h:'📥 早安。收件箱有 1 份方案待确认（右侧 →）' },
+
+  { s:7, sep:'周四 10:00' },
+  { s:7, who:'user', h:'recall 有时候召回一堆不相关的旧记忆，我觉得整个召回架构可能要重想' },
+  { s:7, who:'ai', h:`<span class="judge deep">🌊 深水道 · 目标本身未定</span><br/>这不是攒碎片能收敛的——"要不要重想"本身就是问题。建议开会话讨论（我把 recall 日志和相关代码上下文带过去）。<div class="pbtns"><span class="pbtn blue tapped">开会话讨论 →</span><span class="pbtn ghost">先攒着</span></div>` },
+  { s:7, who:'sys', h:'⇢ 已打开 Claude Code 会话（右侧 →）· 讨论发生在会话里，不在账本里' },
+
+  { s:8, sep:'周五 09:00' },
+  { s:8, who:'sys', h:'本周输入总量：1 个完整需求 + 3 句碎片 + 1 场讨论 + 1 次晨间确认 = 5 个任务进入执行' },
+];
+
+// ---------------- ledger tasks ----------------
+function ledgerRows(s, approved, handed) {
+  const rows = [];
+  if (s >= 1) rows.push({ ap:1, b:'dev', t:'修复群组通知静默失败', sub:'🚀 快车道 · acp-codex', st: s>=5 ? ['ok','done ✓ PR'] : s>=3 ? ['run','running'] : ['rev','plan gate'] });
+  if (s > 6 || approved) {
+    rows.push({ ap:6, b:'dev', t:'① 账本任务行显示"被谁挡住"', sub:'💡 慢车道合成 · 依赖：无', st:['wait','queued'] });
+    rows.push({ ap:6, b:'dev', t:'② 阻塞详情含挡路任务负责人', sub:'💡 依赖：①', st:['wait','blocked→①'] });
+    rows.push({ ap:6, b:'dev', t:'③ 阻塞超 3 天 Bot 私发提醒', sub:'💡 依赖：① · AI 推断项已按你选择去掉', st:['wait','blocked→①'] });
+  }
+  if (s > 7 || handed) rows.push({ ap:7, b:'hand', t:'recall：episodic 时间衰减 + 置信门槛', sub:'🌊 会话交接 · SPEC 已定稿 · preference 豁免', st:['rev','plan gate'] });
+  return rows;
+}
+
+// ---------------- state ----------------
+let step = 0;
+let approvedB = false, handed = false, inferPicked = false;
+
+function render() {
+  const S = STEPS[step];
+  $('nDay').textContent = S.day;
+  $('nTitle').textContent = S.title;
+  $('nDesc').innerHTML = S.desc;
+  $('phTime').textContent = S.time;
+  $('prevBtn').disabled = step === 0;
+  $('nextBtn').disabled = step === STEPS.length - 1;
+  $('nextBtn').textContent = step === STEPS.length - 1 ? '旅程结束' : '下一步 →';
+  $('dots').innerHTML = STEPS.map((_, i) => `<i class="${i <= step ? 'on' : ''}"></i>`).join('');
+
+  // phone
+  $('chat').innerHTML = MSGS.filter(m => m.s <= step).map(m =>
+    m.sep ? `<div class="daysep">— ${m.sep} —</div>`
+          : `<div class="msg ${m.who}" ${m.s === step ? 'data-new="1"' : ''}>${m.h}</div>`
+  ).join('');
+  $('chat').scrollTop = $('chat').scrollHeight;
+
+  // lanes overview: show at start & end
+  $('pLanes').classList.toggle('hidden', !(step === 0 || step === 8));
+  $('statF').innerHTML = step === 8 ? '本周 1 个 · 你的成本：30 秒' : '';
+  $('statS').innerHTML = step === 8 ? '3 碎片 → 1 方案 → 3 任务 · 成本：3 句话 + 1 次确认' : '';
+  $('statD').innerHTML = step === 8 ? '1 场讨论 → 1 SPEC → 1 任务 · 成本：12 分钟' : '';
+
+  // intent inbox
+  const showIntent = step >= 2 && step <= 6;
+  $('pIntent').classList.toggle('hidden', !showIntent);
+  if (showIntent) {
+    const cov = step === 2 ? 35 : step === 3 ? 60 : 80;
+    const done = step === 6 && approvedB;
+    $('themeBar').style.width = (done ? 100 : cov) + '%';
+    $('themeSt').className = 'st ' + (done ? 'ok' : step >= 4 ? 'ok' : 'wait');
+    $('themeSt').textContent = done ? '已转方案 ✓' : step >= 4 ? '✨ 已可整理' : '积累中';
+    $('themeCard').classList.toggle('lit', step >= 4 && !done);
+    $('themeMiss').textContent = done ? '' : step === 2 ? '还缺：行为定义、展示方式、验收标准' : step === 3 ? '还缺：提醒/升级规则（AI 已追问，可不答）' : step >= 4 ? 'AI 判断已够整理；仍未确认：是否通知被依赖方（将作为推断项标红）' : '';
+    const frags = [
+      { s:2, t:'周一 21:14 手机：「依赖线要能真的拦住 agent 执行」' },
+      { s:3, t:'周二 09:30 Glip：「要能看到是谁挡的」' },
+      { s:4, t:'周三 08:15 手机：「阻塞超过 3 天就提醒我」' },
+    ];
+    $('themeFrags').innerHTML = frags.filter(f => f.s <= step).map(f => `<div class="frag">${f.t}</div>`).join('');
+  }
+
+  // confirm box
+  $('pConfirm').classList.toggle('hidden', !(step === 5 || step === 6));
+  if (step === 5) { $('confirmCard').style.opacity = .55; $('confirmCard').style.pointerEvents = 'none'; }
+  if (step === 6) { $('confirmCard').style.opacity = 1; $('confirmCard').style.pointerEvents = 'auto'; }
+
+  // session
+  $('pSession').classList.toggle('hidden', step !== 7);
+
+  // ledger
+  const rows = ledgerRows(step, approvedB, handed);
+  $('ledgerCount').textContent = rows.length ? `${rows.length} 个任务（另有 37 条定时任务折叠）` : '（空 · 需求 A 入账后出现）';
+  $('ledger').innerHTML = rows.length ? rows.map(r =>
+    `<div class="row ${r.ap === step ? 'flash' : ''}"><span class="b ${r.b}">${r.b === 'hand' ? '会话交接' : '开发'}</span><span class="title">${r.t} <span class="sub">· ${r.sub}</span></span><span class="st ${r.st[0]}">${r.st[1]}</span></div>`
+  ).join('') : '<div style="font-size:.72rem;color:var(--ink-dim);padding:.3rem">还没有本周旅程产生的任务</div>';
+}
+
+function go(d) {
+  step = Math.max(0, Math.min(STEPS.length - 1, step + d));
+  if (step > 6) approvedB = true;   // 没手动批也自动推进剧情
+  if (step > 7) handed = true;
+  render();
+}
+
+// confirm interactions
+function pick(which) {
+  inferPicked = true;
+  $('adoptBtn').classList.toggle('sel', which === 'adopt');
+  $('dropBtn').classList.toggle('sel', which === 'drop');
+  ckChange();
+}
+function ckChange() {
+  const all = [...document.querySelectorAll('.ck')].every(c => c.checked) && inferPicked;
+  $('okBtn').disabled = !all;
+}
+function approveB() {
+  approvedB = true;
+  $('okBtn').classList.add('hidden');
+  $('okStamp').classList.remove('hidden');
+  render();
+  // keep confirm visible with stamp
+  $('pConfirm').classList.remove('hidden');
+  $('confirmCard').style.opacity = .7;
+}
+function handoff() {
+  handed = true;
+  $('handoffBtn').classList.add('hidden');
+  $('handStamp').classList.remove('hidden');
+  render();
+  $('pSession').classList.remove('hidden');
+}
+
+render();
+</script>
+</body>
+</html>
