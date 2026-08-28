@@ -149,21 +149,36 @@ function identitiesMatch(
     .some((candidate) => selfCandidates.has(candidate));
 }
 
+function compactIdentity(value?: string | null): string {
+  return normalizeIdentity(value).replace(/[^a-z0-9]/g, '');
+}
+
+function ringCentralIdentityKeys(value?: string | null): string[] {
+  const normalized = normalizeIdentity(value);
+  if (!normalized) return [];
+  const keys = new Set<string>([normalized]);
+  const withoutGlipPrefix = normalized.replace(/^glip_person\./, '');
+  if (withoutGlipPrefix) keys.add(withoutGlipPrefix);
+  const compact = compactIdentity(withoutGlipPrefix || normalized);
+  if (compact.length >= 5) keys.add(compact);
+  if (normalized.includes('@')) {
+    const local = normalized.split('@')[0];
+    keys.add(local);
+    const compactLocal = compactIdentity(local);
+    if (compactLocal.length >= 5) keys.add(compactLocal);
+  }
+  return Array.from(keys);
+}
+
 function ringCentralIdentitiesMatch(
   authorValues: Array<string | undefined>,
   selfValues: string[],
 ): boolean {
-  const authorCandidates = authorValues.map(normalizeIdentity).filter(Boolean);
-  const selfCandidates = selfValues.map(normalizeIdentity).filter(Boolean);
-  return authorCandidates.some((author) =>
-    selfCandidates.some((self) => {
-      if (author === self) return true;
-      if (/^\d+$/.test(author) && author === self) return true;
-      const selfEmailLocal = self.includes('@') ? self.split('@')[0] : '';
-      if (selfEmailLocal && author === selfEmailLocal) return true;
-      return self.length >= 5 && author.length >= 5 && author.includes(self);
-    }),
-  );
+  const selfKeys = new Set(selfValues.flatMap(ringCentralIdentityKeys));
+  if (!selfKeys.size) return false;
+  return authorValues
+    .flatMap(ringCentralIdentityKeys)
+    .some((key) => selfKeys.has(key));
 }
 
 function readJsonLocalStorage<T>(key: string, fallback: T): T {
@@ -174,6 +189,100 @@ function readJsonLocalStorage<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function readLocalStorageValue(key: string): unknown {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function collectIdentityValues(
+  add: (value?: unknown) => void,
+  value: unknown,
+  depth = 0,
+): void {
+  if (value == null || depth > 3) return;
+  if (typeof value === 'string' || typeof value === 'number') {
+    add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.slice(0, 16).forEach((item) => collectIdentityValues(add, item, depth + 1));
+    return;
+  }
+  if (typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  [
+    'displayName',
+    'email',
+    'extensionId',
+    'id',
+    'accountId',
+    'personId',
+    'contactId',
+    'glipId',
+    'extension',
+    'username',
+    'name',
+    'rcUserId',
+  ].forEach((key) => collectIdentityValues(add, record[key], depth + 1));
+}
+
+const PAI_INJECTED_UI_SELECTOR = [
+  '.pai-composer-guard',
+  '#pai-composer-guard-root',
+  '.pai-context-bubble',
+  '.pai-context-card',
+  '.pai-context-peek',
+  '.message-reaction-toolbar',
+  '.snooze-icon',
+].join(', ');
+
+export function isIgnoredComposerContextMedia(input: {
+  url?: string;
+  label?: string;
+  element?: Element | null;
+}): boolean {
+  if (input.element?.closest?.(PAI_INJECTED_UI_SELECTOR)) return true;
+  const url = (input.url || '').trim();
+  if (
+    /^(chrome-extension|chrome|moz-extension|safari-extension):/i.test(url)
+  ) {
+    return true;
+  }
+  const label = normalizeText(input.label);
+  return (
+    /^personal ai$/i.test(label) && /\/icons\/icon\d+\.png(\?|$)/i.test(url)
+  );
+}
+
+const COMPOSER_CHROME_ONLY_RE =
+  /^(improve|draft for me|send|reply|ai writer)$/i;
+
+export function sanitizeRingCentralComposerChromeText(text: string): string {
+  const normalized = normalizeText(text);
+  if (!normalized || COMPOSER_CHROME_ONLY_RE.test(normalized)) return '';
+  return normalized
+    .replace(/\s+(Improve|Draft for me)$/g, (suffix, _label, offset, source) => {
+      const before = String(source).slice(0, offset).trim();
+      if (/[.!?。！？]$/.test(before) || before.length >= 40) return '';
+      return suffix;
+    })
+    .trim();
+}
+
+export function isRingCentralComposerCard(card: HTMLElement): boolean {
+  if (card.matches?.(RINGCENTRAL_COMPOSER_SELECTOR)) return true;
+  return Boolean(card.querySelector(RINGCENTRAL_COMPOSER_SELECTOR));
 }
 
 function clip(text: string, maxLength: number): string {
@@ -353,10 +462,20 @@ function getRingCentralCurrentUserIdentifiers(doc: Document): string[] {
         ? String(value)
         : '',
     );
-    if (normalized) identifiers.add(normalized);
+    if (!normalized) return;
+    identifiers.add(normalized);
+    const withoutGlipPrefix = normalized.replace(/^GLIP_PERSON\./i, '');
+    if (withoutGlipPrefix && withoutGlipPrefix !== normalized) {
+      identifiers.add(withoutGlipPrefix);
+    }
   };
 
+  collectIdentityValues(add, readLocalStorageValue('ownExtension'));
+  collectIdentityValues(add, readLocalStorageValue('displayName'));
+  collectIdentityValues(add, readLocalStorageValue('userinfo'));
+
   const accountUD = window.localStorage.getItem('global.account.UD') || '';
+  add(accountUD);
   const sessionData = readJsonLocalStorage<unknown>(
     'global.account.ACCOUNT_SESSION_DATA_LIST',
     [],
@@ -382,14 +501,7 @@ function getRingCentralCurrentUserIdentifiers(doc: Document): string[] {
         : Boolean(record.displayName);
     });
 
-  if (accountInfo && typeof accountInfo === 'object') {
-    const record = accountInfo as Record<string, unknown>;
-    add(record.displayName);
-    add(record.email);
-    add(record.extensionId);
-    add(record.id);
-    add(record.accountId);
-  }
+  collectIdentityValues(add, accountInfo);
 
   Array.from(
     doc.querySelectorAll<HTMLElement>(
@@ -410,11 +522,30 @@ function getRingCentralCurrentUserIdentifiers(doc: Document): string[] {
 }
 
 function getMessageText(card: HTMLElement): string {
+  if (isRingCentralComposerCard(card)) return '';
   const body =
     card.querySelector<HTMLElement>('[data-name="text"]') ||
     card.querySelector<HTMLElement>('[data-name="body"]') ||
     card.querySelector<HTMLElement>('[data-test-automation-id*="message"]');
-  return clip(body?.textContent || card.textContent || '', MAX_MESSAGE_TEXT);
+  if (body) {
+    return clip(normalizeText(body.textContent || ''), MAX_MESSAGE_TEXT);
+  }
+
+  const clone = card.cloneNode(true) as HTMLElement;
+  clone
+    .querySelectorAll(
+      [
+        'button',
+        '[role="button"]',
+        RINGCENTRAL_COMPOSER_SELECTOR,
+        PAI_INJECTED_UI_SELECTOR,
+      ].join(', '),
+    )
+    .forEach((node) => node.remove());
+  return clip(
+    sanitizeRingCentralComposerChromeText(clone.textContent || ''),
+    MAX_MESSAGE_TEXT,
+  );
 }
 
 function toVisibleMessage(card: HTMLElement): VisibleMessageSnapshot | null {
@@ -495,9 +626,9 @@ function getVisibleRingCentralMainCards(doc: Document): HTMLElement[] {
     root.querySelectorAll<HTMLElement>('.conversation-card-wrapper[data-id]'),
   ).filter((card) => !replyTree?.contains(card));
 
-  return getVisibleCardsInContainer(uniqueByDataId(cards), stream).slice(
-    -MAX_VISIBLE_MESSAGES,
-  );
+  return getVisibleCardsInContainer(uniqueByDataId(cards), stream)
+    .filter((card) => !isRingCentralComposerCard(card))
+    .slice(-MAX_VISIBLE_MESSAGES);
 }
 
 function getVisibleRingCentralThreadCards(doc: Document): HTMLElement[] {
@@ -513,7 +644,9 @@ function getVisibleRingCentralThreadCards(doc: Document): HTMLElement[] {
       ),
     ),
   );
-  return getVisibleCardsInContainer(cards, replyTree).slice(-12);
+  return getVisibleCardsInContainer(cards, replyTree)
+    .filter((card) => !isRingCentralComposerCard(card))
+    .slice(-12);
 }
 
 function getRingCentralThreadRoot(
@@ -542,6 +675,7 @@ function getElementUrl(element: Element): string | undefined {
 function getRingCentralMediaContextItems(
   card: HTMLElement,
 ): ComposerContextItem[] {
+  if (isRingCentralComposerCard(card)) return [];
   const messageId = card.getAttribute('data-id') || undefined;
   const items: ComposerContextItem[] = [];
   const mediaElements = Array.from(
@@ -570,6 +704,15 @@ function getRingCentralMediaContextItems(
         '',
       160,
     );
+    if (
+      isIgnoredComposerContextMedia({
+        url,
+        label,
+        element,
+      })
+    ) {
+      continue;
+    }
     if (!label && !url) continue;
     items.push({
       type: isImage ? 'image' : 'attachment',

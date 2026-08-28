@@ -1,6 +1,6 @@
 # Assist
 
-_最后更新: 2026-08-04_
+_最后更新: 2026-08-29_
 
 > 文档路径：`docs/features/assist.md`（旧文件名 `compose_assist.md`）。产品口语与 API 仍常称 Compose Assist / `/composer/assist`；本文覆盖其下两个子模块。
 
@@ -419,7 +419,8 @@ Compose Assist 使用 `SiteContextAdapter` 把不同网站归一成 `SiteContext
 - 不读取隐藏缓存卡片。
 - 不混入打开的 thread reply tree。
 - 传入 `conversationId`、`groupId`、conversation title、visible senders。
-- 可见附件/图片只传页面已有 metadata，例如文件名、alt/title/url，不上传二进制。
+- 可见附件/图片只传页面已有 metadata，例如文件名、alt/title/url，不上传二进制。忽略 Personal AI 自己注入的 `chrome-extension://` 图标（消息工具栏 / Compose Assist icon），以及输入框卡片上的 `Improve` / `Draft for me` 等宿主按钮字。
+- 不把当前回复输入框本身当成一条 `visibleMessages` / `contextItems`。
 
 Thread 回复框：
 
@@ -430,7 +431,7 @@ Thread 回复框：
 
 自我发言识别：
 
-- adapter 会尽量从 RingCentral 本地账号信息、profile DOM、sender/avatar id 判断 `metadata.isSelf`。
+- adapter 会尽量从 RingCentral 本地账号信息、`ownExtension` / `displayName`、profile DOM、sender/avatar id 判断 `metadata.isSelf`。显示名 `Esone Qiu` 与邮箱/用户名 `esone.qiu`、以及 `GLIP_PERSON.<id>` 与纯数字 id 视为同一人。
 - 后端会检查最近上下文末尾是否已经有 owner 回复。
 - 如果 owner 已完整回复，返回 `available=false`，避免重复提示。
 - 如果 owner 已回复但可能不完整，生成内容必须是补充说明，不能重复前面已发内容。

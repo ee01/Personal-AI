@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-08-25*
+*最后更新: 2026-08-29*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -158,6 +158,7 @@
 | Draft Compose（起草助手） | Compose Assist | [assist.md](./features/assist.md) | `assistIntent=draft_compose`；focus + 空草稿；从零起草；Web AI 输出 `prompt_draft` |
 | Draft Refine（精修助手） | Compose Assist | [assist.md](./features/assist.md) | `assistIntent=draft_refine`；blur + 非空草稿；精修增强；Glip/Jira 输出 `reply_refine` 并强制预览 |
 | 回复助手来源适配 | Compose Assist | [assist.md](./features/assist.md) | RingCentral / Jira / Web AI；来源路由显示适配边界和重算口径 |
+| RingCentral 输入框上下文清洗 | Compose Assist | [assist.md](./features/assist.md) | 忽略扩展图标与 Improve/Draft for me 按钮字，不把回复框当消息；`isSelf` 对齐显示名/邮箱/`GLIP_PERSON` id |
 | 回复助手预演提醒 | Compose Assist | [rehearsal.md](./features/rehearsal.md) | `sourceTypes` 包含 `rehearsal` 时作为预演 evidence；复核态显示命中线索、提示资格和插入边界 |
 | 回复助手直接插入 | Compose Assist | [assist.md](./features/assist.md) | hover 只预览正文，点击 icon 直接插入，插入后显示约 10 秒可撤销边界 |
 | 回复助手身份投影 | Compose Assist | [assist.md](./features/assist.md) | 已实现：生成前按 scene、audience 和画像 slot 控制可说内容；manager/external 强制预览，blocked 不展示入口，原始 USER_CORE 不进入 Compose |

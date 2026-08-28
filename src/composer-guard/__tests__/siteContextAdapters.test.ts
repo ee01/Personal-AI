@@ -6,8 +6,11 @@ import {
   buildInteractionSceneSnapshot,
   buildJiraOwnerCommentLearningPayloads,
   getWebAgentSourceTypesForProvider,
+  isIgnoredComposerContextMedia,
+  isRingCentralComposerCard,
   markRingCentralSelfAuthoredMessages,
   markJiraSelfAuthoredComments,
+  sanitizeRingCentralComposerChromeText,
 } from '../siteContextAdapters.ts';
 import type { ComposerContextItem, ComposerTarget, SiteContextSnapshot } from '../types.ts';
 
@@ -84,6 +87,88 @@ test('markRingCentralSelfAuthoredMessages: marks owner messages from display nam
   assert.equal(marked[1].metadata?.authorRole, undefined);
   assert.equal(marked[2].metadata?.isSelf, false);
   assert.equal(marked[2].metadata?.authorRole, undefined);
+});
+
+test('markRingCentralSelfAuthoredMessages: matches email local, Glip person id, and compact display name', () => {
+  const ownReply: ComposerContextItem = {
+    type: 'thread_reply',
+    sender: 'Esone Qiu',
+    text: 'Absolutely, NC Switcher is a great productivity booster.',
+    metadata: {
+      authorValues: [
+        'Esone Qiu',
+        'GLIP_PERSON.17215389699',
+        '17215389699',
+      ],
+    },
+  };
+  const peerReply: ComposerContextItem = {
+    type: 'thread_reply',
+    sender: 'Venky Iyer',
+    text: 'Let’s also demo this tool',
+    metadata: {
+      authorValues: ['Venky Iyer', 'GLIP_PERSON.1384468406275', '1384468406275'],
+    },
+  };
+
+  const byEmail = markRingCentralSelfAuthoredMessages(
+    [ownReply, peerReply],
+    ['esone.qiu@ringcentral.com'],
+  );
+  assert.equal(byEmail[0].metadata?.isSelf, true);
+  assert.equal(byEmail[0].metadata?.authorRole, 'owner');
+  assert.equal(byEmail[1].metadata?.isSelf, false);
+
+  const byPersonId = markRingCentralSelfAuthoredMessages(
+    [ownReply, peerReply],
+    ['GLIP_PERSON.17215389699'],
+  );
+  assert.equal(byPersonId[0].metadata?.isSelf, true);
+  assert.equal(byPersonId[1].metadata?.isSelf, false);
+});
+
+test('isIgnoredComposerContextMedia: drops Personal AI extension icons', () => {
+  assert.equal(
+    isIgnoredComposerContextMedia({
+      url: 'chrome-extension://ekagkmjaaikfljgbkbblfkolkaemooml/icons/icon16.png',
+      label: 'Personal AI',
+    }),
+    true,
+  );
+  assert.equal(
+    isIgnoredComposerContextMedia({
+      url: 'https://nc-web-switcher.int.rclabenv.com/guide.png',
+      label: 'NC Switcher demo',
+    }),
+    false,
+  );
+});
+
+test('sanitizeRingCentralComposerChromeText: strips Improve / Draft for me chrome', () => {
+  assert.equal(
+    sanitizeRingCentralComposerChromeText(
+      '@Venky Iyer Absolutely, NC Switcher is a great productivity booster. I’ll help coordinate the demo in Weekly Sync and make sure Christophe is updated. Improve',
+    ),
+    '@Venky Iyer Absolutely, NC Switcher is a great productivity booster. I’ll help coordinate the demo in Weekly Sync and make sure Christophe is updated.',
+  );
+  assert.equal(sanitizeRingCentralComposerChromeText('Draft for me'), '');
+  assert.equal(
+    sanitizeRingCentralComposerChromeText('this will improve'),
+    'this will improve',
+  );
+});
+
+test('isRingCentralComposerCard: detects the reply editor wrapper', () => {
+  const composer = {
+    matches: (selector: string) => selector.includes('.ql-editor'),
+    querySelector: () => ({ className: 'ql-editor' }),
+  } as unknown as HTMLElement;
+  const ordinary = {
+    matches: () => false,
+    querySelector: () => null,
+  } as unknown as HTMLElement;
+  assert.equal(isRingCentralComposerCard(composer), true);
+  assert.equal(isRingCentralComposerCard(ordinary), false);
 });
 
 test('buildJiraOwnerCommentLearningPayloads: creates jira owner learning payloads only', () => {
