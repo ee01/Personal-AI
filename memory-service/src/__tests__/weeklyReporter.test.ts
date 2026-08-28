@@ -9,6 +9,7 @@ import { NotificationCenterService } from '../core/NotificationCenterService.js'
 import { UserContextManager } from '../core/UserContextManager.js';
 import { WeeklyReporter } from '../core/WeeklyReporter.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
+import { resetConfigForTests } from '../config.js';
 import { getTestDb } from './setup.js';
 
 vi.mock('../llm/LLMClient.js', async (importOriginal) => {
@@ -175,8 +176,18 @@ describe('weekly and dream digest push-now routes', () => {
   let app: FastifyInstance;
   let userContextManager: UserContextManager;
   let tempDir = '';
+  let prevApiKey: string | undefined;
 
   beforeEach(async () => {
+    // These routes are hit with only `x-user-id`, no Authorization bearer —
+    // that's the anonymous-identity path, which auth.ts intentionally
+    // rejects (401) once a service key is configured. A real API_KEY in this
+    // machine's memory-service/.env leaks in via config.ts's dotenv.config()
+    // otherwise, so neutralize it the same way the other auth-sensitive
+    // suites do (see api-agent-executors-probe.test.ts).
+    prevApiKey = process.env.API_KEY;
+    delete process.env.API_KEY;
+    resetConfigForTests();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-routes-'));
     userContextManager = new UserContextManager(tempDir);
     const result = await buildApp({ userContextManager });
@@ -240,6 +251,9 @@ Route Current Launch narrative.
     }
     vi.restoreAllMocks();
     fs.rmSync(tempDir, { recursive: true, force: true });
+    if (prevApiKey === undefined) delete process.env.API_KEY;
+    else process.env.API_KEY = prevApiKey;
+    resetConfigForTests();
   });
 
   it('passes push target none from weekly-report push-now into the reporter', async () => {
