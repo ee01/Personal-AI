@@ -3511,7 +3511,20 @@ const ScheduledMessagesManager: React.FC = () => {
         } catch (syncError: any) {
           outreachSyncError = syncError instanceof Error ? syncError : new Error(syncError?.message || '主动询问同步失败');
         }
-        
+
+        let agentTaskNotifyConfigError: Error | null = null;
+        try {
+          if (editingMessage.Push_Method === 'AgentTask' && savedMessage.Push_Method !== 'AgentTask') {
+            await deleteAgentTaskNotifyConfigMirror(editingMessage.ID);
+          } else {
+            await syncAgentTaskNotifyConfigMirror(savedMessage);
+          }
+        } catch (syncError: any) {
+          agentTaskNotifyConfigError = syncError instanceof Error
+            ? syncError
+            : new Error(syncError?.message || 'AgentTask 通知配置同步失败');
+        }
+
         // 跳过 Jira 状态同步，因为刚保存的消息状态是一致的
         await loadMessages(service, true);
         setShowAddDialog(false);
@@ -3523,6 +3536,7 @@ const ScheduledMessagesManager: React.FC = () => {
           outreachSyncError,
           agentTaskWebhookDetail,
           editingMessage.Status,
+          agentTaskNotifyConfigError,
         ));
       } else {
         // 新建模式：创建消息
@@ -3534,6 +3548,16 @@ const ScheduledMessagesManager: React.FC = () => {
         } catch (syncError: any) {
           outreachSyncError = syncError instanceof Error ? syncError : new Error(syncError?.message || '主动询问同步失败');
         }
+
+        let agentTaskNotifyConfigError: Error | null = null;
+        try {
+          await syncAgentTaskNotifyConfigMirror(savedMessage);
+        } catch (syncError: any) {
+          agentTaskNotifyConfigError = syncError instanceof Error
+            ? syncError
+            : new Error(syncError?.message || 'AgentTask 通知配置同步失败');
+        }
+
         // 跳过 Jira 状态同步，因为新建的消息不需要同步
         await loadMessages(service, true);
         setShowAddDialog(false);
@@ -3543,6 +3567,8 @@ const ScheduledMessagesManager: React.FC = () => {
           'created',
           outreachSyncError,
           agentTaskWebhookDetail,
+          undefined,
+          agentTaskNotifyConfigError,
         ));
       }
     } catch (error) {
@@ -3602,6 +3628,44 @@ const ScheduledMessagesManager: React.FC = () => {
       return true;
     } catch (error) {
       console.info('Outreach template mirror cancel unavailable, ignoring:', error);
+      return false;
+    }
+  };
+
+  // AgentTask 通知配置（通知目标/成功回执/通知身份/模板）直接注册到 memory-service，
+  // 不再依赖「Sheet -> 已部署 Apps Script -> 请求体」这条链路——那条链路只会转发
+  // 已部署脚本版本认识的字段，版本没跟上时会静默丢字段（例如 successReceipt）。
+  const syncAgentTaskNotifyConfigMirror = async (message: ScheduledMessage): Promise<void> => {
+    if (message.Push_Method !== 'AgentTask') {
+      return;
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SYNC_AGENT_TASK_NOTIFY_CONFIG',
+        data: { message },
+      });
+      if (response && response.success === false) {
+        throw new Error(response.error || 'backend unavailable');
+      }
+    } catch (error) {
+      console.warn('AgentTask notify config sync failed:', error);
+      throw error;
+    }
+  };
+
+  const deleteAgentTaskNotifyConfigMirror = async (sheetMessageId: string): Promise<boolean> => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'DELETE_AGENT_TASK_NOTIFY_CONFIG',
+        data: { sheetMessageId },
+      });
+      if (response && response.success === false) {
+        console.info('AgentTask notify config delete skipped:', response.error || 'backend unavailable');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.info('AgentTask notify config delete unavailable, ignoring:', error);
       return false;
     }
   };
@@ -3957,6 +4021,7 @@ const ScheduledMessagesManager: React.FC = () => {
     outreachSyncError?: Error | null,
     agentTaskWebhookDetail?: string,
     previousStatus?: ScheduledMessage['Status'],
+    agentTaskNotifyConfigError?: Error | null,
   ): ConfigSyncNotice => {
     const topic = message.Topic || message.ID;
     const actionLabel = action === 'created' ? '创建' : '更新';
@@ -3968,10 +4033,15 @@ const ScheduledMessagesManager: React.FC = () => {
     const agentTaskDetail = message.Push_Method === 'AgentTask'
       ? '帮我做: 已写入 AgentTask 计划行；Jira Rule 只在到期时调用 memory-service，执行账本和通知以后端为准'
       : '';
+    const agentTaskNotifyConfigDetail = agentTaskNotifyConfigError
+      ? `结果通知配置: 写入 Messages 成功，但同步到 memory-service 失败 - ${agentTaskNotifyConfigError.message}；若线上 App Script 版本较旧，通知目标/成功回执可能不生效`
+      : message.Push_Method === 'AgentTask'
+        ? '结果通知配置: 已直接注册到 memory-service，不依赖 Jira Rule 触发时的请求体字段'
+        : '';
     const reactivatedFromDone = previousStatus === 'Done' && message.Status === 'Active';
 
     return {
-      tone: outreachSyncError ? 'warning' : 'success',
+      tone: outreachSyncError || agentTaskNotifyConfigError ? 'warning' : 'success',
       title: message.Push_Method === 'AgentTask' ? `帮我做${actionLabel}回执` : `定时消息${actionLabel}回执`,
       description: `「${topic}」已写入 Messages 并定位到列表。`,
       details: [
@@ -3984,6 +4054,7 @@ const ScheduledMessagesManager: React.FC = () => {
         `发给: ${formatRecipient(message)}`,
         outreachSyncDetail,
         agentTaskDetail,
+        agentTaskNotifyConfigDetail,
         message.Push_Method === 'AgentTask' ? agentTaskWebhookDetail : '',
         '边界: 已保存计划但没有立即发送；定位只改变当前列表视图',
         '恢复: 返回完整列表可清除定位；发送前仍可继续编辑、暂停或删除',

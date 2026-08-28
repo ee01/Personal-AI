@@ -1135,6 +1135,41 @@ async function cancelOutreachTemplateMirror(messageId: string): Promise<void> {
   await client.cancelOutreachTemplate(messageId);
 }
 
+/**
+ * Registers AgentTask result-notification preferences directly with
+ * memory-service instead of relying on them reaching it through Sheet ->
+ * deployed Apps Script -> request body. That path only forwards whatever
+ * fields the *deployed* GAS version knows about, so config added after the
+ * last upgrade (e.g. successReceipt) silently never arrives.
+ */
+function buildAgentTaskNotifyTargetPayload(
+  message: ScheduledMessage,
+): { type: 'private' | 'group'; targetGroupId?: string; glipUserName?: string } | null {
+  if (message.Target_Type === 'group') {
+    const groupId = message.Glip_Team_ID?.trim();
+    return groupId ? { type: 'group', targetGroupId: groupId } : null;
+  }
+  const glipUserName = message.Glip_User_Name?.trim();
+  return glipUserName ? { type: 'private', glipUserName } : null;
+}
+
+async function syncAgentTaskNotifyConfigMirror(message: ScheduledMessage): Promise<void> {
+  if (message.Push_Method !== 'AgentTask') return;
+  const client = getMemoryServiceClient();
+  await client.upsertAgentTaskNotifyConfig({
+    sheetMessageId: message.ID,
+    notifyTarget: buildAgentTaskNotifyTargetPayload(message),
+    successReceipt: message.Agent_Notify_Success_Receipt === 'N' ? 'N' : 'Y',
+    notifyVia: message.Agent_Notify_Via === 'asme' ? 'asme' : 'bot',
+    notifyTemplate: message.Agent_Notify_Template?.trim() || undefined,
+  });
+}
+
+async function deleteAgentTaskNotifyConfigMirror(sheetMessageId: string): Promise<void> {
+  const client = getMemoryServiceClient();
+  await client.deleteAgentTaskNotifyConfig(sheetMessageId);
+}
+
 async function pauseOutreachTemplateMirror(
   message: ScheduledMessage,
 ): Promise<void> {
@@ -1421,9 +1456,39 @@ chrome.runtime.onInstalled.addListener(async (details) => {
             scopes: GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN,
           }),
         )
-          .then(() => {
-            Logger.upgrade(manifest.version, true, 'App Script 更新成功', {
+          .then((outcome) => {
+            // checkAndAutoUpdate resolves even when it skipped or failed, so the
+            // log line has to follow the outcome instead of the promise.
+            if (outcome.status === 'updated') {
+              Logger.upgrade(manifest.version, true, 'App Script 更新成功', {
+                component: 'AppScript',
+                newVersion: outcome.newVersion,
+              });
+              return;
+            }
+
+            if (outcome.status === 'up_to_date') {
+              Logger.upgrade(manifest.version, true, 'App Script 已是最新版本', {
+                component: 'AppScript',
+                currentVersion: outcome.currentVersion,
+              });
+              return;
+            }
+
+            if (outcome.status === 'skipped') {
+              Logger.upgrade(manifest.version, true, `App Script 更新已跳过（${outcome.reason}）`, {
+                component: 'AppScript',
+                reason: outcome.reason,
+              });
+              return;
+            }
+
+            Logger.upgrade(manifest.version, false, 'App Script 更新失败', {
               component: 'AppScript',
+              error: outcome.error,
+              ...('errorCode' in outcome && outcome.errorCode
+                ? { errorCode: outcome.errorCode }
+                : {}),
             });
           })
           .catch((error) => {
@@ -1937,6 +2002,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({
           success: false,
           error: error?.message || 'cancel_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'SYNC_AGENT_TASK_NOTIFY_CONFIG') {
+    (async () => {
+      try {
+        await syncAgentTaskNotifyConfigMirror(
+          request.data?.message as ScheduledMessage,
+        );
+        sendResponse({ success: true });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'sync_failed',
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === 'DELETE_AGENT_TASK_NOTIFY_CONFIG') {
+    (async () => {
+      try {
+        await deleteAgentTaskNotifyConfigMirror(
+          String(request.data?.sheetMessageId || ''),
+        );
+        sendResponse({ success: true });
+      } catch (error: any) {
+        sendResponse({
+          success: false,
+          error: error?.message || 'delete_failed',
         });
       }
     })();

@@ -44,6 +44,20 @@ export interface AppScriptVersionInfo {
   lastUpdated: string;
 }
 
+/**
+ * Outcome of an auto-update pass. Returned rather than swallowed so callers stop
+ * reporting "更新成功" for a run that skipped or failed.
+ */
+export type AutoUpdateOutcome =
+  | { status: 'updated'; newVersion?: string }
+  | { status: 'up_to_date'; currentVersion?: string }
+  | {
+      status: 'skipped';
+      reason: 'no_config' | 'no_token' | 'domain_policy_backoff';
+    }
+  | { status: 'check_failed'; error?: string }
+  | { status: 'failed'; error?: string; errorCode?: string };
+
 interface DeployedAppScriptVersionInfo {
   version: string;
   lastUpdated?: string;
@@ -63,8 +77,13 @@ export const APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR = 'APP_SCRIPT_DEPLOYMENT_MISMA
 export const APP_SCRIPT_DEPLOYMENT_NOT_FOUND_ERROR = 'APP_SCRIPT_DEPLOYMENT_NOT_FOUND';
 export const APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR = 'APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED';
 export const APP_SCRIPT_PROJECT_CONTENT_MISMATCH_ERROR = 'APP_SCRIPT_PROJECT_CONTENT_MISMATCH';
+export const APP_SCRIPT_DOMAIN_POLICY_ACCESS_ERROR = 'APP_SCRIPT_DOMAIN_POLICY_ACCESS';
 const APP_SCRIPT_VERSION_LIMIT = 200;
 const APP_SCRIPT_VERSION_WARNING_THRESHOLD = 195;
+const APP_SCRIPT_MANIFEST_FILE_NAME = 'appsscript';
+/** Domain-policy rejections are not self-healing; stop auto-upgrade from burning version quota. */
+export const APP_SCRIPT_DOMAIN_POLICY_BLOCK_STORAGE_KEY = 'appScriptDomainPolicyBlockedUntil';
+const APP_SCRIPT_DOMAIN_POLICY_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 export function buildProjectHistoryUrl(scriptId: string): string {
   return `https://script.google.com/home/projects/${encodeURIComponent(scriptId)}/projecthistory`;
@@ -125,6 +144,132 @@ function isProjectHistoryLimitError(errorText: string): boolean {
   );
 }
 
+/**
+ * Google Workspace admins can disable public/anonymous Apps Script access. The
+ * deployment PUT then fails with "ANYONE access has been disabled by your
+ * domain administrator", regardless of how many times we retry.
+ */
+export function isDomainPolicyAccessError(errorText: string): boolean {
+  return /access has been disabled by your domain administrator/i.test(errorText);
+}
+
+function parseManifestObject(source?: string): Record<string, unknown> {
+  if (typeof source !== 'string' || !source.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Build the appsscript.json we write on upgrade.
+ *
+ * The deployed project's own `webapp` block is preserved: Web App access is
+ * governed by domain policy, so a value that predates a policy change keeps
+ * working while a freshly declared one gets rejected at deployment time. Any
+ * other manifest keys the project carries (oauthScopes, dependencies, ...) are
+ * preserved too — rewriting them from scratch silently dropped them before.
+ *
+ * `executionApi` is never declared: this project only uses /v1/projects plus the
+ * Web App /exec entry point (never scripts.run), and its `ANYONE` value is what
+ * domain policy names when it refuses the deployment.
+ */
+export function buildAppScriptManifestSource(input: {
+  existingManifestSource?: string;
+  timeZone: string;
+}): string {
+  const existing = parseManifestObject(input.existingManifestSource);
+  const manifest: Record<string, unknown> = { ...existing };
+
+  manifest.timeZone = input.timeZone;
+  manifest.exceptionLogging = 'STACKDRIVER';
+  manifest.runtimeVersion = 'V8';
+
+  const existingWebapp =
+    existing.webapp && typeof existing.webapp === 'object' && !Array.isArray(existing.webapp)
+      ? (existing.webapp as Record<string, unknown>)
+      : undefined;
+  const existingAccess =
+    typeof existingWebapp?.access === 'string' && existingWebapp.access.trim()
+      ? existingWebapp.access.trim()
+      : undefined;
+  const existingExecuteAs =
+    typeof existingWebapp?.executeAs === 'string' && existingWebapp.executeAs.trim()
+      ? existingWebapp.executeAs.trim()
+      : undefined;
+
+  manifest.webapp = {
+    ...(existingWebapp || {}),
+    access: existingAccess || 'ANYONE_ANONYMOUS',
+    executeAs: existingExecuteAs || 'USER_DEPLOYING',
+  };
+
+  delete manifest.executionApi;
+
+  return JSON.stringify(manifest, null, 2);
+}
+
+/**
+ * A domain-policy rejection repeats on every attempt, and each attempt burns one
+ * of the project's 200 history versions, so auto-upgrade backs off for a day.
+ * Manual upgrades stay available — the user may be retrying right after an admin
+ * change — and any success clears the flag.
+ */
+export async function markAppScriptDomainPolicyBlocked(): Promise<void> {
+  try {
+    await chrome.storage.local.set({
+      [APP_SCRIPT_DOMAIN_POLICY_BLOCK_STORAGE_KEY]: Date.now() + APP_SCRIPT_DOMAIN_POLICY_BACKOFF_MS,
+    });
+  } catch (error) {
+    console.warn('无法记录 App Script 域策略拦截状态:', error);
+  }
+}
+
+export async function clearAppScriptDomainPolicyBlock(): Promise<void> {
+  try {
+    await chrome.storage.local.remove(APP_SCRIPT_DOMAIN_POLICY_BLOCK_STORAGE_KEY);
+  } catch (error) {
+    console.warn('无法清除 App Script 域策略拦截状态:', error);
+  }
+}
+
+export async function getAppScriptDomainPolicyBlockedUntil(): Promise<number> {
+  try {
+    const stored = await chrome.storage.local.get([APP_SCRIPT_DOMAIN_POLICY_BLOCK_STORAGE_KEY]);
+    const blockedUntil = Number(stored?.[APP_SCRIPT_DOMAIN_POLICY_BLOCK_STORAGE_KEY]);
+    return Number.isFinite(blockedUntil) && blockedUntil > Date.now() ? blockedUntil : 0;
+  } catch (error) {
+    console.warn('无法读取 App Script 域策略拦截状态:', error);
+    return 0;
+  }
+}
+
+function readManifestWebAppAccess(manifestSource: string): string | undefined {
+  const webapp = parseManifestObject(manifestSource).webapp;
+  if (!webapp || typeof webapp !== 'object' || Array.isArray(webapp)) {
+    return undefined;
+  }
+  const access = (webapp as Record<string, unknown>).access;
+  return typeof access === 'string' && access.trim() ? access.trim() : undefined;
+}
+
+function extractManifestSource(files: any[]): string | undefined {
+  const manifestFile = files.find(
+    (file: any) =>
+      file?.type === 'JSON' &&
+      typeof file?.source === 'string' &&
+      (file.name === APP_SCRIPT_MANIFEST_FILE_NAME || !file.name),
+  );
+  return typeof manifestFile?.source === 'string' ? manifestFile.source : undefined;
+}
+
 function summarizeVersionProbeResponse(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (!compact) {
@@ -173,6 +318,29 @@ class AppScriptProjectHistoryLimitError extends Error {
     super(`App Script ${usageText}历史版本已达到 200 个上限，无法创建新版本。${helpMessage} ${helpUrl}`);
     this.name = 'AppScriptProjectHistoryLimitError';
     Object.setPrototypeOf(this, AppScriptProjectHistoryLimitError.prototype);
+    this.helpUrl = helpUrl;
+    this.helpMessage = helpMessage;
+  }
+}
+
+class AppScriptDomainPolicyAccessError extends Error {
+  readonly errorCode = APP_SCRIPT_DOMAIN_POLICY_ACCESS_ERROR;
+  readonly helpUrl: string;
+  readonly helpMessage: string;
+
+  constructor(input: { scriptId: string; webAppAccess?: string; apiError: string }) {
+    const helpUrl = buildAppScriptProjectUrl(input.scriptId);
+    const accessText = input.webAppAccess ? `（当前 Web App access=${input.webAppAccess}）` : '';
+    const helpMessage =
+      '域管理员已禁用 Apps Script 的公开/匿名访问，新版本无法部署，但已部署的旧版本仍在服务。' +
+      '可选处理：1) 让 Workspace 管理员为该脚本放开匿名 Web App 访问；' +
+      '2) 走「Jira Rule 直连 memory-service」迁移，去掉对匿名 Web App 的依赖。' +
+      '在此期间自动升级会暂停 24 小时，避免反复消耗 Project History 版本额度。';
+    super(
+      `Apps Script 部署被域策略拒绝${accessText}：${input.apiError} ${helpMessage} ${helpUrl}`,
+    );
+    this.name = 'AppScriptDomainPolicyAccessError';
+    Object.setPrototypeOf(this, AppScriptDomainPolicyAccessError.prototype);
     this.helpUrl = helpUrl;
     this.helpMessage = helpMessage;
   }
@@ -253,6 +421,8 @@ class AppScriptDeploymentVerificationError extends Error {
 export class AppScriptUpdater {
   private token: string;
   private config: SheetConfig | null = null;
+  /** Web App access value written by the current upgrade; used to explain domain-policy rejections. */
+  private lastWrittenWebAppAccess?: string;
   private static deploymentVerificationAttempts = 3;
   private static deploymentVerificationDelayMs = 1000;
   
@@ -540,16 +710,21 @@ export class AppScriptUpdater {
       );
 
       // 3. 确认 Script ID 指向 Personal AI 管理的调度脚本，避免覆盖错误项目或用户自定义脚本
-      await this.assertCurrentProjectLooksManagedByPersonalAi(this.config.scriptId);
+      const { manifestSource: existingManifestSource } =
+        await this.assertCurrentProjectLooksManagedByPersonalAi(this.config.scriptId);
 
       // 4. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
       await this.assertProjectVersionCapacity(this.config.scriptId);
-      
+
       // 5. 加载最新的 App Script 模板代码
       const scriptCode = await this.loadAppScriptTemplate();
-      
-      // 6. 更新 App Script 项目代码
-      await this.updateProjectContent(this.config.scriptId, scriptCode);
+
+      // 6. 更新 App Script 项目代码（保留线上 manifest 的 Web App access 等域策略相关设置）
+      await this.updateProjectContent(
+        this.config.scriptId,
+        scriptCode,
+        existingManifestSource,
+      );
       
       // 7. 创建新版本
       const versionNumber = await this.createVersion(this.config.scriptId, latestVersion);
@@ -588,9 +763,10 @@ export class AppScriptUpdater {
         latestVersionInfo,
       );
       await this.updateConfigVersion(persistedVersionInfo);
-      
+      await clearAppScriptDomainPolicyBlock();
+
       console.log('App Script 更新成功！');
-      
+
       return {
         success: true,
         message: `App Script 已更新到版本 ${persistedVersionInfo.version}`,
@@ -607,6 +783,18 @@ export class AppScriptUpdater {
         return {
           success: false,
           message: 'App Script 历史版本已达到 200 个上限',
+          error: error.message,
+          errorCode: error.errorCode,
+          helpUrl: error.helpUrl,
+          helpMessage: error.helpMessage
+        };
+      }
+
+      if (error instanceof AppScriptDomainPolicyAccessError) {
+        await markAppScriptDomainPolicyBlocked();
+        return {
+          success: false,
+          message: 'App Script 部署被域策略拒绝（匿名访问已被管理员禁用）',
           error: error.message,
           errorCode: error.errorCode,
           helpUrl: error.helpUrl,
@@ -665,7 +853,17 @@ export class AppScriptUpdater {
   /**
    * 更新 App Script 项目内容
    */
-  private async updateProjectContent(scriptId: string, scriptCode: string): Promise<void> {
+  private async updateProjectContent(
+    scriptId: string,
+    scriptCode: string,
+    existingManifestSource?: string,
+  ): Promise<void> {
+    const manifestSource = buildAppScriptManifestSource({
+      existingManifestSource,
+      timeZone: getLocalScheduleTimeZone(),
+    });
+    this.lastWrittenWebAppAccess = readManifestWebAppAccess(manifestSource);
+
     const response = await fetch(
       `https://script.googleapis.com/v1/projects/${scriptId}/content`,
       {
@@ -682,35 +880,31 @@ export class AppScriptUpdater {
               source: scriptCode
             },
             {
-              name: 'appsscript',
+              name: APP_SCRIPT_MANIFEST_FILE_NAME,
               type: 'JSON',
-              source: JSON.stringify({
-                timeZone: getLocalScheduleTimeZone(),
-                exceptionLogging: 'STACKDRIVER',
-                runtimeVersion: 'V8',
-                webapp: {
-                  access: 'ANYONE_ANONYMOUS',
-                  executeAs: 'USER_DEPLOYING'
-                },
-                executionApi: {
-                  access: 'ANYONE'
-                }
-              })
+              source: manifestSource
             }
           ]
         })
       }
     );
-    
+
     if (!response.ok) {
       const error = await response.text();
       throw new Error(`更新项目内容失败: ${error}`);
     }
-    
+
     console.log('✅ 项目代码已更新');
   }
 
-  private async assertCurrentProjectLooksManagedByPersonalAi(scriptId: string): Promise<void> {
+  /**
+   * Confirm the script belongs to Personal AI and return its current manifest so
+   * the upgrade can preserve domain-policy-governed settings instead of
+   * re-declaring them.
+   */
+  private async assertCurrentProjectLooksManagedByPersonalAi(
+    scriptId: string,
+  ): Promise<{ manifestSource?: string }> {
     let response: Response;
     try {
       response = await fetch(
@@ -768,6 +962,8 @@ export class AppScriptUpdater {
     }
 
     console.log(`✅ App Script 项目代码归属已确认: ${matchedFile.name || 'SERVER_JS'}`);
+
+    return { manifestSource: extractManifestSource(files) };
   }
   
   /**
@@ -1066,9 +1262,16 @@ export class AppScriptUpdater {
     
     if (!response.ok) {
       const error = await response.text();
+      if (isDomainPolicyAccessError(error)) {
+        throw new AppScriptDomainPolicyAccessError({
+          scriptId,
+          webAppAccess: this.lastWrittenWebAppAccess,
+          apiError: error,
+        });
+      }
       throw new Error(`更新部署失败: ${error}`);
     }
-    
+
     console.log('✅ 部署已更新（URL 保持不变）');
   }
 
@@ -1275,9 +1478,9 @@ export class AppScriptUpdater {
       delay?: number;
       showNotification?: boolean;
     } = {}
-  ): Promise<void> {
+  ): Promise<AutoUpdateOutcome> {
     const { delay = 3000, showNotification = true } = options;
-    
+
     try {
       // 延迟执行，避免与其他初始化冲突
       if (delay > 0) {
@@ -1292,7 +1495,7 @@ export class AppScriptUpdater {
       
       if (!config || !config.scriptId || !config.webAppUrl) {
         console.log('⏭️ 未找到 Scheduled Messages 配置，跳过 App Script 更新检查');
-        return;
+        return { status: 'skipped', reason: 'no_config' };
       }
       
       console.log('✅ 找到 Scheduled Messages 配置，检查 App Script 版本...');
@@ -1301,7 +1504,7 @@ export class AppScriptUpdater {
       const token = await getToken();
       if (!token) {
         console.warn('⚠️ 无法获取 Google 授权，跳过 App Script 更新');
-        return;
+        return { status: 'skipped', reason: 'no_token' };
       }
       
       // 创建更新器实例
@@ -1311,14 +1514,23 @@ export class AppScriptUpdater {
       const checkResult = await updater.checkForUpdates();
       if (checkResult.error) {
         console.warn(`⚠️ App Script 更新检查失败，跳过自动升级: ${checkResult.error}`);
-        return;
+        return { status: 'check_failed', error: checkResult.error };
       }
       
       if (!checkResult.needsUpdate) {
         console.log(`✅ App Script 已是最新版本 (${checkResult.currentVersion})`);
-        return;
+        return { status: 'up_to_date', currentVersion: checkResult.currentVersion };
       }
       
+      // 域策略拦截会在每次尝试时重复出现，且每次都消耗一个 Project History 版本额度
+      const domainPolicyBlockedUntil = await getAppScriptDomainPolicyBlockedUntil();
+      if (domainPolicyBlockedUntil) {
+        console.warn(
+          `⏭️ App Script 部署此前被域策略拒绝（匿名访问被管理员禁用），自动升级暂停至 ${new Date(domainPolicyBlockedUntil).toLocaleString()}，跳过本次自动升级以保留版本额度。手动升级仍可用。`,
+        );
+        return { status: 'skipped', reason: 'domain_policy_backoff' };
+      }
+
       console.log(`🔄 发现新版本: ${checkResult.latestVersion}，当前版本: ${checkResult.currentVersion}`);
       console.log('🚀 开始自动更新 App Script...');
       
@@ -1341,6 +1553,7 @@ export class AppScriptUpdater {
             }
           );
         }
+        return { status: 'updated', newVersion: updateResult.newVersion };
       } else {
         console.error(`❌ App Script 更新失败: ${updateResult.error}`);
         
@@ -1361,7 +1574,11 @@ export class AppScriptUpdater {
                 priority: 2
               }
             );
-            return;
+            return {
+              status: 'failed',
+              error: updateResult.error,
+              errorCode: updateResult.errorCode,
+            };
           }
 
           if (updateResult.helpUrl) {
@@ -1379,7 +1596,11 @@ export class AppScriptUpdater {
                 priority: 2
               }
             );
-            return;
+            return {
+              status: 'failed',
+              error: updateResult.error,
+              errorCode: updateResult.errorCode,
+            };
           }
 
           chrome.notifications.create(
@@ -1393,10 +1614,18 @@ export class AppScriptUpdater {
             }
           );
         }
+        return {
+          status: 'failed',
+          error: updateResult.error,
+          errorCode: updateResult.errorCode,
+        };
       }
-      
     } catch (error) {
       console.error('❌ checkAndAutoUpdate 执行失败:', error);
+      return {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 }

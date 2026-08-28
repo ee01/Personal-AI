@@ -616,6 +616,10 @@ export class SheetInitializer {
             {
               name: 'appsscript',
               type: 'JSON',
+              // executionApi is intentionally absent: this project is only ever
+              // reached through the Web App /exec entry point, and declaring
+              // `ANYONE` there is rejected outright where a Workspace admin has
+              // disabled public Apps Script access.
               source: JSON.stringify({
                 timeZone,
                 exceptionLogging: 'STACKDRIVER',
@@ -623,9 +627,6 @@ export class SheetInitializer {
                 webapp: {
                   access: 'ANYONE_ANONYMOUS',
                   executeAs: 'USER_DEPLOYING',
-                },
-                executionApi: {
-                  access: 'ANYONE',
                 },
               }),
             },
