@@ -395,7 +395,7 @@ function shouldUsePassiveRouteFallback(
   if (!requestBody || !PASSIVE_ROUTE_GUARD_SURFACES.has(requestBody.surface)) {
     return false;
   }
-  if (parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED') === true) {
+  if (parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED') !== false) {
     return false;
   }
   const explicitGuard = parseOptionalBooleanEnv(

@@ -320,6 +320,54 @@ describe('Context Recall API (POST /context-recall)', () => {
     }
   });
 
+  it('keeps passive Lens search on when CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED is unset', async () => {
+    const previousGuard =
+      process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;
+    const previousFastMode = process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
+    const previousSearch = process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+    process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED = 'true';
+    process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = 'true';
+    delete process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/context-recall',
+        payload: {
+          surface: 'web_passive',
+          contextType: 'webpage',
+          title: 'Falcon launch readiness',
+          primaryText: 'Project Falcon launch readiness weekend planning',
+          limit: 5,
+          debug: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.debug?.rejectedReason).not.toBe(
+        'passive_fast_search_disabled',
+      );
+    } finally {
+      if (previousGuard === undefined) {
+        delete process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED =
+          previousGuard;
+      }
+      if (previousFastMode === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = previousFastMode;
+      }
+      if (previousSearch === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = previousSearch;
+      }
+    }
+  });
+
   it('does not short-circuit composer_guard when passive Lens search is disabled', async () => {
     const previousGuard =
       process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;

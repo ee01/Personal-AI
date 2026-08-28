@@ -361,12 +361,16 @@ function isPassiveFastModeEnabled(request: ContextRecallRequest): boolean {
   return process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true';
 }
 
+function isEnvEnabledByDefault(name: string): boolean {
+  return parseOptionalBooleanEnv(name) !== false;
+}
+
 function isPassiveFastVectorEnabled(): boolean {
-  return parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED') === true;
+  return isEnvEnabledByDefault('CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED');
 }
 
 function isPassiveFastSearchEnabled(): boolean {
-  return parseOptionalBooleanEnv('CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED') === true;
+  return isEnvEnabledByDefault('CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED');
 }
 
 function getContextRecallChannels(
