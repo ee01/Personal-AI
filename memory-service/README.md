@@ -157,8 +157,8 @@ Key environment variables (see `.env.example` for all options):
 | `API_KEY` | -- | Optional API key for authentication |
 | `PROACTIVE_SCHEDULER_ENABLED` | `false` | Enable heartbeat, consolidation, dreaming, and report cron jobs |
 | `OUTREACH_SCHEDULER_ENABLED` | on | Set `false` to disable the outreach polling loop at deploy level |
-| `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` | `false` | Enable passive Memory Lens / browser recall search. Does not gate Compose Assist. |
-| `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` | `false` | Enable vector search on passive Memory Lens / browser recall |
+| `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` | `true` | Enable passive Memory Lens / browser recall search. Does not gate Compose Assist. |
+| `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` | `true` | Enable vector search on passive Memory Lens / browser recall. Still no-ops if embeddings are not loaded. |
 | `CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED` | `true` | Return empty passive recall before DB/FTS work when passive search is disabled |
 | `INGEST_LLM_EXTRACTION_ENABLED` | `false` | Enable LLM entity extraction during ingest |
 | `INGEST_EMBEDDING_ENABLED` | `false` | Enable local embedding indexing during ingest |
