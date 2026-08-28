@@ -84,7 +84,6 @@ const PASSIVE_FAST_MODE_SURFACES = new Set([
   'meeting_passive',
   'popup_passive',
   'follow_thread',
-  'composer_guard',
 ]);
 
 const GENERIC_CONTEXT_TERMS = new Set([

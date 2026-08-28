@@ -28,7 +28,6 @@ const PASSIVE_ROUTE_GUARD_SURFACES = new Set([
   'meeting_passive',
   'popup_passive',
   'follow_thread',
-  'composer_guard',
 ]);
 
 let activeContextRecallRequests = 0;

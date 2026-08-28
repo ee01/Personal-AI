@@ -320,6 +320,46 @@ describe('Context Recall API (POST /context-recall)', () => {
     }
   });
 
+  it('does not short-circuit composer_guard when passive Lens search is disabled', async () => {
+    const previousGuard =
+      process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;
+    const previousSearch = process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+    process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED = 'true';
+    process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = 'false';
+
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/context-recall',
+        payload: {
+          surface: 'composer_guard',
+          contextType: 'message_thread',
+          title: 'RingCentral Staff Slides Update',
+          primaryText: 'Staff slides Rooms NC JVD Webinar done.',
+          debug: true,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.debug?.rejectedReason).not.toBe(
+        'passive_fast_search_disabled',
+      );
+    } finally {
+      if (previousGuard === undefined) {
+        delete process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED =
+          previousGuard;
+      }
+      if (previousSearch === undefined) {
+        delete process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
+      } else {
+        process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED = previousSearch;
+      }
+    }
+  });
+
   it('returns matches with exploreLink and a topMatch on relevant content', async () => {
     const res = await app.inject({
       method: 'POST',

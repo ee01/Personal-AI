@@ -191,7 +191,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('short-circuits RingCentral composer recall when passive search is disabled', async () => {
+  it('keeps RingCentral composer recall running when passive Lens search is disabled', async () => {
     const previousFastMode = process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
     const previousSearch = process.env.CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED;
     process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE = 'true';
@@ -222,11 +222,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
 
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.available).toBe(false);
-      expect(body.debug?.recall?.rejectedReason).toBe(
+      expect(body.debug?.recall?.rejectedReason).not.toBe(
         'passive_fast_search_disabled',
       );
-      expect(llmGenerateMock).not.toHaveBeenCalled();
+      expect(Array.isArray(body.debug?.recall?.channelsHit)).toBe(true);
     } finally {
       if (previousFastMode === undefined) {
         delete process.env.CONTEXT_RECALL_PASSIVE_FAST_MODE;
