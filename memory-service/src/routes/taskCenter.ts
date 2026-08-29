@@ -220,6 +220,22 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  /**
+   * Look a task up by the idempotency key its entry point used.
+   * Lets a caller (e.g. the snooze entry) find the reminder it created earlier
+   * for the same message and reschedule it instead of stacking a duplicate.
+   */
+  app.get<{ Querystring: { idempotencyKey?: string } }>(
+    '/task-center/tasks/by-key',
+    async (request, reply) => {
+      const key = nonEmpty(request.query.idempotencyKey);
+      if (!key) return reply.status(400).send({ error: 'idempotencyKey is required' });
+      const repo = new ActionRepository(request.userContext.db);
+      const found = repo.findReusableByIdempotencyKey(key);
+      return reply.status(200).send({ task: found ? serializeTask(found) : null });
+    },
+  );
+
   /** Lane availability + which kinds may choose, so the editor can grey correctly. */
   app.get('/task-center/capabilities', async (request, reply) => {
     return reply.status(200).send({
@@ -309,6 +325,37 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       // so a jira_sheet task is not fully scheduled until that mirror lands.
       mirrorRequired: laneDecision.lane === 'jira_sheet',
     });
+  });
+
+  /**
+   * Reschedule, pause or resume a task.
+   *
+   * Re-snoozing an existing reminder needs this: the entry point looks the task
+   * up by its idempotency key and moves its due time instead of stacking a
+   * second reminder for the same message.
+   */
+  app.patch<{
+    Params: { id: string };
+    Body: { scheduledAt?: number; queueStatus?: 'queued' | 'cancelled'; title?: string };
+  }>('/task-center/tasks/:id', async (request, reply) => {
+    const { db } = request.userContext;
+    const repo = new ActionRepository(db);
+    const existing = repo.getById(request.params.id);
+    if (!existing) {
+      return reply.status(404).send({ error: 'task_not_found' });
+    }
+
+    const body = request.body ?? {};
+    if (body.queueStatus === 'cancelled') {
+      repo.cancel(request.params.id, 'Cancelled from Task Center');
+    } else if (typeof body.scheduledAt === 'number' && Number.isFinite(body.scheduledAt)) {
+      // Reschedule also re-opens a task that already finished or was cancelled,
+      // which is what "remind me again, later" means.
+      repo.rescheduleTask(request.params.id, body.scheduledAt, nonEmpty(body.title));
+    }
+
+    const updated = repo.getById(request.params.id);
+    return reply.status(200).send({ task: updated ? serializeTask(updated) : null });
   });
 
   /** Manual sweep, so the UI can roll a series forward without waiting a tick. */

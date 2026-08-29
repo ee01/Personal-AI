@@ -24,6 +24,7 @@ import {
 } from '../../repositories/ActionRepository.js';
 import { ActionResultRepository } from '../../repositories/ActionResultRepository.js';
 import { ConfirmRequestRepository } from '../../repositories/ConfirmRequestRepository.js';
+import { NotificationCenterService } from '../NotificationCenterService.js';
 import { getUserRuntimeConfig } from '../../runtimeConfig.js';
 import { now } from '../../utils/time.js';
 import { buildMessageRuleImprovementContextFromDelegationOutcome } from '../MessageRuleAutomationAdvisor.js';
@@ -549,9 +550,48 @@ export class ActionExecutor {
         currentTime,
       );
 
+    // Delivery channel. A notification record alone only reaches the user via
+    // the extension's Chrome-notification poll (the L0 channel). Reminders
+    // created before Task Center were delivered as Glip Bot private messages,
+    // so a task that asks for 'bot' still gets one; 'auto' tries Bot and falls
+    // back to the record when no Bot is configured, which is what keeps this
+    // working for L0 users who never set credentials up.
+    const channel =
+      typeof params.channel === 'string' ? params.channel.trim().toLowerCase() : 'plugin';
+    let botPushed = false;
+    let botError: string | undefined;
+
+    if (channel === 'bot' || channel === 'auto') {
+      try {
+        const delivery = await new NotificationCenterService(this.db).deliverNoticeToGlip({
+          sourceRef: `notification:${notificationId}`,
+          title: String(params.title ?? action.title),
+          body: String(params.body ?? action.description ?? ''),
+          mention: true,
+          targetUserId:
+            typeof params.targetUserId === 'string' ? params.targetUserId : undefined,
+          targetGroupId:
+            typeof params.targetGroupId === 'string' ? params.targetGroupId : undefined,
+        });
+        botPushed = delivery.sent;
+        if (!delivery.sent) botError = delivery.error;
+      } catch (error) {
+        botError = error instanceof Error ? error.message : String(error);
+      }
+
+      // An explicit 'bot' request that could not be delivered is a real failure
+      // for the user (they asked for a Glip message and got none), so it is
+      // surfaced rather than silently degraded to a Chrome notification.
+      if (channel === 'bot' && !botPushed) {
+        throw new Error(`Glip 投递失败：${botError ?? 'unknown error'}`);
+      }
+    }
+
     return {
       notificationId,
-      botPushed: false,
+      botPushed,
+      channel,
+      ...(botError ? { botError } : {}),
     };
   }
 

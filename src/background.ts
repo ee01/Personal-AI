@@ -54,8 +54,10 @@ import { handleMemoryMessage } from './modals/memory-exploring-messageHandler';
 import { getWebIntelligenceIntegrator } from './web-intelligence/WebIntelligenceIntegrator';
 import {
   buildPassiveWebpageAnalysisKey,
+  buildPassiveWebpageAnalysisPrompt,
   normalizePassiveWebpageAnalysisResult,
   PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
+  type PassiveWebpageAnalysisInput,
   type PassiveWebpageAnalysisResult,
 } from './web-intelligence/passiveWebpageAnalysis';
 import {
@@ -113,7 +115,11 @@ import {
   jiraFetch,
   getTicketDetail,
 } from './jira';
-import { handleLLMRequest } from './llm';
+import {
+  callLLMJsonAPI,
+  handleLLMRequest,
+  isMainLLMConfiguredForMeetingAnalysis,
+} from './llm';
 import { CAPABILITIES } from './analytics/capabilities';
 import { concernedItemsSyncService } from './services/ConcernedItemsSyncService';
 import { isManualConcernedItem, partitionConcernedItems } from './watchRules';
@@ -140,7 +146,6 @@ import {
 } from './utils/memoryEntryRulesNavigation';
 import {
   doesSnoozeReminderMatchSchedule,
-  findOpenSnoozeReminderForMessage,
   getSnoozeReminderSourceKey,
   isOpenSnoozeReminder,
 } from './message-reaction/snoozeDeduplication';
@@ -216,6 +221,31 @@ const webpageAnalysisBackgroundInFlight = new Map<
 let contextRecallBackgroundCacheLoadPromise: Promise<void> | null = null;
 let webpageAnalysisBackgroundCacheLoadPromise: Promise<void> | null = null;
 let webpageAnalysisFailureBackoffLoadPromise: Promise<void> | null = null;
+
+/**
+ * Passive webpage analysis via the user's own configured LLM (same config as
+ * message analysis, src/llm.ts) — the only path; there is no memory-service
+ * fallback (see docs/features/memory_capture.md「网页分析的 LLM 路径」
+ * for why: it was ~55% of backend LLM tokens on the shared service key).
+ * Reuses the exact same prompt builder and result normalizer the backend
+ * service (`PassiveWebpageAnalysisService`) was built from —
+ * `buildPassiveWebpageAnalysisPrompt` and `normalizePassiveWebpageAnalysisResult`
+ * — so this is the same analysis, just running against a different LLM
+ * endpoint. Return shape matches the old `MemoryServiceClient.analyzeSourceMemoryWebpage`
+ * response so the caller below didn't need to branch on shape.
+ */
+async function analyzeWebpageViaLocalKey(
+  input: PassiveWebpageAnalysisInput,
+): Promise<{ result: unknown; promptVersion: string }> {
+  const prompt = buildPassiveWebpageAnalysisPrompt(input);
+  const raw = await callLLMJsonAPI({
+    prompt,
+    type: 'query',
+    capability: CAPABILITIES.MEMORY_CAPTURE,
+    feature: 'passive_webpage_memory_analysis',
+  });
+  return { result: raw, promptVersion: PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION };
+}
 
 function getSessionStorageArea(): any | null {
   return (chrome.storage as any)?.session || null;
@@ -3345,14 +3375,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return;
         }
 
+        // Webpage analysis always uses the user's own configured LLM (same
+        // config as message analysis, src/llm.ts) — no server-side fallback.
+        // See docs/features/memory_capture.md「网页分析的 LLM 路径」:
+        // Esone decided against a memory-service fallback (it was ~55% of
+        // backend LLM tokens on the shared service key); if the LLM isn't
+        // configured, the feature is simply unavailable rather than quietly
+        // falling back to a shared key. Options surfaces a "configure LLM"
+        // prompt at both the webpage-analysis and message-analysis sections.
+        const envConfigForWebpageAnalysis = await getEnvConfig();
+        const llmReadiness = isMainLLMConfiguredForMeetingAnalysis(
+          envConfigForWebpageAnalysis,
+        );
+        if (!llmReadiness.ok) {
+          sendResponse({
+            success: true,
+            processed: false,
+            stored: false,
+            reason: 'llm_not_configured',
+            message: llmReadiness.message,
+          });
+          return;
+        }
+
         const analysisKey = String(
           request.analysisKey || buildPassiveWebpageAnalysisKey(input),
         );
         const cacheKey = buildSessionRequestCacheKey('webpage-analysis-v2', {
           analysisKey,
           promptVersion: PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
-          provider: 'memory_service',
-          model: 'backend_configured',
+          provider: 'local_key',
+          model: 'local_configured',
         });
         const force = Boolean(request.force);
         const triggerSource =
@@ -3404,8 +3457,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           existing ||
           (async () => {
             try {
-              const response = await getMemoryServiceClient()
-                .analyzeSourceMemoryWebpage(input);
+              const response = await analyzeWebpageViaLocalKey(input);
               if (
                 response.promptVersion !==
                 PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION
@@ -4592,30 +4644,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const config = result.scheduledMessagesConfig;
         const userinfo = result.userinfo;
 
+        // Snooze now writes to the Task Center ledger instead of the Sheet, so
+        // it no longer needs Google auth or an initialized spreadsheet — a
+        // fresh install can snooze a message immediately (Level 0). Bot
+        // credentials, when present, still decide whether the reminder arrives
+        // as a Glip private message or a Chrome notification.
+        const botConfigured = Boolean(config?.botId || result.botConfig?.botId);
+
         console.log('🔔 Background: 配置状态:', {
           hasConfig: !!config,
-          hasSheetId: !!config?.sheetId,
+          botConfigured,
           hasUserinfo: !!userinfo,
         });
-
-        if (!config || !config.sheetId) {
-          console.error('❌ Background: 未配置 Scheduled Messages');
-          sendResponse({
-            success: false,
-            error: '请先在设置中初始化定时消息系统',
-          });
-          return;
-        }
-
-        // 获取 auth token（用户主动操作，可以弹窗）
-        console.log('🔔 Background: 获取 Google Auth Token...');
-        const token = await getGoogleAuthToken({
-          caller: 'background.createSnoozeMessage',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        console.log('🔔 Background: Token 获取成功');
-
-        const service = new ScheduledMessageService(token);
 
         // 格式化提醒时间
         const { dateStr, timeStr } = formatLocalScheduleDateTime(remindAt);
@@ -4643,51 +4683,62 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
 
         const snoozeContent = contentParts.join('\n');
-        const existingSnooze = findOpenSnoozeReminderForMessage(
-          await service.getAllMessages(),
-          messageInfo,
-        );
+        const ledgerClient = getMemoryServiceClient();
 
-        if (existingSnooze) {
+        // Deterministic key per source message: snoozing the same message twice
+        // reschedules the one reminder instead of stacking a second one at a
+        // different time (what the old findOpenSnoozeReminderForMessage did).
+        const snoozeKey = `snooze:${messageInfo.messageLink || messageInfo.id}`;
+        const scheduledAtSeconds = Math.floor(remindAt / 1000);
+
+        const existing = await ledgerClient
+          .findTaskCenterTaskByKey(snoozeKey)
+          .catch(() => ({ task: null }));
+
+        if (existing.task && existing.task.queueStatus !== 'cancelled') {
           console.log(
             '🔔 Background: 已存在同源 Snooze，改为更新提醒时间:',
-            existingSnooze.ID,
+            existing.task.id,
           );
-
-          const updatedMessage = await service.updateMessage(
-            existingSnooze.ID,
-            {
-              Topic: existingSnooze.Topic || `稍后处理: ${topicSummary}`,
-              Content: snoozeContent,
-              Schedule_Date: dateStr,
-              Schedule_Time: timeStr,
-              Status: 'Active',
-              Exec_Log: '已重新安排，待执行',
-            },
-          );
-
+          const updated = await ledgerClient.updateTaskCenterTask(existing.task.id, {
+            scheduledAt: scheduledAtSeconds,
+            title: `稍后处理: ${topicSummary}`,
+          });
           sendResponse({
             success: true,
-            messageId: updatedMessage.ID,
+            messageId: updated.task?.id ?? existing.task.id,
             updated: true,
           });
           return;
         }
 
-        // 创建定时消息（核心操作）
-        console.log('🔔 Background: 创建定时消息...');
-        const newMessage = await service.createMessage({
-          Topic: `稍后处理: ${topicSummary}`,
-          Content: snoozeContent,
-          Schedule_Date: dateStr,
-          Schedule_Time: timeStr,
-          Push_Method: 'Bot',
-          Target_Type: 'private',
-          Glip_User_Name: userinfo?.fullName || userinfo?.username || '',
-          Category: 'Snooze,提醒',
+        console.log('🔔 Background: 写入任务中心账本...');
+        const created = await ledgerClient.createTaskCenterTask({
+          taskKind: 'remind',
+          title: `稍后处理: ${topicSummary}`,
+          description: snoozeContent,
+          // Reminders are always locally scheduled: they need no Sheet row and
+          // must work before any cloud setup exists.
+          lane: 'memory_cron',
+          scheduledAt: scheduledAtSeconds,
+          idempotencyKey: snoozeKey,
+          sourceKind: 'snooze',
+          sourceRefId: messageInfo.id,
+          payload: {
+            title: `稍后处理: ${topicSummary}`,
+            body: snoozeContent,
+            // 'auto' delivers via Glip Bot when credentials exist and falls back
+            // to a Chrome notification when they do not.
+            channel: botConfigured ? 'auto' : 'plugin',
+            targetUserId: userinfo?.username || undefined,
+            sourceMessageLink: messageInfo.messageLink,
+            groupName: messageInfo.groupName,
+            senderName: messageInfo.senderName,
+          },
         });
 
-        console.log('✅ Background: Snooze 定时消息创建成功:', newMessage.ID);
+        const newMessage = { ID: created.task.id };
+        console.log('✅ Background: Snooze 任务已入账本:', newMessage.ID);
 
         // 🔥 立即发送成功响应，避免消息通道超时
         sendResponse({ success: true, messageId: newMessage.ID });
@@ -4711,17 +4762,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               const newTopicSummary = summaryResult.trim().substring(0, 20);
               console.log('✅ Background: 后台摘要生成成功:', newTopicSummary);
 
-              // 更新已创建消息的 Topic
+              // 更新已创建任务的标题
               try {
-                const freshToken = await getGoogleAuthToken({
-                  caller: 'background.updateMessageTopic',
-                  scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
+                await getMemoryServiceClient().updateTaskCenterTask(newMessage.ID, {
+                  title: `稍后处理: ${newTopicSummary}`,
                 });
-                const freshService = new ScheduledMessageService(freshToken);
-                await freshService.updateMessage(newMessage.ID, {
-                  Topic: `稍后处理: ${newTopicSummary}`,
-                });
-                console.log('✅ Background: 消息 Topic 已更新');
+                console.log('✅ Background: 任务标题已更新');
               } catch (updateError) {
                 console.warn(
                   '⚠️ Background: 更新 Topic 失败（不影响功能）:',

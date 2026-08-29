@@ -179,3 +179,98 @@ describe('Task Center API', () => {
     expect(res.json()).toHaveProperty('parentsCompleted');
   });
 });
+
+describe('Task Center task updates', () => {
+  let app2: FastifyInstance;
+  let db2: BetterSqlite3.Database;
+
+  beforeAll(async () => {
+    db2 = getTestDb();
+    const result = await buildApp({ db: db2 });
+    app2 = result.app;
+    await app2.ready();
+  });
+
+  afterAll(async () => {
+    await app2.close();
+  });
+
+  beforeEach(() => {
+    // Attempts reference actions, so they must go first.
+    db2.prepare('DELETE FROM proposed_action_attempts').run();
+    db2.prepare('DELETE FROM proposed_actions').run();
+  });
+
+  async function createRemind(idempotencyKey: string) {
+    const res = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: { taskKind: 'remind', title: '回复 Kenny', idempotencyKey, scheduledAt: 1000 },
+    });
+    return res.json().task;
+  }
+
+  it('finds a task by the key its entry point used, so re-snooze can reuse it', async () => {
+    const task = await createRemind('snooze:msg-1');
+    const res = await app2.inject({
+      method: 'GET',
+      url: '/api/v1/task-center/tasks/by-key?idempotencyKey=snooze%3Amsg-1',
+    });
+    expect(res.json().task.id).toBe(task.id);
+  });
+
+  it('returns null for an unknown key rather than erroring', async () => {
+    const res = await app2.inject({
+      method: 'GET',
+      url: '/api/v1/task-center/tasks/by-key?idempotencyKey=nope',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().task).toBeNull();
+  });
+
+  it('reschedules instead of stacking a duplicate reminder', async () => {
+    const task = await createRemind('snooze:msg-2');
+    const res = await app2.inject({
+      method: 'PATCH',
+      url: `/api/v1/task-center/tasks/${task.id}`,
+      payload: { scheduledAt: 9999, title: '稍后处理: 新摘要' },
+    });
+    expect(res.json().task.scheduledAt).toBe(9999);
+    expect(res.json().task.title).toBe('稍后处理: 新摘要');
+
+    const all = await app2.inject({ method: 'GET', url: '/api/v1/task-center/tasks' });
+    expect(all.json().items).toHaveLength(1);
+  });
+
+  it('re-opens a finished reminder when it is snoozed again', async () => {
+    const task = await createRemind('snooze:msg-3');
+    const repo = new ActionRepository(db2);
+    repo.markSucceeded(task.id, repo.markRunning(task.id), { status: 'success' });
+
+    await app2.inject({
+      method: 'PATCH',
+      url: `/api/v1/task-center/tasks/${task.id}`,
+      payload: { scheduledAt: 12345 },
+    });
+    expect(repo.getById(task.id)?.queueStatus).toBe('queued');
+  });
+
+  it('cancels a task', async () => {
+    const task = await createRemind('snooze:msg-4');
+    await app2.inject({
+      method: 'PATCH',
+      url: `/api/v1/task-center/tasks/${task.id}`,
+      payload: { queueStatus: 'cancelled' },
+    });
+    expect(new ActionRepository(db2).getById(task.id)?.queueStatus).toBe('cancelled');
+  });
+
+  it('404s on an unknown task', async () => {
+    const res = await app2.inject({
+      method: 'PATCH',
+      url: '/api/v1/task-center/tasks/nope',
+      payload: { scheduledAt: 1 },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});

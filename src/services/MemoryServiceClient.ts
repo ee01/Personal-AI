@@ -6953,6 +6953,20 @@ export class MemoryServiceClient {
     return this.request('POST', '/task-center/tasks', body);
   }
 
+  async findTaskCenterTaskByKey(idempotencyKey: string): Promise<{ task: TaskCenterTask | null }> {
+    return this.request(
+      'GET',
+      `/task-center/tasks/by-key?idempotencyKey=${encodeURIComponent(idempotencyKey)}`,
+    );
+  }
+
+  async updateTaskCenterTask(
+    id: string,
+    body: { scheduledAt?: number; queueStatus?: 'queued' | 'cancelled'; title?: string },
+  ): Promise<{ task: TaskCenterTask | null }> {
+    return this.request('PATCH', `/task-center/tasks/${encodeURIComponent(id)}`, body);
+  }
+
   async sweepTaskCenter(): Promise<{
     rolledOver: number;
     seriesEnded: number;

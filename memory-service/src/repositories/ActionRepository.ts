@@ -978,6 +978,30 @@ export class ActionRepository {
       .run(JSON.stringify({ ...(existing.result || {}), leaseUntil }), id);
   }
 
+  /**
+   * Move a task's due time and re-open it.
+   *
+   * Used when the same reminder is snoozed again: the task is reused rather
+   * than duplicated, so the user ends up with one reminder at the new time
+   * instead of two at different times.
+   */
+  rescheduleTask(id: string, scheduledAt: number, title?: string): QueuedActionRecord | null {
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET scheduled_at = ?,
+             queue_status = 'queued',
+             state = 'pending',
+             started_at = NULL,
+             finished_at = NULL,
+             last_error = NULL,
+             title = COALESCE(?, title)
+         WHERE id = ?`,
+      )
+      .run(scheduledAt, title ?? null, id);
+    return this.getById(id);
+  }
+
   markClaimedByWorker(
     id: string,
     workerId: string,
