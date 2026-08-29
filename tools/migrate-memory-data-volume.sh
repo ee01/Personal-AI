@@ -31,6 +31,8 @@ SOURCE_DIR="$PROJECT_ROOT/memory-service/data"
 ENV_FILE="$PROJECT_ROOT/.env"
 VOLUME_NAME="$(basename "$PROJECT_ROOT" | tr -cd '[:alnum:]_-')_memory-data"
 IMAGE="alpine:3.20"
+COPY_CONTAINER="memory-data-copy"
+MARKER_FILE=".migration-complete"
 MODE="copy"
 
 for arg in "$@"; do
@@ -63,42 +65,84 @@ echo "==> source : $SOURCE_DIR"
 echo "==> volume : $VOLUME_NAME"
 du -sh "$SOURCE_DIR" 2>/dev/null || true
 
+# Decide about the target volume before taking the service down, so a config
+# mistake costs nothing instead of an outage.
+if docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
+  # The marker is written only after a copy is verified, so its absence means
+  # any content is a partial run that rsync can resume. `|| true` because a
+  # missing marker makes cat exit non-zero, which set -e would treat as fatal.
+  DONE_MARKER="$(docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" \
+    sh -c "cat /to/$MARKER_FILE 2>/dev/null || true")"
+  if [ -n "$DONE_MARKER" ]; then
+    echo "volume $VOLUME_NAME already holds a completed migration ($DONE_MARKER)." >&2
+    echo "'docker volume rm $VOLUME_NAME' first if you really want a fresh copy." >&2
+    exit 1
+  fi
+  echo "==> volume exists without a completion marker; resuming the copy"
+else
+  docker volume create "$VOLUME_NAME" >/dev/null
+fi
+
 # The copy must see a quiesced database. A live writer would hand us a torn
 # snapshot, which is exactly the failure we are migrating away from.
 echo "==> stopping memory-service"
 docker compose stop memory-service 2>/dev/null || true
 
-if docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
-  EXISTING="$(docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" sh -c 'ls -A /to 2>/dev/null | head -1')"
-  if [ -n "$EXISTING" ]; then
-    echo "volume $VOLUME_NAME already has data; refusing to overwrite." >&2
-    echo "inspect it, then 'docker volume rm $VOLUME_NAME' for a clean re-copy." >&2
-    exit 1
-  fi
-else
-  docker volume create "$VOLUME_NAME" >/dev/null
-fi
-
+# Detached, not attached. A 12GB copy over virtiofs takes long enough that the
+# client-daemon stream can drop, and an attached `docker run --rm` reports that
+# as "unexpected EOF" and discards the container along with its exit code.
+# rsync rather than cp so an interrupted run resumes instead of restarting.
 echo "==> copying into the volume (multi-GB data dir takes a while)"
-docker run --rm \
+docker rm -f "$COPY_CONTAINER" >/dev/null 2>&1 || true
+docker run -d --name "$COPY_CONTAINER" \
   -v "$SOURCE_DIR:/from:ro" \
   -v "$VOLUME_NAME:/to" \
   "$IMAGE" \
-  sh -c 'cp -a /from/. /to/ && sync'
+  sh -c 'apk add --no-cache rsync >/dev/null 2>&1 && rsync -a --delete /from/ /to/ && sync' >/dev/null
+
+while [ "$(docker inspect -f '{{.State.Running}}' "$COPY_CONTAINER" 2>/dev/null)" = "true" ]; do
+  printf '\r    copied: %s' "$(docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" du -sh /to 2>/dev/null | cut -f1)"
+  sleep 20
+done
+printf '\n'
+
+COPY_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "$COPY_CONTAINER" 2>/dev/null || echo 1)"
+if [ "$COPY_EXIT" != "0" ]; then
+  echo "copy container exited with $COPY_EXIT. Logs:" >&2
+  docker logs --tail 30 "$COPY_CONTAINER" >&2 || true
+  echo "Re-run this script to resume from where it stopped." >&2
+  exit 1
+fi
+docker rm -f "$COPY_CONTAINER" >/dev/null 2>&1 || true
 
 echo "==> verifying"
 SRC_USERS="$(ls "$SOURCE_DIR/users" 2>/dev/null | wc -l | tr -d ' ')"
 SRC_DBS="$(find "$SOURCE_DIR" -name memory.db | wc -l | tr -d ' ')"
+SRC_BYTES="$(du -sk "$SOURCE_DIR" | cut -f1 | tr -d ' ')"
 DST_USERS="$(docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" sh -c 'ls /to/users 2>/dev/null | wc -l' | tr -d ' ')"
 DST_DBS="$(docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" sh -c 'find /to -name memory.db | wc -l' | tr -d ' ')"
+DST_BYTES="$(docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" sh -c 'du -sk /to | cut -f1' | tr -d ' ')"
 
 echo "user dirs : source=$SRC_USERS volume=$DST_USERS"
 echo "memory.db : source=$SRC_DBS volume=$DST_DBS"
+echo "size (KB) : source=$SRC_BYTES volume=$DST_BYTES"
 
 if [ "$SRC_USERS" != "$DST_USERS" ] || [ "$SRC_DBS" != "$DST_DBS" ]; then
   echo "counts do not match; not flipping the mount. Investigate before retrying." >&2
   exit 1
 fi
+
+# Counts alone would pass on a half-copied database file, so require the total
+# size to land within 2% as well. Block sizes differ between the two
+# filesystems, hence a tolerance rather than equality.
+SIZE_DELTA=$(( SRC_BYTES > DST_BYTES ? SRC_BYTES - DST_BYTES : DST_BYTES - SRC_BYTES ))
+if [ "$SRC_BYTES" -gt 0 ] && [ $(( SIZE_DELTA * 100 / SRC_BYTES )) -gt 2 ]; then
+  echo "size differs by more than 2%; copy looks incomplete. Re-run to resume." >&2
+  exit 1
+fi
+
+docker run --rm -v "$VOLUME_NAME:/to" "$IMAGE" \
+  sh -c "date -u +%Y-%m-%dT%H:%M:%SZ > /to/$MARKER_FILE"
 
 if [ "$MODE" != "commit" ]; then
   echo
