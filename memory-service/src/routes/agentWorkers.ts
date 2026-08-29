@@ -156,6 +156,25 @@ export async function agentWorkerRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{
     Params: { id: string };
+    Body: { actionId?: string; fenceToken?: number };
+  }>('/agent-workers/:id/renew-lease', async (request, reply) => {
+    if (request.workerId && request.workerId !== request.params.id) {
+      return reply.code(403).send({ error: 'worker_mismatch' });
+    }
+    const service = new AgentWorkerService(
+      request.userContext.db,
+      request.userContext.userDataManager,
+      request.userId || 'default',
+    );
+    try {
+      return service.renewLease(request.params.id, request.body ?? {});
+    } catch (error) {
+      return sendWorkerError(error, reply);
+    }
+  });
+
+  app.post<{
+    Params: { id: string };
     Body: {
       actionId?: string;
       commandId?: string;

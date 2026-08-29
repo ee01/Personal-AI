@@ -289,6 +289,51 @@ export class AgentWorkerRepository {
     };
   }
 
+  /**
+   * Extend an active lease. Only the holder can renew, and only with a matching
+   * fence token, so a worker that already lost the lease (expired and reclaimed,
+   * then re-claimed by someone else) cannot resurrect its old ownership.
+   */
+  renewLease(input: {
+    actionId: string;
+    workerId: string;
+    fenceToken: number;
+    leaseUntil: number;
+  }): AgentWorkerLeaseRecord | null {
+    const currentTime = now();
+    const result = this.db
+      .prepare(
+        `UPDATE agent_worker_leases
+         SET lease_until = ?, updated_at = ?
+         WHERE action_id = ? AND worker_id = ? AND fence_token = ?`,
+      )
+      .run(input.leaseUntil, currentTime, input.actionId, input.workerId, input.fenceToken);
+    if (result.changes === 0) return null;
+    return this.getLease(input.actionId);
+  }
+
+  /** Leases currently held by a worker, so a heartbeat can renew them all. */
+  listLeasesForWorker(workerId: string): AgentWorkerLeaseRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM agent_worker_leases WHERE worker_id = ?')
+      .all(workerId) as Array<{
+      action_id: string;
+      worker_id: string;
+      fence_token: number;
+      lease_until: number;
+      created_at: number;
+      updated_at: number;
+    }>;
+    return rows.map((row) => ({
+      actionId: row.action_id,
+      workerId: row.worker_id,
+      fenceToken: row.fence_token,
+      leaseUntil: row.lease_until,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
   getLease(actionId: string): AgentWorkerLeaseRecord | null {
     const row = this.db
       .prepare('SELECT * FROM agent_worker_leases WHERE action_id = ?')

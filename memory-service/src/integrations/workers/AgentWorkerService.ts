@@ -6,7 +6,10 @@ import {
   findEnabledExecutor,
   type AgentExecutorInstance,
 } from '../executors/executorRegistry.js';
-import { ActionRepository } from '../../repositories/ActionRepository.js';
+import {
+  ActionRepository,
+  type QueuedActionRecord,
+} from '../../repositories/ActionRepository.js';
 import { AgentWorkerRepository } from '../../repositories/AgentWorkerRepository.js';
 import { getUserRuntimeConfig } from '../../runtimeConfig.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
@@ -35,6 +38,14 @@ export class AgentWorkerProtocolError extends Error {
     this.name = 'AgentWorkerProtocolError';
   }
 }
+
+/**
+ * Cap on how many tasks one worker may hold at once. The worker reports
+ * currentTaskCount on every heartbeat, so the claim budget shrinks as it fills
+ * up — that is what keeps a busy worker from draining the shared pool while an
+ * idle one has nothing to do.
+ */
+const MAX_WORKER_CONCURRENCY = 2;
 
 export class AgentWorkerService {
   private readonly workers: AgentWorkerRepository;
@@ -148,9 +159,20 @@ export class AgentWorkerService {
     if (!worker) {
       throw new AgentWorkerProtocolError('Worker not found', 'not_found', 404);
     }
+
+    // A heartbeat is proof the worker is still alive, so it also extends every
+    // lease it holds. Without this a task running longer than WORKER_LEASE_SECONDS
+    // gets reclaimed underneath a worker that is still working on it, and its
+    // eventual report is rejected as lease_expired — the run is lost even though
+    // it succeeded. Renewal on the existing heartbeat means workers get this for
+    // free, without a second call to forget.
+    const renewedLeases = this.renewLeasesForWorker(workerId);
+
     return {
       ok: true,
       protocolVersion: WORKER_PROTOCOL_VERSION,
+      leaseSeconds: WORKER_LEASE_SECONDS,
+      renewedLeases,
       commands: this.workers.listPendingCommands(workerId).map((item) => ({
         id: item.id,
         kind: item.kind,
@@ -215,7 +237,25 @@ export class AgentWorkerService {
     if (!worker || worker.revokedAt) {
       throw new AgentWorkerProtocolError('Worker not found', 'not_found', 404);
     }
-    const due = this.actions.listAwaitingClaim(workerId, Math.max(1, maxItems));
+    // Idle-aware budget: a worker already running things asks for less, so a
+    // busy worker cannot drain the shared pool while an idle one starves.
+    const budget = Math.max(
+      0,
+      Math.min(Math.max(1, maxItems), MAX_WORKER_CONCURRENCY - (worker.currentTaskCount ?? 0)),
+    );
+    if (budget === 0) return { tasks: [] };
+
+    // Work pre-bound to this worker comes first; only then does it dip into the
+    // shared pool, and only for tasks its capabilities can actually run.
+    const bound = this.actions.listAwaitingClaim(workerId, budget);
+    const pooled =
+      bound.length < budget
+        ? this.actions
+            .listPoolAwaitingClaim(budget - bound.length)
+            .filter((action) => this.workerCanRun(worker, action))
+        : [];
+    const due = [...bound, ...pooled];
+
     const tasks = [];
     for (const action of due) {
       const fenceToken = this.workers.nextLeaseEpoch(workerId);
@@ -239,6 +279,93 @@ export class AgentWorkerService {
       });
     }
     return { tasks };
+  }
+
+  /**
+   * Whether a worker's declared capabilities cover an action's executor.
+   *
+   * Only applied to pool tasks: a task explicitly parked for a worker was
+   * already routed on purpose, and second-guessing that here would strand it.
+   */
+  private workerCanRun(
+    worker: { capabilities?: WorkerCapabilities },
+    action: QueuedActionRecord,
+  ): boolean {
+    const executor = this.resolveExecutor(action.params);
+    if (!executor) return false;
+    const capabilities = worker.capabilities ?? {};
+    switch (executor.type) {
+      case 'acp-codex':
+        return capabilities.acpCodex === true;
+      case 'acp-claude-code':
+        return capabilities.acpClaudeCode === true;
+      default:
+        // Gateway executors do not run on the worker at all, and an unknown
+        // ACP type has no capability flag to check yet — neither belongs in a
+        // pool grab where nobody vetted the routing.
+        return false;
+    }
+  }
+
+  /**
+   * Extend every lease this worker holds. Returns what was renewed so the
+   * worker can notice a lease it thought it owned but no longer does.
+   */
+  renewLeasesForWorker(workerId: string): Array<{ actionId: string; leaseUntil: number }> {
+    const leaseUntil = now() + WORKER_LEASE_SECONDS;
+    const renewed: Array<{ actionId: string; leaseUntil: number }> = [];
+    for (const lease of this.workers.listLeasesForWorker(workerId)) {
+      // Skip leases that already expired: those belong to the reclaim path, and
+      // silently extending one would let a worker keep a task the queue has
+      // already handed back.
+      if (lease.leaseUntil <= now()) continue;
+      const updated = this.workers.renewLease({
+        actionId: lease.actionId,
+        workerId,
+        fenceToken: lease.fenceToken,
+        leaseUntil,
+      });
+      if (updated) {
+        this.actions.extendWorkerLease(lease.actionId, leaseUntil);
+        renewed.push({ actionId: lease.actionId, leaseUntil });
+      }
+    }
+    return renewed;
+  }
+
+  /** Explicit single-lease renewal, for a worker that wants finer control. */
+  renewLease(
+    workerId: string,
+    input: { actionId?: string; fenceToken?: number },
+  ): { ok: true; leaseUntil: number } {
+    const actionId = input.actionId?.trim();
+    if (!actionId) {
+      throw new AgentWorkerProtocolError('actionId required', 'invalid_renew');
+    }
+    const lease = this.workers.getLease(actionId);
+    if (!lease || lease.workerId !== workerId) {
+      throw new AgentWorkerProtocolError(
+        'No active lease for this action',
+        'lease_mismatch',
+        409,
+      );
+    }
+    if (input.fenceToken !== lease.fenceToken) {
+      throw new AgentWorkerProtocolError(
+        'Stale fence token; this worker no longer owns the lease',
+        'stale_fence',
+        409,
+      );
+    }
+    if (lease.leaseUntil <= now()) {
+      // Already reclaimed: renewing here would take back a task the queue may
+      // have handed to another worker.
+      throw new AgentWorkerProtocolError('Lease expired', 'lease_expired', 409);
+    }
+    const leaseUntil = now() + WORKER_LEASE_SECONDS;
+    this.workers.renewLease({ actionId, workerId, fenceToken: lease.fenceToken, leaseUntil });
+    this.actions.extendWorkerLease(actionId, leaseUntil);
+    return { ok: true, leaseUntil };
   }
 
   async report(

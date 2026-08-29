@@ -110,7 +110,9 @@ export function buildAgentResultSystemPrompt(
     '例子（Jira 写）：每个更新的 issue 一张收据，sourceSystem=jira, entityKey=NOVA-17023, verification=rest_api_readback, operation=update, changedFields=["Committed"]。',
     '例子（浏览器读）：sourceSystem=chrome, entityKey=页面 URL, verification=page_url, observedFields=["url","title"]。',
     '例子（文件/代码）：sourceSystem=filesystem, entityKey=路径, verification=git_status 或 file_read。',
+    '- 产出文件的任务（调研报告、方案文档、幻灯片）：交一张 kind="file" 的收据，metadata.path 写相对用户数据目录的路径（如 research/xxx.md，不要写绝对路径或 ..），metadata.verification 说明怎么确认写成功（如 file_write / git_status），content 写一句产物摘要。文件本身由你写盘，账本只记路径。',
     '例子（查询 0 匹配）：kind=query_result, sourceSystem=jira, query="issueFunction in portfolioChildrenOf(...)", verification=jql_requery, matchCount=0。',
+    '例子（文件产物）：kind=file, path="research/sqlite-vec-vs-lancedb.md", verification=file_write, content="p95 延迟对比与迁移成本结论"。',
     '',
     'Keep the summary concise and factual. Do not ask the user to specify this format.',
   ]

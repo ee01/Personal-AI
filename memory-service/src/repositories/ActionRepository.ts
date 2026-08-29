@@ -917,6 +917,28 @@ export class ActionRepository {
     return rows.map((row) => this.rowToAction(row));
   }
 
+  /**
+   * Unassigned work any capable worker may take.
+   *
+   * listAwaitingClaim only returns rows pre-bound to one worker via
+   * target_worker_id, so a task parked for a worker that is offline sits there
+   * while other idle workers have nothing to do. Rows with target_worker_id
+   * NULL are the shared pool: whoever asks first and can run it, gets it.
+   */
+  listPoolAwaitingClaim(limit: number): QueuedActionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM proposed_actions
+         WHERE queue_status = 'awaiting_claim'
+           AND target_worker_id IS NULL
+         ORDER BY priority DESC, COALESCE(scheduled_at, created_at) ASC
+         LIMIT ?`,
+      )
+      .all(Math.max(1, limit)) as ActionRow[];
+    return rows.map((row) => this.rowToAction(row));
+  }
+
   markAwaitingClaim(
     id: string,
     workerId: string,
@@ -941,6 +963,19 @@ export class ActionRepository {
       )
       .run(workerId, JSON.stringify(merged), id);
     return this.getById(id);
+  }
+
+  /**
+   * Keep the action row's copy of leaseUntil in step with a renewed lease, so
+   * anything reading run state (runtime-status, the Task Center detail panel)
+   * does not show a lease that looks expired while the worker is still on it.
+   */
+  extendWorkerLease(id: string, leaseUntil: number): void {
+    const existing = this.getById(id);
+    if (!existing) return;
+    this.db
+      .prepare('UPDATE proposed_actions SET result_json = ? WHERE id = ?')
+      .run(JSON.stringify({ ...(existing.result || {}), leaseUntil }), id);
   }
 
   markClaimedByWorker(

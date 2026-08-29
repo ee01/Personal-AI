@@ -113,6 +113,44 @@ export function isVerifiedEmptyResultArtifact(artifact: AgentResultArtifact): bo
   return Boolean(sourceSystem && query && verification && hasBody);
 }
 
+/**
+ * A research or authoring task's real output is a file, not a record it touched.
+ * Its receipt is the deliverable itself: a path under the user's data directory
+ * plus how it was produced.
+ *
+ * The path is required to be relative and free of traversal segments — a
+ * receipt naming /etc/passwd or ../../ is a prompt-injection attempt, not a
+ * deliverable, and this contract is what everything downstream trusts.
+ */
+export function isVerifiedFileArtifact(artifact: AgentResultArtifact): boolean {
+  const kind = typeof artifact.kind === 'string' ? artifact.kind.trim().toLowerCase() : '';
+  if (kind !== 'file') return false;
+
+  const metadata = artifact.metadata;
+  const filePath = getMetadataString(metadata, ['path', 'filePath', 'relativePath']);
+  if (!filePath || !isSafeRelativeArtifactPath(filePath)) return false;
+
+  const verification =
+    metadata?.verified === true ||
+    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
+  const hasBody =
+    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
+    (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
+
+  return Boolean(verification && hasBody);
+}
+
+/** Relative, no traversal, no absolute or Windows-drive prefix, no NUL. */
+export function isSafeRelativeArtifactPath(value: string): boolean {
+  const path = value.trim();
+  if (!path || path.includes('\0')) return false;
+  if (path.startsWith('/') || path.startsWith('\\')) return false;
+  if (/^[a-zA-Z]:/.test(path)) return false;
+  return !path
+    .split(/[\\/]+/)
+    .some((segment) => segment === '..');
+}
+
 function hasVerifiableEntityArtifact(
   artifact: AgentResultArtifact,
   options: { targetSystem?: string },
@@ -160,6 +198,7 @@ export function hasVerifiableArtifact(
   return artifacts.some(
     (artifact) =>
       hasVerifiableEntityArtifact(artifact, options) ||
-      isVerifiedEmptyResultArtifact(artifact),
+      isVerifiedEmptyResultArtifact(artifact) ||
+      isVerifiedFileArtifact(artifact),
   );
 }
