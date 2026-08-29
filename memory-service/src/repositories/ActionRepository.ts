@@ -402,6 +402,24 @@ export class ActionRepository {
       params.push(filters.sourceRefId);
     }
 
+    // Task Center filters. These were declared on ActionListFilters when the
+    // columns landed but never reached the SQL, so callers got an unfiltered
+    // list back and had to re-filter client-side (or silently didn't).
+    if (filters.lane) {
+      conditions.push('lane = ?');
+      params.push(filters.lane);
+    }
+
+    if (filters.taskKind) {
+      conditions.push('task_kind = ?');
+      params.push(filters.taskKind);
+    }
+
+    if (filters.parentActionId) {
+      conditions.push('parent_action_id = ?');
+      params.push(filters.parentActionId);
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.db
       .prepare(
@@ -526,6 +544,112 @@ export class ActionRepository {
       .all(currentTime, currentTime, Math.max(1, limit)) as ActionRow[];
 
     return rows.map((row) => this.rowToAction(row));
+  }
+
+  /**
+   * Recurring tasks whose current occurrence has reached a terminal state and
+   * that have not yet produced a successor.
+   *
+   * Rollover is driven by a scan rather than hooked into markSucceeded, because
+   * an occurrence can reach a terminal state through paths that never call it:
+   * cancel(), recoverStaleRunningActions(), and the worker report path all end
+   * runs on their own. A scan sees every one of them, and re-running it is
+   * harmless (see markRecurrenceRolledOver).
+   */
+  listRecurringActionsPendingRollover(limit = 20): QueuedActionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM proposed_actions
+         WHERE recurrence_spec IS NOT NULL
+           AND queue_status IN ('succeeded', 'failed', 'dead_letter', 'cancelled')
+           AND json_extract(recurrence_spec, '$.rolledOverAt') IS NULL
+         ORDER BY COALESCE(finished_at, created_at) ASC
+         LIMIT ?`,
+      )
+      .all(Math.max(1, limit)) as ActionRow[];
+    return rows.map((row) => this.rowToAction(row));
+  }
+
+  /**
+   * Stamp an occurrence as rolled over so the scan stops returning it.
+   * `nextActionId` is null when the series ended (endDate passed or repeatCount
+   * reached) — the stamp still goes on, which is what stops the series.
+   */
+  markRecurrenceRolledOver(
+    id: string,
+    nextActionId: string | null,
+    currentTime = now(),
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET recurrence_spec = json_set(
+               json_set(COALESCE(recurrence_spec, '{}'), '$.rolledOverAt', ?),
+               '$.nextActionId', ?
+             )
+         WHERE id = ?`,
+      )
+      .run(currentTime, nextActionId, id);
+  }
+
+  /** Children of a parent task, for aggregation and for the Task Center tree. */
+  listChildren(parentActionId: string): QueuedActionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM proposed_actions
+         WHERE parent_action_id = ?
+         ORDER BY created_at ASC`,
+      )
+      .all(parentActionId) as ActionRow[];
+    return rows.map((row) => this.rowToAction(row));
+  }
+
+  /**
+   * Parents that are still open while every child has succeeded.
+   *
+   * Like rollover this is a scan: children finish through several code paths,
+   * and a parent with zero children must never auto-complete (that would
+   * complete a task nobody ran), hence the EXISTS guard.
+   */
+  listParentsReadyToComplete(limit = 20): QueuedActionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT parent.*
+         FROM proposed_actions parent
+         WHERE parent.queue_status IN ('queued', 'running', 'input_required', 'awaiting_claim')
+           AND EXISTS (
+             SELECT 1 FROM proposed_actions child
+             WHERE child.parent_action_id = parent.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM proposed_actions child
+             WHERE child.parent_action_id = parent.id
+               AND child.queue_status <> 'succeeded'
+           )
+         ORDER BY parent.created_at ASC
+         LIMIT ?`,
+      )
+      .all(Math.max(1, limit)) as ActionRow[];
+    return rows.map((row) => this.rowToAction(row));
+  }
+
+  /** Complete a parent whose children all succeeded. No attempt row: it never ran itself. */
+  markParentCompleted(id: string, result?: Record<string, unknown>): QueuedActionRecord | null {
+    const currentTime = now();
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'succeeded',
+             state = 'executed',
+             executed_at = ?,
+             finished_at = ?,
+             result_json = ?,
+             last_error = NULL
+         WHERE id = ?`,
+      )
+      .run(currentTime, currentTime, result ? JSON.stringify(result) : null, id);
+    return this.getById(id);
   }
 
   getById(id: string): QueuedActionRecord | null {

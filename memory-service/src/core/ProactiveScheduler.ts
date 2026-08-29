@@ -27,6 +27,8 @@ import { runWithUsageContext } from '../analytics/usageContext.js';
 import { KeystoneBriefComposerService } from './KeystoneBriefComposerService.js';
 import { tickAutoBackups } from './AutoBackupService.js';
 import { sweepExpiredExportJobs } from './ExportJobService.js';
+import { TaskCenterMaintenanceService } from './TaskCenterMaintenanceService.js';
+import { ActionExecutor } from './actions/ActionExecutor.js';
 
 // Usage-analytics rollup cron schedules (independent of proactive features).
 const USAGE_ROLLUP_HOURLY_CRON = '0 * * * *';
@@ -43,6 +45,7 @@ export class ProactiveScheduler {
 
   private heartbeatIntervalId: ReturnType<typeof setInterval> | null = null;
   private outreachIntervalId: ReturnType<typeof setInterval> | null = null;
+  private taskDrainIntervalId: ReturnType<typeof setInterval> | null = null;
   private dailyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyTask: ReturnType<typeof cron.schedule> | null = null;
   private weeklyReportTask: ReturnType<typeof cron.schedule> | null = null;
@@ -86,6 +89,18 @@ export class ProactiveScheduler {
       startedLoops.push(`outreach every ${config.outreachIntervalMs}ms`);
     } else {
       console.log('[ProactiveScheduler] Outreach scheduler disabled');
+    }
+
+    // Task Center drains on its own short cadence, and deliberately sits before
+    // the proactiveSchedulerEnabled gate: a user's 09:00 task must still fire on
+    // deployments that keep the heavy heartbeat work (reflection, digests) off.
+    if (process.env.TASK_DRAIN_SCHEDULER_ENABLED !== 'false') {
+      this.taskDrainIntervalId = setInterval(() => {
+        this.safeRun('taskDrain', () => this.runTaskDrainCycle());
+      }, config.taskDrainIntervalMs);
+      startedLoops.push(`taskDrain every ${config.taskDrainIntervalMs}ms`);
+    } else {
+      console.log('[ProactiveScheduler] Task drain scheduler disabled');
     }
 
     if (process.env.AUTO_BACKUP_SCHEDULER_ENABLED !== 'false') {
@@ -168,6 +183,11 @@ export class ProactiveScheduler {
       this.outreachIntervalId = null;
     }
 
+    if (this.taskDrainIntervalId !== null) {
+      clearInterval(this.taskDrainIntervalId);
+      this.taskDrainIntervalId = null;
+    }
+
     if (this.autoBackupIntervalId !== null) {
       clearInterval(this.autoBackupIntervalId);
       this.autoBackupIntervalId = null;
@@ -240,6 +260,40 @@ export class ProactiveScheduler {
       } catch (err) {
         console.error(
           `[ProactiveScheduler] Outreach cycle error for user ${userId}:`,
+          (err as Error).message,
+        );
+      }
+    }
+  }
+
+  /**
+   * Execute due Task Center work: run what is due, then roll recurring series
+   * forward and close out parents whose children all finished.
+   *
+   * The sweeps run after the drain so a task that completes on this tick rolls
+   * over on this tick too, instead of waiting a full interval.
+   */
+  private async runTaskDrainCycle(): Promise<void> {
+    const userIds = this.ucm.getRegisteredUserIds();
+    for (const userId of userIds) {
+      try {
+        const ctx = this.ucm.getContext(userId);
+        await runWithUsageContext(
+          { side: 'backend', userId, capability: 'memory_service', feature: 'task_center_drain' },
+          async () => {
+            const executor = new ActionExecutor(ctx.db, ctx.userDataManager, userId);
+            await executor.runDueActions(10);
+            const sweep = new TaskCenterMaintenanceService(ctx.db).sweep();
+            if (sweep.rolledOver > 0 || sweep.parentsCompleted > 0 || sweep.seriesEnded > 0) {
+              console.log(
+                `[ProactiveScheduler] Task Center sweep for ${userId}: rolled=${sweep.rolledOver}, ended=${sweep.seriesEnded}, parentsCompleted=${sweep.parentsCompleted}`,
+              );
+            }
+          },
+        );
+      } catch (err) {
+        console.error(
+          `[ProactiveScheduler] Task drain error for user ${userId}:`,
           (err as Error).message,
         );
       }
@@ -477,13 +531,25 @@ export class ProactiveScheduler {
   private async runKeystoneBriefComposer(): Promise<void> {
     const userIds = this.ucm.getRegisteredUserIds();
     for (const userId of userIds) {
-      const context = this.ucm.getContext(userId);
-      const result = await new KeystoneBriefComposerService(context.db).run({
-        maxBriefs: 2,
-      });
-      if (result.composed > 0 || result.failed > 0) {
-        console.log(
-          `[ProactiveScheduler] Keystone briefs for ${userId}: composed=${result.composed}, ready=${result.ready}, partial=${result.partial}, stale=${result.stale}, failed=${result.failed}`,
+      try {
+        const context = this.ucm.getContext(userId);
+        // B8: without a usage context, KeystoneBriefComposerService's LLM
+        // calls were attributed to userId:unknown/capability:unknown in the
+        // analytics report — exactly the "unknown" bucket the dashboard
+        // flags as a coverage gap.
+        const result = await runWithUsageContext(
+          { side: 'backend', userId, capability: 'memory_service', feature: 'keystone_composer' },
+          () => new KeystoneBriefComposerService(context.db).run({ maxBriefs: 2 }),
+        );
+        if (result.composed > 0 || result.failed > 0) {
+          console.log(
+            `[ProactiveScheduler] Keystone briefs for ${userId}: composed=${result.composed}, ready=${result.ready}, partial=${result.partial}, stale=${result.stale}, failed=${result.failed}`,
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[ProactiveScheduler] Keystone brief composer error for user ${userId}:`,
+          (err as Error).message,
         );
       }
     }

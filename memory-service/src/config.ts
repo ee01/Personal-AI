@@ -41,6 +41,17 @@ export interface Config {
   llmFallbackCooldownMs: number;
   llmFallbackFailureThreshold: number;
   llmFallbackOnJsonParse: boolean;
+  /**
+   * Model override for passive webpage analysis (empty = inherit the primary
+   * provider's configured model). This is the biggest single backend LLM
+   * cost (~55% of backend tokens) and is being migrated to the user's own
+   * frontend key — see docs/features/memory_capture.md「网页分析的 LLM 路径」.
+   * Until that lands (or for desktop/e2e traffic that keeps using this
+   * route), downgrading the model here is the cheap interim fix.
+   */
+  webpageAnalysisModel: string;
+  /** Per-user daily cap on backend webpage-analysis LLM calls. 0 = no cap. */
+  webpageAnalysisDailyLimit: number;
 
   // Embedding
   embeddingProvider: string;
@@ -95,6 +106,16 @@ export interface Config {
   // Scheduler
   proactiveSchedulerEnabled: boolean;
   heartbeatIntervalMs: number;
+  /**
+   * How often the Task Center drains due tasks and runs its maintenance sweeps
+   * (recurrence rollover, parent aggregation).
+   *
+   * The 15-minute heartbeat is far too coarse for a task the user scheduled for
+   * a specific minute: a 09:00 push would fire anywhere in 09:00-09:15. This
+   * loop is deliberately separate so the cheap due-scan can run often without
+   * dragging the expensive heartbeat work (reflection, digests) along with it.
+   */
+  taskDrainIntervalMs: number;
   dailyCron: string;
   weeklyCron: string;
   quietHoursStart: number;
@@ -151,6 +172,13 @@ export interface Config {
   reflectionUrgentNotifyThreshold: number;
   reflectionAutoExecuteThreshold: number;
   reflectionUrgentConfidenceThreshold: number;
+  /**
+   * Safety net for a user who opted into reflection and then went idle: skip
+   * the (costly) research-run step when there has been no new message
+   * activity for this many days, regardless of how many threads are still
+   * `active`. Does not change the run cadence while the user is active.
+   */
+  reflectionIdlePauseDays: number;
 
   // OpenClaw
   openClawEnabled: boolean;
@@ -259,6 +287,32 @@ function buildLlmCredentialContext(): LLMTargetCredentialContext {
   };
 }
 
+/**
+ * Whether self-reflection is enabled by default for users who haven't
+ * explicitly opted in via Options.
+ *
+ * `REFLECTION_ENABLED` used to default to `true` when unset (`!== 'false'`),
+ * so a deploy that simply forgot to set the var silently turned reflection on
+ * for every user — this is exactly what happened 2026-08-17/24 and burned
+ * ~$350/month at full fan-out before anyone noticed (see
+ * docs/features/usage_analytics.md, 成本治理与 2026-08 事故复盘). Renamed
+ * to make the "this is a default, not a hard switch" semantics explicit, and
+ * the unset default is now explicitly `false`.
+ */
+function parseReflectionDefaultEnabled(): boolean {
+  const next = process.env.REFLECTION_DEFAULT_ENABLED;
+  if (next !== undefined) return next === 'true';
+  const legacy = process.env.REFLECTION_ENABLED;
+  if (legacy !== undefined) {
+    console.warn(
+      '[Config] REFLECTION_ENABLED is deprecated — rename to REFLECTION_DEFAULT_ENABLED. ' +
+        'Honoring the legacy value for now.',
+    );
+    return legacy === 'true';
+  }
+  return false;
+}
+
 function parseOpenClawExecutorType(
   raw: string | undefined,
 ): Config['openClawExecutorType'] {
@@ -355,6 +409,12 @@ export function getConfig(): Readonly<Config> {
       1,
     ),
     llmFallbackOnJsonParse: process.env.LLM_FALLBACK_ON_JSON_PARSE === 'true',
+    webpageAnalysisModel: (process.env.WEBPAGE_ANALYSIS_MODEL || '').trim(),
+    webpageAnalysisDailyLimit: parsePositiveInt(
+      process.env.WEBPAGE_ANALYSIS_DAILY_LIMIT,
+      300,
+      0,
+    ),
 
     // Embedding
     embeddingProvider: process.env.EMBEDDING_PROVIDER || 'local',
@@ -415,6 +475,12 @@ export function getConfig(): Readonly<Config> {
     heartbeatIntervalMs: parseInt(
       process.env.HEARTBEAT_INTERVAL_MS || '900000',
       10,
+    ),
+    // Floor of 15s: below that the scan cost stops being negligible while
+    // buying no perceptible accuracy (the extension polls on its own cadence).
+    taskDrainIntervalMs: Math.max(
+      15000,
+      parseInt(process.env.TASK_DRAIN_INTERVAL_MS || '60000', 10) || 60000,
     ),
     dailyCron: process.env.DAILY_CRON || '0 23 * * *',
     weeklyCron: process.env.WEEKLY_CRON || '0 3 * * 0',
@@ -507,7 +573,7 @@ export function getConfig(): Readonly<Config> {
     dreamDigestIntervalDays,
 
     // Reflection runtime
-    reflectionEnabled: process.env.REFLECTION_ENABLED !== 'false',
+    reflectionEnabled: parseReflectionDefaultEnabled(),
     reflectionActiveTopicLimit: parseInt(
       process.env.REFLECTION_ACTIVE_TOPIC_LIMIT || '6',
       10,
@@ -524,6 +590,11 @@ export function getConfig(): Readonly<Config> {
     ),
     reflectionUrgentConfidenceThreshold: parseFloat(
       process.env.REFLECTION_URGENT_CONFIDENCE_THRESHOLD || '0.9',
+    ),
+    reflectionIdlePauseDays: parsePositiveInt(
+      process.env.REFLECTION_IDLE_PAUSE_DAYS,
+      7,
+      1,
     ),
 
     // OpenClaw / 外部委派总开关：默认开启；仅 OPENCLAW_ENABLED=false 关闭
