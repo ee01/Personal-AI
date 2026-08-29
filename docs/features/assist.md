@@ -665,6 +665,24 @@ POST /api/v1/extractor/from-chat
    - 同一个下限也适用于**有记忆**的 Glip/Jira 起草：`responseConfidence` 取 `max(top evidence score, 0.80)`。回复草稿的质量下限由线程本身决定，不该被通过了门的最弱一条记忆拉下去。此前一条 0.62 分的预演线索会把整条建议压到前端 0.78 阈值以下，导致「命中一点弱记忆」反而比「完全没记忆」更不容易拿到建议。
    - 仍然静默的情况：owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复。
    - 信息量门槛按信息权重而非裸字符数计算：CJK 字符记 2，其余非空白字符记 1，来自非 owner 条目的合计权重需 `>= 80`（`MIN_CONTEXT_ONLY_DRAFT_WEIGHT`）。裸字符数会让中文线程被要求写到两倍长才肯起草。
+5.2. Glip/Jira 输出语言（`resolveComposerOutputLanguage`）。生成 prompt 本身是中文写的，所以不给显式目标时，模型会用中文回复英文线程。语言按 owner 的承诺强度取第一个非 `unknown` 的信号：
+
+   | 优先级 | 来源 | 说明 |
+   | --- | --- | --- |
+   | 1 | 已确认 `writing_style*` 中写明的语言 | 唯一的例外通道，见下 |
+   | 2 | `draftText`（用户正在输入） | 用户已经选定了语言 |
+   | 3 | owner 在上下文末尾已发出的半截回复 | 同上 |
+   | 4 | 被回复的非 owner 消息 | 回复对方就用对方的语言 |
+   | 5 | 整段可见上下文 | 兜底 |
+
+   例外通道只认 `projection.controls`（已确认）里明确写了语言的写作偏好，例如 `writing_style.ringcentral.reply = "Use concise Chinese, one short paragraph"`；`softControls` 是未确认猜测，不允许压过线程实际使用的语言。先解析偏好再落 prompt，避免同时给模型两条互相矛盾的语言指令。
+
+   双语团队靠「读整段线程而不是只读最后一条来消息」来兜住：一个以中文为主、偶尔夹一条英文消息的线程仍然判为中文。只有在线程整体是英文时才会要求英文回复，而这正是本条要修的场景。
+
+   语言指令在 prompt 里出现两次——身份投影约束开头一次，要求区末尾再一次。中文 prompt 会把模型往中文拽，只在开头写一次压不住；结尾那条的服从度最高。判定复用 Web AI 侧的 `detectDominantPromptLanguage`（cjk / latin / unknown）与 `isPromptLanguageConsistent`。
+
+   目标语言已知而生成结果不符时拦截，原因码 `composer_generation_language_mismatch`（有记忆路径）或 `composer_context_only_language_mismatch`（纯上下文路径），`debug` 同时给出 `expectedLanguage` 和 `actualLanguage`；`unknown` 不拦截。拦截而不是照样展示，是因为语言不对的草稿本来就不能发，而单独的原因码让它可诊断，不会像之前那样并进 `composer_generation_unavailable` 里查不出来。
+
 6. 增量收益门（仅 refine）：计算 `refineGain`；语义偏差超过阈值，或引入原草稿缺失的具体证据事实，二选一即可放行。不通过则 `available=false`，`debug.refineReceipt` 记录原因，不进入用户可见文案。
 7. Web AI Draft Refine 先执行三个确定性 prompt patch。命中时直接返回 `prompt_patch + append_patch`，不调用通用编译器。
 8. 其余 Web AI 任务在 kill switch 开启时进行一次结构化 Prompt Compiler 调用，只接收 `mode、insertText、usedEvidenceIds、gaps、confidence`。system prompt 明确要求只优化 prompt、保持草稿语言、保留目标/事实、不编造个人信息/引用，并把记忆视作未验证上下文；GPT-5 请求使用 `reasoning_effort=none`，结果保持紧凑；编译超时预算为 30 秒（`WEB_PROMPT_COMPILER_TIMEOUT_MS`）。

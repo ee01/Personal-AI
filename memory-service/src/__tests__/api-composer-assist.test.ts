@@ -1489,6 +1489,166 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.summary).toContain('未使用历史记忆');
   });
 
+  it('asks for an English draft when the thread is in English', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    llmGenerateMock.mockResolvedValue({
+      content:
+        'Thanks for flagging this. I will reach out to facilities about the printer and share the repair window in this thread once I hear back.',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        title: 'Office facilities',
+        draftText: '',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: 'The third floor printer is jammed again and it is blocking the contracts we need to mail out today. Could someone contact maintenance? I am in meetings all afternoon.',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    // The generation prompt is authored in Chinese, so an English thread needs an
+    // explicit target or the model answers in Chinese.
+    const prompt = llmGenerateMock.mock.calls.at(-1)?.[0] as string;
+    expect(prompt).toContain('Output language: English');
+    expect(body.insertText).toContain('printer');
+  });
+
+  it('drops a draft whose language contradicts the thread', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    llmGenerateMock.mockResolvedValue({
+      content: '好的，我来跟进这台打印机的报修，稍后把维修时间同步到群里。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        debug: true,
+        title: 'Office facilities',
+        draftText: '',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: 'The third floor printer is jammed again and it is blocking the contracts we need to mail out today. Could someone contact maintenance? I am in meetings all afternoon.',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    // No memory backed this draft, so it is the context-only path that blocks it.
+    expect(body.debug.rejectedReason).toBe(
+      'composer_context_only_language_mismatch',
+    );
+    expect(body.debug.expectedLanguage).toBe('latin');
+    expect(body.debug.actualLanguage).toBe('cjk');
+  });
+
+  it('lets a confirmed writing-style language override the thread', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    db.prepare(
+      `INSERT INTO user_profile_items
+         (id, item_type, item_key, item_value, source_kind, confidence,
+          user_confirmed, status, salience_score, mention_count, last_seen,
+          created_at, updated_at, fingerprint)
+       VALUES (?, 'preference', 'writing_style.ringcentral.reply', ?, 'manual', 0.9,
+               1, 'active', 0.9, 3, ?, ?, ?, ?)`,
+    ).run(
+      'style-lang-zh',
+      'Use concise Chinese, one short paragraph',
+      Date.now(),
+      Date.now(),
+      Date.now(),
+      'fp-style-lang-zh',
+    );
+    llmGenerateMock.mockResolvedValue({
+      content: '好的，我来跟进这台打印机的报修，稍后把维修时间同步到群里。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        title: 'Office facilities',
+        draftText: '',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: 'The third floor printer is jammed again and it is blocking the contracts we need to mail out today. Could someone contact maintenance? I am in meetings all afternoon.',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The owner confirmed they reply in Chinese here, so an English thread does
+    // not force an English draft.
+    expect(res.json().available).toBe(true);
+    const prompt = llmGenerateMock.mock.calls.at(-1)?.[0] as string;
+    expect(prompt).toContain('输出语言：中文');
+    db.prepare('DELETE FROM user_profile_items WHERE id = ?').run(
+      'style-lang-zh',
+    );
+  });
+
+  it('follows the half-typed draft language over the incoming thread', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    llmGenerateMock.mockResolvedValue({
+      content: '我下午联系一下维修，确认时间后同步到这个群里。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        title: 'Office facilities',
+        // The owner already committed to Chinese, so the reply follows them
+        // rather than the English thread.
+        draftText: '我这边可以帮忙',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: 'The third floor printer is jammed again and it is blocking the contracts we need to mail out today. Could someone contact maintenance?',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const prompt = llmGenerateMock.mock.calls.at(-1)?.[0] as string;
+    expect(prompt).toContain('输出语言：中文');
+  });
+
   it('stays silent for context-only drafting when the thread is too thin', async () => {
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM chunks').run();

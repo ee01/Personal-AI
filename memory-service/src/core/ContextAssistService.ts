@@ -516,6 +516,35 @@ export class ContextAssistService {
       });
     }
 
+    const outputLanguage = resolveComposerOutputLanguage(request, projection);
+    if (
+      !promptPatch &&
+      !isPromptLanguageConsistent(insertText, outputLanguage)
+    ) {
+      return finish({
+        available: false,
+        suggestionType: 'none',
+        title: '暂无可直接发送的建议',
+        summary: '生成结果的语言与当前会话不一致，未提供可插入草稿。',
+        evidence,
+        riskLevel,
+        previewRequired: false,
+        confidence,
+        queryTimeMs: recall.queryTimeMs,
+        debug: request.debug
+          ? {
+              recall: recall.debug,
+              recallRequest,
+              taskFrame,
+              personaProjection: projection.summary,
+              rejectedReason: 'composer_generation_language_mismatch',
+              expectedLanguage: outputLanguage,
+              actualLanguage: detectDominantPromptLanguage(insertText),
+            }
+          : undefined,
+      });
+    }
+
     const validation = validatePersonaProjectionOutput(insertText, projection);
     if (!validation.valid) {
       const blockedProjection = blockPersonaProjection(
@@ -1081,6 +1110,19 @@ export class ContextAssistService {
         '相关上下文',
         '生成内容与用户已发送的回复重复，保持安静。',
         'composer_context_only_redundant_with_owner_reply',
+      );
+    }
+
+    const outputLanguage = resolveComposerOutputLanguage(request, projection);
+    if (!isPromptLanguageConsistent(sanitized, outputLanguage)) {
+      return silent(
+        '暂无可直接发送的建议',
+        '生成结果的语言与当前会话不一致。',
+        'composer_context_only_language_mismatch',
+        {
+          expectedLanguage: outputLanguage,
+          actualLanguage: detectDominantPromptLanguage(sanitized),
+        },
       );
     }
 
@@ -3236,6 +3278,80 @@ function isPromptLanguageConsistent(
   return actual === expected;
 }
 
+/**
+ * A confirmed writing-style preference that names a language, e.g.
+ * `writing_style.ringcentral.reply = "Use concise Chinese, one short paragraph"`.
+ *
+ * Only confirmed `controls` count. Soft controls are unconfirmed guesses and
+ * must not outrank the language the thread is actually being held in.
+ */
+function findPersonaLanguagePreference(
+  projection: PersonaProjection,
+): WebPromptCompileResult['outputLanguage'] {
+  for (const slot of projection.controls) {
+    if (!slot.key.startsWith('writing_style')) continue;
+    const value = String(slot.value);
+    if (/\bchinese\b|中文/i.test(value)) return 'cjk';
+    if (/\benglish\b|英文/i.test(value)) return 'latin';
+  }
+  return 'unknown';
+}
+
+/**
+ * Which language a Glip/Jira draft must be written in.
+ *
+ * The generation prompt is written in Chinese, so with no explicit target the
+ * model answers an English thread in Chinese. Signals are ordered by how firmly
+ * the owner has committed: a confirmed style preference that names a language
+ * beats everything, then what they are typing right now, then the messages being
+ * replied to, then the whole visible thread, which also holds the owner's older
+ * turns and quoted boilerplate.
+ *
+ * Reading the thread rather than the incoming message alone is what keeps
+ * bilingual teams working: a mostly-Chinese thread with one English message
+ * still resolves to Chinese.
+ */
+function resolveComposerOutputLanguage(
+  request: ComposerAssistRequest,
+  projection: PersonaProjection,
+): WebPromptCompileResult['outputLanguage'] {
+  const preferred = findPersonaLanguagePreference(projection);
+  if (preferred !== 'unknown') return preferred;
+
+  const items = normalizeComposerContextItems(request);
+  const textOf = (list: ComposerContextItem[]): string =>
+    list
+      .map((item) => (item.text || item.title || '').trim())
+      .filter(Boolean)
+      .join(' ');
+
+  const candidates = [
+    normalizeComposerDraft(request.draftText),
+    getOwnerReplyState(request).text,
+    textOf(items.filter((item) => !isOwnerAuthoredContextItem(item))),
+    textOf(items),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const language = detectDominantPromptLanguage(candidate);
+    if (language !== 'unknown') return language;
+  }
+  return 'unknown';
+}
+
+function describeComposerOutputLanguage(
+  language: WebPromptCompileResult['outputLanguage'],
+): string {
+  if (language === 'latin') {
+    return '* Output language: English. These instructions are in Chinese, but the reply itself MUST be written entirely in English. Keep proper nouns, product names and identifiers as they appear.';
+  }
+  if (language === 'cjk') {
+    return '* 输出语言：中文。整段回复必须用中文写，产品名、代号和技术术语保留原文。';
+  }
+  return '* 输出语言：与当前上下文里对方使用的语言保持一致。';
+}
+
 function hasCompiledPromptGoalContinuity(
   draft: string,
   compiled: string,
@@ -3379,7 +3495,10 @@ export function buildComposerRefinePrompt(
     memories,
     '',
     '身份投影约束：',
-    '* 匹配主人当前使用的语言；长度、语气和结构跟当前场景保持一致。',
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
+    '* 长度、语气和结构跟当前场景保持一致。',
     '* 只能使用下方投影允许的身份信息；柔性提示不能当作事实。',
     '* 表达控制只影响写法，不得在正文中复述配置值。',
     '* 不要说 Personal AI，也不要透露这是由系统或记忆生成。',
@@ -3394,6 +3513,9 @@ export function buildComposerRefinePrompt(
     scenario === 'jira_comment'
       ? '* 语气正式、清晰，给出判断/依据/next step。'
       : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
   ]
     .filter(Boolean)
     .join('\n');
@@ -3440,7 +3562,10 @@ export function buildComposerGenerationPrompt(
       : ['可用记忆：无。只能基于上面的当前上下文和身份投影约束写，不要引入外部事实。']),
     '',
     '身份投影约束：',
-    '* 匹配主人当前使用的语言；长度、语气和结构跟当前场景保持一致。',
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
+    '* 长度、语气和结构跟当前场景保持一致。',
     '* 只能使用下方投影允许的身份信息；柔性提示不能当作事实。',
     '* 表达控制只影响写法，不得在正文中复述配置值。',
     '* 不要说 Personal AI，也不要透露这是由系统或记忆生成。',
@@ -3462,6 +3587,11 @@ export function buildComposerGenerationPrompt(
       ? '* 语气正式、清晰，给出判断/依据/next step。'
       : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
     '* 不要编造当前上下文或记忆里没有的事实。',
+    // Repeated last on purpose: a Chinese prompt pulls the model toward Chinese
+    // output, and the closing instruction is the one it follows most reliably.
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
   ]
     .filter(Boolean)
     .join('\n');
