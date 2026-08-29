@@ -11,7 +11,11 @@ import {
   AGENT_ACTION_TYPES,
   isAgentDelegateActionType,
 } from '../integrations/executors/executorRegistry.js';
-import { ActionRepository } from '../repositories/ActionRepository.js';
+import {
+  ActionRepository,
+  normalizeTaskKind,
+  normalizeTaskLane,
+} from '../repositories/ActionRepository.js';
 
 export async function actionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{
@@ -23,6 +27,9 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       actionType?: string;
       sourceKind?: string;
       sourceRefId?: string;
+      lane?: string;
+      taskKind?: string;
+      parentActionId?: string;
       limit?: string;
       offset?: string;
     };
@@ -46,6 +53,9 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
       actionType: request.query.actionType,
       sourceKind: request.query.sourceKind,
       sourceRefId: request.query.sourceRefId,
+      lane: normalizeTaskLane(request.query.lane),
+      taskKind: normalizeTaskKind(request.query.taskKind),
+      parentActionId: request.query.parentActionId,
       limit: parseInt(request.query.limit ?? '20', 10) || 20,
       offset: parseInt(request.query.offset ?? '0', 10) || 0,
     });
