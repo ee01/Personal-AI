@@ -161,6 +161,7 @@ Key environment variables (see `.env.example` for all options):
 | `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` | `true` (omit = on) | Enable vector search on passive Memory Lens / browser recall. Unset/missing enables it; only explicit `false`/`0`/`off`/`no` disables. Still no-ops if embeddings are not loaded. |
 | `CONTEXT_RECALL_ROUTE_PASSIVE_FAST_FALLBACK_ENABLED` | `true` | Return empty passive recall before DB/FTS work when passive search is disabled |
 | `COMPOSER_SENDABLE_GENERATION_ENABLED` | `true` (omit = on) | Generate sendable Glip/Jira drafts in Compose Assist. Unset/missing enables it; only explicit `false`/`0`/`off`/`no` disables, leaving compiled `draft_hint` cues as the sole insert source. |
+| `COMPOSER_GENERATION_TIMEOUT_MS` | `15000` | Per-call budget for Compose Assist draft generation. Must cover a failed primary LLM target plus a reasoning-model fallback. |
 | `COMPOSER_PROMPT_COMPILER_ENABLED` | `true` (omit = on) | Web AI Prompt Compiler. Disabling keeps deterministic prompt patches only. |
 | `INGEST_LLM_EXTRACTION_ENABLED` | `false` | Enable LLM entity extraction during ingest |
 | `INGEST_EMBEDDING_ENABLED` | `false` | Enable local embedding indexing during ingest |

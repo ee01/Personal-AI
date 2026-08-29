@@ -53,7 +53,16 @@ const MIN_COMPOSER_SOURCE_OVERLAP = 1;
 // by empty evidence plus forced preview instead.
 const CONTEXT_ONLY_DRAFT_CONFIDENCE = 0.8;
 const MIN_CONTEXT_ONLY_DRAFT_WEIGHT = 80;
-const COMPOSER_GENERATION_TIMEOUT_MS = 4500;
+// A failed primary target plus a reasoning-model fallback already costs more
+// than 5s, so the old 4.5s budget rejected every draft before it arrived.
+const COMPOSER_GENERATION_TIMEOUT_MS = parsePositiveIntEnv(
+  'COMPOSER_GENERATION_TIMEOUT_MS',
+  15_000,
+);
+// Reasoning models bill their hidden reasoning against the same budget, so a
+// reply-sized ceiling truncates the visible answer to finish_reason=length.
+const COMPOSER_GENERATION_MAX_TOKENS = 900;
+const COMPOSER_JIRA_GENERATION_MAX_TOKENS = 1200;
 const WEB_PROMPT_COMPILER_TIMEOUT_MS = 30_000;
 const MIN_WEB_REFINE_DRAFT_CHARS = 8;
 const MIN_WORK_REFINE_SEMANTIC_GAIN = 0.34;
@@ -116,6 +125,11 @@ const WORK_SOURCES: RecallSourceType[] = [
   'reflection_thread',
   'rehearsal',
 ];
+
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function parseOptionalBooleanEnv(name: string): boolean | null {
   const raw = process.env[name];
@@ -3265,7 +3279,10 @@ async function generateSendableComposerText(
     const response = await withTimeout(
       llm.generate(prompt, {
         temperature: 0.2,
-        maxTokens: scenario === 'jira_comment' ? 360 : 220,
+        maxTokens:
+          scenario === 'jira_comment'
+            ? COMPOSER_JIRA_GENERATION_MAX_TOKENS
+            : COMPOSER_GENERATION_MAX_TOKENS,
         systemPrompt:
           'You write only the exact text the user can insert into the current composer. No explanation, no wrapper, no metadata.',
         timeoutMs: COMPOSER_GENERATION_TIMEOUT_MS,
@@ -3300,7 +3317,10 @@ async function generateRefinedComposerText(
     const response = await withTimeout(
       llm.generate(prompt, {
         temperature: 0.2,
-        maxTokens: scenario === 'jira_comment' ? 380 : 260,
+        maxTokens:
+          scenario === 'jira_comment'
+            ? COMPOSER_JIRA_GENERATION_MAX_TOKENS
+            : COMPOSER_GENERATION_MAX_TOKENS,
         systemPrompt:
           'You refine the user draft into the exact replacement text for the current composer. No explanation, no wrapper, no metadata.',
         timeoutMs: COMPOSER_GENERATION_TIMEOUT_MS,

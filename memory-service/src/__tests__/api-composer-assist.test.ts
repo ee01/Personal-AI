@@ -1358,11 +1358,15 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     });
     expect(body.personaProjection.usedSlotKinds).toContain('writing_style');
     expect(body.debug.personaProjection).toEqual(body.personaProjection);
+    // The budget has to cover a failed primary target plus a reasoning-model
+    // fallback, and leave the reasoning tokens room so the visible reply is not
+    // truncated to finish_reason=length.
     expect(llmGenerateMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         retryCount: 0,
-        timeoutMs: 4500,
+        timeoutMs: 15_000,
+        maxTokens: 900,
       }),
     );
   });

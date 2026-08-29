@@ -191,6 +191,8 @@ Compose Assist 不做：
 - Memory Lens 被动召回另有独立用户开关 `CONTEXT_LENS_ENABLED`（同样默认打开）。关闭 Lens 不会关掉 Compose Assist 或会前准备。
 - 子开关：`COMPOSE_DRAFT_ENABLED` / `COMPOSE_REFINE_ENABLED` 分别门控 Draft Compose / Draft Refine；挂在 Compose Assist 总开关之下。
 - 服务端 kill switch `COMPOSER_SENDABLE_GENERATION_ENABLED` 门控 Glip/Jira 可发送正文生成，未配置即开启；只有显式 `false`/`0`/`off`/`no` 才关闭，关闭后只剩编译好的 `draft_hint` cue 可插入。这个开关曾经默认只在 `NODE_ENV=test` / `VITEST` 下开启，导致测试全绿但线上每一次 Glip 起草都静默返回 `composer_generation_unavailable`；任何新增 kill switch 都不允许再用「仅测试运行时为开」作为默认值。
+- 生成预算 `COMPOSER_GENERATION_TIMEOUT_MS` 默认 `15000`。它必须能容纳「主 target 失败 + reasoning 模型兜底」这条最慢路径：主 target 报错本身要花 0.5–2.5s，reasoning 模型再要 3.5–5s，原来的 4500ms 会在结果返回前就把每一次起草判超时。
+- 生成 token 预算为普通回复 900、Jira comment 1200。reasoning 模型把隐藏推理算进同一预算，按回复长度设上限（原来的 220）会让可见正文被截断成 `finish_reason=length`。这是上限不是目标，正文长度仍由 prompt 的「3-5 行以内」和 `isSendableComposerText` 的行数校验约束。
 - 自适应阈值按 `surface:intent` 复合 key 读写（例如 `chatgpt:draft_refine`）；裸 `surface` 作为兼容 fallback。ChatGPT 拒绝一次 prompt 优化不会连累 Glip 起草。
 - thumb-down / accepted 反馈同样写入复合 key。
 
