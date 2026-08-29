@@ -21,8 +21,10 @@ focus 时草稿非空则完全静默，等 blur 走精修。发送后回到空�
 
 | | Draft Compose | Draft Refine |
 | --- | --- | --- |
-| **Glip / Jira** | 已有：`reply_context` / `issue_context`（空草稿用会话/issue 上下文起草） | 新增：`reply_refine`（强制预览，严格增量收益门） |
+| **Glip / Jira** | 已有：`reply_context` / `issue_context`（空草稿用会话/issue 上下文起草，零记忆时降级为纯上下文起草） | 新增：`reply_refine`（强制预览，严格增量收益门） |
 | **Web AI** | 新增：`prompt_draft`（页面可见 AI turns + 召回记忆，无 8 字符前置） | 已有：`rewrite_prompt` / `prompt_patch` / `context_pack`（软增量收益门） |
+
+四个象限都不把“命中历史记忆”当作起草的前置条件。当前线程/issue 本身就是回复的第一输入；要求先召回一条历史记忆才肯起草，会让助手恰好在用户进入新话题时失效。
 
 实现状态：Compose Assist 身份投影 P0 已于 2026-07-15 交付到 RingCentral、Jira 和 Web AI。Draft Compose / Draft Refine 双策略于 2026-08-04 贯通前后端。当前行为、维护入口和验证命令以本文为准；后续跨模块 projection 仍按本文“身份投影合约”的边界独立评审。
 
@@ -188,6 +190,7 @@ Compose Assist 不做：
 - 总开关：`CONTEXT_ASSIST_ENABLED` 与 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动。二者默认打开（`!== false` / 环境变量不是 `'false'`）。
 - Memory Lens 被动召回另有独立用户开关 `CONTEXT_LENS_ENABLED`（同样默认打开）。关闭 Lens 不会关掉 Compose Assist 或会前准备。
 - 子开关：`COMPOSE_DRAFT_ENABLED` / `COMPOSE_REFINE_ENABLED` 分别门控 Draft Compose / Draft Refine；挂在 Compose Assist 总开关之下。
+- 服务端 kill switch `COMPOSER_SENDABLE_GENERATION_ENABLED` 门控 Glip/Jira 可发送正文生成，未配置即开启；只有显式 `false`/`0`/`off`/`no` 才关闭，关闭后只剩编译好的 `draft_hint` cue 可插入。这个开关曾经默认只在 `NODE_ENV=test` / `VITEST` 下开启，导致测试全绿但线上每一次 Glip 起草都静默返回 `composer_generation_unavailable`；任何新增 kill switch 都不允许再用「仅测试运行时为开」作为默认值。
 - 自适应阈值按 `surface:intent` 复合 key 读写（例如 `chatgpt:draft_refine`）；裸 `surface` 作为兼容 fallback。ChatGPT 拒绝一次 prompt 优化不会连累 Glip 起草。
 - thumb-down / accepted 反馈同样写入复合 key。
 
@@ -649,10 +652,16 @@ POST /api/v1/extractor/from-chat
 3. `ContextRecallService` 走 fast path：`vector + fts`，limit 默认 3，并在最终展示前执行第一道 Cohesion Gate；随后执行 Web AI 低信息过滤、相关性准入、来源/id/内容去重和最多 3 条限制。如果显示预算把 matches 静音，但 context match 已锁定并携带 evidence ids，会先解析最多 6 条原始候选，再复用同一过滤链，最终仍最多 3 条。Compose Assist 的 `composer_guard` surface **不受** `CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED` 控制；该开关只关掉 Memory Lens / `web_passive` 等页面旁路检索。Lens 的向量通道另由 `CONTEXT_RECALL_PASSIVE_VECTOR_ENABLED` 控制（未配置时默认开启；仅显式 `false`/`0`/`off`/`no` 关闭）。嵌入未加载时 vector 通道会跳过，FTS 仍会跑。
 4. Compose 对最终 evidence 执行第二道 Cohesion Gate，覆盖 change projection 和 locked-context fallback；后续分支只能读取 gated evidence。共享前置管道（recall / cohesion / persona projection）对所有象限相同。
 5. 二维策略路由：`assistIntent × contextType` 选择生成器。
-   - `draft_compose` + Glip/Jira → 既有回复/issue 起草（`reply_context` / `issue_context`）。
+   - `draft_compose` + Glip/Jira → 既有回复/issue 起草（`reply_context` / `issue_context`）。gated evidence 为空时不再直接静默，而是进入纯上下文起草降级路径（见下方第 5.1 条）。
    - `draft_compose` + Web AI → `prompt_draft` 生成器（复用 Prompt Compiler 骨架，无 8 字符前置）。
    - `draft_refine` + Web AI → 既有确定性 patch + Prompt Compiler（`rewrite_prompt` / `prompt_patch` / `context_pack`），再过软增量收益门。
    - `draft_refine` + Glip/Jira → `reply_refine` 生成器（传入原草稿，保留意图与已给事实，只补缺失信息或修正明显偏差），强制 `previewRequired`，再过严格增量收益门。
+5.1. Glip/Jira 纯上下文起草（`assistWorkContextOnlyDraft`）。零记忆时只用可见上下文和身份投影生成正文，并保持以下边界：
+   - `evidence` 必须为空数组，`summary` 明确写「未使用历史记忆」，不得声称记忆支撑。
+   - `previewRequired` 恒为 `true`；没有记忆背书的正文一律先预览再插入。
+   - `confidence` 取展示层下限 `0.80`（`CONTEXT_ONLY_DRAFT_CONFIDENCE`），刚好高于 Draft Compose 象限的 `0.78` 前端阈值。置信度在这里表达「是否值得展示」，「有没有记忆背书」由空 evidence 和强制预览承载。
+   - 仍然静默的情况：owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复。
+   - 信息量门槛按信息权重而非裸字符数计算：CJK 字符记 2，其余非空白字符记 1，来自非 owner 条目的合计权重需 `>= 80`（`MIN_CONTEXT_ONLY_DRAFT_WEIGHT`）。裸字符数会让中文线程被要求写到两倍长才肯起草。
 6. 增量收益门（仅 refine）：计算 `refineGain`；语义偏差超过阈值，或引入原草稿缺失的具体证据事实，二选一即可放行。不通过则 `available=false`，`debug.refineReceipt` 记录原因，不进入用户可见文案。
 7. Web AI Draft Refine 先执行三个确定性 prompt patch。命中时直接返回 `prompt_patch + append_patch`，不调用通用编译器。
 8. 其余 Web AI 任务在 kill switch 开启时进行一次结构化 Prompt Compiler 调用，只接收 `mode、insertText、usedEvidenceIds、gaps、confidence`。system prompt 明确要求只优化 prompt、保持草稿语言、保留目标/事实、不编造个人信息/引用，并把记忆视作未验证上下文；GPT-5 请求使用 `reasoning_effort=none`，结果保持紧凑；编译超时预算为 30 秒（`WEB_PROMPT_COMPILER_TIMEOUT_MS`）。
@@ -727,7 +736,7 @@ Compose Assist 可把 [变化脉络](./change_memory_ledger.md) 投影转成既�
 
 ## 源码与维护入口
 
-- API 与服务编排：`memory-service/src/routes/composerAssist.ts`、`memory-service/src/core/ContextAssistService.ts`（含 `resolveComposerAssistIntent`、`evaluateComposerRefineGain`、四象限生成器）。
+- API 与服务编排：`memory-service/src/routes/composerAssist.ts`、`memory-service/src/core/ContextAssistService.ts`（含 `resolveComposerAssistIntent`、`evaluateComposerRefineGain`、`assistWorkContextOnlyDraft`、四象限生成器）。
 - 身份投影：`memory-service/src/core/ComposerAudienceResolver.ts`、`memory-service/src/core/PersonaProjectionService.ts`（含 `prompt_draft` / `reply_refine` scene）。
 - 输入框探测、双策略触发和写入：`src/composer-guard/siteContextAdapters.ts`、`src/composer-guard/ComposerGuardController.ts`、`src/composer-guard/assistConfig.ts`。
 - 展示门、`surface:intent` 阈值和回执文案：`src/composer-guard/assistPreviewPolicy.ts`、`src/composer-guard/types.ts`、`src/services/MemoryServiceClient.ts`。

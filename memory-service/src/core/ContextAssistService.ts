@@ -47,6 +47,12 @@ const MIN_PROMPT_PATCH_CONFIDENCE = 0.82;
 const MIN_WEB_PROMPT_COMPILER_CONFIDENCE = 0.78;
 const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
 const MIN_COMPOSER_SOURCE_OVERLAP = 1;
+// A context-only draft carries no memory backing, but it is grounded in the
+// thread the user is looking at. It must clear the 0.78 compose-quadrant
+// display threshold or the client hides it; the "no memory" boundary is carried
+// by empty evidence plus forced preview instead.
+const CONTEXT_ONLY_DRAFT_CONFIDENCE = 0.8;
+const MIN_CONTEXT_ONLY_DRAFT_WEIGHT = 80;
 const COMPOSER_GENERATION_TIMEOUT_MS = 4500;
 const WEB_PROMPT_COMPILER_TIMEOUT_MS = 30_000;
 const MIN_WEB_REFINE_DRAFT_CHARS = 8;
@@ -120,12 +126,14 @@ function parseOptionalBooleanEnv(name: string): boolean | null {
   return null;
 }
 
+// Unset means enabled. A test-only default silently disabled every Glip/Jira
+// draft in production while the suites kept passing.
 function isComposerSendableGenerationEnabled(): boolean {
   const envValue = parseOptionalBooleanEnv(
     'COMPOSER_SENDABLE_GENERATION_ENABLED',
   );
   if (envValue !== null) return envValue;
-  return process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+  return true;
 }
 
 function isComposerPromptCompilerEnabled(): boolean {
@@ -371,27 +379,19 @@ export class ContextAssistService {
     }
 
     if (evidence.length === 0) {
-      return finish({
-        available: false,
-        suggestionType: 'none',
-        title: '暂无相关记忆',
-        summary: '没有找到足够相关的 Personal AI 记忆。',
-        evidence,
-        riskLevel: 'low',
-        previewRequired: false,
-        confidence: 0,
-        queryTimeMs: recall.queryTimeMs,
-        debug: request.debug
-          ? {
-              recall: recall.debug,
-              recallRequest,
-              taskFrame,
-              rejectedReason: rawEvidence.length || fallbackEvidence.length
-                ? 'composer_evidence_not_relevant_to_current_scene'
-                : undefined,
-            }
-          : undefined,
-      });
+      return finish(
+        await this.assistWorkContextOnlyDraft({
+          request: requestWithIntent,
+          recallRequest,
+          recallDebug: recall.debug,
+          queryTimeMs: recall.queryTimeMs,
+          hadFilteredEvidence: Boolean(
+            rawEvidence.length || fallbackEvidence.length,
+          ),
+          ownerReplyState,
+          taskFrame,
+        }),
+      );
     }
 
     const confidence = getConfidence(evidence);
@@ -953,6 +953,172 @@ export class ContextAssistService {
             personaProjection: projection.summary,
             rawEvidenceCount: rawEvidence.length,
             filteredEvidenceCount: evidence.length,
+          }
+        : undefined,
+    };
+  }
+
+  /**
+   * Glip/Jira 起草在零记忆时的降级路径。
+   *
+   * 当前线程本身就是回复的第一输入，要求先命中一条历史记忆才肯起草，会让助手
+   * 恰好在用户进入新话题时失效。这里只用可见上下文和身份投影生成正文，evidence
+   * 保持为空、summary 不声称记忆支撑，并强制预览。上下文太薄或用户已经回复完
+   * 时仍然保持安静。
+   */
+  private async assistWorkContextOnlyDraft(input: {
+    request: ComposerAssistRequest;
+    recallRequest: ContextRecallRequest;
+    recallDebug?: ContextRecallDebug;
+    queryTimeMs: number;
+    hadFilteredEvidence: boolean;
+    ownerReplyState: OwnerReplyState;
+    taskFrame: AgentComposeTaskFrame;
+  }): Promise<ComposerAssistResponse> {
+    const {
+      request,
+      recallRequest,
+      recallDebug,
+      queryTimeMs,
+      hadFilteredEvidence,
+      ownerReplyState,
+      taskFrame,
+    } = input;
+
+    const silent = (
+      title: string,
+      summary: string,
+      rejectedReason: string,
+      extra?: Record<string, unknown>,
+    ): ComposerAssistResponse => ({
+      available: false,
+      suggestionType: 'none',
+      title,
+      summary,
+      evidence: [],
+      riskLevel: 'low',
+      previewRequired: false,
+      confidence: 0,
+      queryTimeMs,
+      debug: request.debug
+        ? {
+            recall: recallDebug,
+            recallRequest,
+            taskFrame,
+            assistIntent: 'draft_compose',
+            contextOnlyDraft: true,
+            hadFilteredEvidence,
+            rejectedReason,
+            ...extra,
+          }
+        : undefined,
+    });
+
+    if (ownerReplyState.state === 'complete') {
+      return silent(
+        '相关上下文',
+        '最近上下文显示用户已经回复过；这里不再起草。',
+        'owner_already_replied_context_only',
+        { ownerReplyText: ownerReplyState.text },
+      );
+    }
+
+    if (!hasSufficientContextForContextOnlyDraft(request)) {
+      return silent(
+        '暂无相关记忆',
+        '没有找到相关记忆，当前可见上下文也不足以起草回复。',
+        hadFilteredEvidence
+          ? 'composer_evidence_not_relevant_to_current_scene'
+          : 'composer_context_too_thin',
+      );
+    }
+
+    const suggestionType = getComposerSuggestionType(request);
+    const riskLevel = getComposerRiskLevel(request, []);
+    const projection = this.personaProjectionService.project({
+      request,
+      suggestionType,
+    });
+
+    const generated = await generateSendableComposerText(request, [], projection);
+    if (!generated) {
+      return silent(
+        '暂无可直接发送的建议',
+        '未能根据当前会话上下文生成回复文本。',
+        'composer_context_only_generation_unavailable',
+      );
+    }
+
+    const sanitized = sanitizeGeneratedComposerText(generated);
+    if (!isSendableComposerText(sanitized, getComposerScenario(request))) {
+      return silent(
+        '暂无可直接发送的建议',
+        '生成结果未通过可发送文本校验。',
+        'composer_context_only_not_sendable',
+      );
+    }
+
+    if (isRedundantWithOwnerReply(sanitized, request)) {
+      return silent(
+        '相关上下文',
+        '生成内容与用户已发送的回复重复，保持安静。',
+        'composer_context_only_redundant_with_owner_reply',
+      );
+    }
+
+    const validation = validatePersonaProjectionOutput(sanitized, projection);
+    if (!validation.valid) {
+      const blockedProjection = blockPersonaProjection(
+        projection,
+        validation.reasonCode,
+      );
+      return {
+        available: false,
+        suggestionType: 'none',
+        title: '建议已拦截',
+        summary: '生成内容触发身份或敏感信息边界，未提供可插入草稿。',
+        evidence: [],
+        riskLevel,
+        previewRequired: false,
+        confidence: 0,
+        queryTimeMs,
+        personaProjection: blockedProjection.summary,
+        debug: request.debug
+          ? {
+              recall: recallDebug,
+              recallRequest,
+              taskFrame,
+              assistIntent: 'draft_compose',
+              contextOnlyDraft: true,
+              personaProjection: blockedProjection.summary,
+              rejectedReason: validation.reasonCode,
+            }
+          : undefined,
+      };
+    }
+
+    return {
+      available: true,
+      suggestionType,
+      insertMode: 'append_patch',
+      title: getContextOnlyDraftTitle(request),
+      summary:
+        '根据当前会话上下文起草，未使用历史记忆；确认后写入输入框，不会自动发送。',
+      insertText: clipInsertText(sanitized),
+      evidence: [],
+      riskLevel,
+      previewRequired: true,
+      confidence: CONTEXT_ONLY_DRAFT_CONFIDENCE,
+      queryTimeMs,
+      personaProjection: projection.summary,
+      debug: request.debug
+        ? {
+            recall: recallDebug,
+            recallRequest,
+            taskFrame,
+            assistIntent: 'draft_compose',
+            contextOnlyDraft: true,
+            hadFilteredEvidence,
           }
         : undefined,
     };
@@ -3245,8 +3411,9 @@ export function buildComposerGenerationPrompt(
       ? ['', '用户已经发送但可能未完成的内容：', ownerReplyState.text]
       : []),
     '',
-    '可用记忆：',
-    memories,
+    ...(memories
+      ? ['可用记忆：', memories]
+      : ['可用记忆：无。只能基于上面的当前上下文和身份投影约束写，不要引入外部事实。']),
     '',
     '身份投影约束：',
     '* 匹配主人当前使用的语言；长度、语气和结构跟当前场景保持一致。',
@@ -3258,8 +3425,12 @@ export function buildComposerGenerationPrompt(
     '',
     '要求：',
     '* 不要说“我理解当前”。',
-    '* 不要把记忆逐条摘抄成清单；先消化成自然回复。',
-    '* 只使用和当前上下文明显相关的记忆，不确定就少说。',
+    ...(memories
+      ? [
+          '* 不要把记忆逐条摘抄成清单；先消化成自然回复。',
+          '* 只使用和当前上下文明显相关的记忆，不确定就少说。',
+        ]
+      : ['* 没有可用记忆时，只回应当前上下文里已经出现的内容，不要补充背景。']),
     ownerReplyState.state === 'partial'
       ? '* 用户已经发过的内容不要重复；只生成补充说明，且必须能接在已发送内容后面。'
       : '',
@@ -3379,6 +3550,37 @@ function isOwnerAuthoredContextItem(item: ComposerContextItem): boolean {
   return (
     item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner'
   );
+}
+
+// CJK carries roughly twice the information per character as latin script, so a
+// raw length gate would silently demand that Chinese threads be twice as long.
+function getContextInformationWeight(text: string): number {
+  let weight = 0;
+  for (const char of text) {
+    if (/\s/.test(char)) continue;
+    weight += /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(char) ? 2 : 1;
+  }
+  return weight;
+}
+
+function hasSufficientContextForContextOnlyDraft(
+  request: ComposerAssistRequest,
+): boolean {
+  const incoming = normalizeComposerContextItems(request).filter(
+    (item) => !isOwnerAuthoredContextItem(item),
+  );
+  if (incoming.length === 0) return false;
+  const text = incoming
+    .map((item) => (item.text || item.title || '').trim())
+    .filter(Boolean)
+    .join(' ');
+  return getContextInformationWeight(text) >= MIN_CONTEXT_ONLY_DRAFT_WEIGHT;
+}
+
+function getContextOnlyDraftTitle(request: ComposerAssistRequest): string {
+  if (request.contextType === 'jira_issue') return 'Jira 评论草稿';
+  if (request.surface === 'ringcentral_thread') return 'Thread 回复草稿';
+  return '消息回复草稿';
 }
 
 function isCompleteOwnerReply(text: string): boolean {

@@ -1443,6 +1443,124 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.evidence).toEqual([]);
   });
 
+  it('drafts a Glip reply from thread context when no memory is relevant', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+    llmGenerateMock.mockResolvedValue({
+      content: '好的，我来跟进这台打印机的报修，稍后把维修时间同步到群里。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        title: 'Office facilities',
+        draftText: '',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: '三楼的打印机又卡纸了，已经影响到今天要寄出的合同打印。有人能帮忙联系一下维修吗？我这边下午都在会议里。',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(true);
+    expect(body.suggestionType).toBe('reply_context');
+    expect(body.insertText).toBeTruthy();
+    expect(body.evidence).toEqual([]);
+    // No memory backing, so the draft must always be previewed before insert.
+    expect(body.previewRequired).toBe(true);
+    expect(body.confidence).toBeGreaterThanOrEqual(0.78);
+    expect(body.summary).toContain('未使用历史记忆');
+  });
+
+  it('stays silent for context-only drafting when the thread is too thin', async () => {
+    db.prepare('DELETE FROM messages_raw').run();
+    db.prepare('DELETE FROM chunks').run();
+    db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        title: 'Office facilities',
+        draftText: '',
+        visibleMessages: [{ sender: 'Alice', text: '收到' }],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.available).toBe(false);
+    expect(body.suggestionType).toBe('none');
+    expect(body.insertText).toBeUndefined();
+  });
+
+  it('keeps sendable draft generation enabled outside the test runtime', async () => {
+    // Regression guard: this flag used to default to on only under NODE_ENV=test
+    // / VITEST, so every production Glip draft silently returned none while the
+    // suite stayed green.
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousVitest = process.env.VITEST;
+    const previousFlag = process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
+    process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
+    delete process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
+
+    try {
+      db.prepare('DELETE FROM messages_raw').run();
+      db.prepare('DELETE FROM chunks').run();
+      db.prepare(
+        `INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`,
+      ).run();
+      llmGenerateMock.mockResolvedValue({
+        content: '好的，我来跟进这台打印机的报修，稍后把维修时间同步到群里。',
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/composer/assist',
+        payload: {
+          surface: 'ringcentral_thread',
+          contextType: 'message_thread',
+          assistIntent: 'draft_compose',
+          title: 'Office facilities',
+          draftText: '',
+          visibleMessages: [
+            {
+              sender: 'Alice',
+              text: '三楼的打印机又卡纸了，已经影响到今天要寄出的合同打印。有人能帮忙联系一下维修吗？我这边下午都在会议里。',
+            },
+          ],
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.available).toBe(true);
+      expect(body.insertText).toBeTruthy();
+      expect(llmGenerateMock).toHaveBeenCalled();
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previousVitest;
+      if (previousFlag === undefined)
+        delete process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
+      else process.env.COMPOSER_SENDABLE_GENERATION_ENABLED = previousFlag;
+    }
+  });
+
   it('does not use draft text as the recall query signal', async () => {
     const res = await app.inject({
       method: 'POST',
