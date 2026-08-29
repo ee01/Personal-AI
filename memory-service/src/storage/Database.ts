@@ -4,9 +4,19 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getConfig } from '../config.js';
+import { isSqliteCorruptError } from '../utils/sqliteErrors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
+
+function parseOptionalBooleanEnv(name: string): boolean | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return null;
+  const normalized = raw.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
 
 export interface DatabaseConfig {
   /** Path to the SQLite database file. Defaults to {dataDir}/memory.db */
@@ -72,6 +82,66 @@ export class Database {
         '[Database] sqlite-vec extension not available - vector search will be disabled.',
         err instanceof Error ? err.message : String(err)
       );
+    }
+  }
+
+  /**
+   * Verify `chunks_fts` and rebuild it if the index is corrupt.
+   *
+   * A damaged FTS index is silent: recall just returns nothing, so an outage
+   * can run for days before anyone connects it to a broken search. `chunks_fts`
+   * is an external-content table (`content='chunks'`), so the index is fully
+   * derivable and rebuilding costs nothing but time.
+   *
+   * Returns what happened so callers can log it. Never throws: a repair failure
+   * must not stop the user context from loading, since everything other than
+   * keyword recall still works.
+   */
+  verifyAndRepairFtsIndex(): 'clean' | 'repaired' | 'repair_failed' | 'skipped' {
+    if (parseOptionalBooleanEnv('SQLITE_FTS_AUTO_REPAIR_ENABLED') === false) {
+      return 'skipped';
+    }
+
+    try {
+      this.db
+        .prepare("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
+        .run();
+      return 'clean';
+    } catch (error) {
+      if (!isSqliteCorruptError(error)) return 'skipped';
+    }
+
+    // The content table is the only irreplaceable input. If it is also damaged
+    // a rebuild would bake the damage into the index, so leave it alone and let
+    // the corruption stay visible.
+    try {
+      this.db.prepare('SELECT chunk_id FROM chunks LIMIT 1').get();
+    } catch {
+      console.error(
+        `[Database] chunks_fts is corrupt in ${this.dbPath} but chunks is unreadable; skipping rebuild`,
+      );
+      return 'repair_failed';
+    }
+
+    try {
+      const started = Date.now();
+      this.db
+        .prepare("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')")
+        .run();
+      this.db.prepare("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')").run();
+      this.db
+        .prepare("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
+        .run();
+      console.warn(
+        `[Database] Rebuilt corrupt chunks_fts in ${this.dbPath} (${Date.now() - started}ms)`,
+      );
+      return 'repaired';
+    } catch (error) {
+      console.error(
+        `[Database] Failed to rebuild corrupt chunks_fts in ${this.dbPath}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      return 'repair_failed';
     }
   }
 
