@@ -127,10 +127,19 @@ async function main() {
     assert.ok(bodyText.includes('🏠'), '本地 lane 图标应出现');
     console.log('✓ 两条 lane 在列表中可区分');
 
-    // 3. Level strip reflects that Level 2 is not configured in this profile.
-    assert.ok(bodyText.includes('L0 任务账本'), 'L0 分层应显示');
-    assert.ok(bodyText.includes('L2 云端 lane'), 'L2 分层应显示');
-    console.log('✓ 分层激活状态条渲染');
+    // 3. Capability bar is compact, and opens a guided setup with a real way in.
+    assert.ok(bodyText.includes('L0 账本'), 'L0 分层应显示在能力条');
+    assert.ok(bodyText.includes('L2 云端'), 'L2 分层应显示在能力条');
+    await page.click('.level-bar');
+    await page.waitForSelector('.setup-step', { timeout: 5000 });
+    const setupText = await page.evaluate(
+      () => document.querySelector('.tc-dialog')?.textContent ?? '',
+    );
+    assert.ok(setupText.includes('去配置 Bot'), 'L1 未启用时应给出配置入口');
+    assert.ok(setupText.includes('去一键初始化'), 'L2 未启用时应给出初始化入口');
+    assert.ok(setupText.includes('解锁'), '每层应说明解锁什么');
+    await page.click('.tc-dialog-foot .tc-btn');
+    console.log('✓ 能力条压缩为一行，点击展开引导式初始化并给出真实配置入口');
 
     // 4. Kind filtering narrows the list.
     await page.click('button.chip:has-text("稍后提醒")');

@@ -11,15 +11,54 @@
       </div>
     </div>
 
-    <!-- Layered activation: what the user can do right now, and what is still locked. -->
-    <div class="level-strip" aria-label="能力分层状态">
-      <div v-for="level in levels" :key="level.key" class="level-card" :class="{ on: level.active }">
-        <div class="level-top">
-          <span class="level-dot" />
-          <strong>{{ level.label }}</strong>
-          <span class="level-state">{{ level.active ? '已启用' : '未启用' }}</span>
+    <!-- One compact line: what is on, what is not, and a way in. The detail
+         lives in the setup drawer rather than taking a third of the viewport. -->
+    <button class="level-bar" :class="{ incomplete: !allLevelsActive }" @click="setupOpen = true">
+      <span class="level-bar-label">能力</span>
+      <span v-for="level in levels" :key="level.key" class="level-pill" :class="{ on: level.active }">
+        <span class="level-dot" />{{ level.shortLabel }}
+      </span>
+      <span class="level-bar-cta">{{ allLevelsActive ? '查看配置' : '去配置 →' }}</span>
+    </button>
+
+    <!-- Guided setup: the same three steps as the prototype, each linking to the
+         surface that actually owns that configuration. -->
+    <div v-if="setupOpen" class="tc-backdrop" @click.self="setupOpen = false">
+      <div class="tc-dialog" role="dialog" aria-label="任务中心初始化">
+        <div class="tc-dialog-head">
+          <strong>初始化任务中心</strong>
+          <span class="tc-x" @click="setupOpen = false">✕</span>
         </div>
-        <small>{{ level.detail }}</small>
+        <div class="tc-dialog-body">
+          <p class="setup-intro">
+            能力是分层的：装完插件就能用 L0，L1 和 L2 按需开启。未开启不影响已有功能，只是少一些投递目标和调度选择。
+          </p>
+
+          <div v-for="(level, index) in levels" :key="level.key" class="setup-step" :class="{ done: level.active }">
+            <div class="setup-step-top">
+              <span class="setup-num">{{ level.active ? '✓' : index }}</span>
+              <strong>{{ level.label }}</strong>
+              <span class="setup-state">{{ level.active ? '已启用' : '未启用' }}</span>
+            </div>
+            <div class="setup-step-body">
+              <p>{{ level.detail }}</p>
+              <p class="setup-unlocks"><span>解锁</span>{{ level.unlocks }}</p>
+              <div v-if="level.action" class="setup-actions">
+                <button class="tc-btn primary" @click="level.action.run()">{{ level.action.label }}</button>
+                <small>{{ level.action.hint }}</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="setup-note">
+            L2 在受管 Google 账号下可能被域策略拦住（禁止匿名 Web App 部署）。届时定时消息页会给出明确原因；
+            没有 L2 也不影响任何任务创建，只是调度器固定用 🏠。
+          </div>
+        </div>
+        <div class="tc-dialog-foot">
+          <span class="tc-sync-hint">配置完成后回到本页刷新即可生效</span>
+          <button class="tc-btn" @click="setupOpen = false">关闭</button>
+        </div>
       </div>
     </div>
 
@@ -255,6 +294,7 @@ const tasks = ref<TaskCenterTask[]>([]);
 const selectedId = ref('');
 const activeKind = ref<TaskKind | 'all'>('all');
 const createOpen = ref(false);
+const setupOpen = ref(false);
 const saving = ref(false);
 const toast = ref('');
 const laneSelectableKinds = ref<TaskKind[]>(['push', 'agent']);
@@ -300,28 +340,63 @@ const createKindOptions: Array<{ value: TaskKind; label: string; hint: string }>
   { value: 'dev', label: '🛠 开发委派', hint: '定稿的开发 / 调研工作单' },
 ];
 
+/**
+ * L1 (Bot credentials) and L2 (Sheet + Apps Script + Jira rule) are both owned
+ * by the scheduled-messages page — that is where the credentials and the
+ * one-click setup already live. The Task Center reports status and sends the
+ * user there rather than growing a second copy of those flows.
+ */
+function openScheduledMessages(hash = '') {
+  window.open(chrome.runtime.getURL(`scheduled-messages.html${hash}`), '_blank');
+}
+
 const levels = computed(() => [
   {
     key: 'l0',
+    shortLabel: 'L0 账本',
     label: 'L0 任务账本',
     active: true,
-    detail: '零配置，四类任务都可创建（🏠 本地调度）',
+    detail: '零配置，装完插件即可用。',
+    unlocks: '四类任务全部可创建（🏠 本地调度）+ 插件通知',
+    action: null as null | { label: string; hint: string; run: () => void },
   },
   {
     key: 'l1',
+    shortLabel: 'L1 推送',
     label: 'L1 推送通道',
     active: botConfigured.value,
-    detail: botConfigured.value ? 'Glip Bot 已配置，可发私信 / 群组' : '未配置 Bot，通知走插件通知',
+    detail: botConfigured.value
+      ? 'Glip Bot 已配置，通知可发到私信或群组。'
+      : '未配置 Bot，通知目前只走插件通知（Chrome 通知）。',
+    unlocks: 'Glip Bot 私发 / 群组作为通知目标',
+    action: botConfigured.value
+      ? null
+      : {
+          label: '去配置 Bot',
+          hint: '在定时消息页填写 SM AI Bot 凭据',
+          run: () => openScheduledMessages(),
+        },
   },
   {
     key: 'l2',
-    label: 'L2 云端 lane',
+    shortLabel: 'L2 云端',
+    label: 'L2 云端 lane（☁️ jira_sheet）',
     active: cloudLaneAvailable.value,
     detail: cloudLaneAvailable.value
-      ? 'Sheet + Jira Automation 已就绪，☁️ 调度器可选'
-      : '未配置 Google Sheet + Jira Automation，☁️ 调度器不可选',
+      ? 'Google Sheet + Apps Script + Jira Automation 已就绪。'
+      : '未配置。需要 Google 授权和 Jira 项目 admin 权限。',
+    unlocks: '☁️ 调度器（memory-service 离线也照跑）、Timeline 里程碑触发、Drive 附件',
+    action: cloudLaneAvailable.value
+      ? null
+      : {
+          label: '去一键初始化',
+          hint: '定时消息页 → 一键初始化，会创建 Sheet、部署脚本、装 Jira 规则',
+          run: () => openScheduledMessages(),
+        },
   },
 ]);
+
+const allLevelsActive = computed(() => levels.value.every((level) => level.active));
 
 const pageDescription = computed(
   () =>
@@ -399,7 +474,7 @@ const laneNote = computed(() => {
   }
   return cloudLaneAvailable.value
     ? '🏠 由 memory-service 调度。切到 ☁️ 会创建 Sheet 镜像行交给 Jira 调度。'
-    : '☁️ 需要 Level 2（Google Sheet + Jira Automation），当前不可选；保存后使用 🏠 调度，之后可随时切换。';
+    : '☁️ 需要 Level 2（Google Sheet + Jira Automation），当前不可选；保存后使用 🏠 调度，之后可随时切换。点右上「能力」可去配置。';
 });
 const syncHint = computed(() =>
   effectiveLane.value === 'jira_sheet'
@@ -626,14 +701,31 @@ onUnmounted(() => {
 .tc-btn.primary { background: rgba(59, 130, 246, 0.18); border-color: rgba(59, 130, 246, 0.45); color: var(--tc-accent); font-weight: 600; }
 .tc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.level-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 0.9rem; }
-.level-card { border: 1px solid var(--tc-line); border-radius: 0.55rem; padding: 0.6rem 0.75rem; background: rgba(255, 255, 255, 0.02); }
-.level-card.on { border-color: rgba(52, 211, 153, 0.35); }
-.level-top { display: flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; }
-.level-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tc-dim); flex-shrink: 0; }
-.level-card.on .level-dot { background: var(--tc-green); }
-.level-state { margin-left: auto; font-size: 0.68rem; color: var(--tc-muted); }
-.level-card small { display: block; margin-top: 0.3rem; font-size: 0.7rem; color: var(--tc-dim); }
+.level-bar { display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; padding: 0.3rem 0.7rem 0.3rem 0.6rem; border: 1px solid var(--tc-line); border-radius: 999px; background: rgba(255, 255, 255, 0.02); cursor: pointer; font-family: inherit; color: inherit; }
+.level-bar:hover { border-color: var(--tc-accent); }
+.level-bar.incomplete { border-color: rgba(251, 191, 36, 0.3); }
+.level-bar-label { font-size: 0.68rem; color: var(--tc-dim); }
+.level-pill { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.7rem; color: var(--tc-dim); }
+.level-pill.on { color: var(--tc-green); }
+.level-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tc-dim); flex-shrink: 0; }
+.level-pill.on .level-dot { background: var(--tc-green); }
+.level-bar-cta { font-size: 0.68rem; color: var(--tc-accent); margin-left: 0.15rem; }
+
+.setup-intro { font-size: 0.76rem; color: var(--tc-muted); margin-bottom: 0.9rem; }
+.setup-step { border: 1px solid var(--tc-line); border-radius: 0.55rem; padding: 0.7rem 0.85rem; margin-bottom: 0.6rem; background: rgba(255, 255, 255, 0.02); }
+.setup-step.done { border-color: rgba(52, 211, 153, 0.35); }
+.setup-step-top { display: flex; align-items: center; gap: 0.5rem; }
+.setup-step-top strong { font-size: 0.84rem; flex: 1; }
+.setup-num { width: 20px; height: 20px; border-radius: 50%; background: rgba(148, 163, 184, 0.15); color: var(--tc-muted); font-size: 0.68rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.setup-step.done .setup-num { background: rgba(34, 197, 94, 0.16); color: var(--tc-green); }
+.setup-state { font-size: 0.68rem; color: var(--tc-muted); }
+.setup-step-body { margin-left: 1.7rem; margin-top: 0.35rem; }
+.setup-step-body p { font-size: 0.74rem; color: var(--tc-muted); margin: 0 0 0.3rem; }
+.setup-unlocks { font-size: 0.72rem !important; color: var(--tc-dim) !important; }
+.setup-unlocks span { color: var(--tc-green); margin-right: 0.35rem; }
+.setup-actions { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; margin-top: 0.45rem; }
+.setup-actions small { font-size: 0.68rem; color: var(--tc-dim); }
+.setup-note { font-size: 0.7rem; color: var(--tc-amber); background: rgba(245, 158, 11, 0.08); border-radius: 6px; padding: 0.5rem 0.65rem; margin-top: 0.6rem; }
 
 .chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
 .chip { border: 1px solid var(--tc-line); background: transparent; color: var(--tc-muted); border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.74rem; cursor: pointer; }
@@ -645,7 +737,7 @@ onUnmounted(() => {
 .tc-empty p { margin-bottom: 0.75rem; }
 
 .tc-layout { display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 1.05rem; align-items: start; }
-@media (max-width: 900px) { .tc-layout { grid-template-columns: 1fr; } .level-strip { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .tc-layout { grid-template-columns: 1fr; } }
 
 .tc-list { background: var(--tc-panel); border: 1px solid var(--tc-line); border-radius: 0.7rem; padding: 0.6rem 0.7rem; }
 .tc-group-head { font-size: 0.72rem; font-weight: 700; color: var(--tc-muted); padding: 0.35rem 0; border-bottom: 1px solid var(--tc-line); margin-bottom: 0.25rem; }
