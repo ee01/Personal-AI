@@ -25,6 +25,8 @@ const WATCH_SNOOZE_SECONDS = 72 * 3600;
 interface ConfirmRequestRow {
   id: string;
   question: string;
+  /** Migration 066; absent on rows created before it. */
+  resume_action_id?: string | null;
   context: string | null;
   options_json: string | null;
   evidence_refs_json: string | null;
@@ -91,6 +93,10 @@ function formatConfirmRequest(row: ConfirmRequestRow) {
 // ---------------------------------------------------------------------------
 // Route plugin
 // ---------------------------------------------------------------------------
+
+function nonEmptyText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
 
 export async function confirmRequestRoutes(
   app: FastifyInstance,
@@ -220,14 +226,21 @@ export async function confirmRequestRoutes(
       let retriedActionId: string | undefined;
       let skippedActionId: string | undefined;
       let stoppedActionId: string | undefined;
-      if (updated.category === 'openclaw_delegation') {
-        const evidenceRefs = safeJsonParse<string[]>(
-          updated.evidence_refs_json,
-          [],
-        );
-        const actionRef = evidenceRefs.find((ref) => ref.startsWith('action:'));
-        const actionId = actionRef?.slice('action:'.length);
-        if (actionId && answer === 'retry') {
+
+      // Resuming used to be reachable only for category='openclaw_delegation',
+      // with the action id recovered by scanning evidence refs. Task Center
+      // raises the same kind of gate for write approval, dev plan review and
+      // artifact review, so the link is now an explicit column and the resume
+      // works for any category. The evidence-ref lookup stays as a fallback for
+      // confirm requests created before migration 066.
+      const actionId =
+        nonEmptyText(updated.resume_action_id) ??
+        safeJsonParse<string[]>(updated.evidence_refs_json, [])
+          .find((ref) => ref.startsWith('action:'))
+          ?.slice('action:'.length);
+
+      if (actionId) {
+        if (answer === 'retry') {
           const repo = new ActionRepository(db);
           const retried = repo.retry(actionId);
           if (retried) {
@@ -239,9 +252,9 @@ export async function confirmRequestRoutes(
             await executor.executeAction(actionId);
             retriedActionId = actionId;
           }
-        } else if (actionId && answer === 'skip_once') {
+        } else if (answer === 'skip_once') {
           skippedActionId = actionId;
-        } else if (actionId && answer === 'stop') {
+        } else if (answer === 'stop') {
           const repo = new ActionRepository(db);
           const stopped = repo.cancel(
             actionId,

@@ -614,6 +614,13 @@ export class ActionExecutor {
         typeof params.reasonCode === 'string' ? params.reasonCode : null,
       sourceAnchor: fallbackSourceAnchor,
       gapType: typeof params.gapType === 'string' ? params.gapType : null,
+      // Names the action to resume when the human answers. Explicit link so a
+      // gate resumes regardless of category (migration 066); previously only
+      // 'openclaw_delegation' resumed, via an evidence-ref scan.
+      resumeActionId:
+        typeof params.resumeActionId === 'string' && params.resumeActionId.trim()
+          ? params.resumeActionId.trim()
+          : null,
       createdAt: currentTime,
     };
     const reusedFromThread = action.threadId
@@ -1274,6 +1281,7 @@ export class ActionExecutor {
         category: 'openclaw_delegation',
         priority: action.priority >= 8 ? 'high' : 'normal',
         evidenceRefs: [`action:${action.id}`],
+        resumeActionId: action.id,
       },
       requiresApproval: false,
       executionMode: 'auto',

@@ -31,6 +31,12 @@ export interface ConfirmRequestRecord {
   createdAt: number;
   updatedAt?: number;
   dedupeKey?: string;
+  /**
+   * The queued action to resume when this request is answered.
+   * Set by whoever raises the gate, so resuming no longer depends on the
+   * request's category or on parsing an 'action:' evidence ref.
+   */
+  resumeActionId?: string;
 }
 
 interface ConfirmRequestRow {
@@ -56,6 +62,7 @@ interface ConfirmRequestRow {
   created_at: number;
   updated_at: number | null;
   dedupe_key: string | null;
+  resume_action_id?: string | null;
 }
 
 export interface CreateConfirmRequestInput {
@@ -81,6 +88,7 @@ export interface CreateConfirmRequestInput {
   createdAt?: number;
   updatedAt?: number;
   dedupeKey?: string;
+  resumeActionId?: string | null;
 }
 
 export interface CreateOrReusePendingConfirmRequestResult {
@@ -329,6 +337,7 @@ export class ConfirmRequestRepository {
       createdAt: row.created_at,
       updatedAt: row.updated_at ?? undefined,
       dedupeKey: row.dedupe_key ?? undefined,
+      resumeActionId: row.resume_action_id ?? undefined,
     };
   }
 
@@ -547,8 +556,9 @@ export class ConfirmRequestRepository {
           `INSERT INTO confirm_requests
             (id, question, context, options_json, evidence_refs_json, category, related_entity_id,
              related_property_id, priority, state, routing, reason_code, source_anchor, gap_type,
-             user_answer, answered_at, snooze_until, snooze_count, expires_at, created_at, updated_at, dedupe_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             user_answer, answered_at, snooze_until, snooze_count, expires_at, created_at, updated_at, dedupe_key,
+             resume_action_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -573,6 +583,7 @@ export class ConfirmRequestRepository {
           normalizedInput.createdAt,
           normalizedInput.updatedAt,
           dedupeKey,
+          normalizedInput.resumeActionId ?? null,
         );
     } catch (error) {
       if (
@@ -747,6 +758,11 @@ export class ConfirmRequestRepository {
       priority: normalizePriorityLabel(input.priority),
       state: input.state ?? defaultState,
       routing,
+      resumeActionId:
+        typeof input.resumeActionId === 'string' &&
+        input.resumeActionId.trim().length > 0
+          ? input.resumeActionId.trim()
+          : undefined,
       reasonCode:
         typeof input.reasonCode === 'string' &&
         input.reasonCode.trim().length > 0
