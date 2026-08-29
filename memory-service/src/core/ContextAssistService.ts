@@ -47,11 +47,11 @@ const MIN_PROMPT_PATCH_CONFIDENCE = 0.82;
 const MIN_WEB_PROMPT_COMPILER_CONFIDENCE = 0.78;
 const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
 const MIN_COMPOSER_SOURCE_OVERLAP = 1;
-// A context-only draft carries no memory backing, but it is grounded in the
-// thread the user is looking at. It must clear the 0.78 compose-quadrant
-// display threshold or the client hides it; the "no memory" boundary is carried
-// by empty evidence plus forced preview instead.
-const CONTEXT_ONLY_DRAFT_CONFIDENCE = 0.8;
+// Display floor for Glip/Jira reply drafts. The draft is grounded in the thread
+// the user is looking at, so it must clear the 0.78 compose-quadrant threshold
+// or the client hides it. For a context-only draft the "no memory" boundary is
+// carried by empty evidence plus forced preview, not by a low score.
+const MIN_WORK_DRAFT_DISPLAY_CONFIDENCE = 0.8;
 const MIN_CONTEXT_ONLY_DRAFT_WEIGHT = 80;
 // A failed primary target plus a reasoning-model fallback already costs more
 // than 5s, so the old 4.5s budget rejected every draft before it arrived.
@@ -469,9 +469,13 @@ export class ContextAssistService {
     if (promptPatch) {
       suggestionType = 'prompt_patch';
     }
+    // A reply draft is grounded in the thread, so its floor is set by the
+    // visible context rather than by the weakest memory that survived the
+    // gates. Without this, weak evidence scored below the client's display
+    // threshold made a partial memory hit worse than no memory at all.
     const responseConfidence = promptPatch
       ? Math.max(confidence, MIN_PROMPT_PATCH_CONFIDENCE)
-      : confidence;
+      : Math.max(confidence, MIN_WORK_DRAFT_DISPLAY_CONFIDENCE);
     const projection = this.personaProjectionService.project({
       request,
       suggestionType,
@@ -1122,7 +1126,7 @@ export class ContextAssistService {
       evidence: [],
       riskLevel,
       previewRequired: true,
-      confidence: CONTEXT_ONLY_DRAFT_CONFIDENCE,
+      confidence: MIN_WORK_DRAFT_DISPLAY_CONFIDENCE,
       queryTimeMs,
       personaProjection: projection.summary,
       debug: request.debug

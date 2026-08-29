@@ -661,7 +661,8 @@ POST /api/v1/extractor/from-chat
 5.1. Glip/Jira 纯上下文起草（`assistWorkContextOnlyDraft`）。零记忆时只用可见上下文和身份投影生成正文，并保持以下边界：
    - `evidence` 必须为空数组，`summary` 明确写「未使用历史记忆」，不得声称记忆支撑。
    - `previewRequired` 恒为 `true`；没有记忆背书的正文一律先预览再插入。
-   - `confidence` 取展示层下限 `0.80`（`CONTEXT_ONLY_DRAFT_CONFIDENCE`），刚好高于 Draft Compose 象限的 `0.78` 前端阈值。置信度在这里表达「是否值得展示」，「有没有记忆背书」由空 evidence 和强制预览承载。
+   - `confidence` 取展示层下限 `0.80`（`MIN_WORK_DRAFT_DISPLAY_CONFIDENCE`），刚好高于 Draft Compose 象限的 `0.78` 前端阈值。置信度在这里表达「是否值得展示」，「有没有记忆背书」由空 evidence 和强制预览承载。
+   - 同一个下限也适用于**有记忆**的 Glip/Jira 起草：`responseConfidence` 取 `max(top evidence score, 0.80)`。回复草稿的质量下限由线程本身决定，不该被通过了门的最弱一条记忆拉下去。此前一条 0.62 分的预演线索会把整条建议压到前端 0.78 阈值以下，导致「命中一点弱记忆」反而比「完全没记忆」更不容易拿到建议。
    - 仍然静默的情况：owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复。
    - 信息量门槛按信息权重而非裸字符数计算：CJK 字符记 2，其余非空白字符记 1，来自非 owner 条目的合计权重需 `>= 80`（`MIN_CONTEXT_ONLY_DRAFT_WEIGHT`）。裸字符数会让中文线程被要求写到两倍长才肯起草。
 6. 增量收益门（仅 refine）：计算 `refineGain`；语义偏差超过阈值，或引入原草稿缺失的具体证据事实，二选一即可放行。不通过则 `available=false`，`debug.refineReceipt` 记录原因，不进入用户可见文案。

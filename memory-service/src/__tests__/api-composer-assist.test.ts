@@ -1269,6 +1269,10 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     );
     expect(body.previewRequired).toBe(true);
     expect(body.riskLevel).toBe('low');
+    // A rehearsal cue scores around 0.62, below the client's 0.78 compose
+    // threshold. The draft is grounded in the thread, so the weak memory must
+    // not push a usable reply below the display floor.
+    expect(body.confidence).toBeGreaterThanOrEqual(0.78);
     expect(llmGenerateMock).toHaveBeenCalledTimes(1);
     expect(llmGenerateMock.mock.calls[0][0]).toContain('预演提醒');
   });
