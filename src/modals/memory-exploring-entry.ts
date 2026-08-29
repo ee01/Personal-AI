@@ -20,6 +20,7 @@ import DreamInsights from './components/DreamInsights.vue';
 import ReflectionThreads from './components/ReflectionThreads.vue';
 import ReflectionThreadDetail from './components/ReflectionThreadDetail.vue';
 import ActionQueue from './components/ActionQueue.vue';
+import TaskCenterPage from './components/TaskCenterPage.vue';
 import OutreachSessions from './components/OutreachSessions.vue';
 import OutreachSessionDetail from './components/OutreachSessionDetail.vue';
 import MeetingHistoryPage from './components/MeetingHistoryPage.vue';
@@ -54,6 +55,7 @@ const routes = [
     component: ReflectionThreadDetail,
     props: true,
   },
+  { path: '/task-center', name: 'TaskCenter', component: TaskCenterPage },
   { path: '/actions', name: 'ActionQueue', component: ActionQueue },
   { path: '/rehearsals', name: 'Rehearsals', component: RehearsalsPage },
   { path: '/outreach', name: 'OutreachSessions', component: OutreachSessions },

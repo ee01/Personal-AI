@@ -344,3 +344,39 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 - 1.4 `confirm_requests.resume_action_id` 通用续跑（解除 `openclaw_delegation` 硬编码）
 - 1.5 `POST /task-center/tasks` 统一入口 + lane 路由
 - 1.6 本地 drain 短 interval（当前 15 分钟心跳对消息调度太粗）
+
+### ✅ 1.2–1.6 + 任务中心 UI（已完成）
+
+**1.2 recurrence 滚动**
+- 把 `parseNextDispatch` 及 12 个私有辅助函数从 `OutreachEngine.ts` 原样抽到 `core/scheduleSpec.ts` 并导出（OutreachEngine 改为 import，30 个既有测试全绿 = 零行为变化）。这样任务中心复用的是生产验证过的同一套语义（工作日 Day、Week+repeatDays 周次、endDate 闭区间、DST 安全的浮动时间），而不是第二套实现。
+- `TaskCenterMaintenanceService.rollRecurringOccurrences()`：终态任务按 spec 克隆下一次。**做成扫描而非 markSucceeded 钩子**——`cancel()`、`recoverStaleRunningActions()`、worker report 三条终态路径都不走 markSucceeded，挂钩子会让这些情况下的重复任务**整条序列静默停掉**。
+- `repeatCount` 终止由账本自己计数（解释器不管这个，OutreachRepository 才管），baseline 取 `scheduledAt` 而非 now——否则一次迟到的执行会跳过中间所有次。
+
+**1.3 父任务聚合 + 环检测**
+- `listParentsReadyToComplete()` + `markParentCompleted()`：全部子任务 succeeded 时父任务自动完成。**零子任务的任务永不自动完成**（EXISTS 守卫），否则会"完成"一个根本没人跑过的任务。
+- 环检测放在 `POST /task-center/tasks` 的 create 时（`findDependencyCycle`）：due-scan 阶段的依赖门只会让成环任务**永久静默不执行**，创建时是唯一还能报错给人的时机。
+
+**1.4 通用续跑**
+- 迁移 066 给 `confirm_requests` 加 `resume_action_id`；answer 处理器不再只认 `category==='openclaw_delegation'`，任意 category 都能续跑；旧行回落到原来的 evidence_refs 扫描，向后兼容。
+
+**1.5 统一入口 API**
+- `POST /task-center/tasks`（+ GET 列表 / capabilities / 手动 sweep）。**lane 由服务端裁决**：`resolveLane()` 中 push/agent 可选 ☁️，remind/dev/reflection 固定 🏠；请求 ☁️ 但没 L2 时回落 🏠 并在响应里说明（`honoredRequest: false`），任务照跑不失败。
+- 顺带修掉一个和 depends_on 同款的缺陷：`ActionListFilters` 早就声明了 `lane/taskKind/parentActionId`，但 `list()` 的 SQL **从未使用它们**——调用方拿到的是未过滤列表。已通电。
+
+**1.6 短 drain**
+- `config.taskDrainIntervalMs`（默认 60s，下限 15s）+ ProactiveScheduler 独立 interval。**刻意放在 `proactiveSchedulerEnabled` 门禁之前**：用户排的 09:00 任务，在关掉重型心跳（反思/摘要）的部署上也必须照常触发。15 分钟心跳对分钟级任务太粗（09:00 的任务会在 09:00–09:15 之间随机触发）。
+
+**任务中心 UI**
+- `src/modals/components/TaskCenterPage.vue`（721 行）+ 路由 `#/task-center` + 侧边栏「🗂 任务中心」+ i18n。技术栈与落点完全对齐现有视图（Vue 3 script setup、组件内直连 `getMemoryServiceClient()`、RehearsalsPage 式左列表右详情、PersonalSkillsPage 式模态）。
+- 实现了 demo 的分层设计：L0/L1/L2 状态条、按执行顺序分组、类型筛选、每类不同的编辑器字段、**调度器按 L2 是否就绪置灰并说明缺什么**、开发委派强制验收标准。
+- L2 检测在前端读 `chrome.storage.local`（Google/Jira 凭据在扩展侧，后端无从判断），随请求上报给 `cloudLaneAvailable`。
+- 端到端验证 `npm run verify:task-center-ui`（7 项断言，真实加载扩展 + Playwright 驱动）。
+
+**回归**：memory-service 全量 92 failed / 1082 passed（基线 94 failed / 1043 passed）——零回归，且顺带修好 2 个；`src/` 与 `memory-service/src/` tsc 均干净；webpack 构建通过。
+
+### 下一步（Phase 2 起）
+
+- 2.x worker lease 续租、公共池 claim、`poll()` 接线、file artifact
+- 3.x `input_required` 通用停靠、反思候选聚合去重后接入账本、产物目录规范
+- 4.x Sheet 降只读镜像、GAS access 降 `DOMAIN`
+- 待接：Glip 定时消息 / 稍后提醒两个注入入口改写账本 API（见 9.1 改动面表）

@@ -2899,6 +2899,34 @@ export interface ReflectionThreadListResponse {
   offset: number;
 }
 
+export type TaskKind = 'push' | 'agent' | 'remind' | 'dev' | 'reflection';
+/** memory_cron = this service's due-scan; jira_sheet = Jira Automation via a Sheet mirror row. */
+export type TaskLane = 'memory_cron' | 'jira_sheet';
+
+export interface TaskCenterTask {
+  id: string;
+  title: string;
+  description?: string;
+  taskKind?: TaskKind;
+  lane?: TaskLane;
+  queueStatus: string;
+  scheduledAt?: number;
+  startedAt?: number;
+  finishedAt?: number;
+  priority: number;
+  dependsOn: string[];
+  parentActionId?: string;
+  recurrenceSpec?: Record<string, unknown>;
+  mirrorRef?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  lastError?: string;
+  retryCount: number;
+  sourceKind?: string;
+  sourceRefId?: string;
+  createdAt: number;
+}
+
 export interface RuntimeAction {
   id: string;
   type: string;
@@ -2940,6 +2968,12 @@ export interface RuntimeAction {
   utilityScore?: number;
   urgencyScore?: number;
   outreachSessionId?: string;
+  /** Task Center ledger fields (migration 065). */
+  taskKind?: TaskKind;
+  lane?: TaskLane;
+  parentActionId?: string;
+  recurrenceSpec?: Record<string, unknown>;
+  mirrorRef?: Record<string, unknown>;
   readinessReceipt?: ActionReadinessReceipt;
 }
 
@@ -6861,6 +6895,70 @@ export class MemoryServiceClient {
     error?: string;
   }> {
     return this.request('POST', '/agent-tasks/execute', body);
+  }
+
+  async getTaskCenterTasks(filters?: {
+    taskKind?: TaskKind;
+    lane?: TaskLane;
+    queueStatus?: string;
+    parentActionId?: string;
+    limit?: number;
+  }): Promise<{ items: TaskCenterTask[]; total: number }> {
+    const params = new URLSearchParams();
+    if (filters?.taskKind) params.set('taskKind', filters.taskKind);
+    if (filters?.lane) params.set('lane', filters.lane);
+    if (filters?.queueStatus) params.set('queueStatus', filters.queueStatus);
+    if (filters?.parentActionId) params.set('parentActionId', filters.parentActionId);
+    if (filters?.limit) params.set('limit', String(filters.limit));
+    const qs = params.toString();
+    return this.request('GET', `/task-center/tasks${qs ? `?${qs}` : ''}`);
+  }
+
+  async getTaskCenterCapabilities(): Promise<{
+    lanes: TaskLane[];
+    taskKinds: TaskKind[];
+    laneSelectableKinds: TaskKind[];
+    cloudLaneDetection: string;
+  }> {
+    return this.request('GET', '/task-center/capabilities');
+  }
+
+  /**
+   * The one write path for every task entry point. The lane comes back resolved
+   * (the server decides), and `mirrorRequired` tells the extension it still has
+   * to write the Sheet row before a jira_sheet task is actually scheduled.
+   */
+  async createTaskCenterTask(body: {
+    taskKind: TaskKind;
+    title: string;
+    description?: string;
+    payload?: Record<string, unknown>;
+    lane?: TaskLane;
+    cloudLaneAvailable?: boolean;
+    executionMode?: 'manual' | 'auto';
+    requiresApproval?: boolean;
+    priority?: number;
+    scheduledAt?: number;
+    recurrenceSpec?: Record<string, unknown>;
+    dependsOn?: string[];
+    parentActionId?: string;
+    idempotencyKey?: string;
+    sourceKind?: string;
+    sourceRefId?: string;
+  }): Promise<{
+    task: TaskCenterTask;
+    lane: { lane: TaskLane; reason: string; honoredRequest: boolean };
+    mirrorRequired: boolean;
+  }> {
+    return this.request('POST', '/task-center/tasks', body);
+  }
+
+  async sweepTaskCenter(): Promise<{
+    rolledOver: number;
+    seriesEnded: number;
+    parentsCompleted: number;
+  }> {
+    return this.request('POST', '/task-center/sweep');
   }
 
   async upsertAgentTaskNotifyConfig(body: {

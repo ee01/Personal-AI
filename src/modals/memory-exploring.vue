@@ -223,6 +223,17 @@
           </router-link>
 
           <router-link
+            to="/task-center"
+            class="entity-type"
+            active-class="router-link-active"
+          >
+            <div class="entity-icon">🗂</div>
+            <div class="entity-name">
+              {{ t('memoryExplorer.nav.taskCenter') }}
+            </div>
+          </router-link>
+
+          <router-link
             to="/actions"
             class="entity-type"
             active-class="router-link-active"

@@ -40,6 +40,7 @@
     "eval:memory-claim-attribution": "node tools/eval-run.mjs --suite memory-claim-attribution --no-repair",
     "eval:passive-webpage-analysis": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/eval-passive-webpage-analysis.ts",
     "eval:recall-synthesis-contract": "memory-service/node_modules/.bin/tsx tools/eval-recall-synthesis-contract.ts",
+    "eval:usage-analytics-guardrails": "node tools/eval-usage-analytics-guardrails.mjs",
     "zip": "rm personal-ai.zip; cd dist && zip -r ../personal-ai.zip .",
     "backup": "tar -czf ./chroma-backup/chroma-backup-$(date +%Y%m%d).tar.gz ./chroma-data",
     "clean": "rm -rf dist/* && rm personal-ai.zip",
@@ -115,7 +116,8 @@
     "verify:scheduled-messages-timeline-cache": "node tools/verify-scheduled-messages-timeline-cache.mjs",
     "verify:scheduled-messages-health-recovery:e2e": "node tools/verify-scheduled-messages-health-recovery-e2e.mjs",
     "verify:scheduled-messages-queue-suggestion:e2e": "node tools/verify-scheduled-messages-queue-suggestion-e2e.mjs",
-    "verify:scheduled-messages-crud-focus:e2e": "node tools/verify-scheduled-messages-crud-focus-e2e.mjs"
+    "verify:scheduled-messages-crud-focus:e2e": "node tools/verify-scheduled-messages-crud-focus-e2e.mjs",
+    "verify:task-center-ui": "node desktop-app/scripts/task-center-ui-check.mjs"
   },
   "type": "module",
   "license": "MIT",

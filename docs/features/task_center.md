@@ -127,11 +127,23 @@
 - **Jira / roadmap-service 仍是团队事实源**。账本只管个人执行层，用 `externalRef` 指向 `(teamId, itemKey)`，完成走既有 resolve intent 回写，不复制任何排期字段。
 - **不做**：通用 workflow DSL / BPMN 引擎、PPT/文档渲染管线、多人协作编辑 UI、在 `ScheduledMessagesManager` 里新增 UI（它已 12,874 行，账本 UI 在 memory-exploring 独立生长）。
 
+## 入口
+
+**任务中心页面**：扩展的 memory-exploring 页 → 侧边栏「🗂 任务中心」，或直接 `memory-exploring.html#/task-center`。
+
+页面提供：分层激活状态条（L0/L1/L2 各自是否就绪）、按执行顺序分组的任务列表（需要处理 / 待执行 / 已完成）、类型筛选、任务详情（含子任务树与 Sheet 镜像状态）、新建任务弹窗（字段随类型变化，调度器按 L2 是否就绪置灰）。
+
+端到端验证：
+
+```bash
+npm run verify:task-center-ui
+```
+
 ## 实施阶段
 
 | Phase | 内容 | 验收 |
 |---|---|---|
-| **1 通电** | `recurrence_spec` + `memory_cron` 调度、`parent_action_id`、depends_on 消费、`resume_action_id` 通用续跑、drain 短 interval | 两条 lane 的任务共用同一账本/幂等/runtime-status |
+| **1 通电** ✅ | `recurrence_spec` + `memory_cron` 调度、`parent_action_id`、depends_on 消费、`resume_action_id` 通用续跑、drain 短 interval、`POST /task-center/tasks` 统一入口、任务中心 UI | 两条 lane 的任务共用同一账本/幂等/runtime-status |
 | **2 执行承载** | worker lease 续租、公共池 claim + 空闲判定、`poll()` 接线、file artifact | 30 分钟调研任务在远程 worker 跑完并交回 md 路径 |
 | **3 人工节点** | `input_required` 通用停靠、反思挂树、产物目录规范 | 反思→批准→执行→产物→review→解锁下游全程可见 |
 | **4 收敛** | Sheet 降只读镜像、GAS access 降 `DOMAIN`、升级通道解冻 | 见 scheduled_messages_manager.md |
