@@ -1,6 +1,11 @@
 import type Database from 'better-sqlite3';
 
 import {
+  loadComposerOwnerIdentity,
+  type ComposerOwnerIdentity,
+} from './composerEvidenceSlots.js';
+import { cueValuesMatch, isCueStopword } from './cueMatching.js';
+import {
   hasStableCue,
   normalizeCues,
   RehearsalService,
@@ -32,7 +37,10 @@ interface MatchScore {
 export class RehearsalActivationService {
   private readonly rehearsalService: RehearsalService;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly userId = 'default',
+  ) {
     this.rehearsalService = new RehearsalService(db);
   }
 
@@ -43,9 +51,10 @@ export class RehearsalActivationService {
     const scene = extractSceneCues(request);
     const rehearsals = this.rehearsalService.listActivatable();
     const matches: ContextRecallMatch[] = [];
+    const ownerIdentity = loadComposerOwnerIdentity(this.db, this.userId);
 
     for (const rehearsal of rehearsals) {
-      const score = scoreRehearsal(rehearsal, request, scene);
+      const score = scoreRehearsal(rehearsal, request, scene, ownerIdentity);
       if (!score || score.displayPriority === 'hidden') continue;
 
       if (rehearsal.status === 'candidate') {
@@ -87,39 +96,67 @@ function scoreRehearsal(
   rehearsal: Rehearsal,
   request: ContextRecallRequest,
   scene: SceneCues,
+  ownerIdentity?: ComposerOwnerIdentity,
 ): MatchScore | null {
   const cues = normalizeCues(rehearsal.activationCues);
   const matched: RehearsalActivationCues = {};
   let overlapScore = 0;
 
-  overlapScore += matchList(cues.people, scene.people, matched, 'people') * 0.14;
-  overlapScore += matchList(cues.projects, scene.projects, matched, 'projects') * 0.12;
-  overlapScore += matchList(cues.topics, scene.topics, matched, 'topics') * 0.08;
-  overlapScore += matchList(cues.keywords, scene.keywords, matched, 'keywords') * 0.07;
-  overlapScore += matchList(cues.groupIds, scene.groupIds, matched, 'groupIds') * 0.25;
   overlapScore +=
-    matchList(cues.conversationIds, scene.conversationIds, matched, 'conversationIds') *
-    0.25;
-  overlapScore += matchList(cues.meetingIds, scene.meetingIds, matched, 'meetingIds') * 0.22;
+    matchList(cues.people, scene.people, matched, 'people', ownerIdentity) * 0.12;
   overlapScore +=
-    matchList(cues.calendarEventIds, scene.calendarEventIds, matched, 'calendarEventIds') *
-    0.2;
-  overlapScore += matchList(cues.issueKeys, scene.issueKeys, matched, 'issueKeys') * 0.2;
+    matchList(cues.projects, scene.projects, matched, 'projects', ownerIdentity) *
+    0.34;
+  overlapScore +=
+    matchList(cues.topics, scene.topics, matched, 'topics', ownerIdentity) * 0.08;
+  overlapScore +=
+    matchList(cues.keywords, scene.keywords, matched, 'keywords', ownerIdentity) *
+    0.06;
+  overlapScore +=
+    matchList(cues.groupIds, scene.groupIds, matched, 'groupIds', ownerIdentity) *
+    0.38;
+  overlapScore +=
+    matchList(
+      cues.conversationIds,
+      scene.conversationIds,
+      matched,
+      'conversationIds',
+      ownerIdentity,
+    ) * 0.38;
+  overlapScore +=
+    matchList(cues.meetingIds, scene.meetingIds, matched, 'meetingIds', ownerIdentity) *
+    0.36;
+  overlapScore +=
+    matchList(
+      cues.calendarEventIds,
+      scene.calendarEventIds,
+      matched,
+      'calendarEventIds',
+      ownerIdentity,
+    ) * 0.34;
+  overlapScore +=
+    matchList(cues.issueKeys, scene.issueKeys, matched, 'issueKeys', ownerIdentity) *
+    0.36;
   overlapScore += matchUrl(cues.urls, request.url || request.sourceContext?.url, matched);
-  overlapScore += matchList(cues.surfaces, [request.surface], matched, 'surfaces') * 0.06;
+  overlapScore +=
+    matchList(cues.surfaces, [request.surface], matched, 'surfaces', ownerIdentity) *
+    0.04;
 
   if (!hasAnyCue(matched)) return null;
 
   const now = Math.floor(Date.now() / 1000);
-  const base = Math.max(0.18, Math.min(0.62, rehearsal.confidence * 0.52));
-  let score = base + Math.min(0.44, overlapScore);
+  // Self-assessed rehearsal confidence must not be enough, on its own, to
+  // clear the 0.55 display line. A real group/issue/project hit still can.
+  const base = Math.max(0.06, Math.min(0.22, rehearsal.confidence * 0.2));
+  let score = base + Math.min(0.7, overlapScore);
   if (rehearsal.priority >= 8) score += 0.05;
+  const expired = Boolean(rehearsal.validUntil && rehearsal.validUntil < now);
   if (rehearsal.validFrom && rehearsal.validFrom > now) score -= 0.08;
   if (rehearsal.validUntil) {
-    if (rehearsal.validUntil < now) score -= 0.18;
+    if (expired) score -= 0.1;
     else if (rehearsal.validUntil - now <= 3 * 86400) score += 0.04;
   }
-  if (rehearsal.status === 'stale') score -= 0.12;
+  if (rehearsal.status === 'stale' && !expired) score -= 0.12;
   if (rehearsal.staleReason === 'aging_no_activation_30d') score -= 0.06;
   if (
     rehearsal.lastActivatedAt &&
@@ -284,20 +321,31 @@ function matchList(
   sceneValues: string[] | undefined,
   matched: RehearsalActivationCues,
   key: keyof RehearsalActivationCues,
+  ownerIdentity?: ComposerOwnerIdentity,
 ): number {
   if (!cues?.length || !sceneValues?.length) return 0;
   const hits: string[] = [];
   for (const cue of cues) {
+    if (isCueStopword(cue)) continue;
+    if (
+      key === 'people' &&
+      ownerIdentity &&
+      ownerIdentity.stopwords.has(normalizeForCompare(cue))
+    ) {
+      continue;
+    }
     const cueNorm = normalizeForCompare(cue);
     if (!cueNorm) continue;
     for (const sceneValue of sceneValues) {
-      const sceneNorm = normalizeForCompare(sceneValue);
-      if (!sceneNorm) continue;
+      if (isCueStopword(sceneValue)) continue;
       if (
-        cueNorm === sceneNorm ||
-        (cueNorm.length >= 4 && sceneNorm.includes(cueNorm)) ||
-        (sceneNorm.length >= 4 && cueNorm.includes(sceneNorm))
+        key === 'people' &&
+        ownerIdentity &&
+        ownerIdentity.stopwords.has(normalizeForCompare(sceneValue))
       ) {
+        continue;
+      }
+      if (cueValuesMatch(cue, sceneValue)) {
         hits.push(cue);
         break;
       }

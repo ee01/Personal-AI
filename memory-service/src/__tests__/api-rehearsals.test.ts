@@ -394,4 +394,81 @@ describe('Rehearsal API and context activation', () => {
     expect(rehearsal.validUntil).toBeUndefined();
     expect(rehearsal.lastActivatedAt).toBeGreaterThanOrEqual(now);
   });
+
+  it('does not activate a rehearsal that only matches the owner name', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, evidence_refs, source_kind,
+         confidence, user_confirmed, status, salience_score, mention_count,
+         last_seen, valid_from, valid_to, created_at, updated_at, fingerprint)
+       VALUES (?, 'fact', 'display_name', 'Esone Qiu', '[]', 'manual', 0.99, 1,
+               'active', 0.99, 3, ?, null, null, ?, ?, ?)`,
+    ).run('profile-owner-rehearsal', now, now, now, 'fp-owner-rehearsal');
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/rehearsals',
+      payload: {
+        title: 'Owner-name-only cue',
+        content: 'Fires only because Esone Qiu is in the thread.',
+        activationCues: { people: ['Esone Qiu'] },
+        confidence: 0.99,
+        priority: 10,
+      },
+    });
+
+    const recall = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'composer_guard',
+        contextType: 'message_thread',
+        title: 'Chat with Esone Qiu',
+        primaryText: 'Esone Qiu asked about the printer',
+        sourceContext: { participants: ['Esone Qiu', 'Alice'] },
+        entityHints: [{ kind: 'person', value: 'Esone Qiu' }],
+        sourceTypes: ['rehearsal'],
+      },
+    });
+
+    expect(recall.statusCode).toBe(200);
+    expect(
+      recall.json().matches.some((match: { type: string }) => match.type === 'rehearsal'),
+    ).toBe(false);
+    db.prepare('DELETE FROM user_profile_items WHERE id = ?').run(
+      'profile-owner-rehearsal',
+    );
+  });
+
+  it('does not treat a company-name substring as a rehearsal keyword hit', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/rehearsals',
+      payload: {
+        title: 'RingCentral boilerplate',
+        content: 'A cue that used to fire on the word RingCentral.',
+        activationCues: { keywords: ['ringcentral', 'central'] },
+        confidence: 0.99,
+        priority: 10,
+      },
+    });
+
+    const recall = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'composer_guard',
+        contextType: 'message_thread',
+        title: 'Office facilities',
+        primaryText: 'The RingCentral printer on floor 3 is jammed again.',
+        sourceTypes: ['rehearsal'],
+      },
+    });
+
+    expect(recall.statusCode).toBe(200);
+    expect(
+      recall.json().matches.some((match: { type: string }) => match.type === 'rehearsal'),
+    ).toBe(false);
+  });
 });

@@ -615,7 +615,7 @@ function getComposerRouteRefreshBoundary(
   if (input.surface === 'ringcentral_thread') {
     return {
       label: '刷新口径',
-      value: 'thread root 或可见回复变化会重算；不沿用主会话',
+      value: '换 thread 会重算；同一回复框再次 focus 从缓存恢复，不沿用主会话',
       tone: 'ok',
     };
   }

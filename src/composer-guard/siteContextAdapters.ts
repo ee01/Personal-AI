@@ -481,6 +481,7 @@ function getRingCentralCurrentUserIdentifiers(doc: Document): string[] {
   collectIdentityValues(add, readLocalStorageValue('ownExtension'));
   collectIdentityValues(add, readLocalStorageValue('displayName'));
   collectIdentityValues(add, readLocalStorageValue('userinfo'));
+  extraComposerOwnerIdentifiers.forEach(add);
 
   const accountUD = window.localStorage.getItem('global.account.UD') || '';
   add(accountUD);
@@ -554,6 +555,75 @@ function getMessageText(card: HTMLElement): string {
     sanitizeRingCentralComposerChromeText(clone.textContent || ''),
     MAX_MESSAGE_TEXT,
   );
+}
+
+const extraComposerOwnerIdentifiers: string[] = [];
+
+export function addComposerOwnerIdentifiers(
+  values: Array<string | undefined | null>,
+): void {
+  for (const value of values) {
+    const normalized = normalizeText(String(value || ''));
+    if (!normalized) continue;
+    extraComposerOwnerIdentifiers.push(normalized);
+    const local = normalized.split('@')[0];
+    if (local && local !== normalized) extraComposerOwnerIdentifiers.push(local);
+  }
+}
+
+export function hydrateComposerOwnerIdentifiersFromExtensionStorage(): void {
+  try {
+    if (typeof chrome === 'undefined' || !chrome?.storage?.local) return;
+    chrome.storage.local.get(['userinfo'], (result: {
+      userinfo?: { username?: string; userEmail?: string; email?: string };
+    }) => {
+      addComposerOwnerIdentifiers([
+        result.userinfo?.username,
+        result.userinfo?.userEmail,
+        result.userinfo?.email,
+      ]);
+    });
+  } catch {
+    // Content scripts without storage access still rely on page localStorage.
+  }
+}
+
+function pickRingCentralDisplaySender(authorValues: string[]): string | undefined {
+  return (
+    authorValues.find(
+      (value) =>
+        value &&
+        !/^\d+$/.test(value) &&
+        !/^GLIP_PERSON\./i.test(value),
+    ) || undefined
+  );
+}
+
+export function inheritAuthorValuesIfMissing(
+  current: string[],
+  previous: string[],
+): string[] {
+  return current.length ? current : previous;
+}
+
+export function inheritCollapsedGlipAuthors(
+  messages: Array<{ sender?: string; authorValues: string[] }>,
+): Array<{ sender?: string; authorValues: string[] }> {
+  let lastAuthorValues: string[] = [];
+  let lastSender: string | undefined;
+  return messages.map((message) => {
+    const authorValues = inheritAuthorValuesIfMissing(
+      message.authorValues,
+      lastAuthorValues,
+    );
+    if (authorValues.length) lastAuthorValues = authorValues;
+    const sender =
+      message.sender ||
+      pickRingCentralDisplaySender(authorValues) ||
+      lastSender;
+    if (sender) lastSender = sender;
+    return { sender, authorValues };
+  });
 }
 
 function toVisibleMessage(card: HTMLElement): VisibleMessageSnapshot | null {
@@ -747,6 +817,40 @@ function toMessageContextItem(
   };
 }
 
+function buildRingCentralMessageSnapshots(
+  cards: HTMLElement[],
+): Array<{
+  card: HTMLElement;
+  message: VisibleMessageSnapshot;
+  authorValues: string[];
+}> {
+  const drafts = cards.flatMap((card) => {
+    const message = toVisibleMessage(card);
+    if (!message) return [];
+    return [
+      {
+        card,
+        message,
+        authorValues: getRingCentralMessageAuthorValues(card),
+      },
+    ];
+  });
+  const inherited = inheritCollapsedGlipAuthors(
+    drafts.map((draft) => ({
+      sender: draft.message.sender,
+      authorValues: draft.authorValues,
+    })),
+  );
+  return drafts.map((draft, index) => ({
+    card: draft.card,
+    message: {
+      ...draft.message,
+      sender: inherited[index]?.sender,
+    },
+    authorValues: inherited[index]?.authorValues ?? draft.authorValues,
+  }));
+}
+
 function buildRingCentralContextItems(
   cards: HTMLElement[],
   mode: ComposerTarget['mode'],
@@ -754,16 +858,19 @@ function buildRingCentralContextItems(
 ): ComposerContextItem[] {
   const items: ComposerContextItem[] = [];
   const threadMode = mode === 'thread';
+  const snapshots = buildRingCentralMessageSnapshots(cards);
+  const snapshotByCard = new Map(
+    snapshots.map((snapshot) => [snapshot.card, snapshot]),
+  );
   cards.forEach((card, index) => {
-    const message = toVisibleMessage(card);
-    if (message) {
-      const authorValues = getRingCentralMessageAuthorValues(card);
+    const snapshot = snapshotByCard.get(card);
+    if (snapshot) {
       const isSelf = ringCentralIdentitiesMatch(
-        authorValues,
+        snapshot.authorValues,
         currentUserIdentifiers,
       );
       const item = toMessageContextItem(
-        message,
+        snapshot.message,
         threadMode && index === 0
           ? 'thread_root'
           : threadMode
@@ -774,7 +881,7 @@ function buildRingCentralContextItems(
         ...item,
         metadata: {
           ...(item.metadata || {}),
-          authorValues,
+          authorValues: snapshot.authorValues,
           isSelf,
           ...(isSelf ? { authorRole: 'owner' } : {}),
         },
@@ -860,6 +967,21 @@ function collectPeopleFromRingCentralContextItems(
   return people.length ? people : undefined;
 }
 
+export function buildRingCentralComposerContextKey(input: {
+  conversationId: string;
+  surface: Extract<ComposerSurface, 'ringcentral_message' | 'ringcentral_thread'>;
+  threadRootId?: string;
+  mode?: ComposerTarget['mode'];
+}): string {
+  return [
+    'ringcentral',
+    input.conversationId,
+    input.surface,
+    input.threadRootId || '',
+    input.mode || (input.surface === 'ringcentral_thread' ? 'thread' : 'main'),
+  ].join('|');
+}
+
 function findRingCentralComposer(
   doc: Document,
   fromElement?: Element | null,
@@ -933,9 +1055,9 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
       ? getVisibleRingCentralThreadCards(doc)
       : getVisibleRingCentralMainCards(doc);
     const currentUserIdentifiers = getRingCentralCurrentUserIdentifiers(doc);
-    const visibleMessages = cards
-      .map((card) => toVisibleMessage(card))
-      .filter((message): message is VisibleMessageSnapshot => message != null);
+    const visibleMessages = buildRingCentralMessageSnapshots(cards).map(
+      (snapshot) => snapshot.message,
+    );
     const contextItems = buildRingCentralContextItems(
       cards,
       activeComposer?.mode || 'main',
@@ -958,19 +1080,13 @@ const ringCentralMessageAdapter: SiteContextAdapter = {
       cards
         .map((card) => card.getAttribute('groupid'))
         .find((value): value is string => Boolean(value)) || conversationId;
-    const messageIds = visibleMessages
-      .map((message) => message.id)
-      .filter(Boolean);
     const surface = threadRoot ? 'ringcentral_thread' : 'ringcentral_message';
-    const contextKey = [
-      'ringcentral',
+    const contextKey = buildRingCentralComposerContextKey({
       conversationId,
       surface,
-      title,
-      threadRoot?.id || '',
-      messageIds.slice(-3).join(','),
-      signature(primaryText),
-    ].join('|');
+      threadRootId: threadRoot?.id,
+      mode: activeComposer?.mode,
+    });
 
     return {
       adapterId: this.id,

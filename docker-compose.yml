@@ -17,7 +17,9 @@ services:
       # The default stays on the bind mount on purpose: deploys sync this file
       # but never the data, so flipping it here would start the service against
       # an empty volume. Run tools/migrate-memory-data-volume.sh to copy the data
-      # and set the variable in the same maintenance window.
+      # and set the variable in the same maintenance window. npm run deploy:memory
+      # restores MEMORY_DATA_MOUNT=memory-data when that named volume already
+      # exists, so a lost host .env line cannot silently fall back to virtiofs.
       - ${MEMORY_DATA_MOUNT:-./memory-service/data}:/app/data
     env_file:
       - ./memory-service/.env

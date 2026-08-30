@@ -1277,6 +1277,64 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(llmGenerateMock.mock.calls[0][0]).toContain('预演提醒');
   });
 
+  it('does not treat the owner name as a topic anchor for rehearsal evidence', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO user_profile_items
+        (id, item_type, item_key, item_value, evidence_refs, source_kind,
+         confidence, user_confirmed, status, salience_score, mention_count,
+         last_seen, valid_from, valid_to, created_at, updated_at, fingerprint)
+       VALUES (?, 'fact', 'display_name', 'Esone Qiu', '[]', 'manual', 0.99, 1,
+               'active', 0.99, 3, ?, null, null, ?, ?, ?)`,
+    ).run('profile-owner-display-name', now, now, now, 'fp-owner-display-name');
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/rehearsals',
+      payload: {
+        title: 'Self-only cue',
+        scenarioType: 'person_chat',
+        content: 'A note that only fires because it mentions Esone Qiu.',
+        activationCues: { people: ['Esone Qiu'] },
+        confidence: 0.99,
+        priority: 10,
+      },
+    });
+
+    llmGenerateMock.mockResolvedValue({
+      content:
+        '好的，我来跟进这台打印机的报修，稍后把维修时间同步到群里。',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/composer/assist',
+      payload: {
+        surface: 'ringcentral_thread',
+        contextType: 'message_thread',
+        assistIntent: 'draft_compose',
+        debug: true,
+        title: 'Office facilities',
+        visibleMessages: [
+          {
+            sender: 'Alice',
+            text: '三楼的打印机又卡纸了，已经影响到今天要寄出的合同打印。有人能帮忙联系一下维修吗？我这边下午都在会议里。',
+          },
+        ],
+        sourceTypes: ['rehearsal'],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.evidence).toEqual([]);
+    expect(body.available).toBe(true);
+    expect(body.summary).toContain('未使用历史记忆');
+    db.prepare('DELETE FROM user_profile_items WHERE id = ?').run(
+      'profile-owner-display-name',
+    );
+  });
+
   it('uses transferable writing style memory for peer RingCentral replies', async () => {
     const now = Math.floor(Date.now() / 1000);
     db.prepare(
@@ -1674,15 +1732,14 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.insertText).toBeUndefined();
   });
 
-  it('keeps sendable draft generation enabled outside the test runtime', async () => {
-    // Regression guard: this flag used to default to on only under NODE_ENV=test
-    // / VITEST, so every production Glip draft silently returned none while the
-    // suite stayed green.
+  it('defaults Compose Assist to full generation when COMPOSER_ASSIST_MODE is unset', async () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousVitest = process.env.VITEST;
-    const previousFlag = process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
+    const previousMode = process.env.COMPOSER_ASSIST_MODE;
+    const previousSendable = process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
     process.env.NODE_ENV = 'production';
     delete process.env.VITEST;
+    delete process.env.COMPOSER_ASSIST_MODE;
     delete process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
 
     try {
@@ -1723,9 +1780,81 @@ describe('Composer Assist API (POST /composer/assist)', () => {
       else process.env.NODE_ENV = previousNodeEnv;
       if (previousVitest === undefined) delete process.env.VITEST;
       else process.env.VITEST = previousVitest;
-      if (previousFlag === undefined)
+      if (previousMode === undefined) delete process.env.COMPOSER_ASSIST_MODE;
+      else process.env.COMPOSER_ASSIST_MODE = previousMode;
+      if (previousSendable === undefined) {
         delete process.env.COMPOSER_SENDABLE_GENERATION_ENABLED;
-      else process.env.COMPOSER_SENDABLE_GENERATION_ENABLED = previousFlag;
+      } else {
+        process.env.COMPOSER_SENDABLE_GENERATION_ENABLED = previousSendable;
+      }
+    }
+  });
+
+  it('returns nothing when COMPOSER_ASSIST_MODE is off', async () => {
+    const previous = process.env.COMPOSER_ASSIST_MODE;
+    process.env.COMPOSER_ASSIST_MODE = 'off';
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/composer/assist',
+        payload: {
+          surface: 'ringcentral_thread',
+          contextType: 'message_thread',
+          assistIntent: 'draft_compose',
+          debug: true,
+          title: 'Office facilities',
+          visibleMessages: [
+            {
+              sender: 'Alice',
+              text: '三楼的打印机又卡纸了，已经影响到今天要寄出的合同打印。有人能帮忙联系一下维修吗？我这边下午都在会议里。',
+            },
+          ],
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.available).toBe(false);
+      expect(body.insertText).toBeUndefined();
+      expect(body.debug.rejectedReason).toBe('composer_assist_mode_off');
+      expect(llmGenerateMock).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.COMPOSER_ASSIST_MODE;
+      else process.env.COMPOSER_ASSIST_MODE = previous;
+    }
+  });
+
+  it('skips insertable generation when COMPOSER_ASSIST_MODE is context_only', async () => {
+    const previous = process.env.COMPOSER_ASSIST_MODE;
+    process.env.COMPOSER_ASSIST_MODE = 'context_only';
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/composer/assist',
+        payload: {
+          surface: 'ringcentral_thread',
+          contextType: 'message_thread',
+          assistIntent: 'draft_compose',
+          debug: true,
+          title: 'Office facilities',
+          visibleMessages: [
+            {
+              sender: 'Alice',
+              text: '三楼的打印机又卡纸了，已经影响到今天要寄出的合同打印。有人能帮忙联系一下维修吗？我这边下午都在会议里。',
+            },
+          ],
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.available).toBe(false);
+      expect(body.insertText).toBeUndefined();
+      expect(body.debug.rejectedReason).toBe(
+        'composer_assist_mode_context_only',
+      );
+      expect(llmGenerateMock).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.COMPOSER_ASSIST_MODE;
+      else process.env.COMPOSER_ASSIST_MODE = previous;
     }
   });
 
@@ -1847,6 +1976,7 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     expect(body.suggestionType).toBe('reply_refine');
     expect(body.insertMode).toBe('replace_draft');
     expect(body.previewRequired).toBe(true);
+    expect(body.confidence).toBeGreaterThanOrEqual(0.86);
     expect(body.debug?.refineReceipt?.pass).toBe(true);
   });
 
@@ -1896,5 +2026,148 @@ describe('Composer Assist API (POST /composer/assist)', () => {
       pass: false,
       reason: 'insufficient_gain',
     });
+  });
+
+  it('does not draft a Glip reply to messages addressed to other people', async () => {
+    const service = new ContextAssistService(db, 'esone.qiu');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'jvd-scope',
+          type: 'chunk',
+          scope: 'work',
+          score: 0.9,
+          title: 'JVD 26.3.30 feature scope',
+          snippet: 'Attached is the JVD 26.3.30 feature scope.',
+          links: [],
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_message',
+      contextType: 'message_thread',
+      scenario: 'instant_message_reply',
+      assistIntent: 'draft_compose',
+      title: 'Video Weekly Sync Up',
+      draftText: '',
+      contextItems: [
+        {
+          type: 'message',
+          text: 'BTW, Venky Iyer it is time to start to prepare the wishlist for Q4. The teams will start to do quarterly planning by late this month.',
+          metadata: { isSelf: false },
+        },
+        {
+          type: 'message',
+          sender: 'Fred Gu',
+          text: 'Hi Alexander Krotov Venky Iyer Attached is the JVD 26.3.30 feature scope. Please let me know if you have any questions. Thanks,CC Chang He Allen Wang Vita Huang Nicole Zheng',
+          metadata: { isSelf: false },
+        },
+      ],
+      debug: true,
+    });
+
+    expect(body.available).toBe(false);
+    expect(body.insertText).toBeUndefined();
+    expect(body.debug?.rejectedReason).toBe('message_not_addressed_to_owner');
+    expect(llmGenerateMock).not.toHaveBeenCalled();
+  });
+
+  it('still drafts a Glip reply when the latest incoming message names the owner', async () => {
+    const service = new ContextAssistService(db, 'esone.qiu');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateMock.mockResolvedValueOnce({
+      content: 'Sure, I will review the JVD scope today.',
+    });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_message',
+      contextType: 'message_thread',
+      scenario: 'instant_message_reply',
+      assistIntent: 'draft_compose',
+      title: 'Video Weekly Sync Up',
+      draftText: '',
+      contextItems: [
+        {
+          type: 'message',
+          sender: 'Fred Gu',
+          text: 'Hi Esone Qiu, can you review the JVD 26.3.30 feature scope attached above? Please let me know if you have any questions, and whether mobile can comment this week.',
+          metadata: { isSelf: false },
+        },
+      ],
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.insertText).toMatch(/JVD/i);
+    expect(llmGenerateMock).toHaveBeenCalled();
+  });
+
+  it('does not refine a thread whose last message is the owner talking to someone else', async () => {
+    const service = new ContextAssistService(db, 'esone.qiu');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [
+        {
+          id: 'nc-switcher',
+          type: 'chunk',
+          scope: 'work',
+          score: 0.9,
+          title: 'NC Switcher',
+          snippet: 'NC Switcher helps PMs switch Native Client versions.',
+          links: [],
+        },
+      ],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_thread',
+      contextType: 'message_thread',
+      scenario: 'thread_reply',
+      assistIntent: 'draft_refine',
+      title: 'Video Weekly Sync Up',
+      draftText: '1',
+      contextItems: [
+        {
+          type: 'thread_root',
+          sender: 'Allen Wang',
+          text: 'Hi Esther Pan, I’d like to highlight NC Switcher.',
+          metadata: { isSelf: false },
+        },
+        {
+          type: 'thread_reply',
+          sender: 'Venky Iyer',
+          text: 'Esone Qiu Let’s also demo this tool in the Weekly Sync Meeting for a wider audience?',
+          metadata: { isSelf: false },
+        },
+        {
+          type: 'thread_reply',
+          sender: 'Esone Qiu',
+          text: 'Venky Iyer Absolutely, NC Switcher is a great productivity booster. I’ll loop the demo in our weekly. cc Allen Wang',
+          metadata: { isSelf: false },
+        },
+      ],
+      debug: true,
+    });
+
+    expect(body.available).toBe(false);
+    expect(body.insertText).toBeUndefined();
+    expect(body.debug?.rejectedReason).toBe(
+      'owner_already_replied_context_only',
+    );
+    expect(llmGenerateMock).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 # Assist
 
-_最后更新: 2026-08-29_
+_最后更新: 2026-08-31_
 
 > 文档路径：`docs/features/assist.md`（旧文件名 `compose_assist.md`）。产品口语与 API 仍常称 Compose Assist / `/composer/assist`；本文覆盖其下两个子模块。
 
@@ -169,7 +169,7 @@ Compose Assist 不做：
 
 - `focusin` 建立输入框会话。若草稿有效字符为 0，约 700ms settle 后调度 `draft_compose`；若草稿非空则静默，等待 blur 走精修。
 - `input` 只刷新 `draftRevision`、撤销旧预览、使在途响应失效，不发 `draft_refine`。
-- capture-phase `focusout` 仅在草稿非空时冻结草稿快照并请求 `draft_refine`；去重签名为 `contextKey + draftRevision + assistIntent`，同一签名最多请求一次。相同草稿反复 focus/blur 不重复请求，修改后必须再次真正 blur。
+- capture-phase `focusout` 仅在草稿非空时冻结草稿快照并请求 `draft_refine`；去重签名为 `contextKey + draftRevision + assistIntent`，同一签名最多请求一次。相同草稿反复 focus/blur 不重复请求，**再次 focus 必须从缓存把 icon 拉回来**；输入框 DOM 被宿主重挂（thread 回复框常见）只要会话身份没变，也不丢建议。修改后必须再次真正 blur。
 - Web AI 的 `MIN_WEB_AI_DRAFT_CHARACTERS`（8 个非空白字符）只约束 Draft Refine；Draft Compose 允许空草稿，用页面可见 AI turns + 召回记忆起草。RingCentral/Jira 空草稿继续依靠 thread、conversation 或 issue 上下文走 Draft Compose。
 - capture-phase `pointerdown` 会在 `focusout` 前识别 Send/Submit/Reply/Post；发送动作造成的失焦不生成建议，发送后清理原 composer 会话。
 - 输入框与其内部节点、格式工具栏、Personal AI 预览/确认控件和撤销控件之间的焦点移动不算真正 blur；Jira rich iframe 通过同等 `focusout` bridge 处理。
@@ -178,19 +178,22 @@ Compose Assist 不做：
 
 展示条件：
 
-- 后端返回 `available=true`。
+- 后端返回 `available=true`。这是显示权威：前端不再用 evidence 分数把已 `available` 的可插入草稿藏掉。Glip/Jira refine 的 0.86 是服务端显示下限，在设 `available=true` 时垫到该值；客户端只再检查 `insertText`、可发送校验、`insertMode` 和身份投影是否 `blocked`。
 - `personaProjection.representationMode` 不是 `blocked`；blocked 响应即使误带 `insertText` 也不能显示 icon。
 - 有非空 `insertText`，并且清理包装话术后仍然是可一键写入的文本。
 - `insertText` 通过可发送文本校验，不能包含 `Personal AI context`、`Please review`、`我理解当前...`、`我这边先补充...` 等包装话术。
-- `confidence >=` 当前 `surface:intent` 复合阈值（见下方「阈值与开关」），默认 Draft Compose `0.78`；Web AI Draft Refine `0.72`；Glip/Jira Draft Refine `0.86`。裸 `surface` key 仍可作为 fallback。
 - 如果只命中高相关 evidence / 关联记忆，但没有生成可一键写入的 `insertText`，前端不挂 Compose Assist icon，也不显示 `草稿回执` 或 `上下文回执`；这类只读关联记忆只走 Memory Lens 的相关记忆卡片。
 
 ### 阈值与开关
 
-- 总开关：`CONTEXT_ASSIST_ENABLED` 与 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动。二者默认打开（`!== false` / 环境变量不是 `'false'`）。
+- 总开关：`CONTEXT_ASSIST_ENABLED` 与 `COMPOSE_ASSIST_ENABLED` 都不是 `false` 时才启动。二者默认打开（`!== false` / 环境变量不是 `'false'`）。这是用户 Options 层，不是运维 kill switch。
 - Memory Lens 被动召回另有独立用户开关 `CONTEXT_LENS_ENABLED`（同样默认打开）。关闭 Lens 不会关掉 Compose Assist 或会前准备。
 - 子开关：`COMPOSE_DRAFT_ENABLED` / `COMPOSE_REFINE_ENABLED` 分别门控 Draft Compose / Draft Refine；挂在 Compose Assist 总开关之下。
-- 服务端 kill switch `COMPOSER_SENDABLE_GENERATION_ENABLED` 门控 Glip/Jira 可发送正文生成，未配置即开启；只有显式 `false`/`0`/`off`/`no` 才关闭，关闭后只剩编译好的 `draft_hint` cue 可插入。这个开关曾经默认只在 `NODE_ENV=test` / `VITEST` 下开启，导致测试全绿但线上每一次 Glip 起草都静默返回 `composer_generation_unavailable`；任何新增 kill switch 都不允许再用「仅测试运行时为开」作为默认值。
+- 服务端运维开关只留一个：`COMPOSER_ASSIST_MODE = off | context_only | full`，未配置即 `full`。
+  - `full`：生成可插入的 Glip/Jira 草稿，并运行 Web AI Prompt Compiler。这是产品默认，也是 Assist 的初衷。
+  - `context_only`：仍做召回，但不生成任何可插入正文。用于冒充风险应急，前端不会挂 Compose icon（没有 `insertText`）；只读关联记忆交给 Memory Lens。
+  - `off`：Assist 接口直接返回空，不召回、不调用 LLM。
+  - 已退休：`COMPOSER_SENDABLE_GENERATION_ENABLED`、`COMPOSER_PROMPT_COMPILER_ENABLED`。若部署机还留着 `SENDABLE=false` 且未设 MODE，映射为 `context_only` 并打警告，下一轮请改成显式 `COMPOSER_ASSIST_MODE`。任何新增 kill switch 都不允许再用「仅测试运行时为开」作为默认值。
 - 生成预算 `COMPOSER_GENERATION_TIMEOUT_MS` 默认 `15000`。它必须能容纳「主 target 失败 + reasoning 模型兜底」这条最慢路径：主 target 报错本身要花 0.5–2.5s，reasoning 模型再要 3.5–5s，原来的 4500ms 会在结果返回前就把每一次起草判超时。
 - 生成 token 预算为普通回复 900、Jira comment 1200。reasoning 模型把隐藏推理算进同一预算，按回复长度设上限（原来的 220）会让可见正文被截断成 `finish_reason=length`。这是上限不是目标，正文长度仍由 prompt 的「3-5 行以内」和 `isSendableComposerText` 的行数校验约束。
 - 自适应阈值按 `surface:intent` 复合 key 读写（例如 `chatgpt:draft_refine`）；裸 `surface` 作为兼容 fallback。ChatGPT 拒绝一次 prompt 优化不会连累 Glip 起草。
@@ -202,7 +205,7 @@ UI 行为：
 - 输入框右上角吸附 `static/icons/icon48.png`。
 - hover icon 时，左侧展开“建议内容”预览。
 - 非 Web AI 场景可以用轻量 glow 标识当前输入框；ChatGPT/Gemini/Claude/豆包等 Web AI 输入框只在右上角显示 Personal AI icon/popover，不把输入框变成红色发光状态。
-- 焦点真正离开输入框后不会立刻丢失会话；异步建议仍锚定原输入框。切换到另一输入框、页面变化、发送，或用户修改原草稿时才使旧会话/响应失效。
+- 焦点真正离开输入框后不会立刻丢失会话；异步建议仍锚定原输入框，返回后写入按签名缓存。切换到另一输入框（主会话 ↔ thread）、页面变化、发送，或用户修改原草稿时才使旧会话/响应失效。同一输入框被 RingCentral 重挂 DOM 节点时，会话身份不变，icon 从缓存恢复，不发第二次请求。
 - `prompt_patch` / `context_pack` 使用 `append_patch`：textarea/input/contenteditable/rich iframe 都按当前光标或选区追加，选中文本时替换选区，没有可用选区时才追加到末尾。
 - `rewrite_prompt` / `prompt_draft` / `reply_refine` 必须使用 `replace_draft`：预览标题与确认文案按类型区分；确认后替换完整内容，并派发 `inputType='insertReplacementText'` 和 `change`，光标落在末尾。`reply_refine` 强制 `previewRequired`（改写用户自己打的字，风险高于追加）。缺失或错误的 replace 模式直接隐藏，绝不把完整重写追加到原文后面。
 - 如果建议需要先进入复核态，Personal AI 会保留进入复核前的输入框选区；即使确认按钮短暂拿到焦点，最终插入仍按用户原本选中的草稿片段替换，不把建议误追加到末尾。
@@ -239,7 +242,7 @@ UI 行为：
 - 如果 visible recall matches 被 attention budget 静音，但 `contextExpansion.contextMatch` 已经处于 `locked` 且 selected topic 带有 evidence ids，后端会从当前用户的 `messages_raw` 解析最多 6 条候选，再走与普通 Web AI evidence 完全相同的低信息过滤、相关性准入、去重和最多 3 条限制。这个 bridge 只消费本次 recall 已产出的 locked context；召回未运行或没有 locked match 时不能自行扩大检索。
 - Jira estimate workflow 另保留一条窄 fallback：locked context 可以生成 `source_memory` prompt-patch evidence，但只在 Web AI + Jira estimate patch 意图同时满足时启用，不影响普通 context pack。
 - Prompt Compiler 的 system prompt 可以是英文，但 `insertText` 必须跟随 `currentDraft` 主语言；混合输入保留产品名、代码和专业术语。语言不匹配、JSON 非法、超时、目标事实丢失或置信度不足时 fail closed，不回退到旧通用 context pack。
-- 编译调用上限 1600 tokens、30 秒，`rewrite_prompt` 硬上限 6000 字符。当前 system prompt 进一步要求在 520 个 Unicode 字符内给出紧凑但有明确分段的结果；GPT-5 兼容模型使用 `reasoning_effort=none`，把交互延迟留给结构化生成而不是长推理。独立 kill switch `COMPOSER_PROMPT_COMPILER_ENABLED` 默认启用；关闭后仍保留确定性 prompt patch，且只有经过过滤的相关记忆才能降级成 context pack。
+- 编译调用上限 1600 tokens、30 秒，`rewrite_prompt` 硬上限 6000 字符。当前 system prompt 进一步要求在 520 个 Unicode 字符内给出紧凑但有明确分段的结果；GPT-5 兼容模型使用 `reasoning_effort=none`，把交互延迟留给结构化生成而不是长推理。Prompt Compiler 不再有独立 kill switch；它随 `COMPOSER_ASSIST_MODE=full` 开启，`off` / `context_only` 时整条 Assist 生成路径都不跑。
 - Web AI 至少为 `medium` risk；草稿、页面或记忆内容涉及未成年人、健康、家庭、个人发育、诊断、薪资或财务时升级为 `high`，并强制预览。普通 `manual` 项目记忆本身不自动升 high，风险由内容和明确的敏感来源标签决定。
 - 当编译器返回 `rewrite_prompt`，但草稿已经明确要求写作/整理/总结某个交付物、任务又不是研究型，并且编译器实际使用了直接相关 evidence 时，服务端把结果收敛为 `context_pack + append_patch`，只追加 evidence 上下文，避免完整重写覆盖一个已经清楚的任务。debug 保留 `rawMode` 和 `modeNormalized` 供验收。
 - 低置信、弱相关、语言/目标校验失败时保持安静；有建议时只显示 Personal AI icon，不自动发送 prompt。
@@ -437,20 +440,24 @@ Thread 回复框：
 - 不混入主群底部消息。
 - `thread_root` 必须进入 `contextItems`。
 - 前端用当前命中的输入框判断 main/thread snapshot，避免焦点状态变化时把 thread 回复误当主会话回复。
+- Assist 会话 `contextKey` 只含 `conversationId + surface + threadRootId + composer mode`，不含最后几条可见消息或 `primaryText` 哈希。可见消息仍进请求 payload 做召回；虚拟列表滚动不能把已返回的 icon 冲掉。
 
 自我发言识别：
 
 - adapter 会尽量从 RingCentral 本地账号信息、`ownExtension` / `displayName`、profile DOM、sender/avatar id 判断 `metadata.isSelf`。显示名 `Esone Qiu` 与邮箱/用户名 `esone.qiu`、以及 `GLIP_PERSON.<id>` 与纯数字 id 视为同一人。
+- Glip 连续消息常常只在该作者的第一条卡片上显示名字。后续卡片若缺少 name/avatar，会继承上一条可见卡片的 `sender` / `authorValues`，避免把自己的跟帖标成别人的来消息。
 - 后端会检查最近上下文末尾是否已经有 owner 回复。
 - 如果 owner 已完整回复，返回 `available=false`，避免重复提示。
 - 如果 owner 已回复但可能不完整，生成内容必须是补充说明，不能重复前面已发内容。
+- 群聊点名闸：最新一条非自己的来消息如果用 `Hi` / `@` 明确点了其他人（不含 CC），`draft_compose` 和 `draft_refine` 都不生成以你名义可发送的草稿，原因码 `message_not_addressed_to_owner`。没有点名的提问（例如「poster 这期怎么处理？」）仍可起草。
+- 前端 `isSelf` 缺失时，后端仍用 `esone.qiu` ↔ `Esone Qiu` 的 compact 匹配把你自己的消息标回 owner；线程末尾已是完整回复则不再精修成「回复自己」。
 
 ### Jira
 
 - 读取 issue key、summary、status、description。
 - 读取可见 comments、assignee/reporter/commenters。
 - 读取可见附件/图片 metadata：文件名、alt/title/url。
-- Jira comment composer 通过当前 focus 元素及其附近的 Atlassian comment / add-comment 容器识别；如果 focus 落在嵌套 ProseMirror、role textbox 或 comment 容器内，也应能挂载 Compose Assist icon。icon 只有在后端返回可插入建议且 confidence 达到当前 surface 阈值时显示。
+- Jira comment composer 通过当前 focus 元素及其附近的 Atlassian comment / add-comment 容器识别；如果 focus 落在嵌套 ProseMirror、role textbox 或 comment 容器内，也应能挂载 Compose Assist icon。icon 只有在后端返回可插入建议时显示；客户端不再用 evidence 分数二次隐藏 `available=true` 的草稿。
 - Jira 场景会同时传 `visibleFields` 和 `interactionScene.visibleFacts`，让后端区分“用户只是在 issue 页面看已经显示的 DEV Estimate New=0.4”和“用户正在 comment 输入框里讨论这张票的估算口径”。前者不应复述字段，后者可以生成可插入的估算口径草稿。
 - Phase 1 不做截图、OCR 或上传图片 binary。
 - 输出语气应更正式，包含判断、依据或 next step，不能像即时通讯闲聊。
@@ -663,7 +670,7 @@ POST /api/v1/extractor/from-chat
    - `previewRequired` 恒为 `true`；没有记忆背书的正文一律先预览再插入。
    - `confidence` 取展示层下限 `0.80`（`MIN_WORK_DRAFT_DISPLAY_CONFIDENCE`），刚好高于 Draft Compose 象限的 `0.78` 前端阈值。置信度在这里表达「是否值得展示」，「有没有记忆背书」由空 evidence 和强制预览承载。
    - 同一个下限也适用于**有记忆**的 Glip/Jira 起草：`responseConfidence` 取 `max(top evidence score, 0.80)`。回复草稿的质量下限由线程本身决定，不该被通过了门的最弱一条记忆拉下去。此前一条 0.62 分的预演线索会把整条建议压到前端 0.78 阈值以下，导致「命中一点弱记忆」反而比「完全没记忆」更不容易拿到建议。
-   - 仍然静默的情况：owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复。
+   - 仍然静默的情况：当前可见来消息是写给其他人的（`message_not_addressed_to_owner`）；owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复。
    - 信息量门槛按信息权重而非裸字符数计算：CJK 字符记 2，其余非空白字符记 1，来自非 owner 条目的合计权重需 `>= 80`（`MIN_CONTEXT_ONLY_DRAFT_WEIGHT`）。裸字符数会让中文线程被要求写到两倍长才肯起草。
 5.2. Glip/Jira 输出语言（`resolveComposerOutputLanguage`）。生成 prompt 本身是中文写的，所以不给显式目标时，模型会用中文回复英文线程。语言按 owner 的承诺强度取第一个非 `unknown` 的信号：
 
@@ -683,12 +690,50 @@ POST /api/v1/extractor/from-chat
 
    目标语言已知而生成结果不符时拦截，原因码 `composer_generation_language_mismatch`（有记忆路径）或 `composer_context_only_language_mismatch`（纯上下文路径），`debug` 同时给出 `expectedLanguage` 和 `actualLanguage`；`unknown` 不拦截。拦截而不是照样展示，是因为语言不对的草稿本来就不能发，而单独的原因码让它可诊断，不会像之前那样并进 `composer_generation_unavailable` 里查不出来。
 
+5.3. 证据两槽（`partitionComposerEvidence`）。召回结果不再扁平成一袋 `evidence[]`。Assist 把它们分成主题证据和本人先验，避免「只命中了用户自己的名字」被说成「找到了关于这件事的记忆」。
+
+   **A 槽仍然必要。** 它约束的是锚点不是作者：一条由你写的、关于某项目的笔记完全合格；一条只因为命中 `Esone` / `qiu` 才召回的记忆不合格。没有 A 槽，群聊里随处出现的自己的名字会把无关记忆抬进 `evidence[]`。
+
+   **写法不走 B 槽。** 语气、长度、直接程度已经有独立学习链：插入后改写并发送 → ambient calibration 的 redacted diff / `styleFeatureTags` → `UserWritingStyleMemoryService` → `user_writing_style_memories` → 晋升 `user_profile_items` 的 `writing_style.*` → `PersonaProjectionService` 按 surface / audience / task / language 注入 `generation_control`。这条链按场景分 scope，有重复证据门槛，也写进 `USER_CORE.md` 的 `## Writing Style`（Compose 不读该原始快照）。B 槽再塞 writing_style 是重复且更弱：它寄生主题召回、上限 2 条、没有 scope。因此 B 槽不再收录 `writing_style` 类记忆。
+
+   **B 槽可以建议立场，不能加码承诺。** Assist 是 L1：草稿要用户点确认才进输入框，所以历史决策倾向可以影响建议正文，但必须同时满足：
+
+   1. 最新一条非自己的来消息是在问你做决定（问号、`Let's` / `can you` / `能不能` 等），点名闸为 `addressed`。
+   2. B 槽命中的是 `decision_tendency`，不是写作风格。
+   3. 只允许偏向答应 / 拒绝 / 先不承诺；**不能**从倾向里写出当前提问没有的日期、版本、范围、负责人和新承诺。
+   4. `priorReceipt.constraint = stance_suggestion`，回执写明这是建议、需确认。问的不是你、或只是 FYI 时，仍是 `writing_only`，不得写立场。
+
+   预览确认挡的是发出去，挡不住一条看起来已经替你表态的草稿被随手插入，所以「完全放权」不行。Fred 写给别人的消息即使有预览也不该出现 `I'll start preparing the wishlist`。
+
+   **A 槽 · 主题证据** — 进 `evidence[]`，可引用，参与 confidence。
+
+   - owner 的 `userId`、姓名、别名、邮箱 local-part、RingCentral extension 在锚点匹配阶段是 stopword，不能作为唯一 `matchedAnchors`。
+   - 至少要有一个来自 {对方或第三人、项目、issue、URL/group/conversation/meeting id、具体专有名词} 的锚点。
+   - 预演（rehearsal）不再因为 `rehearsal_cue` 身份就免检；没有非本人锚点就不能进 A 槽。
+   - 没有结构化锚点的 FTS chunk 仍走原来的 token overlap（`esone` / `qiu` / `ringcentral` 已在 overlap stopword 里）。
+   - 顺带收紧 rehearsal 评分：cue 匹配从子串改成词边界（`"central"` 不能打中 `"ringcentral"`）；公司名、产品壳、套话进 `GLOBAL_CUE_STOPWORDS`；`base = min(0.22, confidence * 0.20)`，自评不能单独把分数抬到 0.55 显示线以上。一个真实的 group/issue/project 命中仍然可以显示。
+
+   **B 槽 · 本人先验** — 不进 `evidence[]`，只喂 generation prompt，不可引用，不抬 confidence。来源是召回命中了但没通过 A 槽、且是 owner 相关的历史决策倾向或场景习惯；上限 2 条。写作风格不进 B 槽。
+
+   - 满足上面 4 条时 prompt 写成「可建议立场，需用户确认」；否则仍是「只影响写法」。
+   - 实质用上时响应带 `priorReceipt`，与 `cohesionReceipt` / `attributionReceipt` 同一模式，方便用户纠正。没有 B 槽命中则省略该字段。
+   - PersonaProjection 的 `generation_control` 仍然独立注入，是写法的主路径。
+
+5.4. 群聊点名闸（`resolveComposerReplyTarget`）。只看最新一条非自己的来消息：
+
+   - 用 `Hi` / `Hey` / `Hello` / `Dear` / `BTW` 后的成对英文名，或 `@mention` / `@team` 作为点名；不算 CC；不把句首普通词（如 Capacity Management）当成人名。
+   - 有点名且不含 owner → `available=false`，`rejectedReason: message_not_addressed_to_owner`，不调用生成模型。`draft_compose` 和 `draft_refine` 都过此闸。
+   - 无点名 → 仍可起草，覆盖小群里「这期 poster 怎么处理？」这类未点名提问。
+   - 后端不信任前端的 `metadata.isSelf`。`sender` / `authorValues` 与 owner 的 `userId`（如 `esone.qiu`）或全名做 compact 匹配时，也视为自己的消息。只认全名/compact，不认单独的 `Qiu`，避免把 Alice Qiu 当成自己。
+   - 线程末尾已是自己的完整回复 → `owner_already_replied_context_only`，不再起草或精修成「Thanks Esone」。
+   - Jira / Web AI 跳过点名闸。
+
 6. 增量收益门（仅 refine）：计算 `refineGain`；语义偏差超过阈值，或引入原草稿缺失的具体证据事实，二选一即可放行。不通过则 `available=false`，`debug.refineReceipt` 记录原因，不进入用户可见文案。
 7. Web AI Draft Refine 先执行三个确定性 prompt patch。命中时直接返回 `prompt_patch + append_patch`，不调用通用编译器。
-8. 其余 Web AI 任务在 kill switch 开启时进行一次结构化 Prompt Compiler 调用，只接收 `mode、insertText、usedEvidenceIds、gaps、confidence`。system prompt 明确要求只优化 prompt、保持草稿语言、保留目标/事实、不编造个人信息/引用，并把记忆视作未验证上下文；GPT-5 请求使用 `reasoning_effort=none`，结果保持紧凑；编译超时预算为 30 秒（`WEB_PROMPT_COMPILER_TIMEOUT_MS`）。
+8. 其余 Web AI 任务在 `COMPOSER_ASSIST_MODE=full` 时进行一次结构化 Prompt Compiler 调用，只接收 `mode、insertText、usedEvidenceIds、gaps、confidence`。system prompt 明确要求只优化 prompt、保持草稿语言、保留目标/事实、不编造个人信息/引用，并把记忆视作未验证上下文；GPT-5 请求使用 `reasoning_effort=none`，结果保持紧凑；编译超时预算为 30 秒（`WEB_PROMPT_COMPILER_TIMEOUT_MS`）。
 9. 服务端校验 mode、文本长度、置信度、主语言、用户目标/事实保留和 evidence id；失败、非法 JSON、超时或语言不匹配一律 `available=false`。
 10. 服务端把 mode 强制映射成 insertMode，只返回编译器实际使用的 evidence，并重新计算风险。未成年人、健康、家庭、发育等内容为 high risk；普通项目记忆仍是 medium。对于“任务已明确、只缺 evidence 上下文”的非研究请求，服务端还会把模型的完整 rewrite 归一化成 evidence-only context pack。
-11. kill switch 关闭时不运行通用编译器；确定性 patch 仍可用，过滤后有高质量 evidence 才可生成简洁 context pack，不恢复旧任务判断/工具推荐模板。
+11. `COMPOSER_ASSIST_MODE` 不是 `full` 时不运行编译器，也不生成可插入正文。
 12. 前端仍套用按 `surface:intent` 的自适应置信度、预览和当前 draft revision 校验；写入后只改变草稿，不发送或提交。
 
 ## Web AI draft-driven context enrichment
@@ -758,6 +803,8 @@ Compose Assist 可把 [变化脉络](./change_memory_ledger.md) 投影转成既�
 ## 源码与维护入口
 
 - API 与服务编排：`memory-service/src/routes/composerAssist.ts`、`memory-service/src/core/ContextAssistService.ts`（含 `resolveComposerAssistIntent`、`evaluateComposerRefineGain`、`assistWorkContextOnlyDraft`、四象限生成器）。
+- 群聊点名闸：`memory-service/src/core/composerReplyTarget.ts`。
+- 证据两槽：`memory-service/src/core/composerEvidenceSlots.ts`。
 - 身份投影：`memory-service/src/core/ComposerAudienceResolver.ts`、`memory-service/src/core/PersonaProjectionService.ts`（含 `prompt_draft` / `reply_refine` scene）。
 - 输入框探测、双策略触发和写入：`src/composer-guard/siteContextAdapters.ts`、`src/composer-guard/ComposerGuardController.ts`、`src/composer-guard/assistConfig.ts`。
 - 展示门、`surface:intent` 阈值和回执文案：`src/composer-guard/assistPreviewPolicy.ts`、`src/composer-guard/types.ts`、`src/services/MemoryServiceClient.ts`。
@@ -775,7 +822,9 @@ npm --prefix memory-service test -- --run \
   src/__tests__/personaProjection.test.ts \
   src/__tests__/api-composer-assist.test.ts \
   src/__tests__/composer-assist-intent-routing.test.ts \
-  src/__tests__/composer-assist-eval.test.ts
+  src/__tests__/composer-assist-eval.test.ts \
+  src/__tests__/composerReplyTarget.test.ts \
+  src/__tests__/composerEvidenceSlots.test.ts
 npm run eval:run -- --suite evidence-cohesion-gate --no-repair
 ```
 
@@ -825,7 +874,7 @@ report 必须能看见：
 建议保留的回归场景：
 
 - RingCentral **空输入框 focus** 约 700ms 后发出 `assistIntent=draft_compose`；非空 focus 静默；真实 blur 才发 `draft_refine`。
-- 去重签名含 intent：同一 `contextKey+revision` 的 compose 与 refine 可各请求一次，但同签名不重发。
+- 去重签名含 intent：同一 `contextKey+revision` 的 compose 与 refine 可各请求一次，但同签名不重发。再次 focus 同一草稿时从缓存恢复 icon，不发第二次请求。
 - RingCentral 开发小群讨论 Codex/computer use/skills 时，不返回 flight、泛 meeting、假期公告。
 - RingCentral thread 只使用 thread root/thread replies，不混入主会话底部消息。
 - owner 已完整回复时不展示 icon。
@@ -851,7 +900,7 @@ report 必须能看见：
 - `previewRequired=true`、`reply_refine` 或 `riskLevel=high` 时，第一次点击 icon 只展开锁定正文预览；未点击对应的 `替换原 prompt / 追加到 prompt / 插入草稿` 前不能改写草稿，点击 `取消` 只关闭当前建议；锁定预览不展示来源名、标题、命中原因或“建议依据”列表。
 - 含 Rehearsal 预演提醒的建议即使风险为 low，也必须走一次锁定预览；预览内容仍只展示待插入正文，避免未来场景脚本被误点直接插入。
 - hover popover 不展示“记忆关联”、来源路由、草稿回执、来源卡片、建议依据或 evidence links。
-- 默认 Draft Compose 阈值 `0.78`、Web refine `0.72`、工作面 refine `0.86` 下，低置信建议不展示；插入会降低对应象限阈值，thumb-down 会提高对应象限阈值。
+- 默认 Draft Compose 阈值 `0.78`、Web refine `0.72`、工作面 refine `0.86` 由服务端在设 `available=true` 时垫到对应下限；客户端信任 `available`，不再用 0.75 这种 evidence 分把已生成草稿藏掉。插入会降低对应象限阈值，thumb-down 会提高对应象限阈值并 dismiss 当前建议。
 - append 模式下，contenteditable 中用户选中一段草稿后点击 icon，建议应替换该选区并保留前后原文；replace 模式忽略局部选区并替换完整草稿。写入成功且撤销窗口结束后才记录 accepted。
 - 插入后点击 `撤销` 应恢复原草稿，并且不记录 accepted 反馈、不立即重弹同一建议。
 - 输入框拒绝写入时应显示 `未写入草稿`，保留原草稿，并且不记录 accepted 反馈。

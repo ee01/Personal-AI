@@ -470,7 +470,7 @@ export class ContextRecallService {
   ) {
     this.engine = new RecallEngine(db);
     this.contextExpansion = new RecallContextExpansionService(db);
-    this.rehearsalActivation = new RehearsalActivationService(db);
+    this.rehearsalActivation = new RehearsalActivationService(db, userId);
     this.relevancePatches = new RecallRelevancePatchService(db, userId);
     this.sceneFrames = new SceneFrameService();
     this.cueFacts = new MemoryCueFactService();

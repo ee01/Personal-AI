@@ -25,6 +25,9 @@ import {
   getComposerAssistProjectionReviewNote,
   getComposerAssistRequestGate,
   isComposerAssistProjectionBlocked,
+  isComposerAssistSessionCurrent,
+  isInsertableComposerAssist,
+  shouldResetComposerAssistOnActivate,
   shouldReviewComposerAssistBeforeInsert,
 } from '../ComposerGuardController.ts';
 
@@ -459,7 +462,7 @@ test('buildComposerAssistSourceRouteReceipt: explains source routing by compose 
       ['当前上下文', 'thread root + 可见回复', 'muted'],
       ['允许召回', '4 类：聊天 / 手动 / 资料 / 预演', 'ok'],
       ['路由边界', 'thread 优先，不混主会话；草稿只作语气/去重', 'ok'],
-      ['刷新口径', 'thread root 或可见回复变化会重算；不沿用主会话', 'ok'],
+      ['刷新口径', '换 thread 会重算；同一回复框再次 focus 从缓存恢复，不沿用主会话', 'ok'],
     ],
   );
 
@@ -633,5 +636,72 @@ test('composer assist request gate suppresses duplicate in-flight and failed ret
       now: 1_500,
     }),
     { suppress: false },
+  );
+});
+
+test('available reply_refine is insertable below the work refine display threshold', () => {
+  assert.equal(
+    isInsertableComposerAssist({
+      available: true,
+      suggestionType: 'reply_refine',
+      insertMode: 'replace_draft',
+      insertText:
+        'Sounds good, thanks Esone Qiu! Happy to help prep the demo before Weekly Sync.',
+      evidence: [],
+      riskLevel: 'low',
+      previewRequired: true,
+      confidence: 0.75,
+      queryTimeMs: 20,
+    }),
+    true,
+  );
+  assert.equal(
+    isInsertableComposerAssist({
+      available: true,
+      suggestionType: 'reply_refine',
+      insertMode: 'append_patch',
+      insertText: 'Sounds good, thanks Esone Qiu!',
+      evidence: [],
+      riskLevel: 'low',
+      previewRequired: true,
+      confidence: 0.9,
+      queryTimeMs: 20,
+    }),
+    false,
+  );
+});
+
+test('composer remount with the same identity keeps the cached assist session', () => {
+  assert.equal(
+    shouldResetComposerAssistOnActivate({
+      previousContextKey: 'ringcentral|6543474694|ringcentral_thread|root-1|thread',
+      nextContextKey: 'ringcentral|6543474694|ringcentral_thread|root-1|thread',
+      draftChangedWithoutInput: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldResetComposerAssistOnActivate({
+      previousContextKey: 'ringcentral|6543474694|ringcentral_message||main',
+      nextContextKey: 'ringcentral|6543474694|ringcentral_thread|root-1|thread',
+      draftChangedWithoutInput: false,
+    }),
+    true,
+  );
+  assert.equal(
+    isComposerAssistSessionCurrent(
+      {
+        contextKey: 'ringcentral|6543474694|ringcentral_thread|root-1|thread',
+        draftRevision: 0,
+        pageHref: 'https://app.ringcentral.com/messages/6543474694',
+      },
+      {
+        contextKey: 'ringcentral|6543474694|ringcentral_thread|root-1|thread',
+        draftRevision: 0,
+        pageHref: 'https://app.ringcentral.com/messages/6543474694',
+      },
+      'https://app.ringcentral.com/messages/6543474694',
+    ),
+    true,
   );
 });
