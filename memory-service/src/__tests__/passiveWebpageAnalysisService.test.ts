@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION,
   PassiveWebpageAnalysisService,
   buildPassiveWebpageAnalysisPrompt,
 } from '../core/PassiveWebpageAnalysisService.js';
+import { resetConfigForTests } from '../config.js';
 
 const INPUT = {
   title: 'Falcon rollout update',
@@ -56,5 +57,45 @@ describe('PassiveWebpageAnalysisService', () => {
       service.analyze({ ...INPUT, mainContent: 'too short' }),
     ).rejects.toThrow('passive_webpage_analysis_input_invalid');
     expect(generateJSON).not.toHaveBeenCalled();
+  });
+
+  describe('WEBPAGE_ANALYSIS_MODEL downgrade (Phase B cost control)', () => {
+    const prevEnv = process.env.WEBPAGE_ANALYSIS_MODEL;
+    const prevProvider = process.env.LLM_PROVIDER;
+    const prevKey = process.env.OPENAI_API_KEY;
+
+    afterEach(() => {
+      if (prevEnv === undefined) delete process.env.WEBPAGE_ANALYSIS_MODEL;
+      else process.env.WEBPAGE_ANALYSIS_MODEL = prevEnv;
+      if (prevProvider === undefined) delete process.env.LLM_PROVIDER;
+      else process.env.LLM_PROVIDER = prevProvider;
+      if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevKey;
+      resetConfigForTests();
+    });
+
+    it('sends the downgraded model instead of the primary provider model when constructed with no injected client', async () => {
+      process.env.LLM_PROVIDER = 'openai';
+      process.env.OPENAI_API_KEY = 'test-key';
+      process.env.OPENAI_MODEL = 'gpt-5.5';
+      process.env.WEBPAGE_ANALYSIS_MODEL = 'cheap-model';
+      resetConfigForTests();
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '{"decision":"skip"}' } }],
+        }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const service = new PassiveWebpageAnalysisService();
+      await service.analyze(INPUT);
+
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+      expect(body.model).toBe('cheap-model');
+
+      vi.unstubAllGlobals();
+    });
   });
 });

@@ -20,6 +20,8 @@ export interface ReflectionPlannerResult {
   checkpointTo: number;
   skipped?: boolean;
   reason?: string;
+  /** True when the (costly) research-run step was skipped for an idle user. */
+  idlePaused?: boolean;
 }
 
 export class ReflectionPlanner {
@@ -141,6 +143,24 @@ export class ReflectionPlanner {
         }
       }
 
+      // Idle-sleep safety net: a user who opted into reflection and then went
+      // idle (no new messages) still has `active` threads sitting in the DB
+      // forever — listDueThreads/runReflection would keep firing on them
+      // indefinitely with nothing new to reflect on. This is exactly what
+      // zong.zheng's 2 idle threads did (595 research attempts over 6 days,
+      // ~$38/month) — see docs/features/usage_analytics.md, 成本治理与 2026-08 事故复盘.
+      // Only the costly research-run step is gated: blocking-reason checks
+      // and deferHeartbeatReflection are cheap local bookkeeping (no LLM) and
+      // still run every cycle exactly as before, so an idle user's threads
+      // keep their waiting-state metadata current even while paused.
+      const idleCutoff = now() - runtimeConfig.reflectionIdlePauseDays * 86400;
+      const hasRecentActivity = Boolean(
+        this.db
+          .prepare(`SELECT 1 FROM messages_raw WHERE created_at > ? LIMIT 1`)
+          .get(idleCutoff),
+      );
+
+      let idlePaused = false;
       const dueThreads = this.service.listDueThreads(topicLimit);
       for (const thread of dueThreads) {
         const blockingReason = this.service.getHeartbeatBlockingReason(
@@ -148,6 +168,10 @@ export class ReflectionPlanner {
         );
         if (blockingReason) {
           this.service.deferHeartbeatReflection(thread.id, blockingReason);
+          continue;
+        }
+        if (!hasRecentActivity) {
+          idlePaused = true;
           continue;
         }
         const runResult = await this.service.runReflection(thread.id, {
@@ -168,6 +192,7 @@ export class ReflectionPlanner {
         actionsQueued,
         checkpointFrom: baseline,
         checkpointTo,
+        idlePaused,
       };
     } finally {
       this.checkpoints.releaseLease(leaseKey, ownerId);

@@ -6620,6 +6620,7 @@ const AddMessageDialog: React.FC<{
         Agent_Last_Error: editingMessage.Agent_Last_Error,
         Category: editingMessage.Category,
         Automation_Link: editingMessage.Automation_Link,
+        Last_Exec: editingMessage.Last_Exec,
       };
     }
     return {
@@ -7884,6 +7885,12 @@ ${content}
     const { dateStr, timeStr } = formatLocalScheduleDateTime(date);
     handleScheduleDateChange(dateStr);
     handleChange('Schedule_Time', timeStr);
+  };
+
+  const applyQuickOneMinuteReschedule = () => {
+    applyScheduleDateTime(new Date(Date.now() + 60 * 1000));
+    // 无论是否为循环任务，都清空 Last_Exec，避免"今日已执行"跳过逻辑挡住这次改期后的重推送
+    handleChange('Last_Exec', '');
   };
 
   const getNextWholeHour = (): Date => {
@@ -9233,7 +9240,7 @@ ${content}
                 <button
                   type="button"
                   style={dialogStyles.quickActionButton}
-                  onClick={() => applyScheduleDateTime(new Date(Date.now() + 60 * 1000))}
+                  onClick={applyQuickOneMinuteReschedule}
                 >
                   1 分钟后
                 </button>

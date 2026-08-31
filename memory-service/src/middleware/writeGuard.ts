@@ -20,14 +20,18 @@ export async function writeGuardMiddleware(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  // Skip for health checks, docs, MCP HTTP, and admin self-auth POSTs
-  // (device-key approval page uses ?token= without X-User-Id).
+  // Skip for health checks, docs, MCP HTTP, and admin self-auth writes
+  // (device-key approval page and PUT /usage/pricing use ?token=/
+  // X-Analytics-Token instead of X-User-Id — see middleware/auth.ts's
+  // ADMIN_SELF_AUTH_PATH_RE, which is the actual gate for these paths; this
+  // guard only needs to get out of the way so that check runs).
   const pathOnly = request.url.split('?')[0];
   if (
     request.url === '/health' ||
     request.url.startsWith('/docs') ||
     pathOnly === '/mcp' ||
-    pathOnly.startsWith('/api/v1/admin/key-requests')
+    pathOnly.startsWith('/api/v1/admin/key-requests') ||
+    pathOnly === '/api/v1/usage/pricing'
   ) {
     return;
   }

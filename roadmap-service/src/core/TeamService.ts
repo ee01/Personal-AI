@@ -210,6 +210,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
       createdBy: sub.created_by,
       version: sub.version,
       description: sub.description || null,
+      status: sub.status || null,
     })),
     markers: markers.map(mapMarker),
   };
@@ -2346,17 +2347,19 @@ function applyRefreshFromJira(
           nextOwner = assignee;
         }
       }
+      const nextStatus = status !== undefined ? status : sub.status;
       const same =
         nextTitle === sub.title &&
         (nextDesc || null) === (sub.description || null) &&
         (nextStart || null) === (sub.start_date || null) &&
         nextDays === sub.days &&
-        (nextOwner || null) === (sub.owner || null);
+        (nextOwner || null) === (sub.owner || null) &&
+        (nextStatus || null) === (sub.status || null);
       if (same) continue;
       const result = db
         .prepare(
           `UPDATE subs SET
-            title = ?, description = ?, start_date = ?, days = ?, owner = ?,
+            title = ?, description = ?, start_date = ?, days = ?, owner = ?, status = ?,
             version = version + 1, updated_at = ?
            WHERE id = ? AND version = ?`,
         )
@@ -2366,6 +2369,7 @@ function applyRefreshFromJira(
           nextStart,
           nextDays,
           nextOwner,
+          nextStatus,
           ts,
           sub.id,
           sub.version,

@@ -106,6 +106,7 @@ export class LLMClient {
         target,
         () => this.callTarget(target, prompt, options),
         options,
+        prompt,
       ),
     );
   }
@@ -126,7 +127,8 @@ export class LLMClient {
    * Record backend LLM token usage for analytics (best-effort). Attribution
    * (user + capability) is read from the current async usage context.
    * When the provider omits usage, fall back to a content-length estimate so
-   * streaming / incomplete-usage calls still appear in the report.
+   * streaming / incomplete-usage calls still appear in the report — flagged
+   * `tokensEstimated` so the estimate share is queryable (B7).
    */
   private recordBackendUsage(
     response: LLMResponse,
@@ -135,10 +137,12 @@ export class LLMClient {
   ): void {
     let promptTokens = response.usage?.promptTokens ?? 0;
     let completionTokens = response.usage?.completionTokens ?? 0;
+    let tokensEstimated = false;
     if (!response.usage || (promptTokens === 0 && completionTokens === 0)) {
       promptTokens = this.estimateTokensFromText(prompt ?? '');
       completionTokens = this.estimateTokensFromText(response.content ?? '');
       if (promptTokens === 0 && completionTokens === 0) return;
+      tokensEstimated = true;
     }
     recordLlmUsage({
       side: 'backend',
@@ -146,19 +150,69 @@ export class LLMClient {
       provider: target.provider,
       promptTokens,
       completionTokens,
+      meta: tokensEstimated ? { tokensEstimated: true } : null,
     });
   }
 
-  private recordBackendFailure(error: unknown, target: ResolvedLLMTarget): void {
+  /**
+   * Record a failed backend LLM call (best-effort).
+   *
+   * Historically this always recorded 0 tokens, which is wrong whenever the
+   * provider actually generated (and billed) content before the failure:
+   *  - B4: generateJSON's JSON.parse fails on a successful, billed response —
+   *    pass `usage`/`response` so the real (or estimated) tokens are kept.
+   *  - B5: a retried-but-not-final attempt is invisible without this — pass
+   *    `attempt`/`willRetry` from withRetryForTarget.
+   *  - B6: a client-side request timeout doesn't mean the provider stopped
+   *    generating — when no usage is known, estimate promptTokens from the
+   *    prompt that was actually sent and flag `billedEstimate`.
+   *  - B9: `errorText` keeps the first 200 chars of the provider's error body
+   *    so failures like a sudden run of bad_request are diagnosable without
+   *    re-deploying a logging change.
+   */
+  private recordBackendFailure(
+    error: unknown,
+    target: ResolvedLLMTarget,
+    opts?: {
+      prompt?: string;
+      usage?: { promptTokens: number; completionTokens: number };
+      tokensEstimated?: boolean;
+      attempt?: number;
+      willRetry?: boolean;
+    },
+  ): void {
     const errorKind = classifyLLMError(error);
+    const errorText = (error instanceof Error ? error.message : String(error)).slice(0, 200);
+
+    let promptTokens = opts?.usage?.promptTokens ?? 0;
+    let completionTokens = opts?.usage?.completionTokens ?? 0;
+    let billedEstimate = false;
+    if (
+      promptTokens === 0 &&
+      completionTokens === 0 &&
+      errorKind === 'timeout' &&
+      opts?.prompt
+    ) {
+      promptTokens = this.estimateTokensFromText(opts.prompt);
+      billedEstimate = promptTokens > 0;
+    }
+
     recordLlmUsage({
       side: 'backend',
       model: target.model,
       provider: target.provider,
-      promptTokens: 0,
-      completionTokens: 0,
+      promptTokens,
+      completionTokens,
       status: 'error',
       errorKind,
+      meta: {
+        errorText,
+        ...(opts?.tokensEstimated ? { tokensEstimated: true } : {}),
+        ...(billedEstimate ? { billedEstimate: true } : {}),
+        ...(opts?.attempt !== undefined
+          ? { attempt: opts.attempt, willRetry: Boolean(opts?.willRetry) }
+          : {}),
+      },
     });
   }
 
@@ -193,7 +247,7 @@ export class LLMClient {
         this.logFailover(failures, target);
         return response;
       } catch (error) {
-        this.recordBackendFailure(error, target);
+        this.recordBackendFailure(error, target, { prompt });
         if (emitted) throw error;
         const kind = classifyLLMError(error);
         this.healthTracker.recordFailure(target.id, kind);
@@ -224,6 +278,7 @@ export class LLMClient {
           target,
           () => this.callTarget(target, prompt, options),
           options,
+          prompt,
         );
         try {
           const parsed = this.parseJSON<T>(response.content);
@@ -232,12 +287,23 @@ export class LLMClient {
           this.logFailover(failures, target);
           return parsed;
         } catch (parseError) {
-          this.recordBackendFailure(parseError, target);
+          // B4: the call succeeded and was billed — only the JSON.parse
+          // failed — so record the real (or best-effort estimated) usage
+          // instead of the 0-token default.
+          const usage =
+            response.usage ?? {
+              promptTokens: this.estimateTokensFromText(prompt),
+              completionTokens: this.estimateTokensFromText(response.content ?? ''),
+            };
+          this.recordBackendFailure(parseError, target, {
+            usage,
+            tokensEstimated: !response.usage,
+          });
           this.healthTracker.recordFailure(target.id, 'unknown');
           failures.push(this.toFailure(target, parseError, 'unknown'));
         }
       } catch (error) {
-        this.recordBackendFailure(error, target);
+        this.recordBackendFailure(error, target, { prompt });
         const kind = classifyLLMError(error);
         this.healthTracker.recordFailure(target.id, kind);
         failures.push(this.toFailure(target, error, kind));
@@ -264,7 +330,7 @@ export class LLMClient {
         this.logFailover(failures, target);
         return response;
       } catch (error) {
-        this.recordBackendFailure(error, target);
+        this.recordBackendFailure(error, target, { prompt });
         const kind = classifyLLMError(error);
         this.healthTracker.recordFailure(target.id, kind);
         failures.push(this.toFailure(target, error, kind));
@@ -806,11 +872,19 @@ export class LLMClient {
 
   /**
    * Retry an async operation once on failure with a 1 second delay.
+   *
+   * B5: an attempt that fails and gets retried was still sent to (and
+   * possibly billed by) the provider, but previously only the *final*
+   * attempt's failure was ever recorded — every retried attempt in between
+   * was invisible to analytics. Record each retried attempt here (tagged
+   * `attempt`/`willRetry: true`); the final, non-retried failure is left to
+   * propagate and is recorded by the caller as before.
    */
   private async withRetryForTarget(
-    _target: ResolvedLLMTarget,
+    target: ResolvedLLMTarget,
     fn: () => Promise<LLMResponse>,
     options?: LLMOptions,
+    prompt?: string,
   ): Promise<LLMResponse> {
     const retryCount = this.getRetryCount(options);
     const hasFallback = this.config.llmFallbacks.length > 0;
@@ -826,6 +900,11 @@ export class LLMClient {
             `[LLMClient] Attempt ${attempt + 1} failed, retrying in ${RETRY_DELAY_MS}ms:`,
             (err as Error).message,
           );
+          this.recordBackendFailure(err, target, {
+            prompt,
+            attempt: attempt + 1,
+            willRetry: true,
+          });
           await this.delay(RETRY_DELAY_MS);
         } else {
           throw err;

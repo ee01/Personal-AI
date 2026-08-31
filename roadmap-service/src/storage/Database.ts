@@ -150,6 +150,14 @@ const MIGRATIONS: Migration[] = [
       addColumn(database, 'item_markers', 'jira_fetched_at', 'INTEGER');
     },
   },
+  {
+    id: '013_subs_status',
+    up: (database) => {
+      // Mirrored Jira workflow status (e.g. Closed/Resolved); resource view uses
+      // it to color completed tasks and exclude them from defer candidates.
+      addColumn(database, 'subs', 'status', 'TEXT');
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

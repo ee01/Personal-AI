@@ -29,6 +29,12 @@ memory-service/node_modules/.bin/tsx tools/eval-memory-abilities.ts \
   --endpoint http://10.32.56.212:3210/api/v1/ask --user esone.qiu
 # add --update-baseline to refresh evals/.baseline/memory-abilities.json
 
+# Usage-analytics cost guardrails — standalone, live /usage/report checks
+node tools/eval-usage-analytics-guardrails.mjs --endpoint http://10.32.56.212:3210/api/v1 --token $ANALYTICS_ADMIN_TOKEN
+# capture the pre-migration baseline once, before rolling out a fix that
+# should shrink a specific share of traffic:
+node tools/eval-usage-analytics-guardrails.mjs --endpoint ... --token ... --capture-webpage-analysis-baseline
+
 # Passive webpage analysis contract eval (synthetic, no external model call)
 npm run eval:passive-webpage-analysis
 
@@ -74,6 +80,40 @@ deterministic heuristic judge to avoid judge-model variance.
   clarifications; the runner strips question/candidate echoes before keyword
   scoring and writes `contextMatchState` plus `evidencePreview` to
   `responses.jsonl` for failure review.
+
+### Usage-analytics cost guardrails (standalone)
+
+`tools/eval-usage-analytics-guardrails.mjs` answers a different question than
+every other suite here: not "is the model's *answer* good", but "did a
+cost/telemetry fix actually hold in production over time". It exists because
+`__tests__/*.test.ts` in `memory-service/` already proves each fix is
+*correct in code* (pricing merge precedence, idle-sleep gating, retry/timeout
+telemetry, ...) — what those tests structurally cannot prove is whether it
+held up against real traffic, because the evidence only exists in three
+shapes a unit test can't fabricate honestly: (1) data that needs real time to
+accumulate (a weekly cron only runs once a week), (2) a live before/after
+comparison against a captured baseline (a traffic *share* dropping, not an
+absolute number), (3) the actual behavior of a real idle/misconfigured user.
+
+Each check hits a live `GET /usage/report` and returns one of three
+verdicts — this three-way split is the actual mechanism for "how do you test
+something that needs time to pass":
+
+- `pass` — matured, and the guardrail holds
+- `fail` — matured, and the guardrail is violated (exits non-zero)
+- `pending` — hasn't matured yet (not enough time, no baseline captured, no
+  data to judge); explicitly **not** a failure, so a scheduled re-run doesn't
+  cry wolf before there's anything to prove
+
+Same standalone precedent as the Memory Abilities benchmark above: a live
+numeric-threshold check against real aggregates doesn't fit the
+case+judge+workflow shape the rest of this framework is built around, so it
+isn't wired into `eval:run`/`registry.yaml` — run it directly or from cron
+(`node tools/eval-usage-analytics-guardrails.mjs --json` for machine-readable
+output). State (run history, captured baselines) lives under
+`.eval-runs/usage-analytics-guardrails/` (gitignored). See
+[docs/features/usage_analytics.md](../docs/features/usage_analytics.md)
+(成本治理与 2026-08 事故复盘) for the incident this was built to catch earlier next time.
 
 Run artifacts are ignored by git because they can contain private memory and RingCentral context. Reports are normalized into a reader-facing model, then written as HTML:
 

@@ -618,7 +618,15 @@ export const defaultEnvConfig: EnvConfigType = {
     1,
     Number(process.env.DREAM_DIGEST_INTERVAL_DAYS) || 1,
   ),
-  SELF_REFLECTION_ENABLED: process.env.REFLECTION_ENABLED !== 'false',
+  // Off unless explicitly enabled: this is only the client-side placeholder
+  // before Options fetches the real per-user value from memory-service
+  // (GET /config → serverConfig.reflectionEnabled); it also matters if that
+  // fetch hasn't resolved yet and the user hits Save on an unrelated field —
+  // defaulting true here would silently opt them into reflection. Matches
+  // the backend's own default (config.ts parseReflectionDefaultEnabled).
+  SELF_REFLECTION_ENABLED: process.env.REFLECTION_DEFAULT_ENABLED === 'true' ||
+    (process.env.REFLECTION_DEFAULT_ENABLED === undefined &&
+      process.env.REFLECTION_ENABLED === 'true'),
   SELF_REFLECTION_HEARTBEAT_MINUTES: Math.max(
     1,
     Number(process.env.REFLECTION_HEARTBEAT_MINUTES) || 15,

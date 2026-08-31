@@ -65,3 +65,16 @@ CREATE TABLE IF NOT EXISTS api_call_events (
 CREATE INDEX IF NOT EXISTS idx_api_call_events_ts ON api_call_events (ts);
 CREATE INDEX IF NOT EXISTS idx_api_call_events_user_ts ON api_call_events (user_id, ts);
 CREATE INDEX IF NOT EXISTS idx_api_call_events_route_ts ON api_call_events (route, ts);
+
+-- Runtime-editable model price table (USD per 1M tokens). Rows here override
+-- the source-compiled seed table in pricing.ts; admins manage this via
+-- GET/PUT /api/v1/usage/pricing instead of a redeploy.
+CREATE TABLE IF NOT EXISTS model_pricing (
+  model TEXT PRIMARY KEY,           -- lower-cased, matches usage_events.model
+  input_per_1m REAL NOT NULL,
+  output_per_1m REAL NOT NULL,
+  cache_read_per_1m REAL,
+  cache_write_per_1m REAL,
+  note TEXT,
+  updated_at INTEGER NOT NULL
+);

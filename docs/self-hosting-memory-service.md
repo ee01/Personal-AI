@@ -80,8 +80,19 @@ curl http://localhost:3210/health
 ALLOWED_ORIGINS=https://your-dashboard.example.com
 ```
 
+## 用量报表成本预估初始化（推荐，部署后做一次）
+
+Usage Analytics 报表的“预估成本”按 `model_pricing` 表估算，源码自带的价目表只是 seed，只覆盖开发期已知的几个模型——换了 `LLM_PROVIDER` 或模型之后，报表会显示预估成本一直是 $0（并在成本卡片打 `⚠ 含未计价模型`）。管理员运行一次 `update-model-pricing` skill（`.claude/skills/update-model-pricing/SKILL.md`）即可补上：
+
+1. 需要 `MEMORY_SERVICE_URL` 和 `ANALYTICS_ADMIN_TOKEN`
+2. skill 会先调 `GET /api/v1/usage/pricing/unpriced?range=30d` 找出本实例**实际用过但没有价格**的模型，联网核对官方价目表，列出待确认的价格差异表，你确认后再写入
+3. 写入立即生效（`PUT /api/v1/usage/pricing`），无需重启、无需等 rollup，历史数据也会跟着重新计价
+
+之后每次换 `LLM_PROVIDER` / 模型，或 dashboard 顶部又出现未计价告警时，重新运行一次即可。详见 [usage_analytics.md](./features/usage_analytics.md) 的「成本估算」一节。
+
 ## 更多
 
 - 工程细节：[`memory-service/README.md`](../memory-service/README.md)
 - Roadmap 组织级自托管：[`roadmap-service/README.md`](../roadmap-service/README.md)
 - 记忆系统总览：[`memory_system.md`](./memory_system.md)
+- 用量与成本报表：[`usage_analytics.md`](./features/usage_analytics.md)

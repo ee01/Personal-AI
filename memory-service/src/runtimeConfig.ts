@@ -27,6 +27,7 @@ export interface UserRuntimeConfig {
   reflectionUrgentNotifyThreshold: number;
   reflectionAutoExecuteThreshold: number;
   reflectionUrgentConfidenceThreshold: number;
+  reflectionIdlePauseDays: number;
   decisionCenterPushTarget: RuntimePushTarget;
   decisionCenterPushGroupId: string;
   openClawEnabled: boolean;
@@ -164,6 +165,10 @@ export function getUserRuntimeConfig(userDataManager?: UserDataManager): UserRun
     reflectionUrgentConfidenceThreshold: normalizeUnitInterval(
       persisted.reflectionUrgentConfidenceThreshold,
       appConfig.reflectionUrgentConfidenceThreshold,
+    ),
+    reflectionIdlePauseDays: normalizePositiveInteger(
+      persisted.reflectionIdlePauseDays,
+      appConfig.reflectionIdlePauseDays,
     ),
     decisionCenterPushTarget: normalizePushTarget(persisted.decisionCenterPushTarget, false, 'me'),
     decisionCenterPushGroupId:

@@ -11,6 +11,10 @@ import {
   PassiveWebpageAnalysisService,
   type PassiveWebpageAnalysisInput,
 } from '../core/PassiveWebpageAnalysisService.js';
+import { getConfig } from '../config.js';
+import { getAnalyticsStore } from '../analytics/AnalyticsStore.js';
+
+const WEBPAGE_ANALYSIS_ROUTE = '/source-memory/webpage-analysis';
 
 const interactionSignalsSchema = {
   type: 'object' as const,
@@ -135,13 +139,32 @@ function buildValidationErrorResponse(error: SourceMemoryCaptureValidationError)
 
 export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: PassiveWebpageAnalysisInput }>(
-    '/source-memory/webpage-analysis',
+    WEBPAGE_ANALYSIS_ROUTE,
     {
       schema: {
         body: webpageAnalysisBodySchema,
       },
     },
     async (request, reply) => {
+      // Per-user daily quota guard against a runaway loop / test script
+      // repeating this route (a single POC account once produced $85/month
+      // on its own — see docs/features/usage_analytics.md, 成本治理与 2026-08 事故复盘).
+      const dailyLimit = getConfig().webpageAnalysisDailyLimit;
+      const store = getAnalyticsStore();
+      if (dailyLimit > 0 && store && request.userId) {
+        const usedToday = store.getTodayCallCountForRoute(
+          request.userId,
+          WEBPAGE_ANALYSIS_ROUTE,
+        );
+        if (usedToday >= dailyLimit) {
+          return reply.status(429).send({
+            error: 'webpage_analysis_daily_quota_exceeded',
+            limit: dailyLimit,
+            used: usedToday,
+          });
+        }
+      }
+
       const service = new PassiveWebpageAnalysisService();
       const result = await service.analyze(request.body);
       return reply.status(200).send({

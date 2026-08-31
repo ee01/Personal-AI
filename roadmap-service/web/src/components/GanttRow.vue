@@ -17,7 +17,7 @@ import {
 import { memberChipHtml, openOwnerFloat } from '../composables/useOwnerFloat';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { useRoadmapState } from '../composables/useRoadmapState';
-import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, driftedDepCount, depBadgeTip, depHoverTip, depEtaMismatchesJira, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS, shouldWrapAlias } from '../composables/useRoadmapContract';
+import { isDraftItem, itemDisplayKey, jiraBrowseUrl, pendingDepCount, driftedDepCount, depBadgeTip, depHoverTip, depEtaMismatchesJira, trackMarkers, phaseColor, phaseGlyph, tooltipHintLine, clampDescription, DESCRIPTION_MAX_CHARS, shouldWrapAlias, isDoneStatus } from '../composables/useRoadmapContract';
 import {
   defaultNewSubSpan,
   dispName,
@@ -981,7 +981,7 @@ watch(
           class="sbar"
           :data-sub-id="s.id"
           :class="[
-            s.temp ? 'draft' : s.start && s.days ? colorCls(s.start, s.days) : '',
+            isDoneStatus(s) ? 'done' : s.temp ? 'draft' : s.start && s.days ? colorCls(s.start, s.days) : '',
             { 'free-h': shouldWrapAlias(s.alias) },
           ]"
           :style="{
@@ -993,13 +993,13 @@ watch(
                 ? 'subIn .34s cubic-bezier(.22,1,.36,1) backwards'
                 : undefined,
           }"
-          :data-tip="`${s.key || '草稿 · 未创建到 Jira'}${s.createdBy && s.createdBy !== currentUser ? ` · 由 ${showName(s.createdBy)} 添加` : ''} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · Owner ${showName(s.owner)}` : ''}${barSprintTitle(s.start, s.days)}||${s.title}||${tooltipHintLine(s.description, subOpsHint(s))}`"
+          :data-tip="`${s.key || '草稿 · 未创建到 Jira'}${s.createdBy && s.createdBy !== currentUser ? ` · 由 ${showName(s.createdBy)} 添加` : ''} · ${s.start ? fmtMD(s.start) : ''} → ${s.start && s.days ? fmtMD(addD(s.start, s.days - 1)) : ''} · ${s.days}d${s.owner ? ` · Owner ${showName(s.owner)}` : ''}${barSprintTitle(s.start, s.days)}${isDoneStatus(s) ? ` · ${s.status}` : ''}||${s.title}||${tooltipHintLine(s.description, subOpsHint(s))}`"
           @pointerdown="barDragStart($event, s, $event.currentTarget as HTMLElement)"
         >
-          <div v-if="shouldWrapAlias(s.alias)" class="wrap-label">{{ esc(s.alias!) }}</div>
+          <div v-if="shouldWrapAlias(s.alias)" class="wrap-label">{{ isDoneStatus(s) ? '✓ ' : '' }}{{ esc(s.alias!) }}</div>
           <span v-else class="in-label">
             <span v-if="s.key" style="font-family: var(--mono); font-size: 9.5px; opacity: 0.75">{{ s.key }}</span>
-            {{ s.key ? ' · ' : '' }}{{ esc(s.alias || s.title) }}
+            {{ s.key ? ' · ' : '' }}{{ isDoneStatus(s) ? '✓ ' : '' }}{{ esc(s.alias || s.title) }}
           </span>
           <span
             v-if="s.createdBy && s.createdBy !== currentUser"

@@ -81,6 +81,8 @@ export interface RoadmapSub {
   version: number;
   /** Draft user text, or Jira description mirror for imported tasks. */
   description?: string | null;
+  /** Mirrored Jira workflow status (e.g. 'Closed', 'Resolved'); null until first Jira refresh. */
+  status?: string | null;
 }
 
 export interface RoadmapItem {

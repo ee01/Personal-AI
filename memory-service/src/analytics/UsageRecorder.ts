@@ -11,6 +11,25 @@ import { getAnalyticsStore, type UsageSide } from './AnalyticsStore.js';
 import { getUsageContext } from './usageContext.js';
 import { normalizeCapability } from './capabilityMap.js';
 
+/**
+ * Features driven by ProactiveScheduler's own loops rather than a live user
+ * request. Tagged `meta.backgroundLlm` so the dashboard can alert when one of
+ * them quietly burns far more than expected in a single day (the reflection
+ * default-enabled incident cost ~$100 over a week before anyone noticed).
+ * Keep this in sync with the `feature` values passed to `runWithUsageContext`
+ * in ProactiveScheduler.ts.
+ */
+const BACKGROUND_FEATURES = new Set([
+  'heartbeat',
+  'outreach',
+  'daily_consolidation',
+  'radar_consolidation',
+  'weekly_dreaming',
+  'weekly_report',
+  'meeting_prep',
+  'keystone_composer',
+]);
+
 export interface RecordLlmUsageParams {
   side: UsageSide;
   model: string | null | undefined;
@@ -43,13 +62,14 @@ export function recordLlmUsage(params: RecordLlmUsageParams): void {
     const capability = normalizeCapability(
       params.capability ?? ctx?.capability ?? null,
     );
+    const feature = params.feature ?? ctx?.feature ?? null;
 
     store.recordUsageEvent({
       ts: params.ts,
       userId: params.userId ?? ctx?.userId ?? 'unknown',
       side: params.side,
       capability,
-      feature: params.feature ?? ctx?.feature ?? null,
+      feature,
       route: params.route ?? ctx?.route ?? null,
       model: params.model ?? null,
       promptTokens: params.promptTokens,
@@ -61,6 +81,9 @@ export function recordLlmUsage(params: RecordLlmUsageParams): void {
         const meta = {
           ...(params.meta ?? {}),
           ...(params.provider ? { provider: params.provider } : {}),
+          ...(feature && BACKGROUND_FEATURES.has(feature)
+            ? { backgroundLlm: true }
+            : {}),
         };
         return Object.keys(meta).length > 0 ? meta : null;
       })(),

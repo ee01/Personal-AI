@@ -304,7 +304,7 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有
 
 ## 数据库迁移
 
-`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳。
+`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除。扩展侧早就在批量刷新时请求 `status` 字段（依赖 ticket 一直在用），这次只是把它也落到 `subs` 表并下发给前端，不需要改扩展。
 
 **顺序约束**：`Database.ts` 是先 `db.exec(schema.sql)` 再跑迁移。所以 `schema.sql` 里**不能**出现引用新列的索引——已有部署还没 ALTER 过，启动时就会崩。`idx_items_jira_key` 因此由迁移 `003` 创建而不是写在 `schema.sql` 里。`schema.sql` 只负责让全新库一次到位，迁移负责把老库补齐。description 列写在 `schema.sql` 里但不建索引。
 
@@ -407,7 +407,14 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 - **前缀 chip**（条足够宽才出现，实际像素宽 > 110px）：备注名优先，超 14 字截断
 - 工具栏「主任务」图例是纯静态色板对照，**不**联动高亮——早期版本 hover 任务条/图例会把同 Epic 的条一起点亮、其余压暗，实测这个联动经常和下面「聚焦」的选中态互相抢视觉焦点，已去掉
 
-高亮/压暗**只由选中驱动**，不由 hover 驱动，且只影响当前正在操作的这个人：进入「聚焦」（见下）时，当前人员未选中的任务变暗（`.res-row.focusing .res-bar:not(.sel)...{opacity:.4}`），选中的任务用 `.sel` 高亮（橙色描边 + ✓）；其他人员的任务条不受任何影响，正常显示。
+高亮/压暗**只由选中驱动**，不由 hover 驱动，且只影响当前正在操作的这个人：进入「聚焦」（见下）时，当前人员**只有选中的任务**用 `.sel` 高亮（橙色描边 + ✓），**其余全部**（含会被顺延移动的候选、顶到 Epic 结束日的 stuck、下面说的已完成 done）统一压暗（`.res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}`）——早期版本让「会被移动的候选」也跟着高亮，实测容易和「已经在做」混在一起分不清，顺延预告改成只靠 `rb-shift` 角标（→下周一 / →钳制日期 / ✕）单独传达；其他人员的任务条不受任何影响，正常显示。
+
+### 已完成任务的配色
+
+子任务镜像的 Jira **状态**（`subs.status`，由 `refresh_from_jira` 写入，见「数据库迁移」）为 `Closed`/`Resolved`/`Done`（`isDoneStatus()`，`useRoadmapContract.ts`）时，人员视图和甘特图都用独立的浅绿配色（`.res-bar.done` / `.sbar.done`）+ 标题前缀 `✓ ` 展示，不与过去/当前/未来的时间配色混淆——镜像状态可能滞后于本地排期日期，一条日期上看是「未来」的任务也可能其实已经关闭。已完成任务：
+
+- **不计入**「待延至下周」的候选统计（`isDeferCandidate()` 排除），也不能被标记「正在做」（`onBarClick` 直接 return）——已经完成的任务不需要顺延，也不需要标进度
+- 只读展示，用户不能在页面上手动设置/清除 `status`，完全由 Jira 刷新单向镜像（`applyRefreshFromJira` 的 sub 分支）
 
 ### 时间窗平移
 
@@ -420,12 +427,14 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 ### 聚焦「正在做」+ 一键顺延到下周
 
-人员视图**单击**一个子任务条把它标成「正在做」（可继续单击多选）；点到**另一个成员**的任务，会对那个人重新开始多选。选中后该成员名下出现操作面板：
+人员视图**单击**一个子任务条把它标成「正在做」（可继续单击多选）；点到**另一个成员**的任务，会对那个人重新开始多选；**已完成**（见上）的任务不参与选中。选中后该成员名下出现操作面板：
 
-- 「其余延至下周 →」：把**该成员未选中、开始日在下周一之前、且尚未结束**的任务（已开始未做完的算，已结束的历史记录不算，下周及以后的远任务不算）统一延到下周一开始，**长度不变**
+- 「其余延至下周 →」：把**该成员未选中、开始日在下周一之前、尚未结束、未完成**的任务（已开始未做完的算，已结束的历史记录不算，下周及以后的远任务不算，已完成的不算）统一延到下周一开始，**长度不变**
 - hover 该按钮会在每条待顺延任务的落点位置画虚线「影子」预览，钳制到 Epic 结束日的会标注「未到下周一（Epic 限制）」
 - 执行后 toast 汇总移动/受限/顶死的数量；再点一次是幂等的（已经落在下周一的不会继续被推）
 - Esc、点击空白处、切团队或切「近 2 周 / 全部」都会退出聚焦
+
+**按钮三态**（`goState()`，`ResourceView.vue`）：`ready`（有可移动的候选，正常橙色，可点）/ `stuck`（有候选但全部顶到所属 Epic 结束日，没有可后移的空间——按钮变灰但**不用** `disabled`，因为 `pointer-events:none` 会连 hover 提示一起吞掉，用户无法知道为什么点不动；改用 `.soft` 类保持可点/可 hover，hover 提示与点击 toast 都明确给出原因）/ `none`（没有候选：其余任务都已完成或都不在可顺延范围内）。
 
 后端新 intent **`{ op: 'defer_subs', subIds: string[], targetStart: 'YYYY-MM-DD' }`**（`TeamService.ts` `applyIntent` 分支）：`targetStart` 由前端算好下周一显式传入，避免服务端时区歧义；服务端逐条按 `shift = min(diffDays(sub.start, targetStart), diffDays(subEnd, epicEnd))` 移动 `start_date`（`days` 不变），`shift > 0` 才算移动，一条聚合 activity；返回 `{ moved, capped, stuck }`（**subId 数组**，供前端精确定位需要回写 Jira Target 的那几条，而不只是计数）。服务端只按 Epic 跨度钳制，**不**检查「是否已过期」——那是纯前端的 `isDeferCandidate` 概念，调用方要自己先过滤掉不该顺延的任务再拼 `subIds`。为避免批量竞态与 N 条 activity/SSE 噪音，这里刻意不复用逐条 `update_sub`，也没有做乐观并发的 `baseVersions` 参数（这是低风险的批量整理操作，真发生并发冲突时下一次刷新自然纠正）。执行成功后 `ResourceView.vue` 把移动的 subId 上抛给 `GanttPanel.vue`，复用已有的 `scheduleTargetDateSync` 防抖队列回写 Jira Target Start/End。
 
@@ -548,7 +557,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的整体移动/Epic 端钳制/幂等/跳过无效 id、`resolve_item`/`resolve_draft` 的 alias 固化）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的整体移动/Epic 端钳制/幂等/跳过无效 id、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 sub `status` 的镜像与幂等）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
 - Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）

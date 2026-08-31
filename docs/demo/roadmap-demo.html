@@ -243,7 +243,8 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-gridline{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
 .res-gridline.today{width:2px;background:var(--danger);opacity:.55}
 .res-bar{position:absolute;height:22px;border-radius:6px;display:flex;align-items:center;
-  overflow:hidden;cursor:pointer;transition:filter .13s,opacity .15s,left .35s cubic-bezier(.25,.9,.35,1)}
+  overflow:hidden;cursor:pointer;transition:filter .13s,opacity .15s,box-shadow .13s,transform .13s,
+  left .35s cubic-bezier(.25,.9,.35,1)}
 .res-bar:hover{filter:brightness(1.05)}
 .res-bar .rb-label{padding:0 8px;font-size:10.5px;font-weight:500;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -260,19 +261,22 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .epic-legend{gap:12px;flex-wrap:wrap}
 .epic-legend .lg{cursor:default;padding:2px 6px;border-radius:6px}
 .epic-legend .ep-dot{width:5px;height:13px;border-radius:3px;flex:none}
-/* ---- 聚焦当前任务：单击多选「正在做」，其余未开始任务一键顺延 ---- */
+/* ---- 聚焦当前任务：单击多选「正在做」，其余未开始任务一键顺延 ----
+   高亮 = 已标记「正在做」的选中条，仅此一种；非高亮 = 其余全部（包括会被顺延移动的
+   candidate、顶到 Epic 结束日的 stuck、已完成的 done）——顺延预告靠 rb-shift 角标
+   （→ 下周一 / →钳制日期 / ✕）单独传达，不需要连整条都跟着高亮，压暗但保留色相，
+   不整体去色，避免和「过去任务」的灰色混淆 */
 .res-row.focusing{background:#FFFCF4}
-.res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 2px 10px rgba(255,136,0,.35);z-index:4}
+.res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}
+.res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 3px 12px rgba(255,136,0,.4);
+  filter:saturate(1.15) brightness(1.04);transform:translateY(-1px);z-index:4}
 .res-bar.sel::after{content:"✓";position:absolute;right:4px;top:50%;transform:translateY(-50%);
   width:13px;height:13px;border-radius:50%;background:var(--cur-deep);color:#fff;font-size:9px;
   font-weight:700;display:flex;align-items:center;justify-content:center}
-.res-row.focusing .res-bar:not(.sel):not(.will-move):not(.ghost){opacity:.4}
-.res-bar.will-move{outline:1.5px dashed #C9842A;outline-offset:1.5px}
 .rb-shift{position:absolute;right:4px;top:50%;transform:translateY(-50%);font-family:var(--mono);
   font-size:8.5px;font-weight:700;background:#C9842A;color:#fff;border-radius:4px;padding:1px 4px;
   pointer-events:none}
-.res-bar.will-move.at-cap{outline-color:var(--danger)}
-.res-bar.will-move.at-cap .rb-shift{background:var(--danger)}
+.res-bar.will-move.stuck .rb-shift{background:var(--danger)}
 .res-bar.ghost{opacity:.6;border:1.5px dashed #C9842A;box-shadow:none;pointer-events:none;
   background:repeating-linear-gradient(45deg,#fff 0 4px,#FBEFD9 4px 8px);color:#8A5A12;z-index:2;
   transition:none}
@@ -285,12 +289,19 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .rpf-go{font-size:11px;font-weight:600;color:#fff;background:var(--cur);border-radius:7px;
   padding:4px 11px;transition:all .13s;box-shadow:0 2px 8px rgba(255,136,0,.3)}
 .rpf-go:hover{background:var(--cur-deep);transform:translateY(-1px)}
-.rpf-go[disabled]{opacity:.45;pointer-events:none;box-shadow:none}
+/* soft：不用 disabled（pointer-events:none 会连 hover 提示一起吞掉，用户不知道为什么点不动）；
+   仍可点/可 hover，颜色变灰示意「当前没什么可做」，点击会 toast 说明具体原因 */
+.rpf-go.soft{opacity:.55;box-shadow:none;background:var(--muted)}
+.rpf-go.soft:hover{background:var(--muted);transform:none}
 .rpf-x{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:4px 9px}
 .rpf-x:hover{background:var(--bg);color:var(--ink)}
 .res-bar.c-past{background:#DDE1E6;color:var(--past-ink)}
 .res-bar.c-cur{background:#FFB25C;color:#7A3E00}
 .res-bar.c-fut{background:#7FBEDD;color:#083B52}
+/* 已完成（Jira Closed/Resolved）：独立配色，不与过去/当前/未来的时间配色混淆——
+   镜像的 Jira 状态可能滞后于本地排期日期，一条「未来」的任务也可能已经 Closed */
+.res-bar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
+.res-bar.done .rb-parent{background:rgba(255,255,255,.55)}
 .res-bar.draft{background:repeating-linear-gradient(45deg,#fff 0 5px,#EEF1F5 5px 10px);
   border:1.5px dashed #96A0AD;color:#3D4754}
 .res-bar.clip-l{border-top-left-radius:0;border-bottom-left-radius:0;
@@ -514,6 +525,8 @@ body.no-select,body.no-select *{user-select:none!important}
 .sbar.c-fut{background:#7FBEDD;color:#083B52}
 .sbar.draft{background:repeating-linear-gradient(45deg,#fff 0 5px,#EEF1F5 5px 10px);
   border:1.5px dashed #96A0AD;color:#3D4754}
+/* 已完成（Jira Closed/Resolved）：与人员视图同一套配色，甘特上也要能一眼看出哪些已经结束 */
+.sbar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
 .sbar .in-label{position:absolute;left:9px;right:9px;font-size:11px;font-weight:500;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .sbar .out-label{position:absolute;left:calc(100% + 7px);font-size:11px;font-weight:500;
@@ -1319,8 +1332,9 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li>任务可选 Owner：标题里输入 <b>@</b> 触发建议（可手输自定义），或点输入框左侧头像；直接 Enter 则跳过。Owner 数据来自<b>团队成员表</b>，新名字自动加入；双击任务条可改 Owner。选人浮层<b>搜索框置顶、打开即聚焦</b>，列表限高可滚动，↑↓ + Enter 快速选择，下方空间不足时自动向上翻转</li>
     <li><b>新增任务默认从今天开始、两周长</b>；草稿任务条不再叠创建者名，<b>hover 时在条外浮出灰色「xxx created」</b></li>
     <li><b>打开 Jira</b>：主/子任务条 hover 左上角出现 <b>↗</b> 圆钮，点击新开对应 issue；<b>⌘/Ctrl+单击任务条</b>等效（草稿无 issue 不显示）</li>
-    <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部），可添加成员、双击改名、移除空闲成员。任务条<b>左侧色条 + 前缀 chip 标识所属主任务</b>（备注名优先，条太窄只留色条），hover 任务条或工具栏「主任务」图例会<b>联动高亮同主任务的所有条</b></li>
-    <li><b>聚焦当前任务（人员视图）</b>：<b>单击任务条</b>标记该成员「正在做」，可继续单击多选；点到<b>另一个成员</b>的任务会对那个人重新开始多选。选中后成员名下出现操作点：<b>「其余延至下周 →」</b>把 TA 其余<b>开始日在下周一之前、尚未结束</b>的任务统一<b>延至下周一开始</b>（任务长度不变）—— 已开始未做完的同样延后；开始日已在下周及以后的<b>远任务不动</b>；已结束的是历史记录不动；每条<b>最多顺延到所属 Epic 结束日</b>（角标预告 →下周一 / →钳制日期 / ✕，hover 按钮预览虚线落点影子）。延后非草稿任务自动回写 Jira <b>Target Start/End</b>；延完再按一次不会继续往后推（幂等）。Esc 或点空白处退出聚焦</li>
+    <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部），可添加成员、双击改名、移除空闲成员。任务条<b>左侧色条 + 前缀 chip 标识所属主任务</b>（备注名优先，条太窄只留色条），工具栏「主任务」图例是纯静态色板对照，不联动高亮</li>
+    <li><b>聚焦当前任务（人员视图）</b>：<b>单击任务条</b>标记该成员「正在做」（<b>唯一</b>的高亮态：亮色描边 + ✓），可继续单击多选；点到<b>另一个成员</b>的任务会对那个人重新开始多选；<b>已完成</b>（Jira Closed/Resolved，见下条）的任务不参与选中。除了选中的任务，<b>其余全部压暗</b>（未选中的顺延候选 / 顶到 Epic 结束日的 stuck / 已完成 / 远任务，压暗程度一致）——顺延预告靠角标（→下周一 / →钳制日期 / ✕）单独传达，不会让候选条也跟着高亮，避免分不清"已经在做的"和"待会要被顺延的"。选中后成员名下出现操作点：<b>「其余延至下周 →」</b>把 TA 其余<b>开始日在下周一之前、尚未结束、未完成</b>的任务统一<b>延至下周一开始</b>（任务长度不变）—— 已开始未做完的同样延后；每条<b>最多顺延到所属 Epic 结束日</b>（hover 按钮预览落点影子）。若候选任务<b>全部</b>已顶到所属 Epic 结束日（没有空间可移），按钮变灰但仍可 hover / 点击——不会像普通 disabled 按钮一样连说明都点不出来，会明确提示原因，而不是静默不可用。延后非草稿任务自动回写 Jira <b>Target Start/End</b>；延完再按一次不会继续往后推（幂等）。Esc 或点空白处退出聚焦</li>
+    <li><b>已完成任务的配色（人员视图）</b>：子任务镜像的 Jira 状态为 <b>Closed / Resolved</b> 时，用独立的浅绿配色 + ✓ 前缀展示，与「过去/当前/未来」的时间配色区分开——镜像状态可能滞后于本地排期日期，一条日期上看是「未来」的任务也可能其实已经关闭。已完成任务<b>不计入</b>「待延至下周」的候选统计，也不能被标记「正在做」</li>
     <li><b>人员视图时间窗平移</b>：近 2 周模式下<b>触控板双指左右滑动</b>整窗平移（窗口长度 14 天不变），或点两端「◂ 更早 / 更晚 ▸」角标平移两周；平移后表头出现<b>「回到今天」</b>，点「近 2 周」按钮同样回到今天。配合聚焦功能：成员先领取了很后面的任务时，滑到时间后方把它标记「正在做」，再一键把眼前的任务延至下周</li>
     <li><b>人员视图任务条标题贴边</b>：任务开始时间被裁到可视范围左侧外（比如已经进行了很久的长任务）时，「主任务前缀 + 标题」这一组会贴在可视范围最左侧显示，不用滚很久才能看到是哪条任务；贴到任务条自己的结束位置后就不再继续贴，交给省略号收尾（保留标题开头，不会露出反直觉的标题尾巴）。不论是双指滑动过程中还是滑完之后都会跟着实时贴边</li>
     <li><b>创建 Jira 后草稿名保留为备注名</b>：回传 jira key 时自动把原草稿标题存为备注名，甘特上展示的名字不因创建（或 Agent 规范化 summary、后续 Jira 刷新）而改变，hover 才看正式 summary。编辑备注名时<b>清空后回车 = 恢复展示原 ticket 名</b></li>
@@ -1797,7 +1811,27 @@ function buildBrandy(){
   c.phases = [ { id:'ph'+(markerSeq++), phaseKind:'production', label:'Production', date: addD(c.start, c.days+10) } ];
   /* 外部依赖示例：手动填写（未绑定 Jira），ETA 已知 */
   c.deps = [ { id:'dep'+(markerSeq++), title:'第三方情感分析模型 License 采购完成后启用高级评分', jiraKey:null, eta: addD(today,40), etaSource:'manual' } ];
-  t.order = [legacy.key, a.key, b.key, c.key];
+  /* Bernard Ye + 一个快收尾的 Epic：演示「其余延至下周」在候选任务全部顶到 Epic 结束日时
+     该如何解释（而不是静默灰掉），以及 Closed/Resolved 状态该如何标色 + 从候选里剔除 */
+  t.members.push({ n:'Bernard Ye', i:'BY', c:'#5B8DEF' });
+  const bernard = t.members.find(m => m.n === 'Bernard Ye');
+  const d = mkItem('NOVA-18210', 'EPIC', 'Nova Integration: RCCC Browser Automation', CURQ, 6);
+  d.scheduled = true; d.start = addD(today, -40); d.days = 44;   // Epic 还有 3 天就结束
+  d.alias = 'Nova Integration';
+  d.subs = [
+    { id:'d1', key:'NOVA-18211', title:'Research Existing RCCC Browser Automation Infrastructure and Define the Test Harness Scope',
+      start:addD(today,-6), days:9, temp:false, owner:bernard },
+    { id:'d2', key:'NOVA-18212', title:'Create a Quality Assurance System Summary Wiki for the Integration Rollout',
+      start:addD(today,-3), days:5, temp:false, owner:bernard },
+    { id:'d3', key:'NOVA-18213', title:'Implement Automated Critical-Path External Dependency Update Notifications',
+      start:addD(today,-15), days:10, temp:false, owner:bernard, status:'Resolved' },
+    { id:'d4', key:'NOVA-18214', title:'Define RCCC Automation Trigger Strategy and Integrate It into the Release Pipeline',
+      start:addD(today,-2), days:6, temp:false, owner:bernard },
+    { id:'d5', key:'NOVA-18215', title:'Document the Static IT Information-Path Integrity Mechanism and Publish the Ops Runbook',
+      start:addD(today,0), days:4, temp:false, owner:bernard },
+  ];
+  t.items.push(d);
+  t.order = [legacy.key, a.key, b.key, c.key, d.key];
   /* 预配置发布时间表：标尺按发布 Sprint 展示（RCV Mobile 未配置，用于体验引导流程） */
   t.releaseSheet = {
     url: 'https://docs.google.com/spreadsheets/d/1sWRtByTquVLKeyv_kQG7nkSjP6-JBbSbNIVv4I3UzTM/edit#gid=0',
@@ -2447,9 +2481,9 @@ function rowEl(it){
       const sl = document.createElement('div'); sl.className='sub-lane';
       const sb = document.createElement('div');
       const sw = s.days*DAY_W - 2;
-      sb.className = 'sbar ' + (s.temp ? 'draft' : colorCls(s.start, s.days));
+      sb.className = 'sbar ' + (isDoneStatus(s) ? 'done' : s.temp ? 'draft' : colorCls(s.start, s.days));
       sb.style.left = X(s.start)+'px'; sb.style.width = sw+'px';
-      const sDisp = s.alias || s.title;
+      const sDisp = (isDoneStatus(s) ? '✓ ' : '') + (s.alias || s.title);
       /* 短备注名（手动缩写）才换行增高；长备注名（如创建 Jira 自动保留的草稿名）单行省略 */
       const sWrap = !!s.alias && s.alias.length <= 40;
       if (sWrap) sb.classList.add('free-h');
@@ -2464,7 +2498,7 @@ function rowEl(it){
         sb.appendChild(ol);
       }
       sb.dataset.sid = s.id;
-      sb.dataset.tip = `${s.key || '草稿 · 未创建到 Jira' + (s.by?' · 由 '+dispName(s.by)+' 添加':'')} · ${fmtMD(s.start)} → ${fmtMD(addD(s.start,s.days-1))} · ${s.days}d${s.owner?' · Owner '+dispName(s.owner.n):''}||${s.title}||${s.desc ? clipTxt(s.desc)
+      sb.dataset.tip = `${s.key || '草稿 · 未创建到 Jira' + (s.by?' · 由 '+dispName(s.by)+' 添加':'')} · ${fmtMD(s.start)} → ${fmtMD(addD(s.start,s.days-1))} · ${s.days}d${s.owner?' · Owner '+dispName(s.owner.n):''}${isDoneStatus(s) ? ' · '+s.status : ''}||${s.title}||${s.desc ? clipTxt(s.desc)
         : `双击${s.temp?'改任务名':'改备注名'} · 拖动/两端拉伸调整${s.key?' · 左上 ↗ / ⌘单击打开 Jira':''}`}`;
       if (opening) sb.style.animationDelay = (si * 45) + 'ms';
       else if (s.id === newSubId) sb.style.animation = 'subIn .34s cubic-bezier(.22,1,.36,1) backwards';
@@ -3926,9 +3960,13 @@ function deferPlan(s, it){
   const maxByEpic = diffD(addD(s.start, s.days - 1), addD(it.start, it.days - 1));
   return { want, shift: clamp(Math.min(want, maxByEpic), 0, want) };
 }
-/* 顺延候选：未选中 && 未清理 && 尚未结束 && 开始日在下周一之前 */
+/* Jira 状态：Closed / Resolved 视为已完成——镜像状态可能滞后于本地排期日期，
+   已完成的任务不该再算「待顺延」，人员视图用独立配色标出，避免和「过去/当前/未来」的时间配色混淆 */
+const DONE_STATUSES = new Set(['Closed', 'Resolved', 'Done']);
+const isDoneStatus = s => !!s.status && DONE_STATUSES.has(s.status);
+/* 顺延候选：未选中 && 未清理 && 未完成 && 尚未结束 && 开始日在下周一之前 */
 const isDeferCandidate = s =>
-  addD(s.start, s.days - 1) >= today && s.start < nextMonday();
+  !isDoneStatus(s) && addD(s.start, s.days - 1) >= today && s.start < nextMonday();
 
 function renderResource(){
   const t = team(); computeTL();
@@ -4024,6 +4062,15 @@ function renderResource(){
     const selN = focusing ? tasks.filter(({s}) => resSel.ids.has(s.id)).length : 0;
     const movers = focusing ? tasks.filter(({s}) => !resSel.ids.has(s.id) && isDeferCandidate(s)) : [];
     const movable = movers.filter(({s, it}) => deferPlan(s, it).shift > 0);
+    /* 「其余延至下周」按钮三态：ready 可执行；stuck 有候选但全部顶到所属 Epic 结束日，
+       用提示说明原因而不是静默灰掉（灰掉 + pointer-events:none 会连 hover 提示一起吞掉）；
+       none 没有候选（都已完成 / 都不在可顺延范围内） */
+    const goState = !movers.length ? 'none' : movable.length ? 'ready' : 'stuck';
+    const goTip = goState === 'ready'
+      ? `把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一（${fmtMD(nextMonday())}）开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、已完成、标记「正在做」的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点；延完再按一次不会继续往后推`
+      : goState === 'stuck'
+        ? `这 ${movers.length} 个待顺延任务都已顶到所属 Epic 的结束日，没有可后移的空间||可以调整 Epic 的排期结束日，或手动处理这些任务`
+        : '没有需要顺延的任务||其余任务不在可顺延范围内，或已标记完成，不需要处理';
     const row = document.createElement('div'); row.className = 'res-row' + (focusing ? ' focusing' : '');
     /* 简单车道分配，避免同人并行任务重叠 */
     const lanes = [];
@@ -4044,8 +4091,7 @@ function renderResource(){
           ${focusing ? `<div class="rp-focus">
             <span class="rpf-line">✓ 正在做 ${selN} · 待延至下周 ${movers.length}</span>
             <div class="rpf-btns">
-              <button class="rpf-go" ${movable.length ? '' : 'disabled'}
-                data-tip="把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一（${fmtMD(nextMonday())}）开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、标记「正在做」的、已结束的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点（虚线影子）；延完再按一次不会继续往后推">其余延至下周 →</button>
+              <button class="rpf-go${goState !== 'ready' ? ' soft' : ''}" data-tip="${goTip}">其余延至下周 →</button>
               <button class="rpf-x" data-tip="退出聚焦（Esc / 点空白处）">✕</button>
             </div>
           </div>` : ''}
@@ -4073,7 +4119,7 @@ function renderResource(){
       const cs = s.start < rangeS ? rangeS : s.start;
       const ce = e > rangeE ? rangeE : e;
       const b = document.createElement('div');
-      b.className = 'res-bar ' + (s.temp ? 'draft' : colorCls(s.start, s.days));
+      b.className = 'res-bar ' + (isDoneStatus(s) ? 'done' : s.temp ? 'draft' : colorCls(s.start, s.days));
       b.style.left = pct(cs) + '%';
       b.style.width = ((diffD(cs, ce) + 1) / days * 100) + '%';
       b.style.top = (8 + li * 27) + 'px';
@@ -4086,7 +4132,7 @@ function renderResource(){
       b.innerHTML = `<i class="rb-stripe" style="background:${col}"></i>`
         + `<span class="rb-title-group">`
         + (showParent ? `<span class="rb-parent" style="color:${col}">${esc(epicShort(it))}</span>` : '')
-        + `<span class="rb-label">${esc(s.alias || s.title)}</span>`
+        + `<span class="rb-label">${isDoneStatus(s) ? '✓ ' : ''}${esc(s.alias || s.title)}</span>`
         + `</span>`;
       b.dataset.epic = it.key;
       b.dataset.sid = s.id;
@@ -4097,14 +4143,19 @@ function renderResource(){
         const barRightPx = barLeftPx + (diffD(cs, ce) + 1) * pxPerDay;
         stickyEntries.push({ el: b.querySelector('.rb-title-group'), barLeftPx, barRightPx });
       }
-      /* 聚焦状态：选中 = 正在做；未选中的顺延候选 = 角标预告落点（→ 下周一 / 钳制日期 / ✕） */
+      /* 聚焦状态：只有选中才高亮，其余（含会被顺延移动的候选、顶到 Epic 结束日的 stuck、
+         已完成的 done）统一压暗，不因为「待会要移动」就跟着高亮——避免和「已经在做」混淆。
+         will-move/stuck 这两个 class 只用来决定角标颜色（琥珀 →date / 红 ✕），不再影响透明度 */
       let tipTail = `主任务：${it.alias || it.title}`;
-      if (resSel.person === personKey && resSel.ids.size){
+      if (isDoneStatus(s)){
+        tipTail += `||状态：${s.status}（已完成，不参与顺延统计）`;
+      } else if (resSel.person === personKey && resSel.ids.size){
         if (resSel.ids.has(s.id)){ b.classList.add('sel'); tipTail += '||已标记「正在做」· 再次单击取消'; }
         else if (isDeferCandidate(s)){
           b.classList.add('will-move');
           const { want, shift } = deferPlan(s, it);
-          if (shift < want) b.classList.add('at-cap');
+          if (shift <= 0) b.classList.add('stuck');
+          else if (shift < want) b.classList.add('at-cap');
           b.insertAdjacentHTML('beforeend', `<span class="rb-shift">${
             shift <= 0 ? '✕' : shift < want ? '→' + fmtMD(addD(s.start, shift)) : '→下周一'}</span>`);
           tipTail += shift <= 0
@@ -4117,6 +4168,7 @@ function renderResource(){
       b.dataset.tip = `${s.key || '草稿'} · ${it.key} · ${fmtMD(s.start)} → ${fmtMD(e)} · ${s.days}d||${s.title}||${tipTail}`;
       b.onclick = ev => {
         ev.stopPropagation();
+        if (isDoneStatus(s)) return;   // 已完成的任务不参与「正在做」多选
         if (resSel.person !== personKey){
           resSel = { team: t.name, person: personKey, ids: new Set([s.id]) };   // 换人 = 重新开始多选
           if (!focusHintShown){
@@ -4163,6 +4215,12 @@ function renderResource(){
       goBtn.onmouseleave = clearGhosts;
       goBtn.onclick = ev => {
         ev.stopPropagation(); clearGhosts();
+        if (goState !== 'ready'){        // soft-disabled 仍可点，用 toast 说明原因（不是静默无反应）
+          toast(goState === 'stuck'
+            ? `这 ${movers.length} 个待顺延任务都已顶到所属 Epic 的结束日，没有可后移的空间`
+            : '没有需要顺延的任务');
+          return;
+        }
         const moved = [], capped = [], stuck = [];
         movers.forEach(({s, it}) => {
           const { want, shift } = deferPlan(s, it);

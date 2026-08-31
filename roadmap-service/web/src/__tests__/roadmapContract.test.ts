@@ -17,6 +17,7 @@ import {
   epicColor,
   epicShort,
   formatEstimate,
+  isDoneStatus,
   isDraftItem,
   isSystemActivity,
   itemDisplayKey,
@@ -140,6 +141,15 @@ describe('display helpers', () => {
     // A key with no known row position still gets a deterministic color
     // instead of throwing or falling back to the same swatch every time.
     expect(epicColor(order, 'UNKNOWN-KEY')).toBe(epicColor(order, 'UNKNOWN-KEY'));
+  });
+
+  it('treats Closed/Resolved/Done as finished, everything else (including no status yet) as open', () => {
+    expect(isDoneStatus(sub({ status: 'Closed' }))).toBe(true);
+    expect(isDoneStatus(sub({ status: 'Resolved' }))).toBe(true);
+    expect(isDoneStatus(sub({ status: 'Done' }))).toBe(true);
+    expect(isDoneStatus(sub({ status: 'In Progress' }))).toBe(false);
+    expect(isDoneStatus(sub({ status: null }))).toBe(false);
+    expect(isDoneStatus(sub({}))).toBe(false);
   });
 
   it('prefers the alias over the title for the resource-view Epic prefix chip', () => {

@@ -154,6 +154,8 @@ export interface SubRow {
   cleared: number;
   created_by: string;
   description: string | null;
+  /** Mirrored Jira workflow status (e.g. 'Closed', 'Resolved'); null until first Jira refresh. */
+  status: string | null;
   version: number;
   created_at: number;
   updated_at: number;

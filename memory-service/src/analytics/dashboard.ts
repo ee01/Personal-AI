@@ -108,11 +108,23 @@ export function renderDashboardHtml(
   .side-pair .fe { color: var(--frontend); }
   .side-pair .be { color: var(--backend); }
   .fail { color: #f87171; }
+  .scope-note {
+    background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--accent); margin-bottom: 12px;
+  }
+  .bg-alert {
+    background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.4);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px; color: #fca5a5; margin-bottom: 12px;
+  }
+  .bg-alert b { color: #fecaca; }
+  .model-flag { color: var(--gold); margin-left: 4px; cursor: help; }
 </style>
 </head>
 <body>
   <h1>用量与 Token 分析 <span style="font-weight:400;color:var(--muted)">· 使用视角</span></h1>
   <div class="sub">Usage Analytics · <span id="status" class="muted">加载中…</span></div>
+  <div id="scopeNote" class="scope-note" style="display:none"></div>
+  <div id="bgAlert" class="bg-alert" style="display:none"></div>
   <div id="error" class="err" style="display:none"></div>
 
   <div class="controls">
@@ -194,6 +206,15 @@ if (isSelfScope) {
   if (userCtrl) userCtrl.style.display = 'none';
   document.querySelector('h1').innerHTML =
     '用量与 Token 分析 <span style="font-weight:400;color:var(--muted)">· 我的用量</span>';
+  var scopeNoteEl = document.getElementById('scopeNote');
+  if (scopeNoteEl) {
+    // Mixing up self vs. all scope here previously caused a ~$137 cost "gap"
+    // to be misdiagnosed as a telemetry bug — it was really one user's own
+    // 36% share being mistaken for the whole service's usage.
+    scopeNoteEl.textContent =
+      '此链接只显示你个人（' + (VIEWER.userId || '未知用户') + '）的用量，不代表全体用户 / 全局服务消耗。要看全局口径需要 Admin 全体用量报表。';
+    scopeNoteEl.style.display = '';
+  }
 }
 
 function fmtInt(n) { return (n || 0).toLocaleString('en-US'); }
@@ -231,6 +252,18 @@ function relativeLast(ts) {
 }
 function sideBucket(r, side) {
   return (r.bySide && r.bySide[side]) || {};
+}
+function failTooltip(rep, r) {
+  if (!r.callCount) return '';
+  var rate = '失败率 ' + ((r.failCount || 0) / Math.max(r.callCount, 1) * 100).toFixed(1) + '%';
+  var breakdown = (rep.errorBreakdown || []).filter(function (e) { return e.capability === r.capability; });
+  if (!breakdown.length) return rate;
+  var byKind = breakdown
+    .sort(function (a, b) { return b.count - a.count; })
+    .slice(0, 5)
+    .map(function (e) { return e.errorKind + '×' + e.count; })
+    .join('，');
+  return rate + '\\n' + byKind;
 }
 
 async function apiGet(path) {
@@ -303,7 +336,7 @@ function renderCapTable(rep) {
       el('td', { html: (expandedCaps[r.capability] ? '▾ ' : '▸ ') + labelOf(r.capability, r.label) + '<span class="cap-en">' + r.capability + '</span>' }),
       el('td', { class: 'num', html: '<b>' + fmtInt(r.usageCount) + '</b>' }),
       el('td', { class: 'num', html: '<span class="side-pair"><span class="fe">' + fmtInt(fe.callCount) + '</span><span class="be">' + fmtInt(be.callCount) + '</span></span>' }),
-      el('td', { class: 'num fail', text: fmtInt(r.failCount), title: r.callCount ? ('失败率 ' + ((r.failCount || 0) / Math.max(r.callCount, 1) * 100).toFixed(1) + '%') : '' }),
+      el('td', { class: 'num fail', text: fmtInt(r.failCount), title: failTooltip(rep, r) }),
     ];
     if (showApi) cells.push(el('td', { class: 'num', text: fmtInt(r.apiCallCount) }));
     cells.push(
@@ -499,9 +532,13 @@ function renderByModel(rep) {
     el('th', { text: '模型' }), el('th', { class: 'num', text: 'Token' }), el('th', { class: 'num', text: '成本' }), el('th', { text: '' })
   ])]));
   var tbody = el('tbody');
+  var unpricedNote = rows.some(function (m) { return m.flagged; })
+    ? el('div', { class: 'muted', style: 'font-size:12px;margin-bottom:8px', text: '⚠ 标记为未计价的模型，成本一直是 $0 直到管理员通过 PUT /usage/pricing 或 update-model-pricing skill 补价' })
+    : null;
+  if (unpricedNote) host.appendChild(unpricedNote);
   rows.forEach(function (m) {
     tbody.appendChild(el('tr', {}, [
-      el('td', { text: m.model }),
+      el('td', { html: m.model + (m.flagged ? '<span class="model-flag" title="未计价，成本固定为 $0">⚠</span>' : '') }),
       el('td', { class: 'num', text: fmtTok(m.totalTokens) }),
       el('td', { class: 'num', text: fmtCost(m.estCostUsd) }),
       el('td', { class: 'barcell' }, [el('div', { class: 'bar', style: 'width:' + (m.totalTokens / max * 100) + '%' })])
@@ -536,8 +573,22 @@ function renderApiRoutes(rep) {
   host.appendChild(table);
 }
 
+function renderBgAlert(rep) {
+  var host = document.getElementById('bgAlert');
+  var alerts = rep.backgroundLlmAlerts || [];
+  if (!alerts.length) {
+    host.style.display = 'none';
+    return;
+  }
+  host.innerHTML = '⚠ 后台任务今日 Token 异常：' + alerts.map(function (a) {
+    return '<b>' + labelOf(a.capability) + ' / ' + a.feature + '</b> 已用 ' + fmtTok(a.totalTokens) + '（阈值 ' + fmtTok(a.thresholdTokens) + '）';
+  }).join('；') + '。参考 docs/features/usage_analytics.md「成本治理与 2026-08 事故复盘」排查是否有用户误开了高频后台功能（如自我反思）。';
+  host.style.display = '';
+}
+
 function renderAll(rep, userFilter) {
   lastReport = rep;
+  renderBgAlert(rep);
   renderCards(rep, userFilter);
   renderCapTable(rep);
   var single = userFilter !== 'all' || isSelfScope;

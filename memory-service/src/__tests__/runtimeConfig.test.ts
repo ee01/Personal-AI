@@ -8,7 +8,11 @@ describe('getUserRuntimeConfig', () => {
     const config = getUserRuntimeConfig();
     const appConfig = getConfig();
 
-    expect(config.reflectionEnabled).toBe(true);
+    // Default is OFF unless REFLECTION_DEFAULT_ENABLED=true (or the legacy
+    // REFLECTION_ENABLED) is set — see config.ts's parseReflectionDefaultEnabled
+    // and docs/features/usage_analytics.md (成本治理与 2026-08 事故复盘) for why an
+    // unset-defaults-to-true footgun is exactly what this guards against.
+    expect(config.reflectionEnabled).toBe(false);
     expect(config.reflectionHeartbeatMinutes).toBeGreaterThanOrEqual(1);
     expect(config.dreamDigestEnabled).toBe(true);
     expect(config.openClawExecutorType).toBe(appConfig.openClawExecutorType);

@@ -21,6 +21,7 @@ import {
   isAnalyticsCorruptionError,
   type AnalyticsStore,
   type DailyActivityRow,
+  type ErrorKindAggregateRow,
   type UsageAggregateRow,
   type UsageSide,
 } from '../analytics/AnalyticsStore.js';
@@ -30,6 +31,17 @@ import {
   type CapabilityKey,
 } from '../analytics/capabilityMap.js';
 import { estimateCostUsd } from '../analytics/pricing.js';
+
+/** Background-feature LLM token alert threshold for a single UTC day. */
+const BACKGROUND_LLM_ALERT_THRESHOLD_TOKENS = parsePositiveIntEnv(
+  process.env.BACKGROUND_LLM_ALERT_THRESHOLD_TOKENS,
+  200_000,
+);
+
+function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 import { renderDashboardHtml } from '../analytics/dashboard.js';
 import {
   signUsageToken,
@@ -117,9 +129,23 @@ interface UsageReport {
   windowStart: number;
   totals: AggregateBucket & { flaggedCost: boolean; apiCallCount: number };
   byCapability: CapabilityReportRow[];
-  byModel: Array<{ model: string } & AggregateBucket>;
+  byModel: Array<{ model: string; flagged: boolean } & AggregateBucket>;
   bySide: Record<UsageSide, AggregateBucket>;
   byUser: UserReportRow[];
+  /** Failure counts by errorKind/side/capability (B9 follow-up: dashboard-visible). */
+  errorBreakdown: ErrorKindAggregateRow[];
+  /**
+   * Background (scheduler-driven) feature whose token burn today exceeds
+   * BACKGROUND_LLM_ALERT_THRESHOLD_TOKENS — the guardrail that would have
+   * caught the reflection-default-enabled incident (see
+   * docs/features/usage_analytics.md, 成本治理与 2026-08 事故复盘) days earlier.
+   */
+  backgroundLlmAlerts: Array<{
+    feature: string;
+    capability: CapabilityKey;
+    totalTokens: number;
+    thresholdTokens: number;
+  }>;
   userCapabilityMatrix: {
     users: string[];
     capabilities: Array<{ capability: CapabilityKey; label: string }>;
@@ -262,6 +288,22 @@ function requireAnalyticsViewer(
 }
 
 /**
+ * Pricing management is admin-only — a `scope=self` link must never see or
+ * change the price table (it would also leak into every self viewer's cost
+ * totals via the shared override map).
+ */
+function requireAdminToken(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): boolean {
+  if (isAdminToken(extractProvidedToken(request))) return true;
+  reply.status(401).send({
+    error: 'Unauthorized: ANALYTICS_ADMIN_TOKEN required',
+  });
+  return false;
+}
+
+/**
  * Force the report user filter under the viewer's scope.
  * self ⇒ always token.userId (ignore query user=).
  * all  ⇒ honor query, default 'all'.
@@ -319,6 +361,7 @@ function buildReport(
   };
   const byCapability = new Map<CapabilityKey, CapAcc>();
   const byModel = new Map<string, AggregateBucket>();
+  const flaggedModels = new Set<string>();
   const bySide: Record<UsageSide, AggregateBucket> = {
     frontend: emptyBucket(),
     backend: emptyBucket(),
@@ -340,6 +383,7 @@ function buildReport(
     byCapability.set(row.capability, capAcc);
 
     const modelKey = row.model || 'unknown';
+    if (flagged) flaggedModels.add(modelKey);
     const modelBucket = byModel.get(modelKey) ?? emptyBucket();
     addToBucket(modelBucket, row, cost);
     byModel.set(modelKey, modelBucket);
@@ -565,6 +609,26 @@ function buildReport(
   const sortByCost = (a: AggregateBucket, b: AggregateBucket): number =>
     b.estCostUsd - a.estCostUsd || b.totalTokens - a.totalTokens;
 
+  const errorBreakdown = store.getErrorKindAggregate({
+    sinceMs,
+    nowMs,
+    userId: userFilter,
+  });
+
+  // Background-LLM alert always looks at "today" (UTC), independent of the
+  // requested report range — a same-day burn spike is the thing worth
+  // surfacing immediately, not something to wait for a 7d/30d window to show.
+  const todayStr = new Date(nowMs).toISOString().slice(0, 10);
+  const backgroundLlmAlerts = store
+    .getBackgroundLlmDailyTotals(todayStr)
+    .filter((row) => row.totalTokens > BACKGROUND_LLM_ALERT_THRESHOLD_TOKENS)
+    .map((row) => ({
+      feature: row.feature,
+      capability: row.capability,
+      totalTokens: row.totalTokens,
+      thresholdTokens: BACKGROUND_LLM_ALERT_THRESHOLD_TOKENS,
+    }));
+
   return {
     range,
     user,
@@ -578,7 +642,7 @@ function buildReport(
     totals: { ...totals, flaggedCost, apiCallCount: apiTotal },
     byCapability: capabilityRows,
     byModel: [...byModel.entries()]
-      .map(([model, bucket]) => ({ model, ...bucket }))
+      .map(([model, bucket]) => ({ model, flagged: flaggedModels.has(model), ...bucket }))
       .sort(sortByCost),
     bySide,
     byUser,
@@ -598,6 +662,8 @@ function buildReport(
         .sort((a, b) => b.count - a.count)
         .slice(0, 50),
     },
+    errorBreakdown,
+    backgroundLlmAlerts,
   };
 }
 
@@ -807,6 +873,109 @@ export async function usageRoutes(app: FastifyInstance): Promise<void> {
           userId: viewer.userId,
         }),
       );
+    },
+  );
+
+  // ---- Pricing management (admin-only) -----------------------------------
+
+  app.get('/usage/pricing', async (request, reply) => {
+    if (!requireAdminToken(request, reply)) return reply;
+    const store = getAnalyticsStore();
+    if (!store) {
+      return reply.status(503).send({ error: 'Analytics store unavailable' });
+    }
+    try {
+      return reply.status(200).send({ pricing: store.getPricingTable() });
+    } catch (err) {
+      if (store.isCorrupt || isAnalyticsCorruptionError(err)) {
+        return replyAnalyticsUnavailable(reply, err);
+      }
+      throw err;
+    }
+  });
+
+  const pricingEntrySchema = {
+    type: 'object' as const,
+    properties: {
+      inputPer1M: { type: 'number' as const },
+      outputPer1M: { type: 'number' as const },
+      cacheReadPer1M: { type: 'number' as const, nullable: true },
+      cacheWritePer1M: { type: 'number' as const, nullable: true },
+      note: { type: 'string' as const, nullable: true },
+    },
+    required: ['inputPer1M', 'outputPer1M'],
+    additionalProperties: false,
+  };
+
+  app.put<{
+    Body: Record<
+      string,
+      {
+        inputPer1M: number;
+        outputPer1M: number;
+        cacheReadPer1M?: number | null;
+        cacheWritePer1M?: number | null;
+        note?: string | null;
+      }
+    >;
+  }>(
+    '/usage/pricing',
+    {
+      schema: {
+        body: {
+          type: 'object' as const,
+          additionalProperties: pricingEntrySchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!requireAdminToken(request, reply)) return reply;
+      const store = getAnalyticsStore();
+      if (!store) {
+        return reply.status(503).send({ error: 'Analytics store unavailable' });
+      }
+      const body = request.body || {};
+      const entries = Object.entries(body).map(([model, entry]) => ({
+        model,
+        inputPer1M: entry.inputPer1M,
+        outputPer1M: entry.outputPer1M,
+        cacheReadPer1M: entry.cacheReadPer1M ?? null,
+        cacheWritePer1M: entry.cacheWritePer1M ?? null,
+        note: entry.note ?? null,
+      }));
+      if (entries.length === 0) {
+        return reply.status(400).send({ error: 'No pricing entries provided' });
+      }
+      try {
+        store.upsertPricing(entries);
+        return reply.status(200).send({ status: 'ok', updated: entries.map((e) => e.model) });
+      } catch (err) {
+        if (store.isCorrupt || isAnalyticsCorruptionError(err)) {
+          return replyAnalyticsUnavailable(reply, err);
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.get<{ Querystring: { range?: string; token?: string } }>(
+    '/usage/pricing/unpriced',
+    async (request, reply) => {
+      if (!requireAdminToken(request, reply)) return reply;
+      const store = getAnalyticsStore();
+      if (!store) {
+        return reply.status(503).send({ error: 'Analytics store unavailable' });
+      }
+      const range = parseRange(request.query.range);
+      const sinceMs = Date.now() - rangeToMs(range);
+      try {
+        return reply.status(200).send({ range, models: store.getUnpricedModels(sinceMs) });
+      } catch (err) {
+        if (store.isCorrupt || isAnalyticsCorruptionError(err)) {
+          return replyAnalyticsUnavailable(reply, err);
+        }
+        throw err;
+      }
     },
   );
 }

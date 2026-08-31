@@ -312,6 +312,16 @@ workflow:
                     return 'team'
                 raise ValueError('mode must be user/private or team/group')
 
+            def _unescape_literal_newlines(text):
+                # Jira Automation's "Create variable" smart value box is single-line, so
+                # authors type the two literal characters \n instead of a real line break.
+                # asJsonString then escapes that backslash, and it arrives here as a
+                # literal "\n" rather than an actual newline. Undo that so json.dumps()
+                # re-escapes it correctly for botman.
+                if not text:
+                    return text
+                return text.replace('\\r\\n', '\n').replace('\\n', '\n').replace('\\r', '\n')
+
             def main(
                 mode: str = '',
                 message: str = '',
@@ -327,6 +337,7 @@ workflow:
             ) -> dict:
                 try:
                     channel = _normalize_mode(mode)
+                    message = _unescape_literal_newlines(message)
                     payload = _parse_json(payload_json, 'payload_json', None)
                     body = dict(payload) if isinstance(payload, dict) else {}
 

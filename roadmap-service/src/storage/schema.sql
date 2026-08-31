@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS subs (
   cleared INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL DEFAULT '',
   description TEXT,
+  status TEXT,
   version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

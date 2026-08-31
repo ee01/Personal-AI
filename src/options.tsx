@@ -21,6 +21,7 @@ import {
 import { AgentExecutorsSettings } from './components/AgentExecutorsSettings';
 import { AutoBackupSettings } from './components/AutoBackupSettings';
 import { ToggleField } from './components/ToggleField';
+import { isMainLLMConfiguredForMeetingAnalysis } from './llm';
 import { syncUserLanguagePreferenceProfileItem } from './services/UserLanguagePreferenceSync';
 import {
   DEVICE_KEY_STORAGE,
@@ -252,6 +253,44 @@ function buildBlockedDigestPushReceipt(
     botSent: false,
     reason,
   };
+}
+
+/**
+ * Shared warning shown wherever a feature depends on the user's own
+ * configured LLM (message analysis, webpage analysis — both call
+ * src/llm.ts's handleLLMRequest, no memory-service fallback for either).
+ * Renders nothing once LLM_TYPE/its key is configured.
+ */
+function LlmConfigGuidance({ config }: { config: EnvConfigType }) {
+  const readiness = isMainLLMConfiguredForMeetingAnalysis(config);
+  if (readiness.ok) return null;
+  return (
+    <div
+      style={{
+        background: '#fff3cd',
+        border: '1px solid #ffe69c',
+        borderRadius: 6,
+        padding: '10px 12px',
+        margin: '0 0 12px',
+        fontSize: 13,
+        color: '#664d03',
+      }}
+    >
+      ⚠️ {readiness.message}此功能依赖它，未配置前不可用。
+      <a
+        href="#llm-config-section"
+        onClick={(event) => {
+          event.preventDefault();
+          document
+            .getElementById('llm-config-section')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }}
+        style={{ marginLeft: 6, fontWeight: 600 }}
+      >
+        去配置 →
+      </a>
+    </div>
+  );
 }
 
 const sanitizeLocalEnvConfig = (
@@ -3388,7 +3427,7 @@ const Options = () => {
         dreamDigestPushTarget: dreamInsightPushTarget,
         dreamDigestPushGroupId:
           (config.DREAM_INSIGHT_PUSH_GROUP_ID || '').trim() || undefined,
-        reflectionEnabled: config.SELF_REFLECTION_ENABLED !== false,
+        reflectionEnabled: config.SELF_REFLECTION_ENABLED === true,
         reflectionHeartbeatMinutes: Math.max(
           1,
           Number(config.SELF_REFLECTION_HEARTBEAT_MINUTES) || 15,
@@ -4116,6 +4155,7 @@ const Options = () => {
         >
           配置消息分析频度、过滤规则，以及命中关注项后的推送位置。
         </small>
+        <LlmConfigGuidance config={config} />
         <div className="form-group">
           <label htmlFor="MESSAGE_ANALYSIS_INTERVAL">
             消息分析频度（分钟）
@@ -4558,10 +4598,10 @@ const Options = () => {
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
           name="SELF_REFLECTION_ENABLED"
-          checked={config.SELF_REFLECTION_ENABLED !== false}
+          checked={config.SELF_REFLECTION_ENABLED === true}
           onChange={handleInputChange}
           label="启用自我反思（场景预演生产总开关）"
-          description="默认开启。关闭后不会自动推进 Reflection，也不会从 Reflection 生成新的场景预演候选；已存在的场景预演和梦境重放不受影响。"
+          description="默认关闭，按下方频率持续对活跃线程调用 LLM；每个开启的账号大约 $12–50/月（视活跃反思线程数量而定），闲置一段时间会自动暂停研究调用以省钱。关闭后不会自动推进 Reflection，也不会从 Reflection 生成新的场景预演候选；已存在的场景预演和梦境重放不受影响。"
         />
         <div className="form-group">
           <label htmlFor="SELF_REFLECTION_HEARTBEAT_MINUTES">
@@ -4581,6 +4621,11 @@ const Options = () => {
             保存后会同步到 memory-service，按用户分别生效。
           </small>
         </div>
+        <h3 style={{ margin: '16px 0 10px' }}>网页分析</h3>
+        <p style={{ color: '#666', fontSize: 13, margin: '0 0 10px' }}>
+          浏览网页触发的被动记忆分析始终使用下方「LLM」区块里配置的 key/模型（和消息分析共用同一份配置），不会经过后端服务。未配置时该功能不可用。
+        </p>
+        <LlmConfigGuidance config={config} />
         {renderPushTargetFields(
           '决策中心推送',
           'DECISION_CENTER_PUSH_TARGET',
@@ -5378,7 +5423,7 @@ const Options = () => {
         {renderDigestManualPushReceipt(weeklyReportPushReceipt)}
       </div>
 
-      <div className="form-section">
+      <div className="form-section" id="llm-config-section">
         <h2>{t('options.sections.llm')}</h2>
         <div className="form-group">
           <label htmlFor="LLM_TYPE">LLM 类型</label>

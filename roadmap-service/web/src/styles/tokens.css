@@ -253,13 +253,17 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-gridline{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
 .res-gridline.today{width:2px;background:var(--danger);opacity:.55}
 .res-bar{position:absolute;height:22px;border-radius:6px;display:flex;align-items:center;
-  overflow:hidden;cursor:default;transition:filter .13s,opacity .15s}
+  overflow:hidden;cursor:default;transition:filter .13s,opacity .15s,box-shadow .13s,transform .13s}
 .res-bar:hover{filter:brightness(1.05)}
 .res-bar .rb-label{padding:0 8px;font-size:10.5px;font-weight:500;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .res-bar.c-past{background:#DDE1E6;color:var(--past-ink)}
 .res-bar.c-cur{background:#FFB25C;color:#7A3E00}
 .res-bar.c-fut{background:#7FBEDD;color:#083B52}
+/* 已完成（Jira Closed/Resolved）：独立配色，不与过去/当前/未来的时间配色混淆——
+   镜像的 Jira 状态可能滞后于本地排期日期，一条「未来」的任务也可能已经 Closed */
+.res-bar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
+.res-bar.done .rb-parent{background:rgba(255,255,255,.55)}
 .res-bar.draft{background:repeating-linear-gradient(45deg,#fff 0 5px,#EEF1F5 5px 10px);
   border:1.5px dashed #96A0AD;color:#3D4754}
 .res-bar.clip-l{border-top-left-radius:0;border-bottom-left-radius:0;
@@ -279,20 +283,23 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .epic-legend{gap:12px;flex-wrap:wrap}
 .epic-legend .lg{cursor:default;padding:2px 6px;border-radius:6px}
 .epic-legend .ep-dot{width:5px;height:13px;border-radius:3px;flex:none}
-/* ---- 聚焦当前任务：单击多选「正在做」，其余任务一键延至下周 ---- */
+/* ---- 聚焦当前任务：单击多选「正在做」，其余任务一键延至下周 ----
+   高亮 = 已标记「正在做」的选中条，仅此一种；非高亮 = 其余全部（包括会被顺延移动的
+   candidate、顶到 Epic 结束日的 stuck、已完成的 done）——顺延预告靠 rb-shift 角标
+   （→ 下周一 / →钳制日期 / ✕）单独传达，不需要连整条都跟着高亮，压暗但保留色相，
+   不整体去色，避免和「过去任务」的灰色混淆 */
 .res-bar{cursor:pointer}
 .res-row.focusing{background:#FFFCF4}
-.res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 2px 10px rgba(255,136,0,.35);z-index:4}
+.res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}
+.res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 3px 12px rgba(255,136,0,.4);
+  filter:saturate(1.15) brightness(1.04);transform:translateY(-1px);z-index:4}
 .res-bar.sel::after{content:"✓";position:absolute;right:4px;top:50%;transform:translateY(-50%);
   width:13px;height:13px;border-radius:50%;background:var(--cur-deep);color:#fff;font-size:9px;
   font-weight:700;display:flex;align-items:center;justify-content:center}
-.res-row.focusing .res-bar:not(.sel):not(.will-move):not(.ghost){opacity:.4}
-.res-bar.will-move{outline:1.5px dashed #C9842A;outline-offset:1.5px}
 .rb-shift{position:absolute;right:4px;top:50%;transform:translateY(-50%);font-family:var(--mono);
   font-size:8.5px;font-weight:700;background:#C9842A;color:#fff;border-radius:4px;padding:1px 4px;
   pointer-events:none}
-.res-bar.will-move.at-cap{outline-color:var(--danger)}
-.res-bar.will-move.at-cap .rb-shift{background:var(--danger)}
+.res-bar.will-move.stuck .rb-shift{background:var(--danger)}
 .res-bar.ghost{opacity:.6;border:1.5px dashed #C9842A;box-shadow:none;pointer-events:none;
   background:repeating-linear-gradient(45deg,#fff 0 4px,#FBEFD9 4px 8px);color:#8A5A12;z-index:2;
   transition:none}
@@ -305,7 +312,10 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .rpf-go{font-size:11px;font-weight:600;color:#fff;background:var(--cur);border-radius:7px;
   padding:4px 11px;transition:all .13s;box-shadow:0 2px 8px rgba(255,136,0,.3)}
 .rpf-go:hover{background:var(--cur-deep);transform:translateY(-1px)}
-.rpf-go[disabled]{opacity:.45;pointer-events:none;box-shadow:none}
+/* soft：不用 disabled（pointer-events:none 会连 hover 提示一起吞掉，用户不知道为什么点不动）；
+   仍可点/可 hover，颜色变灰示意「当前没什么可做」，点击会 toast 说明具体原因 */
+.rpf-go.soft{opacity:.55;box-shadow:none;background:var(--muted)}
+.rpf-go.soft:hover{background:var(--muted);transform:none}
 .rpf-x{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:4px 9px}
 .rpf-x:hover{background:var(--bg);color:var(--ink)}
 .res-chip{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--mono);
@@ -541,6 +551,8 @@ body.no-select,body.no-select *{user-select:none!important}
 .sbar.c-past{background:#DDE1E6;color:var(--past-ink)}
 .sbar.c-cur{background:#FFB25C;color:#7A3E00}
 .sbar.c-fut{background:#7FBEDD;color:#083B52}
+/* 已完成（Jira Closed/Resolved）：与人员视图同一套配色，甘特上也要能一眼看出哪些已经结束 */
+.sbar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
 .sbar.draft{background:var(--draft-stripe);
   border:1.5px dashed var(--draft-line);color:var(--draft-ink)}
 .sbar .in-label{position:absolute;left:9px;right:9px;font-size:11px;font-weight:500;

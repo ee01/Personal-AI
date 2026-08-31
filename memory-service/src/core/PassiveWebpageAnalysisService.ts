@@ -1,7 +1,28 @@
-import { getLLMClient, type LLMClient } from '../llm/LLMClient.js';
+import { getLLMClient, LLMClient } from '../llm/LLMClient.js';
+import { getConfig } from '../config.js';
 
 export const PASSIVE_WEBPAGE_ANALYSIS_PROMPT_VERSION =
   'passive-webpage-memory-v2';
+
+/**
+ * Resolve the LLM client for this route. If `WEBPAGE_ANALYSIS_MODEL` is set,
+ * builds a dedicated LLMClient with the primary provider's model downgraded
+ * (fallback targets keep whatever they were already configured with) —
+ * webpage analysis was ~55% of backend LLM tokens on the service key at the
+ * default (unset) model, see
+ * docs/features/memory_capture.md「网页分析的 LLM 路径」.
+ */
+function resolveWebpageAnalysisLlmClient(): Pick<LLMClient, 'generateJSON'> {
+  const overrideModel = getConfig().webpageAnalysisModel;
+  if (!overrideModel) return getLLMClient();
+  const config = getConfig();
+  return new LLMClient({
+    ...config,
+    openaiModel: overrideModel,
+    claudeModel: overrideModel,
+    ollamaModel: overrideModel,
+  });
+}
 
 export interface PassiveWebpageAnalysisInput {
   title: string;
@@ -110,7 +131,7 @@ export function buildPassiveWebpageAnalysisPrompt(
 
 export class PassiveWebpageAnalysisService {
   constructor(
-    private readonly llmClient: Pick<LLMClient, 'generateJSON'> = getLLMClient(),
+    private readonly llmClient: Pick<LLMClient, 'generateJSON'> = resolveWebpageAnalysisLlmClient(),
   ) {}
 
   async analyze(input: PassiveWebpageAnalysisInput): Promise<unknown> {

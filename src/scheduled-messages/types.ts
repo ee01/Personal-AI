@@ -160,6 +160,8 @@ export interface CreateMessageFormData {
   Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
   // Jira Automation 链接
   Automation_Link?: string;  // Jira Automation Rule 链接
+  /** 编辑时回填，仅"1 分钟后"快捷改期会清空它，用于绕过"今日已执行"跳过逻辑 */
+  Last_Exec?: string;
 }
 
 export interface BotAutomationRule {

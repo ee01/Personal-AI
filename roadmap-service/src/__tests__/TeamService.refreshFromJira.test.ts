@@ -339,3 +339,67 @@ describe('refresh_from_jira dep cache', () => {
     expect(dep.version).toBe(1);
   });
 });
+
+describe('refresh_from_jira sub status', () => {
+  it('mirrors Jira status onto the sub and is idempotent', () => {
+    const snapshot = createTeam({
+      name: 'SubStatusRefresh',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [{ key: 'NOVA-500', type: 'Epic', title: 'P', quarter: '2026-Q3' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey: 'NOVA-500',
+        title: 'child',
+        start: '2026-08-01',
+        days: 4,
+      }),
+    );
+    const sub = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-500')!.subs[0];
+    expect(sub.status).toBeNull();
+    expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: sub.id, jiraKey: 'NOVA-501' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-501',
+            fetchedAt: Date.now() + 1000,
+            fields: { status: 'Resolved' },
+          },
+        ],
+      }),
+    );
+    const refreshed = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-500')!.subs[0];
+    expect(refreshed.status).toBe('Resolved');
+    const version = refreshed.version;
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-501',
+            fetchedAt: Date.now() + 2000,
+            fields: { status: 'Resolved' },
+          },
+        ],
+      }),
+    );
+    const same = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-500')!.subs[0];
+    expect(same.version).toBe(version);
+  });
+});

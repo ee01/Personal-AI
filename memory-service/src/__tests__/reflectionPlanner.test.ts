@@ -32,6 +32,14 @@ describe('ReflectionPlanner', () => {
     db.prepare('DELETE FROM user_profile_items').run();
     db.prepare('DELETE FROM entity_properties').run();
     db.prepare('DELETE FROM messages_raw').run();
+    // Baseline: these tests exercise the blocking/defer logic for an
+    // otherwise-active user, not the idle-sleep safety net (see the
+    // dedicated 'idle-sleep safety net' describe block below, which clears
+    // this row to model a genuinely idle user).
+    db.prepare(
+      `INSERT INTO messages_raw (id, content, source_type, timestamp, created_at)
+       VALUES ('msg-baseline-active', 'baseline activity', 'glip', ?, ?)`,
+    ).run(Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000));
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reflection-planner-'));
     userDataManager = new UserDataManager();
@@ -256,5 +264,74 @@ describe('ReflectionPlanner', () => {
     expect(updatedThread?.continueReason).toBe('waiting_for_manual_action');
     expect(updatedThread?.reflectionCount).toBe(0);
     expect(updatedThread?.lastReflectedAt).toBeUndefined();
+  });
+
+  describe('idle-sleep safety net', () => {
+    it('skips runReflection for a due thread when the user has no recent message activity', async () => {
+      // Remove the beforeEach baseline row — this test models a genuinely
+      // idle user (zong.zheng's actual shape: active threads, zero recent
+      // activity), not the "active user, blocked on something" default.
+      db.prepare('DELETE FROM messages_raw').run();
+      const currentTime = Math.floor(Date.now() / 1000);
+      threadRepo.upsertThread({
+        topicKey: 'entity:zong-idle',
+        title: '闲置用户遗留线程',
+        status: 'active',
+        priority: 8,
+        salience: 0.9,
+        nextReflectionAt: currentTime - 60,
+      });
+      // No messages_raw rows inserted — this is exactly zong.zheng's
+      // situation: active threads with zero front-end activity.
+
+      const runSpy = vi.spyOn(ReflectionThreadService.prototype, 'runReflection');
+      const planner = new ReflectionPlanner(db, userDataManager, 'idle-user');
+      const result = await planner.runHeartbeat();
+
+      expect(runSpy).not.toHaveBeenCalled();
+      expect(result.runsCreated).toBe(0);
+      expect(result.idlePaused).toBe(true);
+    });
+
+    it('still runs reflection for a due thread when the user has recent message activity', async () => {
+      const currentTime = Math.floor(Date.now() / 1000);
+      const thread = threadRepo.upsertThread({
+        topicKey: 'entity:active-user',
+        title: '活跃用户线程',
+        status: 'active',
+        priority: 8,
+        salience: 0.9,
+        nextReflectionAt: currentTime - 60,
+      });
+      db.prepare(
+        `INSERT INTO messages_raw (id, content, source_type, timestamp, created_at)
+         VALUES (?, ?, 'glip', ?, ?)`,
+      ).run('msg-recent-1', 'still talking to the team', currentTime, currentTime - 30);
+
+      const runSpy = vi
+        .spyOn(ReflectionThreadService.prototype, 'runReflection')
+        .mockResolvedValue({
+          thread: threadRepo.getThreadById(thread.id)!,
+          run: {
+            id: 'run-active',
+            threadId: thread.id,
+            runType: 'continuous_reflection',
+            triggerType: 'heartbeat',
+            summary: 'active user reran',
+            inputRefs: [],
+            discoveries: [],
+            openQuestions: [],
+            actions: [],
+            createdAt: currentTime,
+          },
+          actions: [],
+        });
+
+      const planner = new ReflectionPlanner(db, userDataManager, 'active-user');
+      const result = await planner.runHeartbeat();
+
+      expect(runSpy).toHaveBeenCalledTimes(1);
+      expect(result.idlePaused).toBe(false);
+    });
   });
 });

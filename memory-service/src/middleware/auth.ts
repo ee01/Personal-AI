@@ -46,10 +46,12 @@ function isBrowserProbeRequest(request: FastifyRequest): boolean {
 
 /**
  * Endpoints that authenticate themselves with an admin/analytics token
- * instead of a service/personal key (browser-openable pages).
+ * instead of a service/personal key (browser-openable pages, and the
+ * pricing admin API which is also gated purely on ANALYTICS_ADMIN_TOKEN
+ * inside routes/usage.ts's requireAdminToken()).
  */
 const ADMIN_SELF_AUTH_PATH_RE =
-  /^\/api\/v1\/(?:usage\/(?:dashboard|report|users)|admin\/key-requests(?:\/|$))/;
+  /^\/api\/v1\/(?:usage\/(?:dashboard|report|users|pricing(?:\/unpriced)?)|admin\/key-requests(?:\/|$))/;
 
 function hasAdminOrAnalyticsToken(request: FastifyRequest): boolean {
   const header =
@@ -67,7 +69,15 @@ function hasAdminOrAnalyticsToken(request: FastifyRequest): boolean {
 
 function isAdminSelfAuthRequest(request: FastifyRequest): boolean {
   const method = request.method?.toUpperCase() ?? 'GET';
-  if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') return false;
+  // PUT is needed for PUT /usage/pricing (the only write in this exemption).
+  if (
+    method !== 'GET' &&
+    method !== 'HEAD' &&
+    method !== 'POST' &&
+    method !== 'PUT'
+  ) {
+    return false;
+  }
   if (!ADMIN_SELF_AUTH_PATH_RE.test(request.url.split('?')[0])) return false;
   return hasAdminOrAnalyticsToken(request);
 }

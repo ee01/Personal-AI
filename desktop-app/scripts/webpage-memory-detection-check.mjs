@@ -563,6 +563,15 @@ async function startHarnessServer() {
         const rawBody = await readRequestBody(req);
         const body = rawBody ? JSON.parse(rawBody) : {};
         webpageAnalysisRequests.push(body);
+        // Webpage analysis always runs through the user's own configured LLM
+        // (Ollama in this harness, via OLLAMA_MODEL) — there is no
+        // memory-service fallback, so failure-mode simulation belongs on
+        // *this* endpoint, not the (now unreachable) backend mock below.
+        if (webpageAnalysisFailureMode) {
+          res.writeHead(503, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'synthetic_webpage_analysis_failure' }));
+          return;
+        }
         const prompt = String(body.prompt || '');
         const pageText =
           prompt.match(/<page_text>([\s\S]*?)<\/page_text>/)?.[1]?.trim() || '';
@@ -599,6 +608,11 @@ async function startHarnessServer() {
         return;
       }
 
+      // The extension no longer calls this route at all — webpage analysis
+      // is local-LLM-only, no memory-service fallback (see
+      // docs/features/memory_capture.md「网页分析的 LLM 路径」). Kept
+      // as a harmless mock in case a future direct-API/self-hosted caller
+      // exercises it; the real failure-mode test now uses /api/generate above.
       if (
         req.method === 'POST' &&
         req.url === '/api/v1/source-memory/webpage-analysis'
@@ -6055,7 +6069,7 @@ async function verifyPageAnalysisFailureBackoff(server, context, serviceWorker) 
   assert.equal(
     server.webpageAnalysisRequests.length,
     analysisStartCount + 1,
-    '首次网页分析失败应只产生一次 backend LLM 尝试',
+    '首次网页分析失败应只产生一次 LLM 尝试',
   );
 
   const sameSnapshotPage = await context.newPage();
@@ -6073,7 +6087,7 @@ async function verifyPageAnalysisFailureBackoff(server, context, serviceWorker) 
   assert.equal(
     server.webpageAnalysisRequests.length,
     analysisStartCount + 1,
-    '相同快照在失败冷却期应沿用确定性评分，不重复请求 backend LLM',
+    '相同快照在失败冷却期应沿用确定性评分，不重复请求 LLM',
   );
 
   await triggerManualPageAnalysis(serviceWorker, sameSnapshotPage.url());

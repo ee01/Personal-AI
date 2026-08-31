@@ -17,7 +17,7 @@ import {
 } from '../composables/useGeometry';
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
-import { tooltipHintLine, epicColor, epicShort } from '../composables/useRoadmapContract';
+import { tooltipHintLine, epicColor, epicShort, isDoneStatus } from '../composables/useRoadmapContract';
 
 const props = defineProps<{ tl: Timeline }>();
 const state = useRoadmapState();
@@ -166,6 +166,7 @@ const nextMonday = computed(() => {
 });
 
 function isDeferCandidate(s: RoadmapSub): boolean {
+  if (isDoneStatus(s)) return false;
   if (!s.start || !s.days) return false;
   const end = addD(s.start, s.days - 1);
   return dateMs(end) >= dateMs(today) && dateMs(s.start) < dateMs(nextMonday.value);
@@ -197,7 +198,30 @@ function movableOf(row: { tasks: TaskPair[] }, personKey: string): TaskPair[] {
   return moversOf(row, personKey).filter(({ s, it }) => deferPlan(s, it).shift > 0);
 }
 
+/**
+ * 「其余延至下周」按钮三态：ready 可执行；stuck 有候选但全部顶到所属 Epic 结束日，
+ * 用提示说明原因而不是静默灰掉（灰掉 + pointer-events:none 会连 hover 提示一起吞掉）；
+ * none 没有候选（都已完成 / 都不在可顺延范围内）。
+ */
+function goState(row: { tasks: TaskPair[] }, personKey: string): 'ready' | 'stuck' | 'none' {
+  const movers = moversOf(row, personKey);
+  if (!movers.length) return 'none';
+  return movableOf(row, personKey).length ? 'ready' : 'stuck';
+}
+
+function goTip(row: { tasks: TaskPair[] }, personKey: string): string {
+  const state = goState(row, personKey);
+  if (state === 'ready') {
+    return `把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一（${fmtMD(nextMonday.value)}）开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、已完成、标记「正在做」的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点；延完再按一次不会继续往后推`;
+  }
+  if (state === 'stuck') {
+    return `这 ${moversOf(row, personKey).length} 个待顺延任务都已顶到所属 Epic 的结束日，没有可后移的空间||可以调整 Epic 的排期结束日，或手动处理这些任务`;
+  }
+  return '没有需要顺延的任务||其余任务不在可顺延范围内，或已标记完成，不需要处理';
+}
+
 function onBarClick(s: RoadmapSub, personKey: string) {
+  if (isDoneStatus(s)) return; // 已完成的任务不参与「正在做」多选
   if (resSel.value.person !== personKey) {
     resSel.value = { person: personKey, ids: new Set([s.id]) };
     if (!focusHintShown) {
@@ -221,6 +245,7 @@ const previewPerson = ref<string | null>(null);
 /** Fallback hint line for the tooltip (real description still wins via tooltipHintLine). */
 function focusTipHint(s: RoadmapSub, it: RoadmapItem, personKey: string): string {
   const base = `主任务：${it.alias || it.title}`;
+  if (isDoneStatus(s)) return `${base}||状态：${s.status}（已完成，不参与顺延统计）`;
   if (resSel.value.person !== personKey || !resSel.value.ids.size) {
     return `${base}||单击标记「正在做」，可多选；其余任务可一键延至下周`;
   }
@@ -257,7 +282,16 @@ function deferGhosts(row: { placed: ReturnType<typeof placeLanes>['placed'] }, p
 async function runDefer(row: { tasks: TaskPair[] }, personKey: string) {
   previewPerson.value = null;
   const movable = movableOf(row, personKey);
-  if (!movable.length) return;
+  if (!movable.length) {
+    // soft-disabled 仍可点，用 toast 说明原因（不是静默无反应）
+    const movers = moversOf(row, personKey);
+    state.toast(
+      movers.length
+        ? `这 ${movers.length} 个待顺延任务都已顶到所属 Epic 的结束日，没有可后移的空间`
+        : '没有需要顺延的任务',
+    );
+    return;
+  }
   const subIds = movable.map(({ s }) => s.id);
   const targetStartIso = fmtISO(nextMonday.value);
   let summary: { moved: string[]; capped: string[]; stuck: string[] } | null = null;
@@ -573,8 +607,8 @@ async function commitRename(m: TeamMember) {
             <div class="rpf-btns">
               <button
                 class="rpf-go"
-                :disabled="!movableOf(row, personKeyOf(row)).length"
-                data-tip="把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、标记「正在做」的、已结束的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点（虚线影子）；延完再按一次不会继续往后推"
+                :class="{ soft: goState(row, personKeyOf(row)) !== 'ready' }"
+                :data-tip="goTip(row, personKeyOf(row))"
                 @mouseenter="previewPerson = personKeyOf(row)"
                 @mouseleave="previewPerson = null"
                 @click="runDefer(row, personKeyOf(row))"
@@ -612,7 +646,7 @@ async function commitRename(m: TeamMember) {
             v-if="inWindow(s, end)"
             class="res-bar"
             :class="[
-              s.temp ? 'draft' : colorCls(s.start!, s.days!),
+              isDoneStatus(s) ? 'done' : s.temp ? 'draft' : colorCls(s.start!, s.days!),
               {
                 'clip-l': dateMs(s.start!) < dateMs(rangeS),
                 'clip-r': dateMs(end) > dateMs(rangeE),
@@ -622,10 +656,16 @@ async function commitRename(m: TeamMember) {
                   resSel.ids.size > 0 &&
                   !resSel.ids.has(s.id) &&
                   isDeferCandidate(s),
+                stuck:
+                  resSel.person === personKeyOf(row) &&
+                  !resSel.ids.has(s.id) &&
+                  isDeferCandidate(s) &&
+                  deferPlan(s, it).shift <= 0,
                 'at-cap':
                   resSel.person === personKeyOf(row) &&
                   !resSel.ids.has(s.id) &&
                   isDeferCandidate(s) &&
+                  deferPlan(s, it).shift > 0 &&
                   deferPlan(s, it).shift < deferPlan(s, it).want,
               },
             ]"
@@ -647,7 +687,7 @@ async function commitRename(m: TeamMember) {
                 class="rb-parent"
                 :style="{ color: epicColor(orderedEpicKeys, it.key) }"
               >{{ epicShort(it) }}</span>
-              <span class="rb-label">{{ s.alias || s.title }}</span>
+              <span class="rb-label">{{ isDoneStatus(s) ? '✓ ' : '' }}{{ s.alias || s.title }}</span>
             </span>
             <span
               v-if="
