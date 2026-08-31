@@ -156,6 +156,10 @@ export class UserContextManager {
     // Create Database wrapper (handles dir creation, WAL, migrations)
     const database = new Database({ dataDir: userDir });
     database.migrate();
+    const ftsState = database.verifyAndRepairFtsIndex();
+    if (ftsState !== 'clean' && ftsState !== 'skipped') {
+      console.warn(`[UserContextManager] chunks_fts for ${userId}: ${ftsState}`);
+    }
     const db = database.raw;
 
     // Create UserDataManager for this user's markdown directory

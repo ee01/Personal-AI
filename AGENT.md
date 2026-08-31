@@ -290,6 +290,7 @@ Recommended flow:
    - This syncs the local working tree `memory-service/` and repo-root `docker-compose.yml` to `rcadmin@10.32.56.212:/Users/rcadmin/personal-ai`
    - It preserves remote `memory-service/.env` and `memory-service/data/`
    - It rebuilds and restarts the remote `memory-service` container
+   - SQLite data lives on the Docker named volume `personal-ai_memory-data`, selected by `MEMORY_DATA_MOUNT=memory-data` in the **compose project-root** `.env` (not `memory-service/.env`). `deploy:memory` rsyncs `docker-compose.yml` (which still defaults to the bind mount so a fresh host cannot boot against an empty volume) and, if that named volume already exists, restores the `MEMORY_DATA_MOUNT` line before `docker compose up`. Do not delete that line; rollback is `tools/migrate-memory-data-volume.sh --rollback`.
 3. After deploy, real-environment checks may target `http://10.32.56.212:3210`
    - Use `X-User-Id: esone.qiu` when checking APIs against the real user dataset
    - Example read-only checks:
@@ -303,6 +304,7 @@ Important constraints:
 - This is useful when the latest verified fix has not been committed yet
 - Because deploy uses file sync, the remote Git worktree can become dirty; do not assume a later `git pull` on the server will be clean unless those same changes are committed upstream
 - Prefer read-only API checks against `10.32.56.212` unless the task explicitly requires mutating real data
+- After a successful deploy, the script prints how `/app/data` is mounted. On the current host it must be the named volume, not `./memory-service/data` via virtiofs
 
 ## Roadmap Service Deploy And Real Validation
 

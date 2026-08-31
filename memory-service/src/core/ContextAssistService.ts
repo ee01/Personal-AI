@@ -15,6 +15,25 @@ import {
 } from './PersonaProjectionService.js';
 import type { PersonaProjection } from './PersonaProjectionService.js';
 import { TodayPilotMeetingPrepService } from './TodayPilotMeetingPrepService.js';
+import {
+  formatPersonalPriorsForGeneration,
+  inferComposerSituation,
+  loadComposerOwnerIdentity,
+  partitionComposerEvidence,
+  type ComposerPersonalPrior,
+  type ComposerPriorConstraint,
+  type ComposerOwnerIdentity,
+} from './composerEvidenceSlots.js';
+import {
+  isComposerGenerationEnabled,
+  resolveComposerAssistMode,
+} from './composerAssistMode.js';
+import {
+  applyOwnerAuthorshipToRequest,
+  contextItemMatchesOwner,
+  currentAskInvitesDecision,
+  resolveComposerReplyTarget,
+} from './composerReplyTarget.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type {
   ComposerAssistEvidence,
@@ -48,10 +67,13 @@ const MIN_WEB_PROMPT_COMPILER_CONFIDENCE = 0.78;
 const MIN_COMPOSER_CONTEXT_OVERLAP = 2;
 const MIN_COMPOSER_SOURCE_OVERLAP = 1;
 // Display floor for Glip/Jira reply drafts. The draft is grounded in the thread
-// the user is looking at, so it must clear the 0.78 compose-quadrant threshold
-// or the client hides it. For a context-only draft the "no memory" boundary is
+// the user is looking at, so it must clear the 0.78 compose-quadrant threshold.
+// Refine uses 0.86. The client now trusts `available=true` and does not re-hide
+// by evidence score; these floors keep the returned confidence aligned with the
+// quadrant defaults. For a context-only draft the "no memory" boundary is
 // carried by empty evidence plus forced preview, not by a low score.
 const MIN_WORK_DRAFT_DISPLAY_CONFIDENCE = 0.8;
+const MIN_WORK_REFINE_DISPLAY_CONFIDENCE = 0.86;
 const MIN_CONTEXT_ONLY_DRAFT_WEIGHT = 80;
 // A failed primary target plus a reasoning-model fallback already costs more
 // than 5s, so the old 4.5s budget rejected every draft before it arrived.
@@ -131,31 +153,6 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseOptionalBooleanEnv(name: string): boolean | null {
-  const raw = process.env[name];
-  if (raw === undefined) return null;
-  const normalized = raw.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return null;
-}
-
-// Unset means enabled. A test-only default silently disabled every Glip/Jira
-// draft in production while the suites kept passing.
-function isComposerSendableGenerationEnabled(): boolean {
-  const envValue = parseOptionalBooleanEnv(
-    'COMPOSER_SENDABLE_GENERATION_ENABLED',
-  );
-  if (envValue !== null) return envValue;
-  return true;
-}
-
-function isComposerPromptCompilerEnabled(): boolean {
-  const envValue = parseOptionalBooleanEnv(
-    'COMPOSER_PROMPT_COMPILER_ENABLED',
-  );
-  return envValue ?? true;
-}
 const MEETING_PREP_SOURCES: RecallSourceType[] = [
   'calendar',
   'meeting',
@@ -302,12 +299,44 @@ export class ContextAssistService {
       };
     }
 
+    const assistMode = resolveComposerAssistMode();
+    if (assistMode === 'off') {
+      return {
+        available: false,
+        suggestionType: 'none',
+        title: 'Assist 已关闭',
+        summary: 'Compose Assist 当前处于 off 模式，不检索也不生成建议。',
+        evidence: [],
+        riskLevel: 'low',
+        previewRequired: false,
+        confidence: 0,
+        queryTimeMs: 0,
+        debug: request.debug
+          ? {
+              rejectedReason: 'composer_assist_mode_off',
+              assistMode,
+            }
+          : undefined,
+      };
+    }
+
     const assistIntent = resolveComposerAssistIntent(request);
-    const requestWithIntent: ComposerAssistRequest = {
-      ...request,
-      assistIntent,
-    };
-    const ownerReplyState = getOwnerReplyState(requestWithIntent);
+    const ownerIdentity = loadComposerOwnerIdentity(this.db, this.userId);
+    const requestWithIntent: ComposerAssistRequest = applyOwnerAuthorshipToRequest(
+      {
+        ...request,
+        assistIntent,
+      },
+      ownerIdentity,
+    );
+    const ownerReplyState = getOwnerReplyState(requestWithIntent, ownerIdentity);
+    const replyTarget = resolveComposerReplyTarget(
+      requestWithIntent,
+      ownerIdentity,
+    );
+    const canSuggestStance =
+      replyTarget.state === 'addressed' &&
+      currentAskInvitesDecision(replyTarget.incomingText);
     const recallRequest = buildComposerRecallRequest(requestWithIntent);
     const recall = await this.recallService.recall(recallRequest);
     const rawEvidence = [
@@ -322,16 +351,32 @@ export class ContextAssistService {
           requestWithIntent,
           recall.debug,
         );
-    const filteredEvidence = filterComposerEvidence(requestWithIntent, [
+    const overlapFiltered = filterComposerEvidence(requestWithIntent, [
       ...rawEvidence,
       ...fallbackEvidence,
     ]);
+    const projectionForSlots = this.personaProjectionService.project({
+      request: requestWithIntent,
+      suggestionType: getComposerSuggestionType(requestWithIntent),
+    });
+    const slots = partitionComposerEvidence({
+      overlapFiltered,
+      rawEvidence: [...rawEvidence, ...fallbackEvidence],
+      identity: ownerIdentity,
+      situation: inferComposerSituation(
+        requestWithIntent,
+        projectionForSlots.summary.audienceType,
+      ),
+      canSuggestStance,
+    });
     const cohesion = applyComposerEvidenceCohesion(
       this.cohesionGate,
       requestWithIntent,
-      filteredEvidence,
+      slots.topicEvidence,
     );
     const evidence = cohesion.evidence;
+    const personalPriors = slots.personalPriors;
+    const priorReceipt = slots.priorReceipt;
     const cohesionReceipt = mergeComposerCohesionReceipts({
       recallReceipt: recall.cohesionReceipt,
       composerResult: cohesion.result,
@@ -342,13 +387,41 @@ export class ContextAssistService {
       ...response,
       ...(cohesionReceipt ? { cohesionReceipt } : {}),
       ...(attributionReceipt ? { attributionReceipt } : {}),
+      ...(priorReceipt ? { priorReceipt } : {}),
       debug: requestWithIntent.debug
         ? {
             ...(response.debug || {}),
             assistIntent,
+            assistMode,
+            topicEvidenceCount: evidence.length,
+            priorCount: personalPriors.length,
           }
         : response.debug,
     });
+
+    if (assistMode === 'context_only') {
+      return finish({
+        available: false,
+        suggestionType: 'none',
+        title: 'Assist 处于仅上下文模式',
+        summary:
+          '当前未生成可插入草稿。主题证据仍可被 Memory Lens 使用；重新设 COMPOSER_ASSIST_MODE=full 后恢复起草。',
+        evidence,
+        riskLevel: getComposerRiskLevel(requestWithIntent, evidence),
+        previewRequired: false,
+        confidence: getConfidence(evidence),
+        queryTimeMs: recall.queryTimeMs,
+        debug: request.debug
+          ? {
+              recall: recall.debug,
+              recallRequest,
+              taskFrame,
+              rejectedReason: 'composer_assist_mode_context_only',
+              assistMode,
+            }
+          : undefined,
+      });
+    }
 
     if (requestWithIntent.contextType === 'web_agent_prompt') {
       if (assistIntent === 'draft_compose') {
@@ -377,6 +450,30 @@ export class ContextAssistService {
       );
     }
 
+    if (replyTarget.state === 'not_addressed') {
+      return finish({
+        available: false,
+        suggestionType: 'none',
+        title: '暂不生成回复',
+        summary:
+          '当前可见消息是写给其他人的，没有生成以你名义发送的草稿。',
+        evidence,
+        riskLevel: getComposerRiskLevel(requestWithIntent, evidence),
+        previewRequired: false,
+        confidence: getConfidence(evidence),
+        queryTimeMs: recall.queryTimeMs,
+        debug: request.debug
+          ? {
+              recall: recall.debug,
+              recallRequest,
+              taskFrame,
+              rejectedReason: 'message_not_addressed_to_owner',
+              replyTarget,
+            }
+          : undefined,
+      });
+    }
+
     if (assistIntent === 'draft_refine') {
       return finish(
         await this.assistWorkDraftRefine({
@@ -386,6 +483,8 @@ export class ContextAssistService {
           queryTimeMs: recall.queryTimeMs,
           rawEvidence,
           evidence,
+          personalPriors,
+          priorConstraint: priorReceipt?.constraint,
           ownerReplyState,
           taskFrame,
         }),
@@ -404,6 +503,8 @@ export class ContextAssistService {
           ),
           ownerReplyState,
           taskFrame,
+          personalPriors,
+          priorConstraint: priorReceipt?.constraint,
         }),
       );
     }
@@ -486,6 +587,8 @@ export class ContextAssistService {
       projection,
       agentContext,
       promptPatch,
+      personalPriors,
+      priorReceipt?.constraint,
     );
 
     if (!insertText) {
@@ -511,6 +614,35 @@ export class ContextAssistService {
               promptPatch,
               personaProjection: projection.summary,
               rejectedReason: 'composer_generation_unavailable',
+            }
+          : undefined,
+      });
+    }
+
+    const outputLanguage = resolveComposerOutputLanguage(request, projection);
+    if (
+      !promptPatch &&
+      !isPromptLanguageConsistent(insertText, outputLanguage)
+    ) {
+      return finish({
+        available: false,
+        suggestionType: 'none',
+        title: '暂无可直接发送的建议',
+        summary: '生成结果的语言与当前会话不一致，未提供可插入草稿。',
+        evidence,
+        riskLevel,
+        previewRequired: false,
+        confidence,
+        queryTimeMs: recall.queryTimeMs,
+        debug: request.debug
+          ? {
+              recall: recall.debug,
+              recallRequest,
+              taskFrame,
+              personaProjection: projection.summary,
+              rejectedReason: 'composer_generation_language_mismatch',
+              expectedLanguage: outputLanguage,
+              actualLanguage: detectDominantPromptLanguage(insertText),
             }
           : undefined,
       });
@@ -722,6 +854,8 @@ export class ContextAssistService {
     queryTimeMs: number;
     rawEvidence: ComposerAssistEvidence[];
     evidence: ComposerAssistEvidence[];
+    personalPriors?: ComposerPersonalPrior[];
+    priorConstraint?: ComposerPriorConstraint;
     ownerReplyState: OwnerReplyState;
     taskFrame: AgentComposeTaskFrame;
   }): Promise<ComposerAssistResponse> {
@@ -732,6 +866,8 @@ export class ContextAssistService {
       queryTimeMs,
       rawEvidence,
       evidence,
+      personalPriors = [],
+      priorConstraint = 'writing_only',
       ownerReplyState,
       taskFrame,
     } = input;
@@ -838,6 +974,8 @@ export class ContextAssistService {
       request,
       evidence,
       projection,
+      personalPriors,
+      priorConstraint,
     );
     if (!refined) {
       return {
@@ -958,7 +1096,7 @@ export class ContextAssistService {
       evidence,
       riskLevel,
       previewRequired: true,
-      confidence,
+      confidence: Math.max(confidence, MIN_WORK_REFINE_DISPLAY_CONFIDENCE),
       queryTimeMs,
       personaProjection: projection.summary,
       debug: request.debug
@@ -992,6 +1130,8 @@ export class ContextAssistService {
     hadFilteredEvidence: boolean;
     ownerReplyState: OwnerReplyState;
     taskFrame: AgentComposeTaskFrame;
+    personalPriors?: ComposerPersonalPrior[];
+    priorConstraint?: ComposerPriorConstraint;
   }): Promise<ComposerAssistResponse> {
     const {
       request,
@@ -1001,6 +1141,8 @@ export class ContextAssistService {
       hadFilteredEvidence,
       ownerReplyState,
       taskFrame,
+      personalPriors = [],
+      priorConstraint = 'writing_only',
     } = input;
 
     const silent = (
@@ -1058,7 +1200,13 @@ export class ContextAssistService {
       suggestionType,
     });
 
-    const generated = await generateSendableComposerText(request, [], projection);
+    const generated = await generateSendableComposerText(
+      request,
+      [],
+      projection,
+      personalPriors,
+      priorConstraint,
+    );
     if (!generated) {
       return silent(
         '暂无可直接发送的建议',
@@ -1081,6 +1229,19 @@ export class ContextAssistService {
         '相关上下文',
         '生成内容与用户已发送的回复重复，保持安静。',
         'composer_context_only_redundant_with_owner_reply',
+      );
+    }
+
+    const outputLanguage = resolveComposerOutputLanguage(request, projection);
+    if (!isPromptLanguageConsistent(sanitized, outputLanguage)) {
+      return silent(
+        '暂无可直接发送的建议',
+        '生成结果的语言与当前会话不一致。',
+        'composer_context_only_language_mismatch',
+        {
+          expectedLanguage: outputLanguage,
+          actualLanguage: detectDominantPromptLanguage(sanitized),
+        },
       );
     }
 
@@ -1120,8 +1281,9 @@ export class ContextAssistService {
       suggestionType,
       insertMode: 'append_patch',
       title: getContextOnlyDraftTitle(request),
-      summary:
-        '根据当前会话上下文起草，未使用历史记忆；确认后写入输入框，不会自动发送。',
+      summary: personalPriors.length
+        ? '根据当前会话上下文起草，并参考本人历史表达倾向；未引用主题记忆。确认后写入输入框，不会自动发送。'
+        : '根据当前会话上下文起草，未使用历史记忆；确认后写入输入框，不会自动发送。',
       insertText: clipInsertText(sanitized),
       evidence: [],
       riskLevel,
@@ -1241,10 +1403,11 @@ export class ContextAssistService {
       };
     }
 
-    const compilerEnabled = isComposerPromptCompilerEnabled();
-    const compiled = compilerEnabled
-      ? await generateWebPromptCompileResult(request, evidence, taskFrame)
-      : null;
+    const compiled = await generateWebPromptCompileResult(
+      request,
+      evidence,
+      taskFrame,
+    );
 
     if (compiled) {
       const usedEvidence = selectCompiledEvidence(
@@ -1383,75 +1546,11 @@ export class ContextAssistService {
       };
     }
 
-    if (
-      !compilerEnabled &&
-      evidence.length > 0 &&
-      evidenceConfidence >= MIN_AVAILABLE_CONFIDENCE
-    ) {
-      const projection = this.personaProjectionService.project({
-        request,
-        suggestionType: 'context_pack',
-      });
-      const insertText = appendPersonaProjectionToWebText(
-        renderWebAgentContextPack(request, evidence, agentContext),
-        'context_pack',
-        projection,
-      );
-      const validation = validatePersonaProjectionOutput(
-        insertText,
-        projection,
-      );
-      if (!validation.valid) {
-        return buildProjectionBlockedResponse({
-          projection,
-          reasonCode: validation.reasonCode,
-          evidence,
-          riskLevel: initialRiskLevel,
-          queryTimeMs,
-          debug: request.debug
-            ? {
-                recall: recallDebug,
-                recallRequest,
-                taskFrame,
-                compiler: { enabled: false },
-              }
-            : undefined,
-        });
-      }
-      return {
-        available: true,
-        suggestionType: 'context_pack',
-        insertMode: 'append_patch',
-        title: '补充上下文',
-        summary: '找到可追加到当前 prompt 的直接相关上下文；不会自动发送。',
-        insertText,
-        evidence,
-        riskLevel: initialRiskLevel,
-        previewRequired: projection.summary.requiresPreview,
-        confidence: evidenceConfidence,
-        queryTimeMs,
-        personaProjection: projection.summary,
-        debug: request.debug
-          ? {
-              recall: recallDebug,
-              recallRequest,
-              taskFrame,
-              compiler: { enabled: false },
-              personaProjection: projection.summary,
-              rawEvidenceCount: rawEvidence.length,
-              filteredEvidenceCount: evidence.length,
-            }
-          : undefined,
-      };
-    }
-
     return {
       available: false,
       suggestionType: 'none',
       title: '暂无可用的 prompt 优化',
-      summary: compilerEnabled
-        ? '本次没有生成通过语言、目标和证据校验的 prompt 建议。'
-        : 'Prompt Compiler 已关闭，且没有足够相关的上下文可追加。',
+      summary: '本次没有生成通过语言、目标和证据校验的 prompt 建议。',
       evidence: [],
       riskLevel: initialRiskLevel,
       previewRequired: false,
@@ -1462,12 +1561,10 @@ export class ContextAssistService {
             recall: recallDebug,
             recallRequest,
             taskFrame,
-            compiler: { enabled: compilerEnabled },
+            compiler: { enabled: true },
             rawEvidenceCount: rawEvidence.length,
             filteredEvidenceCount: evidence.length,
-            rejectedReason: compilerEnabled
-              ? 'web_prompt_compiler_unavailable_or_invalid'
-              : 'web_prompt_compiler_disabled_without_context',
+            rejectedReason: 'web_prompt_compiler_unavailable_or_invalid',
           }
         : undefined,
     };
@@ -2664,6 +2761,8 @@ async function buildComposerInsertText(
   projection: PersonaProjection,
   agentContext?: AgentComposeContext,
   promptPatch?: PromptContextPatch,
+  priors: ComposerPersonalPrior[] = [],
+  priorConstraint: ComposerPriorConstraint = 'writing_only',
 ): Promise<string | null> {
   if (request.contextType === 'web_agent_prompt') {
     if (promptPatch) {
@@ -2683,6 +2782,8 @@ async function buildComposerInsertText(
     request,
     evidence,
     projection,
+    priors,
+    priorConstraint,
   );
   if (!generated) return null;
   const sanitized = sanitizeGeneratedComposerText(generated);
@@ -3236,6 +3337,80 @@ function isPromptLanguageConsistent(
   return actual === expected;
 }
 
+/**
+ * A confirmed writing-style preference that names a language, e.g.
+ * `writing_style.ringcentral.reply = "Use concise Chinese, one short paragraph"`.
+ *
+ * Only confirmed `controls` count. Soft controls are unconfirmed guesses and
+ * must not outrank the language the thread is actually being held in.
+ */
+function findPersonaLanguagePreference(
+  projection: PersonaProjection,
+): WebPromptCompileResult['outputLanguage'] {
+  for (const slot of projection.controls) {
+    if (!slot.key.startsWith('writing_style')) continue;
+    const value = String(slot.value);
+    if (/\bchinese\b|中文/i.test(value)) return 'cjk';
+    if (/\benglish\b|英文/i.test(value)) return 'latin';
+  }
+  return 'unknown';
+}
+
+/**
+ * Which language a Glip/Jira draft must be written in.
+ *
+ * The generation prompt is written in Chinese, so with no explicit target the
+ * model answers an English thread in Chinese. Signals are ordered by how firmly
+ * the owner has committed: a confirmed style preference that names a language
+ * beats everything, then what they are typing right now, then the messages being
+ * replied to, then the whole visible thread, which also holds the owner's older
+ * turns and quoted boilerplate.
+ *
+ * Reading the thread rather than the incoming message alone is what keeps
+ * bilingual teams working: a mostly-Chinese thread with one English message
+ * still resolves to Chinese.
+ */
+function resolveComposerOutputLanguage(
+  request: ComposerAssistRequest,
+  projection: PersonaProjection,
+): WebPromptCompileResult['outputLanguage'] {
+  const preferred = findPersonaLanguagePreference(projection);
+  if (preferred !== 'unknown') return preferred;
+
+  const items = normalizeComposerContextItems(request);
+  const textOf = (list: ComposerContextItem[]): string =>
+    list
+      .map((item) => (item.text || item.title || '').trim())
+      .filter(Boolean)
+      .join(' ');
+
+  const candidates = [
+    normalizeComposerDraft(request.draftText),
+    getOwnerReplyState(request).text,
+    textOf(items.filter((item) => !isOwnerAuthoredContextItem(item))),
+    textOf(items),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const language = detectDominantPromptLanguage(candidate);
+    if (language !== 'unknown') return language;
+  }
+  return 'unknown';
+}
+
+function describeComposerOutputLanguage(
+  language: WebPromptCompileResult['outputLanguage'],
+): string {
+  if (language === 'latin') {
+    return '* Output language: English. These instructions are in Chinese, but the reply itself MUST be written entirely in English. Keep proper nouns, product names and identifiers as they appear.';
+  }
+  if (language === 'cjk') {
+    return '* 输出语言：中文。整段回复必须用中文写，产品名、代号和技术术语保留原文。';
+  }
+  return '* 输出语言：与当前上下文里对方使用的语言保持一致。';
+}
+
 function hasCompiledPromptGoalContinuity(
   draft: string,
   compiled: string,
@@ -3266,8 +3441,10 @@ async function generateSendableComposerText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
   projection: PersonaProjection,
+  priors: ComposerPersonalPrior[] = [],
+  priorConstraint: ComposerPriorConstraint = 'writing_only',
 ): Promise<string | null> {
-  if (!isComposerSendableGenerationEnabled()) return null;
+  if (!isComposerGenerationEnabled()) return null;
 
   const scenario = getComposerScenario(request);
   const prompt = buildComposerGenerationPrompt(
@@ -3275,6 +3452,8 @@ async function generateSendableComposerText(
     evidence,
     scenario,
     projection,
+    priors,
+    priorConstraint,
   );
   if (!prompt) return null;
 
@@ -3304,8 +3483,10 @@ async function generateRefinedComposerText(
   request: ComposerAssistRequest,
   evidence: ComposerAssistEvidence[],
   projection: PersonaProjection,
+  priors: ComposerPersonalPrior[] = [],
+  priorConstraint: ComposerPriorConstraint = 'writing_only',
 ): Promise<string | null> {
-  if (!isComposerSendableGenerationEnabled()) return null;
+  if (!isComposerGenerationEnabled()) return null;
 
   const scenario = getComposerScenario(request);
   const prompt = buildComposerRefinePrompt(
@@ -3313,6 +3494,8 @@ async function generateRefinedComposerText(
     evidence,
     scenario,
     projection,
+    priors,
+    priorConstraint,
   );
   if (!prompt) return null;
 
@@ -3343,6 +3526,8 @@ export function buildComposerRefinePrompt(
   evidence: ComposerAssistEvidence[],
   scenario: ComposerScenario,
   projection: PersonaProjection,
+  priors: ComposerPersonalPrior[] = [],
+  priorConstraint: ComposerPriorConstraint = 'writing_only',
 ): string | null {
   const draft = normalizeComposerDraft(request.draftText);
   if (!draft) return null;
@@ -3362,6 +3547,7 @@ export function buildComposerRefinePrompt(
     )
     .join('\n');
   const ownerConstraints = formatPersonaProjectionForGeneration(projection);
+  const priorBlock = formatPersonalPriorsForGeneration(priors, priorConstraint);
 
   return [
     '请精修用户已经写好的草稿，输出可以直接替换原草稿并发送的正文。',
@@ -3378,8 +3564,12 @@ export function buildComposerRefinePrompt(
     '可用记忆：',
     memories,
     '',
+    ...(priorBlock ? [priorBlock, ''] : []),
     '身份投影约束：',
-    '* 匹配主人当前使用的语言；长度、语气和结构跟当前场景保持一致。',
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
+    '* 长度、语气和结构跟当前场景保持一致。',
     '* 只能使用下方投影允许的身份信息；柔性提示不能当作事实。',
     '* 表达控制只影响写法，不得在正文中复述配置值。',
     '* 不要说 Personal AI，也不要透露这是由系统或记忆生成。',
@@ -3390,10 +3580,18 @@ export function buildComposerRefinePrompt(
     '* 保留用户原意图和已给出的事实，不要无故删改。',
     '* 只在原草稿有明显偏差、遗漏关键事实、或语气不合适时做实质修改。',
     '* 如果记忆没有带来新的必要事实，不要只做同义改写。',
+    priors.length
+      ? priorConstraint === 'stance_suggestion'
+        ? '* 当前消息在向你征求决定时，本人决策倾向可以建议答应、拒绝或先不承诺；不要加码日期、版本、范围或新负责人。'
+        : '* 本人先验只影响语气、长度、直接程度和是否留余地，不得据此同意、拒绝或作出承诺。'
+      : '',
     '* 不要说“我理解当前”。',
     scenario === 'jira_comment'
       ? '* 语气正式、清晰，给出判断/依据/next step。'
       : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
   ]
     .filter(Boolean)
     .join('\n');
@@ -3404,6 +3602,8 @@ export function buildComposerGenerationPrompt(
   evidence: ComposerAssistEvidence[],
   scenario: ComposerScenario,
   projection: PersonaProjection,
+  priors: ComposerPersonalPrior[] = [],
+  priorConstraint: ComposerPriorConstraint = 'writing_only',
 ): string | null {
   const currentContext = buildComposerContextText(request, {
     includeAudience: false,
@@ -3422,6 +3622,7 @@ export function buildComposerGenerationPrompt(
     .join('\n');
   const ownerConstraints = formatPersonaProjectionForGeneration(projection);
   const ownerReplyState = getOwnerReplyState(request);
+  const priorBlock = formatPersonalPriorsForGeneration(priors, priorConstraint);
 
   return [
     '请根据当前场景，替用户写一段可以直接插入输入框并发送的内容。',
@@ -3439,8 +3640,12 @@ export function buildComposerGenerationPrompt(
       ? ['可用记忆：', memories]
       : ['可用记忆：无。只能基于上面的当前上下文和身份投影约束写，不要引入外部事实。']),
     '',
+    ...(priorBlock ? [priorBlock, ''] : []),
     '身份投影约束：',
-    '* 匹配主人当前使用的语言；长度、语气和结构跟当前场景保持一致。',
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
+    '* 长度、语气和结构跟当前场景保持一致。',
     '* 只能使用下方投影允许的身份信息；柔性提示不能当作事实。',
     '* 表达控制只影响写法，不得在正文中复述配置值。',
     '* 不要说 Personal AI，也不要透露这是由系统或记忆生成。',
@@ -3455,6 +3660,11 @@ export function buildComposerGenerationPrompt(
           '* 只使用和当前上下文明显相关的记忆，不确定就少说。',
         ]
       : ['* 没有可用记忆时，只回应当前上下文里已经出现的内容，不要补充背景。']),
+    priors.length
+      ? priorConstraint === 'stance_suggestion'
+        ? '* 当前消息在向你征求决定时，本人决策倾向可以建议答应、拒绝或先不承诺；不要加码日期、版本、范围或新负责人。'
+        : '* 本人先验只影响语气、长度、直接程度和是否留余地，不得据此同意、拒绝或作出承诺。立场必须来自当前上下文或主题证据。'
+      : '',
     ownerReplyState.state === 'partial'
       ? '* 用户已经发过的内容不要重复；只生成补充说明，且必须能接在已发送内容后面。'
       : '',
@@ -3462,6 +3672,13 @@ export function buildComposerGenerationPrompt(
       ? '* 语气正式、清晰，给出判断/依据/next step。'
       : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
     '* 不要编造当前上下文或记忆里没有的事实。',
+    '* 只回复明确 Hi/@ 点到你、或没有点名其他人的消息。不要替被点名的其他人作答，也不要对写给别人的消息说 Thanks。',
+    '* 不要把你自己先前发出的消息当成对方的提问来回答，也不要替被点名的人接话。',
+    // Repeated last on purpose: a Chinese prompt pulls the model toward Chinese
+    // output, and the closing instruction is the one it follows most reliably.
+    describeComposerOutputLanguage(
+      resolveComposerOutputLanguage(request, projection),
+    ),
   ]
     .filter(Boolean)
     .join('\n');
@@ -3530,7 +3747,10 @@ type OwnerReplyState = {
   text: string;
 };
 
-function getOwnerReplyState(request: ComposerAssistRequest): OwnerReplyState {
+function getOwnerReplyState(
+  request: ComposerAssistRequest,
+  identity?: ComposerOwnerIdentity,
+): OwnerReplyState {
   if (request.contextType === 'web_agent_prompt') {
     return { state: 'none', text: '' };
   }
@@ -3540,7 +3760,7 @@ function getOwnerReplyState(request: ComposerAssistRequest): OwnerReplyState {
   const trailingOwnerItems: ComposerContextItem[] = [];
   for (let index = messageItems.length - 1; index >= 0; index -= 1) {
     const item = messageItems[index];
-    if (!isOwnerAuthoredContextItem(item)) break;
+    if (!isOwnerAuthoredContextItem(item, identity)) break;
     trailingOwnerItems.unshift(item);
   }
 
@@ -3570,10 +3790,18 @@ function isComposerReplyItem(item: ComposerContextItem): boolean {
   );
 }
 
-function isOwnerAuthoredContextItem(item: ComposerContextItem): boolean {
-  return (
-    item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner'
-  );
+function isOwnerAuthoredContextItem(
+  item: ComposerContextItem,
+  identity?: ComposerOwnerIdentity,
+): boolean {
+  if (
+    item.metadata?.isSelf === true ||
+    item.metadata?.authorRole === 'owner'
+  ) {
+    return true;
+  }
+  if (!identity) return false;
+  return contextItemMatchesOwner(item, identity);
 }
 
 // CJK carries roughly twice the information per character as latin script, so a

@@ -216,6 +216,19 @@ POST /api/v1/ambient-calibration/traces
 | LLM       | OpenAI / Claude / Groq / Ollama / Dify | 可插拔；`claude` 直连 Anthropic，不用填 base URL；`LLM_FALLBACKS` 可配置有序降级链 |
 | 调度      | node-cron + heartbeat loop     | 巩固 / 自我反思 / Rehearsal aging / 梦境重放 / 周报 / 通知 |
 
+### 存储耐久性：为什么用 Docker named volume，以及 FTS 自愈
+
+`chunks_fts` 曾经反复报 `database disk image is malformed`，把 `esone.qiu` 的关键词召回打成静默空结果。根因不在 SQLite 用法，而在挂载方式：部署机是 macOS 上的 Docker Desktop，`./memory-service/data` 这种 bind mount 走 virtiofs，SQLite 依赖的 advisory lock 语义和 fsync 顺序在这一层不可靠。之前把 `SQLITE_JOURNAL_MODE` 从 WAL 换成 `DELETE` + `FULL` 只是降低了触发概率，没有消除根因。
+
+因此有两层处理：
+
+- **结构性修复**：memory-service 的数据挂载写成 `${MEMORY_DATA_MOUNT:-./memory-service/data}:/app/data`，把 named volume `memory-data` 作为可切换目标；卷落在 Linux VM 自己的 ext4 上，不再经过 virtiofs。默认值仍是原 bind 目录——部署会同步 `docker-compose.yml` 但从不同步 data，直接改死会让服务对着空卷启动。切换在维护窗口里用 `tools/migrate-memory-data-volume.sh --commit` 完成：停服务 → 整目录拷进卷 → 核对 `users/` 与 `memory.db` 数量，不一致就中止 → 往部署机 compose 根目录的 `.env` 写 `MEMORY_DATA_MOUNT=memory-data` → 重建容器并跑 `/health`。回滚是 `--rollback`（删掉那行环境变量重启）。原 bind 目录保留作冷备份，确认无误后再删。同时加了 `stop_grace_period: 30s`，默认 10s 的 SIGKILL 可能砍在事务中间。
+
+  之后每次 `npm run deploy:memory` 都会 rsync `docker-compose.yml`（默认仍是 bind mount），但**不会**覆盖部署机 compose 根目录的 `.env`。脚本在 `docker compose up` 之前检查 named volume 是否已存在：存在就把 `MEMORY_DATA_MOUNT=memory-data` 写回 `.env`，避免那一行丢了之后 SQLite 悄悄回到 virtiofs。部署结束会打印 `/app/data` 的实际挂载。新主机如果还没跑过迁移，volume 不存在，仍走 bind mount 默认值。
+- **自愈守护**：`Database.verifyAndRepairFtsIndex()` 在 `UserContextManager` 每次打开某个用户的 DB 时（migrate 之后）跑一次 FTS `integrity-check`，失败就地 `delete-all` + `rebuild`。`chunks_fts` 是 `content='chunks'` 的 external-content 索引，完全可从 `chunks` 推导，重建不丢数据。若 `chunks` 本身也读不出来，则跳过重建并告警，避免把损坏烤进索引。重建/失败都会打日志，修复本身不会阻断用户上下文加载。开关 `SQLITE_FTS_AUTO_REPAIR_ENABLED`（未配置即开启），仅在需要保留现场排查时设为 `false`。
+
+离线的重量级修复仍然是 `memory-service/tools/repair-sqlite-vtab.ts`（DROP + 重建 `chunks_fts` / `chunks_vec` / `messages_vec`，先备份），用于虚拟表结构本身损坏、而不只是 FTS 索引内容损坏的情况。
+
 ---
 
 ## 核心引擎一览

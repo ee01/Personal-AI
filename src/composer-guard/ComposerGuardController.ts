@@ -7,6 +7,8 @@ import {
   buildInteractionSceneSnapshot,
   captureComposerSelectionSnapshot,
   captureComposerTextSnapshot,
+  hydrateComposerOwnerIdentifiersFromExtensionStorage,
+  addComposerOwnerIdentifiers,
   findActiveComposerContext,
   insertTextIntoComposer,
   isComposerElement,
@@ -305,6 +307,40 @@ export function inferAssistIntentFromSuggestionType(
   return 'draft_compose';
 }
 
+export function isComposerAssistSessionCurrent(
+  live: {
+    contextKey: string;
+    draftRevision: number;
+    pageHref: string;
+  } | null,
+  requested: {
+    contextKey: string;
+    draftRevision: number;
+    pageHref: string;
+  },
+  locationHref: string,
+): boolean {
+  return Boolean(
+    live &&
+      live.contextKey === requested.contextKey &&
+      live.draftRevision === requested.draftRevision &&
+      live.pageHref === requested.pageHref &&
+      locationHref === requested.pageHref,
+  );
+}
+
+export function shouldResetComposerAssistOnActivate(input: {
+  previousContextKey?: string | null;
+  nextContextKey: string;
+  draftChangedWithoutInput: boolean;
+}): boolean {
+  if (!input.previousContextKey) return false;
+  return (
+    input.previousContextKey !== input.nextContextKey ||
+    input.draftChangedWithoutInput
+  );
+}
+
 export function getComposerAssistRequestGate({
   signature,
   inFlightSignature,
@@ -441,6 +477,22 @@ export function isComposerAssistProjectionBlocked(
   assist: ComposerAssistResponse,
 ): boolean {
   return assist.personaProjection?.representationMode === 'blocked';
+}
+
+export function isInsertableComposerAssist(
+  assist: ComposerAssistResponse | null,
+): boolean {
+  const requiresReplace =
+    assist?.suggestionType === 'rewrite_prompt' ||
+    assist?.suggestionType === 'prompt_draft' ||
+    assist?.suggestionType === 'reply_refine';
+  return Boolean(
+    assist?.available &&
+      assist.insertText &&
+      !isComposerAssistProjectionBlocked(assist) &&
+      (!requiresReplace || assist.insertMode === 'replace_draft') &&
+      looksLikeSendableComposerText(assist.insertText),
+  );
 }
 
 export function getComposerAssistProjectionReviewNote(
@@ -1109,6 +1161,7 @@ export class ComposerGuardController {
   private inFlightAssistRequest: ComposerAssistInFlightRequest | null = null;
   private scheduledAssistSignature: string | null = null;
   private requestedAssistSignatures = new Set<string>();
+  private assistResultCache = new Map<string, ComposerAssistResponse>();
   private suppressBlurForSendTarget: HTMLElement | null = null;
   private suppressBlurForSendUntil = 0;
   private postSendComposerSuppression: PostSendComposerSuppression | null =
@@ -1145,6 +1198,7 @@ export class ComposerGuardController {
     if (typeof chrome !== 'undefined' && chrome?.storage?.onChanged) {
       chrome.storage.onChanged.addListener(this.handleStorageChanged);
     }
+    hydrateComposerOwnerIdentifiersFromExtensionStorage();
     void this.loadComposerGuardConfig().then(() => {
       if (!this.composeAssistEnabled) return;
       this.startComposerObservation();
@@ -1159,7 +1213,18 @@ export class ComposerGuardController {
     changes: Record<string, chrome.storage.StorageChange>,
     areaName: string,
   ): void => {
-    if (areaName !== 'local' || !changes[ENV_CONFIG_KEY]) return;
+    if (areaName !== 'local') return;
+    if (changes.userinfo) {
+      const userinfo = changes.userinfo.newValue as
+        | { username?: string; userEmail?: string; email?: string }
+        | undefined;
+      addComposerOwnerIdentifiers([
+        userinfo?.username,
+        userinfo?.userEmail,
+        userinfo?.email,
+      ]);
+    }
+    if (!changes[ENV_CONFIG_KEY]) return;
     const nextConfig = changes[ENV_CONFIG_KEY].newValue as
       | Record<string, unknown>
       | undefined;
@@ -1486,18 +1551,21 @@ export class ComposerGuardController {
     const targetChanged = Boolean(
       previousSession && previousTargetElement !== context.target.element,
     );
-    const contextChanged =
-      previousSession?.contextKey !== contextKey || targetChanged;
     const draftChangedWithoutInput = Boolean(
       previousSession &&
-        !contextChanged &&
-        previousSession.target.element === context.target.element &&
+        previousSession.contextKey === contextKey &&
         previousSession.draftText !== draftText,
     );
-    const draftRevision = contextChanged
-      ? 0
-      : (previousSession?.draftRevision ?? 0) +
-        (draftChangedWithoutInput ? 1 : 0);
+    const shouldReset = shouldResetComposerAssistOnActivate({
+      previousContextKey: previousSession?.contextKey,
+      nextContextKey: contextKey,
+      draftChangedWithoutInput,
+    });
+    const draftRevision = shouldReset
+      ? draftChangedWithoutInput
+        ? (previousSession?.draftRevision ?? 0) + 1
+        : 0
+      : (previousSession?.draftRevision ?? 0);
     if (
       previousTargetElement &&
       previousTargetElement !== context.target.element
@@ -1523,9 +1591,11 @@ export class ComposerGuardController {
       sourceTypes: context.snapshot.sourceTypes,
       draftLength: draftText.length,
       assistIntent: this.activeSession.assistIntent,
+      targetChanged,
+      shouldReset,
     });
 
-    if (contextChanged || draftChangedWithoutInput) {
+    if (shouldReset) {
       this.cancelScheduledAssistRequest();
       this.requestSeq += 1;
       this.latestAssist = null;
@@ -1535,7 +1605,7 @@ export class ComposerGuardController {
       this.clearPreviewedAssistDraft(previousSession?.contextKey);
       this.removeAffordance();
     } else {
-      this.renderIfUseful();
+      this.restoreAssistFromCache();
     }
 
     this.positionRoot();
@@ -1544,7 +1614,7 @@ export class ComposerGuardController {
       this.writeDebugState('activate:schedule_draft_compose', {
         contextKey,
         draftRevision,
-        contextChanged,
+        shouldReset,
         draftChangedWithoutInput,
       });
       this.scheduleAssistRequest(
@@ -1558,7 +1628,7 @@ export class ComposerGuardController {
     this.writeDebugState('activate:await_blur_for_refine', {
       contextKey,
       draftRevision,
-      contextChanged,
+      shouldReset,
       draftChangedWithoutInput,
       effectiveDraftLength,
     });
@@ -1801,6 +1871,62 @@ export class ComposerGuardController {
     this.scheduledAssistSignature = null;
   }
 
+  private rememberAssistResult(
+    signature: string,
+    response: ComposerAssistResponse,
+  ): void {
+    this.assistResultCache.delete(signature);
+    this.assistResultCache.set(signature, response);
+    while (this.assistResultCache.size > MAX_REQUESTED_ASSIST_SIGNATURES) {
+      const oldest = this.assistResultCache.keys().next().value;
+      if (typeof oldest !== 'string') break;
+      this.assistResultCache.delete(oldest);
+    }
+  }
+
+  private restoreAssistFromCache(): void {
+    const session = this.activeSession;
+    if (!session || this.isDismissed(session.contextKey)) {
+      this.renderIfUseful();
+      return;
+    }
+    const assistIntent =
+      session.assistIntent ||
+      resolveComposerAssistIntentFromDraft(session.draftText);
+    const signature = buildComposerAssistRequestSignature(
+      session.contextKey,
+      session.draftRevision,
+      assistIntent,
+    );
+    const cached = this.assistResultCache.get(signature);
+    if (cached) {
+      this.latestAssist = cached;
+      this.latestAssistContextKey = session.contextKey;
+      this.latestAssistDraftRevision = session.draftRevision;
+      this.writeDebugState('request:restore_cached', {
+        contextKey: session.contextKey,
+        draftRevision: session.draftRevision,
+        assistIntent,
+      });
+    }
+    this.renderIfUseful();
+  }
+
+  private forgetAssistCacheForContext(contextKey?: string | null): void {
+    if (!contextKey) return;
+    const prefix = `${contextKey}|`;
+    for (const signature of [...this.assistResultCache.keys()]) {
+      if (signature === contextKey || signature.startsWith(prefix)) {
+        this.assistResultCache.delete(signature);
+      }
+    }
+    for (const signature of [...this.requestedAssistSignatures]) {
+      if (signature === contextKey || signature.startsWith(prefix)) {
+        this.requestedAssistSignatures.delete(signature);
+      }
+    }
+  }
+
   private clearComposerSessionAfterSend(): void {
     const contextKey = this.activeSession?.contextKey;
     const sentTarget = this.activeSession?.target;
@@ -1809,6 +1935,7 @@ export class ComposerGuardController {
     this.suppressBlurForSendTarget = null;
     this.suppressBlurForSendUntil = 0;
     this.clearPreviewedAssistDraft(contextKey);
+    this.forgetAssistCacheForContext(contextKey);
     this.reviewMode = false;
     this.clearReviewInsertionSelection();
     this.setTargetGlow(false);
@@ -1864,6 +1991,9 @@ export class ComposerGuardController {
       this.requestedAssistSignatures.has(requestSignature) ||
       this.scheduledAssistSignature === requestSignature
     ) {
+      if (this.requestedAssistSignatures.has(requestSignature)) {
+        this.restoreAssistFromCache();
+      }
       this.writeDebugState('request:already_requested_for_revision', {
         contextKey: session.contextKey,
         draftRevision: session.draftRevision,
@@ -1896,20 +2026,15 @@ export class ComposerGuardController {
       assistIntent === 'draft_compose'
         ? REQUEST_FOCUS_SETTLE_MS
         : REQUEST_BLUR_SETTLE_MS;
-    const sessionWithIntent: ActiveComposerSession = {
-      ...session,
-      assistIntent,
-    };
     this.requestTimer = window.setTimeout(() => {
       this.requestTimer = null;
       this.scheduledAssistSignature = null;
       if (
-        !this.activeSession ||
-        this.activeSession.contextKey !== session.contextKey ||
-        this.activeSession.draftRevision !== session.draftRevision ||
-        this.activeSession.target.element !== session.target.element ||
-        this.activeSession.pageHref !== session.pageHref ||
-        window.location.href !== session.pageHref
+        !isComposerAssistSessionCurrent(
+          this.activeSession,
+          session,
+          window.location.href,
+        )
       ) {
         this.writeDebugState('request:stale_snapshot', {
           contextKey: session.contextKey,
@@ -1946,17 +2071,22 @@ export class ComposerGuardController {
         assistIntent,
         trigger,
       });
-      void this.requestAssist(sessionWithIntent);
+      if (!this.activeSession) return;
+      void this.requestAssist({
+        ...this.activeSession,
+        assistIntent,
+      });
     }, settleMs);
   };
 
   private async requestAssist(session: ActiveComposerSession): Promise<void> {
     if (
-      !this.activeSession ||
       !this.canRunComposerAssist() ||
-      this.activeSession.contextKey !== session.contextKey ||
-      this.activeSession.draftRevision !== session.draftRevision ||
-      this.activeSession.target.element !== session.target.element
+      !isComposerAssistSessionCurrent(
+        this.activeSession,
+        session,
+        window.location.href,
+      )
     ) {
       return;
     }
@@ -2023,17 +2153,7 @@ export class ComposerGuardController {
         },
       );
 
-      if (
-        requestSeq !== this.requestSeq ||
-        this.activeSession?.contextKey !== contextKey ||
-        this.activeSession?.draftRevision !== draftRevision
-      ) {
-        return;
-      }
-
-      this.latestAssist = response;
-      this.latestAssistContextKey = contextKey;
-      this.latestAssistDraftRevision = draftRevision;
+      this.rememberAssistResult(requestSignature, response);
       this.assistRetryBlockedUntilBySignature.delete(requestSignature);
       this.writeDebugState('request:response', {
         contextKey,
@@ -2043,6 +2163,24 @@ export class ComposerGuardController {
         insertTextLength: response.insertText?.length ?? 0,
         debug: response.debug,
       });
+      if (
+        requestSeq !== this.requestSeq ||
+        !isComposerAssistSessionCurrent(
+          this.activeSession,
+          session,
+          window.location.href,
+        )
+      ) {
+        this.writeDebugState('request:response_cached_for_restore', {
+          contextKey,
+          draftRevision,
+        });
+        return;
+      }
+
+      this.latestAssist = response;
+      this.latestAssistContextKey = contextKey;
+      this.latestAssistDraftRevision = draftRevision;
       this.renderIfUseful();
     } catch (error) {
       this.writeDebugState('request:error', {
@@ -2130,18 +2268,7 @@ export class ComposerGuardController {
   }
 
   private hasInsertableAssist(assist: ComposerAssistResponse | null): boolean {
-    const requiresReplace =
-      assist?.suggestionType === 'rewrite_prompt' ||
-      assist?.suggestionType === 'prompt_draft' ||
-      assist?.suggestionType === 'reply_refine';
-    return Boolean(
-      assist?.available &&
-        assist.insertText &&
-        !isComposerAssistProjectionBlocked(assist) &&
-        (!requiresReplace || assist.insertMode === 'replace_draft') &&
-        looksLikeSendableComposerText(assist.insertText) &&
-        assist.confidence >= this.getActiveAssistThreshold(assist),
-    );
+    return isInsertableComposerAssist(assist);
   }
 
   private renderIfUseful(): void {
@@ -2502,6 +2629,7 @@ export class ComposerGuardController {
     );
     const calibrationTrace = this.recordAmbientWrongTrace();
     this.clearPreviewedAssistDraft(contextKey);
+    this.forgetAssistCacheForContext(contextKey);
     this.reviewMode = false;
     this.clearReviewInsertionSelection();
     this.clearInsertionUndo(true);
@@ -3340,6 +3468,7 @@ export class ComposerGuardController {
       this.dismissedContexts.set(this.activeSession.contextKey, Date.now());
     }
     this.clearPreviewedAssistDraft(contextKey);
+    this.forgetAssistCacheForContext(contextKey);
     this.clear();
   }
 

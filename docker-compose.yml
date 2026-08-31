@@ -8,10 +8,25 @@ services:
     ports:
       - "3210:3210"
     volumes:
-      - ./memory-service/data:/app/data
+      # The deploy host is Docker Desktop on macOS, where a bind mount is served
+      # by virtiofs. SQLite's advisory locks and fsync ordering are not reliable
+      # there, which is what kept corrupting chunks_fts. Setting
+      # MEMORY_DATA_MOUNT=memory-data switches to the named volume declared
+      # below, which lives in the Linux VM's own ext4 filesystem.
+      #
+      # The default stays on the bind mount on purpose: deploys sync this file
+      # but never the data, so flipping it here would start the service against
+      # an empty volume. Run tools/migrate-memory-data-volume.sh to copy the data
+      # and set the variable in the same maintenance window. npm run deploy:memory
+      # restores MEMORY_DATA_MOUNT=memory-data when that named volume already
+      # exists, so a lost host .env line cannot silently fall back to virtiofs.
+      - ${MEMORY_DATA_MOUNT:-./memory-service/data}:/app/data
     env_file:
       - ./memory-service/.env
     restart: unless-stopped
+    # SQLite needs to finish its current write and unlink the journal. The 10s
+    # default SIGKILL can land mid-transaction.
+    stop_grace_period: 30s
     healthcheck:
       test:
         [
@@ -48,3 +63,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+volumes:
+  memory-data:

@@ -8,6 +8,7 @@ import {
   WEB_AGENT_SOURCE_TYPES,
   buildInteractionSceneSnapshot,
   buildJiraOwnerCommentLearningPayloads,
+  buildRingCentralComposerContextKey,
   clipSiteContextText,
   getWebAgentSourceTypesForProvider,
   isIgnoredComposerContextMedia,
@@ -15,6 +16,7 @@ import {
   markRingCentralSelfAuthoredMessages,
   markJiraSelfAuthoredComments,
   sanitizeRingCentralComposerChromeText,
+  inheritCollapsedGlipAuthors,
 } from '../siteContextAdapters.ts';
 import type { ComposerContextItem, ComposerTarget, SiteContextSnapshot } from '../types.ts';
 
@@ -129,6 +131,52 @@ test('markRingCentralSelfAuthoredMessages: matches email local, Glip person id, 
   );
   assert.equal(byPersonId[0].metadata?.isSelf, true);
   assert.equal(byPersonId[1].metadata?.isSelf, false);
+});
+
+test('markRingCentralSelfAuthoredMessages: matches Personal AI userId to Glip display name', () => {
+  const marked = markRingCentralSelfAuthoredMessages(
+    [
+      {
+        type: 'thread_reply',
+        sender: 'Esone Qiu',
+        text: 'I’ll loop the demo in our weekly.',
+        metadata: { authorValues: ['Esone Qiu'] },
+      },
+      {
+        type: 'thread_reply',
+        sender: 'Alice Qiu',
+        text: 'Thanks',
+        metadata: { authorValues: ['Alice Qiu'] },
+      },
+    ],
+    ['esone.qiu'],
+  );
+  assert.equal(marked[0].metadata?.isSelf, true);
+  assert.equal(marked[1].metadata?.isSelf, false);
+});
+
+test('inheritCollapsedGlipAuthors: copies sender from the previous named card', () => {
+  const inherited = inheritCollapsedGlipAuthors([
+    {
+      sender: 'Esone Qiu',
+      authorValues: ['Esone Qiu', 'GLIP_PERSON.20367368195', '20367368195'],
+    },
+    {
+      authorValues: [],
+    },
+    {
+      sender: 'Fred Gu',
+      authorValues: ['Fred Gu', 'GLIP_PERSON.1428819795971'],
+    },
+  ]);
+
+  assert.equal(inherited[1].sender, 'Esone Qiu');
+  assert.deepEqual(inherited[1].authorValues, [
+    'Esone Qiu',
+    'GLIP_PERSON.20367368195',
+    '20367368195',
+  ]);
+  assert.equal(inherited[2].sender, 'Fred Gu');
 });
 
 test('isIgnoredComposerContextMedia: drops Personal AI extension icons', () => {
@@ -366,4 +414,34 @@ test('RingCentral site context keeps a large per-message cap and still hard-clip
   const primary = clipSiteContextText(joined, MAX_PRIMARY_TEXT);
   assert.equal(primary.endsWith('...'), true);
   assert.ok(primary.length <= MAX_PRIMARY_TEXT + 3);
+});
+
+test('RingCentral assist context key stays stable when visible messages churn', () => {
+  const threadKey = buildRingCentralComposerContextKey({
+    conversationId: '6543474694',
+    surface: 'ringcentral_thread',
+    threadRootId: 'venky-weekly-sync',
+    mode: 'thread',
+  });
+  assert.equal(
+    threadKey,
+    'ringcentral|6543474694|ringcentral_thread|venky-weekly-sync|thread',
+  );
+  assert.equal(
+    buildRingCentralComposerContextKey({
+      conversationId: '6543474694',
+      surface: 'ringcentral_thread',
+      threadRootId: 'venky-weekly-sync',
+      mode: 'thread',
+    }),
+    threadKey,
+  );
+  assert.notEqual(
+    threadKey,
+    buildRingCentralComposerContextKey({
+      conversationId: '6543474694',
+      surface: 'ringcentral_message',
+      mode: 'main',
+    }),
+  );
 });

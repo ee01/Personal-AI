@@ -455,14 +455,16 @@ describe('Composer Assist evals', () => {
       sourceType: 'glip',
     });
 
+    // English thread with no confirmed language preference, so the draft has to
+    // come back in English. This case is about audience tone, not language.
     llmGenerateMock
       .mockResolvedValueOnce({
         content:
-          '我会把 rollout plan 收敛成 owner、风险和下一步，先确认一键安装/配置这两块能跑通。',
+          'I will narrow the rollout plan down to owner, risks and next step, starting with whether one-click install and configure both hold up.',
       })
       .mockResolvedValueOnce({
         content:
-          '可以，我觉得就按一键安装/配置/调用这条线讲，顺便补一下 backend-supported skill 的边界。',
+          'Works for me. Let us frame it as one-click install, configure and call, and add the boundary for backend-supported skills.',
       });
 
     const basePayload = {

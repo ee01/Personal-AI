@@ -2280,6 +2280,22 @@ export interface ComposerAssistResponse {
   /** Final evidence-consumption receipt; cohesive filtering remains UI-silent. */
   cohesionReceipt?: EvidenceCohesionReceipt;
   attributionReceipt?: ClaimAttributionReceipt;
+  /**
+   * B-slot personal priors that fed generation. Not citable and does not raise
+   * confidence. `writing_only` may only affect tone/length/hedging.
+   * `stance_suggestion` may bias agree/refuse/defer when the current message
+   * asks the owner for a decision, without adding extra commitments.
+   */
+  priorReceipt?: {
+    used: boolean;
+    constraint: 'writing_only' | 'stance_suggestion';
+    summary: string;
+    priors: Array<{
+      id: string;
+      kind: 'writing_style' | 'decision_tendency' | 'scene_habit';
+      summary: string;
+    }>;
+  };
   personaProjection?: PersonaProjectionSummary;
   debug?: Record<string, unknown>;
 }

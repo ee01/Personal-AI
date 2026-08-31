@@ -110,6 +110,13 @@ const remoteSteps = [
   `cd ${shellQuote(options.remoteDir)}`,
   'test -f docker-compose.yml',
   'test -f memory-service/Dockerfile',
+  // Named-volume mount lives in the compose project-root .env, which this
+  // script never rsyncs. docker-compose.yml still defaults to the bind mount
+  // so a fresh host does not boot against an empty volume. If the migrated
+  // volume exists, restore MEMORY_DATA_MOUNT so a lost .env line cannot
+  // silently put SQLite back on virtiofs.
+  `VOLUME_NAME="$(basename "$PWD" | tr -cd '[:alnum:]_-')_memory-data"`,
+  'if docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then touch .env; if ! grep -q "^MEMORY_DATA_MOUNT=memory-data$" .env; then grep -v "^MEMORY_DATA_MOUNT=" .env > .env.tmp && mv .env.tmp .env; echo MEMORY_DATA_MOUNT=memory-data >> .env; echo "[deploy] restored MEMORY_DATA_MOUNT=memory-data ($VOLUME_NAME exists)"; fi; else echo "[deploy] $VOLUME_NAME not found; compose default is the bind mount"; fi',
   `docker compose build${options.noCache ? ' --no-cache' : ''} memory-service`,
   'docker compose stop memory-service 2>/dev/null || true',
   'docker compose rm -f -s memory-service 2>/dev/null || true',
@@ -123,6 +130,7 @@ print(vals.get("API_KEY",""))')"`,
   'if [ -n "$API_KEY" ]; then AUTH_HEADER="Authorization: Bearer $API_KEY"; else AUTH_HEADER=""; fi',
   `if [ -n "$AUTH_HEADER" ]; then curl -fsS -H "$AUTH_HEADER" -H ${shellQuote(`X-User-Id: ${options.userId}`)} -H 'Content-Type: application/json' --data-binary ${shellQuote('{"dryRun":true,"limit":1}')} http://127.0.0.1:3210/api/v1/confirm-requests/reclassify-legacy >/dev/null; else curl -fsS -H ${shellQuote(`X-User-Id: ${options.userId}`)} -H 'Content-Type: application/json' --data-binary ${shellQuote('{"dryRun":true,"limit":1}')} http://127.0.0.1:3210/api/v1/confirm-requests/reclassify-legacy >/dev/null; fi`,
   'docker compose ps memory-service',
+  'docker inspect memory-service --format "{{range .Mounts}}{{if eq .Destination \\"/app/data\\"}}[deploy] /app/data <- {{.Type}} {{or .Name .Source}}{{end}}{{end}}"',
   shellQuote(`${options.remoteDir}/tools/server-public-stack-watchdog.sh`),
 ];
 
