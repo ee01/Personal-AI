@@ -92,6 +92,10 @@
 
 **AsMe 的凭据来源**：`getUserRuntimeConfig()` 里的 `ringCentralClientId/Secret/Jwt`，与 OutreachEngine 的「追问」是同一份，`GET /config` 已按 `*Configured` 布尔脱敏、不回传明文。☁️ lane 由 Sheet 临时传入的 `asmeSender` 仍然优先，没有时回落这份——与 notify-config 的「body 优先、表兜底」同构。
 
+**凭据的单一真源**：memory-service 是真源（L0 就存在，Sheet 只有 L2 才有）。Sheet 侧那份是**派生副本**，用途是让 Sheet + Giraffe 脱离 memory-service 独立跑推送。同步是单向下发 + 一次性收编，**不是双向同步**（双向会在两边都改过时产生 split-brain，而凭据取到旧值的失败是静默的）。
+
+> ⚠️ Sheet 侧凭据被 `JiraRuleUpdater` **明文烤进 Jira 规则 payload**（部署时替换占位符），所以改凭据必须**重新部署 Jira 规则**才对 ☁️ lane 生效；域策略禁止部署时，☁️ lane 的 AsMe 凭据事实上是冻结的。🏠 lane 不受此限制——它直接读 runtime config。详见 [plan § 12.1](../progressing/agent-task-ledger-plan.md)。
+
 > ⚠️ **当前限制**：🏠 lane 的 `push` / `agent` 任务经 `ActionExecutor.delegateAgent()` 执行，这条路径只跑执行器并记录结果，**尚未接投递**——投递逻辑目前只存在于 `POST /agent-tasks/execute` 这条 HTTP 入口上。因此本地调度的推送任务到点会执行但结果不会送达。修复计划见 [plan § 十二 P0](../progressing/agent-task-ledger-plan.md)。
 
 投递失败**不再静默**：Bot 分支检查 `deliverNoticeToGlip` 返回的 `.sent`，失败写入 `params.metadata.notifyDeliveryError` 并私发提示给 owner（不改 run 状态，保持"执行与通知独立"的边界）。

@@ -462,3 +462,45 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 - [x] 稍后提醒改写账本 API（不再需要 Google OAuth 和已初始化表格）
 - [x] `notify_user` 支持投递通道（bot / auto / plugin）
 - [x] 能力条压缩为一行 + 引导式初始化抽屉（直达真实配置页）
+
+### 12.1 凭据同步方向的裁决：不是双向同步，是「单一真源 + 一次性收编 + 持续下发」
+
+用户追问：「所以这个复制应该是双向的？L2 配置完也应该存一份 memory service？」
+
+**问题成立，但答案不是「双向同步」**——双向同步同一份密钥有个经典且致命的失败模式：两边都改过时无法判断谁更新，而凭据一旦取到旧值，**失败是静默的**（推送不出去，或更糟：让一个已吊销的凭据复活）。所以正确形态是三段式：
+
+```
+                    ┌── 一次性收编（Sheet → MS）：仅在 MS 为空时
+配置面（任一）──▶ memory-service（唯一真源）
+                    └── 持续下发（MS → Sheet）：L2 已配置时，由扩展镜像写
+```
+
+| 方向 | 时机 | 触发者 | 语义 |
+|---|---|---|---|
+| **收编** Sheet → memory-service | 一次性：L2 检测到 / 存量用户接入时，且 **memory-service 侧为空** | 扩展 | 让存量用户不必重配。MS 已有值时**不覆盖**——避免旧 Sheet 值盖掉新配的 |
+| **下发** memory-service → Sheet | 持续：每次凭据保存后，若 L2 已配置 | 扩展（Google token 只在扩展手里，MS 无法反向写） | Sheet 侧是**派生副本**，供 Sheet+Giraffe 脱离 MS 独立运行 |
+| ~~Sheet → MS 持续同步~~ | ❌ 不做 | — | 这才是「双向」，会产生 split-brain |
+
+### ⚠️ 已核实的硬成本：改凭据必须重新部署 Jira 规则
+
+这是决定上述方案可行性的关键事实，已核实：
+
+- `JiraRuleUpdater.ts:63-92` 的 `getRingCentralSenderReplacements()` 把 `clientId` / `clientSecret` / `jwt` **明文烤进 Jira 规则的 payload**（`{{RINGCENTRAL_SENDER_JWT}}` 等占位符在部署时被替换）。
+- 也就是说 Sheet Config 里的那份凭据**不是 Jira 运行时读取的**——Jira 规则里存的是部署那一刻的快照。
+- **推论**：「下发到 Sheet」只写 Config 格子是**不够的**，必须连带重新部署 Jira 规则，凭据才真正对 ☁️ lane 生效。而 [§ 二 Case 4](#) 已证实，**受管 Google 账号的域策略当前禁止重新部署**（`ANYONE access has been disabled`）。
+
+**这带来一个必须正视的结论**：对于域策略受限的用户（也就是当前的你），☁️ lane 的 AsMe 凭据**事实上是冻结的**——改了也部署不上去。因此：
+
+- 下发路径要**显式检查部署能力**，部署失败时明确告知「Sheet Config 已更新，但 Jira 规则仍持有旧凭据，☁️ lane 的 AsMe 推送不会用新值」，而不是静默地让用户以为改好了。
+- 这反过来强化了 🏠 lane 的价值：**L0/L1 的 AsMe 推送不受此限制**（memory-service 直接用 runtime config 的凭据，不经 Jira 规则），所以域策略受阻的用户走 🏠 反而是更可靠的路径。
+
+### 12.2 修订后的 P3（凭据统一）
+
+- [x] 核实凭据存储现状：memory-service 已有（`runtimeConfig.ts:50-53`）且已脱敏（`config.ts:245-249`）
+- [x] 核实两个配置面：Options 写 MS（`options.tsx:3504`）、定时消息页写 Sheet Config，互不相通
+- [x] 核实改凭据是否需重新部署 Jira 规则：**需要**（`JiraRuleUpdater.ts:63-92` 明文内联），且域策略下可能部署失败
+- [ ] **收编**：扩展在 L2 检测 / 存量接入时，若 MS 侧凭据为空则从 Sheet Config 导入一次（不覆盖已有值）
+- [ ] **下发**：凭据保存后若 L2 已配置，由扩展镜像写 Sheet Config
+- [ ] **下发后的部署提示**：尝试重新部署 Jira 规则；失败时给出明确回执（区分「MS 侧已生效」与「☁️ lane 仍是旧凭据」），复用 `AppScriptDomainPolicyAccessError` 的错误分类
+- [ ] UI：凭据配置处标注「此凭据同时用于：追问、AsMe 推送（🏠 lane 即时生效；☁️ lane 需重新部署 Jira 规则）」
+- [ ] 冲突可见化：若检测到 Sheet Config 与 MS 两侧凭据不一致，在能力条 / 引导抽屉里提示，而不是任其分叉
