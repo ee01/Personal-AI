@@ -1,0 +1,133 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  deliverAgentTaskRunNotifications,
+  readLedgerNotifyConfig,
+  shouldDeliverLedgerNotifications,
+} from '../core/agentTaskNotification.js';
+import { NotificationCenterService } from '../core/NotificationCenterService.js';
+import { ActionRepository } from '../repositories/ActionRepository.js';
+import { getTestDb } from './setup.js';
+
+describe('Task Center home-lane delivery', () => {
+  const db = getTestDb();
+  const repo = new ActionRepository(db);
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM proposed_action_attempts').run();
+    db.prepare('DELETE FROM proposed_actions').run();
+    db.prepare('DELETE FROM notification_records').run();
+    db.prepare('DELETE FROM channel_delivery_records').run();
+    vi.restoreAllMocks();
+  });
+
+  it('treats a Task Center agent row as a ledger notify candidate', () => {
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: '查 Jira',
+      taskKind: 'agent',
+      sourceKind: 'task_center',
+      executionMode: 'auto',
+    });
+    expect(shouldDeliverLedgerNotifications(action)).toBe(true);
+  });
+
+  it('does not re-notify a reminder that already went through notify_user', () => {
+    const action = repo.create({
+      actionType: 'notify_user',
+      title: '提醒我',
+      taskKind: 'remind',
+      executionMode: 'auto',
+    });
+    expect(shouldDeliverLedgerNotifications(action)).toBe(false);
+  });
+
+  it('reads plugin channel from the flatter Task Center payload', () => {
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: '查 Jira',
+      taskKind: 'agent',
+      params: {
+        channel: 'plugin',
+        successReceipt: true,
+      },
+    });
+    expect(readLedgerNotifyConfig(action).notifyVia).toBe('plugin');
+  });
+
+  it('writes a Chrome notification record when via=plugin', async () => {
+    const glip = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true });
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team',
+      taskKind: 'agent',
+      sourceKind: 'task_center',
+      params: {
+        task: '查 JQL',
+        notifyVia: 'plugin',
+        channel: 'plugin',
+        metadata: { notifyVia: 'plugin', successReceipt: true },
+      },
+      executionMode: 'auto',
+    });
+
+    const result = await deliverAgentTaskRunNotifications({
+      db,
+      userId: 'esone.qiu',
+      action,
+      execution: {
+        queueStatus: 'succeeded',
+        result: { status: 'success', summary: '查到 3 条' },
+      },
+    });
+
+    expect(result.delivered).toBeGreaterThan(0);
+    expect(glip).not.toHaveBeenCalled();
+    const row = db
+      .prepare(`SELECT title, body, channel FROM notification_records LIMIT 1`)
+      .get() as { title: string; body: string; channel: string };
+    expect(row.channel).toBe('task_center');
+    expect(row.title).toContain('Nova 缺少 Team');
+    expect(row.body).toContain('查到 3 条');
+  });
+
+  it('records notifyDeliveryError without failing the run when Bot delivery fails', async () => {
+    vi.spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip').mockResolvedValue({
+      sent: false,
+      error: 'bot not a member of target group',
+    });
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: '同步 Committed',
+      taskKind: 'agent',
+      sourceKind: 'agent_task',
+      params: {
+        task: '同步',
+        metadata: {
+          notifyVia: 'bot',
+          successReceipt: false,
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        },
+      },
+      executionMode: 'auto',
+    });
+
+    const result = await deliverAgentTaskRunNotifications({
+      db,
+      userId: 'esone.qiu',
+      action,
+      execution: {
+        queueStatus: 'succeeded',
+        result: { status: 'success', summary: '已同步' },
+      },
+    });
+
+    expect(result.delivered).toBe(0);
+    expect(result.errors[0]).toContain('bot not a member');
+    const stored = repo.getById(action.id);
+    const metadata = stored?.params?.metadata as Record<string, unknown>;
+    expect(String(metadata.notifyDeliveryError)).toContain('bot not a member');
+  });
+});

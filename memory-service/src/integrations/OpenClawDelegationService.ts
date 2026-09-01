@@ -70,6 +70,17 @@ function hasVerifiableArtifact(
   });
 }
 
+/**
+ * Notification-only delegations (agent-task success-template formatting) are pure
+ * text transformations: the summary itself is the deliverable and no external
+ * system is touched, so there is nothing to read back or verify. The verifiable
+ * artifact gate must not apply to them — see the notificationOnly exemption in
+ * delegate().
+ */
+function isNotificationOnlyRequest(input: DelegationRequest): boolean {
+  return input.metadata?.notificationOnly === true;
+}
+
 function cleanJsonCandidate(raw: string): string {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -667,7 +678,11 @@ export class OpenClawDelegationService {
             envelope.summary,
           )
         : coerceArtifacts(envelope.artifacts);
-      if (normalizedStatus === 'success' && !hasVerifiableArtifact(artifacts, input)) {
+      if (
+        normalizedStatus === 'success' &&
+        !isNotificationOnlyRequest(input) &&
+        !hasVerifiableArtifact(artifacts, input)
+      ) {
         return {
           status: 'error',
           summary: 'OpenClaw 返回了 success，但缺少可验证 artifact。',

@@ -285,6 +285,8 @@ describe('AgentTask notifyVia', () => {
     expect(normalizeAgentTaskNotifyVia(undefined)).toBe('bot');
     expect(normalizeAgentTaskNotifyVia('BOT')).toBe('bot');
     expect(normalizeAgentTaskNotifyVia('asme')).toBe('asme');
+    expect(normalizeAgentTaskNotifyVia('plugin')).toBe('plugin');
+    expect(normalizeAgentTaskNotifyVia('chrome')).toBe('plugin');
   });
 
   it('requires Sheet AsMe sender credentials', () => {
@@ -313,6 +315,8 @@ describe('AgentTask notifyVia', () => {
     expect(resolveAgentTaskDeliveryVia('success_receipt', 'asme')).toBe('bot');
     expect(resolveAgentTaskDeliveryVia('failure_receipt', 'asme')).toBe('bot');
     expect(resolveAgentTaskDeliveryVia('result', 'bot')).toBe('bot');
+    expect(resolveAgentTaskDeliveryVia('result', 'plugin')).toBe('plugin');
+    expect(resolveAgentTaskDeliveryVia('success_receipt', 'plugin')).toBe('plugin');
   });
 
   it('sends group results through the user RingCentral client', async () => {

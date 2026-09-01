@@ -22,10 +22,11 @@
 | Native Join | NC 加会 | [meeting_native_join.md](./features/meeting_native_join.md) | |
 | Memory Storyline Builder | 记忆故事线 | [memory_storyline_builder.md](./features/memory_storyline_builder.md) | |
 | Notification Center | 通知中心 | [notification_center.md](./features/notification_center.md) | 含通知提醒与免打扰路径（`notification_records`） |
+| Task Center | 任务中心 | [task_center.md](./features/task_center.md) | 一个账本、两条调度 lane；☁️ 子文档见 Scheduled Messages |
 | Message Analysis | 聊天消息分析入库 | [message_analysis.md](./features/message_analysis.md) | 含 Agent Workflow 多 Agent 编排引擎（`ANALYSIS_TYPE=agentWorkflow`，已并入主文档）；专题文档：[custom_prompts.md](./features/custom_prompts.md)（自定义提示词与用户上下文） |
 | Message Reaction | 消息交互 | [message_reaction.md](./features/message_reaction.md) | |
 | Topic Messages | 主题式消息阅读 | [topic_based_messages.md](./features/topic_based_messages.md) | |
-| Scheduled Messages | 定时消息 | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 含主动询问（Outreach）排队外发与会话管理 |
+| Scheduled Messages | 定时消息 | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 任务中心 ☁️ `jira_sheet` lane；含主动询问（Outreach）排队外发与会话管理 |
 | Personal AI AR Data | AR 数据 | [ar_data_overlay.md](./features/ar_data_overlay.md) | |
 | Relationship Radar | 人脉关系 | [relationship_radar.md](./features/relationship_radar.md) | |
 | Project Dashboard | 项目面板 | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 数据源检查 / watched projects 补齐 / 证据修复见 [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) |
@@ -124,6 +125,10 @@
 | 主题静音 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | 本地 mute 状态、静音菜单/原因/时长按钮边界、查看静音路径与取消静音回执 |
 | 主题详情深链定位 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | `?messageId=` / `?message_id=` / `?ts=` 定位并高亮，兼容来源 permalink / Slack timestamp 别名 |
 | Topic 来源链接安全展示 | Topic Messages | [topic_based_messages.md](./features/topic_based_messages.md) | 只展示可信 http(s)，打开/隐藏都有回执，链接 hover/读屏先说明外部打开边界 |
+| 任务中心统一账本 | Task Center | [task_center.md](./features/task_center.md) | `POST /task-center/tasks`；🏠 `memory_cron` / ☁️ `jira_sheet`；类型决定动作：文本推送 `notify_user`、AI Report `run_http_push`、帮我问 `ask_external_user`、Agent `delegate_agent` |
+| 🏠 lane 执行后投递 | Task Center | [task_center.md](./features/task_center.md) | `ActionExecutor` 终态复用 `planAgentTaskNotifications`；`bot` / `asme` / `plugin`；失败写 `notifyDeliveryError` 不改 run 状态 |
+| L1 Bot / AsMe 分层 | Task Center | [task_center.md](./features/task_center.md) | 能力条认 Bot 或 AsMe；未配置通道置灰并链到定时消息页 / Options 追问凭据 |
+| 提醒我 | Task Center | [task_center.md](./features/task_center.md) | 快捷时间（1 小时后 / 今晚 / 明早 / 下周一）；到点走 `notify_user`，过点时间顺延到下一档 |
 | 定时消息一键初始化 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet、Apps Script、触发器；创建 / 授权 / 恢复按钮 hover 与读屏标明阶段边界 |
 | 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称；Done 单次改成仍有下次执行的循环会自动恢复 Active |
 | Glip 快速定时与未来消息 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 输入框闹钟创建 `ComposeScheduled` AsMe；列表底部虚线未来消息是本地 pending 快照，不是已发送消息 |

@@ -332,6 +332,70 @@ describe('OpenClawDelegationService', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('accepts a notificationOnly success envelope without verifiable artifacts', async () => {
+    // Regression: agent-task success-template formatting is a pure text task —
+    // its deliverable is the summary and it touches no external system. The
+    // verifiable-artifact gate used to downgrade these envelopes to 'error',
+    // so the user's notify template silently never applied.
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
+    const userDataManager = new UserDataManager();
+    userDataManager.initialize(tempDir);
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawBaseUrl: 'https://openclaw.example.com',
+        openClawApiKey: 'test-openclaw-key',
+        openClawTimeoutMs: 5000,
+      }),
+    );
+
+    const notificationBody = [
+      '-- Nova 缺少 Assignee 的 INIT --',
+      '@clare.cheng',
+      'INIT-123 summary... @Request owner',
+    ].join('\n');
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          output_text: JSON.stringify({
+            status: 'success',
+            summary: notificationBody,
+            artifacts: [
+              {
+                kind: 'note',
+                title: '通知格式化结果',
+                content: notificationBody,
+              },
+            ],
+            payload: {},
+          }),
+        }),
+    });
+
+    const service = new OpenClawDelegationService(userDataManager, 'delegation-user');
+    const outcome = await service.delegate({
+      actionId: 'agent-task-notification:format-1',
+      threadId: 'agent-task-notification:Nova 缺少 Assignee 的 INIT',
+      sessionKey: 'agent-task-notification:Nova 缺少 Assignee 的 INIT:1',
+      task: '把 Agent task 执行结果整理成通知文案',
+      mode: 'read',
+      targetSystem: 'agent_task_notification',
+      metadata: { notificationOnly: true },
+    });
+
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toBe(notificationBody);
+    expect(outcome.payload?.artifactValidation).toBeUndefined();
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it('accepts object-shaped observedFields as a verifiable artifact', async () => {
     vi.stubGlobal('fetch', fetchMock);
 

@@ -1,6 +1,6 @@
 # 任务中心（Task Center）
 
-> 一个账本、两条调度 lane。定时推送、Agent 任务、稍后提醒、开发委派、反思候选共用同一张队列表、同一套幂等、同一套人工节点。
+> 一个账本、两条调度 lane。定时推送、Agent 任务、提醒我、开发委派、帮我问、反思候选共用同一张队列表、同一套幂等、同一套人工节点。
 
 - 设计决策与调研过程：[`docs/progressing/agent-task-ledger-plan.md`](../progressing/agent-task-ledger-plan.md)
 - 交互原型：[`docs/progressing/agent-task-ledger-demo.html`](../progressing/agent-task-ledger-demo.html)
@@ -19,13 +19,14 @@
 |---|---|---|---|
 | ⏰ 定时推送 | 用户 | 🏠 / ☁️ 可选 | 内容/JQL、通知通道、Timeline 里程碑触发 |
 | 🤖 Agent 任务 | 用户 | 🏠 / ☁️ 可选（执行恒在 🏠） | read/write 边界、执行器选择、结果通知模板 |
-| ⏳ 稍后提醒 | 用户（Glip 消息 / 网页） | 🏠 固定 | 来源引用、快捷时间 |
+| ⏳ 提醒我 | 用户（Glip 消息 / 网页） | 🏠 固定 | 来源引用、快捷时间 |
+| 📣 帮我问 | 用户 | 🏠 固定 | OutreachEngine 会话、RingCentral 凭据 |
 | 🛠 开发委派 | 用户 / 会话交接 | 🏠 固定 | 验收标准、plan gate、依赖、文件产物 |
 | 🌙 反思候选 | AI（ReflectionWorker） | 🏠 固定 | 主题聚合、必须人工转正才入队 |
 
 ## 大白话运行逻辑
 
-1. 不管从哪个入口创建（Glip 输入框、稍后提醒、Jira 规则导入、反思转正、会话交接），都只写**一个** API：`POST /task-center/tasks`。
+1. 不管从哪个入口创建（Glip 输入框、提醒我、Jira 规则导入、反思转正、会话交接），都只写**一个** API：`POST /task-center/tasks`。
 2. 账本按任务类型和用户配置决定 **lane**：🏠 `memory_cron`（memory-service 到期队列）或 ☁️ `jira_sheet`（Jira Automation 云端触发 + Sheet 镜像行）。
 3. 🏠 任务由 memory-service 的到期扫描直接执行；☁️ 任务由扩展同步器写一行 Sheet，Jira rule 每分钟领取，走原有链路。
 4. 执行结果、artifact、失败原因**统一记在账本**，不管是哪条 lane 触发的。
@@ -62,10 +63,11 @@
 
 每类任务的编辑器字段不同，但共享底部三件套：**重复规则 → 通知通道 → 调度器**。
 
-- **定时推送**：标题、内容/JQL、通知通道、重复规则（含 Timeline 里程碑：项目/里程碑/偏移天数）、调度器。Jira 规则关联的任务内容只读（规则本体在 Jira 侧维护），仅可改暂停/通知目标。
-- **Agent 任务**：任务描述（必填）、执行边界（只读/写入，写入需审批）、执行器 + 结果通知群组、成功回执开关、重复规则、调度器。
-- **稍后提醒**：来源引用（原消息/网页）、标题、快捷时间（1 小时后 / 今晚 / 明早 / 下周一）或自定义、通知通道。
+- **定时推送**：形态（文本 / AI Report）、标题、内容或 JQL、通知通道、重复规则（含时间）、调度器。Jira 规则关联的任务内容只读（规则本体在 Jira 侧维护），仅可改暂停/通知目标。
+- **Agent 任务**：任务描述（必填）、执行边界（只读/写入，写入需审批）、结果通知通道 / 群组、成功回执开关、重复规则、调度器。
+- **提醒我**：来源引用（原消息/网页）、标题、快捷时间（1 小时后 / 今晚 / 明早 / 下周一）或自定义、通知通道。
 - **开发委派**：标题、任务说明、**验收标准（必填）**、执行器 + 工作目录、plan gate 开关、依赖任务。
+- **帮我问**：问题、询问对象；固定 🏠，走 OutreachEngine。
 
 ### 3. 执行器：就地展开配置，不跳出编辑器
 
@@ -96,7 +98,9 @@
 
 > ⚠️ Sheet 侧凭据被 `JiraRuleUpdater` **明文烤进 Jira 规则 payload**（部署时替换占位符），所以改凭据必须**重新部署 Jira 规则**才对 ☁️ lane 生效；域策略禁止部署时，☁️ lane 的 AsMe 凭据事实上是冻结的。🏠 lane 不受此限制——它直接读 runtime config。详见 [plan § 12.1](../progressing/agent-task-ledger-plan.md)。
 
-> ⚠️ **当前限制**：🏠 lane 的 `push` / `agent` 任务经 `ActionExecutor.delegateAgent()` 执行，这条路径只跑执行器并记录结果，**尚未接投递**——投递逻辑目前只存在于 `POST /agent-tasks/execute` 这条 HTTP 入口上。因此本地调度的推送任务到点会执行但结果不会送达。修复计划见 [plan § 十二 P0](../progressing/agent-task-ledger-plan.md)。
+🏠 lane 的 `push` / `agent` 到期执行走 `ActionExecutor`，完成后调用与 `POST /agent-tasks/execute` 同一套投递规划（`planAgentTaskNotifications` + `deliverAgentTaskRunNotifications`）。身份支持 `bot` / `asme` / `plugin`；`asme` 优先用请求里的临时凭据，否则回落 `getUserRuntimeConfig()`。投递失败写入 `params.metadata.notifyDeliveryError` 并私发 owner，**不改 run 状态**。
+
+动作类型按任务形态分流：纯文本推送 / 提醒落 `notify_user`；AI Report 落 `run_http_push`（默认 `POST https://dify.int.rclabenv.com/v1/chat-messages`，鉴权用 env `DIFY_API_KEY` 或任务 `aiHeaders`，不复制 Sheet 侧硬编码 Bearer）；帮我问落 `ask_external_user`；Agent / 开发委派落 `delegate_agent`。`notify_user` / `ask_external_user` 自己负责投递，执行器终态不再二次扇出。
 
 投递失败**不再静默**：Bot 分支检查 `deliverNoticeToGlip` 返回的 `.sent`，失败写入 `params.metadata.notifyDeliveryError` 并私发提示给 owner（不改 run 状态，保持"执行与通知独立"的边界）。
 
@@ -126,7 +130,7 @@
 | `parent_action_id` | 子任务树；父任务在全部子任务 succeeded 时聚合完成 |
 | `recurrence_spec` | 重复调度（复用 OutreachEngine 的 scheduleSpec 语义）；完成时按 spec 克隆下一次，幂等键加时间片后缀 |
 | `lane` | `memory_cron` / `jira_sheet` |
-| `task_kind` | `push` / `agent` / `remind` / `dev` / `reflection` |
+| `task_kind` | `push` / `agent` / `remind` / `dev` / `outreach` / `reflection` |
 | `mirror_ref` | ☁️ 任务对应的 Sheet 行 id（`msg_*`）与同步状态 |
 
 已有但需通电的字段：`depends_on_json`（持久化多年、零消费方）——`listDueAutoActions` 增加"依赖未完成则不出队"，并定义失败传播策略与环检测。
@@ -153,6 +157,7 @@ npm run verify:task-center-ui
 | Phase | 内容 | 验收 |
 |---|---|---|
 | **1 通电** ✅ | `recurrence_spec` + `memory_cron` 调度、`parent_action_id`、depends_on 消费、`resume_action_id` 通用续跑、drain 短 interval、`POST /task-center/tasks` 统一入口、任务中心 UI | 两条 lane 的任务共用同一账本/幂等/runtime-status |
+| **1b L0 投递与能力面** ✅ | 🏠 执行后投递、AI Report `run_http_push`、帮我问、L1 认 AsMe、「提醒我」文案 | 没配 L2 也能用文本推送 / AI Report / Agent / 帮我问；投递失败可见 |
 | **2 执行承载** ✅ | worker lease 续租、公共池 claim + 空闲判定、file artifact 契约 | lease 心跳续租；未绑定任务进共享池按 capabilities 领取；`kind:'file'` 收据（路径强制相对、禁 `..`） |
 | **3 人工节点** | `input_required` 通用停靠、反思挂树、产物目录规范 | 反思→批准→执行→产物→review→解锁下游全程可见 |
 | **4 收敛** | Sheet 降只读镜像、GAS access 降 `DOMAIN`、升级通道解冻 | 见 scheduled_messages_manager.md |

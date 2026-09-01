@@ -2899,7 +2899,7 @@ export interface ReflectionThreadListResponse {
   offset: number;
 }
 
-export type TaskKind = 'push' | 'agent' | 'remind' | 'dev' | 'reflection';
+export type TaskKind = 'push' | 'agent' | 'remind' | 'dev' | 'reflection' | 'outreach';
 /** memory_cron = this service's due-scan; jira_sheet = Jira Automation via a Sheet mirror row. */
 export type TaskLane = 'memory_cron' | 'jira_sheet';
 

@@ -83,7 +83,7 @@ async function main() {
       if (url.includes('/task-center/capabilities')) {
         return json({
           lanes: ['memory_cron', 'jira_sheet'],
-          taskKinds: ['push', 'agent', 'remind', 'dev', 'reflection'],
+          taskKinds: ['push', 'agent', 'remind', 'dev', 'reflection', 'outreach'],
           laneSelectableKinds: ['push', 'agent'],
           cloudLaneDetection: 'client_reported',
         });
@@ -101,6 +101,9 @@ async function main() {
         });
       }
       if (url.includes('/task-center/tasks')) return json({ items: TASKS, total: TASKS.length });
+      if (url.includes('/config')) {
+        return json({ ringCentralJwtConfigured: false, ringCentralClientId: '' });
+      }
       return json({ items: [], total: 0 });
     });
 
@@ -136,13 +139,14 @@ async function main() {
       () => document.querySelector('.tc-dialog')?.textContent ?? '',
     );
     assert.ok(setupText.includes('去配置 Bot'), 'L1 未启用时应给出配置入口');
+    assert.ok(setupText.includes('去配置 AsMe'), 'L1 应同时列出 AsMe 配置入口');
     assert.ok(setupText.includes('去一键初始化'), 'L2 未启用时应给出初始化入口');
     assert.ok(setupText.includes('解锁'), '每层应说明解锁什么');
     await page.click('.tc-dialog-foot .tc-btn');
     console.log('✓ 能力条压缩为一行，点击展开引导式初始化并给出真实配置入口');
 
     // 4. Kind filtering narrows the list.
-    await page.click('button.chip:has-text("稍后提醒")');
+    await page.click('button.chip:has-text("提醒我")');
     await page.waitForFunction(
       () => document.querySelectorAll('.tc-row').length === 1,
       { timeout: 5000 },

@@ -20,6 +20,7 @@ import { ConfirmRequestRepository } from '../repositories/ConfirmRequestReposito
 import { OutreachRepository } from '../repositories/OutreachRepository.js';
 import { getTestDb } from './setup.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
+import { resetConfigForTests } from '../config.js';
 
 describe('ActionExecutor', () => {
   const fetchMock = vi.fn();
@@ -1336,5 +1337,80 @@ describe('ActionExecutor', () => {
       }
     ).count;
     expect(sessionCount).toBe(0);
+  });
+
+  it('runs an AI Report push then writes a plugin receipt', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ answer: '无 Assignee 的 bug：0 条' }),
+    });
+
+    const action = actionRepo.create({
+      actionType: 'run_http_push',
+      title: '无 Assignee bug',
+      description: 'assignee is EMPTY',
+      taskKind: 'push',
+      sourceKind: 'task_center',
+      params: {
+        pushMethod: 'ai',
+        content: 'assignee is EMPTY',
+        channel: 'plugin',
+        notifyVia: 'plugin',
+        aiHeaders: 'Authorization: Bearer test-dify',
+        successReceipt: true,
+        metadata: { notifyVia: 'plugin', successReceipt: true },
+      },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const result = await executor.executeAction(action.id);
+
+    expect(result.queueStatus).toBe('succeeded');
+    expect(result.result?.summary).toContain('无 Assignee');
+    expect(fetchMock).toHaveBeenCalled();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String((init.headers as Record<string, string>).authorization)).toContain(
+      'Bearer test-dify',
+    );
+
+    const notices = db
+      .prepare(`SELECT channel, title, body FROM notification_records`)
+      .all() as Array<{ channel: string; title: string; body: string }>;
+    expect(notices.some((row) => row.channel === 'task_center')).toBe(true);
+  });
+
+  it('fails a Dify AI Report without copying a hardcoded bearer', async () => {
+    const previous = process.env.DIFY_API_KEY;
+    delete process.env.DIFY_API_KEY;
+    resetConfigForTests();
+    try {
+      const action = actionRepo.create({
+        actionType: 'run_http_push',
+        title: '无 Assignee bug',
+        taskKind: 'push',
+        params: {
+          pushMethod: 'ai',
+          content: 'assignee is EMPTY',
+          channel: 'plugin',
+          notifyVia: 'plugin',
+          metadata: { notifyVia: 'plugin' },
+        },
+        executionMode: 'auto',
+        queueStatus: 'queued',
+      });
+      const executor = new ActionExecutor(db, userDataManager, 'test-user');
+      const result = await executor.executeAction(action.id);
+      expect(result.queueStatus).toMatch(/failed|dead_letter/);
+      expect(String(result.error ?? '')).toContain('DIFY_API_KEY');
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.some((url) => url.includes('dify'))).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.DIFY_API_KEY;
+      else process.env.DIFY_API_KEY = previous;
+      resetConfigForTests();
+    }
   });
 });

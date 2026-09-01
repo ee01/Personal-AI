@@ -94,10 +94,67 @@ describe('Task Center API', () => {
         .toBe('jira_sheet');
       expect(resolveLane({ taskKind: 'agent', requestedLane: 'jira_sheet', cloudLaneAvailable: true }).lane)
         .toBe('jira_sheet');
-      for (const kind of ['remind', 'dev', 'reflection'] as const) {
+      for (const kind of ['remind', 'dev', 'reflection', 'outreach'] as const) {
         expect(resolveLane({ taskKind: kind, requestedLane: 'jira_sheet', cloudLaneAvailable: true }).lane)
           .toBe('memory_cron');
       }
+    });
+  });
+
+  describe('action type routing', () => {
+    it('stores a plain push as notify_user so home-lane delivery does not need an executor', async () => {
+      const res = await post({
+        taskKind: 'push',
+        title: '每晚提醒清 inbox',
+        payload: { pushMethod: 'message', channel: 'plugin' },
+      });
+      expect(res.statusCode).toBe(201);
+      const id = res.json().task.id as string;
+      const stored = new ActionRepository(db).getById(id);
+      expect(stored?.actionType).toBe('notify_user');
+      expect(stored?.params?.channel).toBe('plugin');
+    });
+
+    it('stores an AI Report push as run_http_push', async () => {
+      const res = await post({
+        taskKind: 'push',
+        title: '无 Assignee bug',
+        payload: { pushMethod: 'ai', content: 'assignee is EMPTY' },
+      });
+      expect(new ActionRepository(db).getById(res.json().task.id)?.actionType).toBe(
+        'run_http_push',
+      );
+    });
+
+    it('stores 帮我问 as ask_external_user', async () => {
+      const res = await post({
+        taskKind: 'outreach',
+        title: '问 Kenny 分页',
+        payload: { question: '分页这样改行吗', targetRef: 'kenny.hu' },
+      });
+      expect(new ActionRepository(db).getById(res.json().task.id)?.actionType).toBe(
+        'ask_external_user',
+      );
+    });
+
+    it('keeps agent tasks on delegate_agent and copies notify metadata', async () => {
+      const res = await post({
+        taskKind: 'agent',
+        title: 'Nova 缺 Team',
+        payload: {
+          task: '查 JQL',
+          notifyVia: 'bot',
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        },
+      });
+      const stored = new ActionRepository(db).getById(res.json().task.id);
+      expect(stored?.actionType).toBe('delegate_agent');
+      const metadata = stored?.params?.metadata as Record<string, unknown>;
+      expect(metadata.notifyVia).toBe('bot');
+      expect(metadata.notifyTarget).toMatchObject({
+        type: 'group',
+        targetGroupId: '164506140678',
+      });
     });
   });
 

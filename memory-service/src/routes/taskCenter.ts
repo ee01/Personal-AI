@@ -113,17 +113,30 @@ function nonEmpty(value: unknown): string | undefined {
 
 /**
  * Default action type per kind. Reminders and reflection candidates only ever
- * notify; pushes and agent tasks delegate to an executor.
+ * notify; AI reports fetch then notify; outreach creates a session; pushes and
+ * agent tasks otherwise delegate to an executor.
  */
-function defaultActionType(taskKind: TaskKind): string {
+function defaultActionType(
+  taskKind: TaskKind,
+  payload: Record<string, unknown>,
+): string {
+  const pushMethod =
+    typeof payload.pushMethod === 'string'
+      ? payload.pushMethod.trim().toLowerCase()
+      : '';
   switch (taskKind) {
     case 'remind':
-      return 'notify_user';
     case 'reflection':
+      return 'notify_user';
+    case 'outreach':
+      return 'ask_external_user';
+    case 'push':
+      if (pushMethod === 'outreach') return 'ask_external_user';
+      if (pushMethod === 'ai') return 'run_http_push';
+      if (pushMethod === 'agent') return 'delegate_agent';
       return 'notify_user';
     case 'dev':
     case 'agent':
-    case 'push':
     default:
       return 'delegate_agent';
   }
@@ -291,14 +304,34 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       cloudLaneAvailable: body.cloudLaneAvailable === true,
     });
 
+    const payload = body.payload ?? {};
+    const notifyVia = payload.notifyVia ?? payload.channel;
+    const notifyTarget = payload.notifyTarget;
+    const actionType = nonEmpty(body.actionType) ?? defaultActionType(taskKind, payload);
+
     const action = repo.create({
-      actionType: nonEmpty(body.actionType) ?? defaultActionType(taskKind),
+      actionType,
       title,
       description: nonEmpty(body.description),
       params: {
-        ...(body.payload ?? {}),
+        ...payload,
+        title: payload.title ?? title,
+        body: payload.body ?? nonEmpty(body.description),
+        task:
+          typeof payload.task === 'string' && payload.task.trim()
+            ? payload.task
+            : nonEmpty(body.description) ?? title,
         taskKind,
         laneReason: laneDecision.reason,
+        metadata: {
+          ...(payload.metadata && typeof payload.metadata === 'object'
+            ? (payload.metadata as Record<string, unknown>)
+            : {}),
+          notifyVia,
+          notifyTarget,
+          successReceipt: payload.successReceipt !== false,
+          notifyTemplate: payload.notifyTemplate,
+        },
       },
       // Dev delegations and write-mode agent work stop for a human before they
       // run; everything else drains automatically.

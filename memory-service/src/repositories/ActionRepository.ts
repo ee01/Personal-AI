@@ -22,7 +22,7 @@ export type ActionQueueStatus =
 export const TASK_LANES = ['memory_cron', 'jira_sheet'] as const;
 export type TaskLane = (typeof TASK_LANES)[number];
 
-export const TASK_KINDS = ['push', 'agent', 'remind', 'dev', 'reflection'] as const;
+export const TASK_KINDS = ['push', 'agent', 'remind', 'dev', 'reflection', 'outreach'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
 /** Rows predating Task Center have no lane; they were always locally scheduled. */
@@ -695,6 +695,33 @@ export class ActionRepository {
       )
       .run(approvedAt, id);
 
+    return this.getById(id);
+  }
+
+  /**
+   * Merge keys into params.metadata without touching the rest of params.
+   * Used to persist notifyDeliveryError after a run already reached a terminal
+   * queue status — delivery is independent of execution, so it must not go
+   * through markFailed / last_error.
+   */
+  patchParamsMetadata(
+    id: string,
+    patch: Record<string, unknown>,
+  ): QueuedActionRecord | null {
+    const current = this.getById(id);
+    if (!current) return null;
+    const params =
+      current.params && typeof current.params === 'object' && !Array.isArray(current.params)
+        ? { ...current.params }
+        : {};
+    const metadata =
+      params.metadata && typeof params.metadata === 'object' && !Array.isArray(params.metadata)
+        ? { ...(params.metadata as Record<string, unknown>) }
+        : {};
+    params.metadata = { ...metadata, ...patch };
+    this.db
+      .prepare(`UPDATE proposed_actions SET params_json = ? WHERE id = ?`)
+      .run(JSON.stringify(params), id);
     return this.getById(id);
   }
 

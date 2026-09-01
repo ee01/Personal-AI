@@ -38,6 +38,14 @@ import {
 } from '../ActionReadinessService.js';
 import type { UserDataManager } from '../../storage/UserDataManager.js';
 import { AgentWorkerRepository } from '../../repositories/AgentWorkerRepository.js';
+import { RingCentralClient } from '../../integrations/RingCentralClient.js';
+import { getConfig } from '../../config.js';
+import {
+  deliverAgentTaskAsMeNotice,
+  deliverAgentTaskRunNotifications,
+  normalizeAsMeSenderCredentials,
+  shouldDeliverLedgerNotifications,
+} from '../agentTaskNotification.js';
 
 const OPENCLAW_STALE_RUNNING_GRACE_SECONDS = 60;
 
@@ -52,6 +60,11 @@ export interface ActionExecutionResult {
 
 export interface ActionExecutionOptions {
   approve?: boolean;
+  /**
+   * Sheet AsMe credentials for this run only. Not persisted; when omitted,
+   * AsMe delivery falls back to getUserRuntimeConfig() RingCentral fields.
+   */
+  asmeSender?: ReturnType<typeof normalizeAsMeSenderCredentials>;
 }
 
 interface DispatchOutcome {
@@ -187,6 +200,54 @@ export function buildOpenClawStaleRunningError(
     `OpenClaw action exceeded stale running timeout (${staleAfterSeconds}s). ` +
     'The external operation may have completed without returning to Memory Service; review before retrying to avoid duplicate writes.'
   );
+}
+
+const DEFAULT_AI_REPORT_ENDPOINT =
+  'POST https://dify.int.rclabenv.com/v1/chat-messages';
+
+function parseHttpPushEndpoint(raw?: string): { method: string; url: string } {
+  const text = (raw ?? DEFAULT_AI_REPORT_ENDPOINT).trim();
+  const match = text.match(/^(GET|POST|PUT|PATCH)\s+(.+)$/i);
+  if (match) {
+    return { method: match[1].toUpperCase(), url: match[2].trim() };
+  }
+  return { method: 'POST', url: text };
+}
+
+function parseHttpPushHeaders(raw?: string): Map<string, string> {
+  const headers = new Map<string, string>();
+  if (!raw?.trim()) return headers;
+  for (const line of raw.split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const name = line.slice(0, idx).trim().toLowerCase();
+    const value = line.slice(idx + 1).trim();
+    if (name && value) headers.set(name, value);
+  }
+  return headers;
+}
+
+function extractHttpPushSummary(rawText: string): string | undefined {
+  const trimmed = rawText.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const answer = parsed.answer;
+    if (typeof answer === 'string' && answer.trim()) return answer.trim();
+    const data = parsed.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const outputs = (data as Record<string, unknown>).outputs;
+      if (typeof outputs === 'string' && outputs.trim()) return outputs.trim();
+      if (outputs && typeof outputs === 'object') {
+        return JSON.stringify(outputs);
+      }
+    }
+    const text = parsed.text;
+    if (typeof text === 'string' && text.trim()) return text.trim();
+  } catch {
+    return trimmed.slice(0, 4000);
+  }
+  return trimmed.slice(0, 4000);
 }
 
 export class ActionExecutor {
@@ -442,13 +503,13 @@ export class ActionExecutor {
         if (updated.threadId) {
           this.threadService.refreshThreadDocument(updated.threadId);
         }
-        return {
+        return this.finishWithLedgerNotify(updated, {
           actionId: updated.id,
           actionType: updated.actionType,
           queueStatus: updated.queueStatus,
           result: outcome.result,
           error: outcome.errorMessage,
-        };
+        }, options);
       }
 
       const updated =
@@ -468,12 +529,12 @@ export class ActionExecutor {
       if (updated.threadId) {
         this.threadService.refreshThreadDocument(updated.threadId);
       }
-      return {
+      return this.finishWithLedgerNotify(updated, {
         actionId: updated.id,
         actionType: updated.actionType,
         queueStatus: updated.queueStatus,
         result: outcome.result,
-      };
+      }, options);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const updated =
@@ -486,18 +547,57 @@ export class ActionExecutor {
       if (updated.threadId) {
         this.threadService.refreshThreadDocument(updated.threadId);
       }
-      return {
+      return this.finishWithLedgerNotify(updated, {
         actionId: updated.id,
         actionType: updated.actionType,
         queueStatus: updated.queueStatus,
         error: message,
-      };
+      }, options);
     }
+  }
+
+  /**
+   * After a terminal run, fan out the result using the same planner as
+   * `/agent-tasks/execute`. Failure here is recorded on metadata, not last_error.
+   */
+  private async finishWithLedgerNotify(
+    action: QueuedActionRecord,
+    result: ActionExecutionResult,
+    options: ActionExecutionOptions = {},
+  ): Promise<ActionExecutionResult> {
+    if (!shouldDeliverLedgerNotifications(action)) return result;
+    if (
+      result.queueStatus !== 'succeeded' &&
+      result.queueStatus !== 'failed' &&
+      result.queueStatus !== 'dead_letter'
+    ) {
+      return result;
+    }
+    try {
+      await deliverAgentTaskRunNotifications({
+        db: this.db,
+        userDataManager: this.userDataManager,
+        userId: this.userId ?? 'default',
+        action,
+        execution: {
+          queueStatus: result.queueStatus,
+          result: result.result,
+          error: result.error,
+        },
+        asmeSender: options.asmeSender,
+      });
+    } catch (error) {
+      console.warn('ledger notify failed', error);
+    }
+    return result;
   }
 
   private async dispatch(action: QueuedActionRecord): Promise<DispatchOutcome> {
     if (action.actionType === 'notify_user') {
       return { result: await this.notifyUser(action) };
+    }
+    if (action.actionType === 'run_http_push') {
+      return { result: await this.runHttpPush(action) };
     }
     if (action.actionType === 'create_confirm_request') {
       return { result: await this.createConfirmRequest(action) };
@@ -560,8 +660,29 @@ export class ActionExecutor {
       typeof params.channel === 'string' ? params.channel.trim().toLowerCase() : 'plugin';
     let botPushed = false;
     let botError: string | undefined;
+    let asmePushed = false;
+    let asmeError: string | undefined;
 
-    if (channel === 'bot' || channel === 'auto') {
+    if (channel === 'asme') {
+      const asmeResult = await deliverAgentTaskAsMeNotice({
+        ringClient: new RingCentralClient(
+          this.userDataManager,
+          this.db,
+          this.userId ?? 'default',
+        ),
+        title: String(params.title ?? action.title),
+        body: String(params.body ?? action.description ?? ''),
+        targetUserId:
+          typeof params.targetUserId === 'string' ? params.targetUserId : undefined,
+        targetGroupId:
+          typeof params.targetGroupId === 'string' ? params.targetGroupId : undefined,
+      });
+      asmePushed = asmeResult.sent;
+      asmeError = asmeResult.error;
+      if (!asmePushed) {
+        throw new Error(`AsMe 投递失败：${asmeError ?? 'unknown error'}`);
+      }
+    } else if (channel === 'bot' || channel === 'auto') {
       try {
         const delivery = await new NotificationCenterService(this.db).deliverNoticeToGlip({
           sourceRef: `notification:${notificationId}`,
@@ -590,8 +711,99 @@ export class ActionExecutor {
     return {
       notificationId,
       botPushed,
+      asmePushed,
       channel,
       ...(botError ? { botError } : {}),
+      ...(asmeError ? { asmeError } : {}),
+    };
+  }
+
+  /**
+   * Home-lane AI Report: call the stored HTTP endpoint (Dify / PEP / custom),
+   * then let finishWithLedgerNotify deliver the body. This is the L0 equivalent
+   * of Jira Automation fetching the same URL after claiming a Sheet row.
+   */
+  private async runHttpPush(
+    action: QueuedActionRecord,
+  ): Promise<Record<string, unknown>> {
+    const params = safeJsonValue(action.params);
+    const topic = String(params.title ?? action.title);
+    const content = String(
+      params.content ?? params.jql ?? action.description ?? '',
+    );
+    const teamId = String(params.teamId ?? params.aiTeamId ?? '');
+    const extraText = String(params.extraText ?? '');
+    const substitutions: Record<string, string> = {
+      '{Topic}': topic,
+      '{Content}': content,
+      '{TeamID}': teamId,
+      '{ExtraText}': extraText,
+    };
+    const apply = (raw: string) =>
+      Object.entries(substitutions).reduce(
+        (acc, [token, value]) => acc.split(token).join(value),
+        raw,
+      );
+
+    const parsed = parseHttpPushEndpoint(
+      typeof params.aiEndpoint === 'string' ? params.aiEndpoint : undefined,
+    );
+    const headers = parseHttpPushHeaders(
+      typeof params.aiHeaders === 'string' ? params.aiHeaders : undefined,
+    );
+    if (!headers.has('authorization')) {
+      const difyKey = getConfig().difyApiKey?.trim();
+      if (difyKey && parsed.url.toLowerCase().includes('dify')) {
+        headers.set('authorization', `Bearer ${difyKey}`);
+      } else if (parsed.url.toLowerCase().includes('dify')) {
+        throw new Error(
+          'AI Report 调用 Dify 需要 Authorization。请配置 memory-service 的 DIFY_API_KEY，或在任务 params.aiHeaders 提供 Authorization。未带密钥拒绝出站。',
+        );
+      }
+    }
+    if (!headers.has('content-type') && parsed.method !== 'GET') {
+      headers.set('content-type', 'application/json');
+    }
+
+    let body = typeof params.aiBody === 'string' ? params.aiBody : '';
+    if (!body.trim() && parsed.method !== 'GET') {
+      body = JSON.stringify({
+        response_mode: 'blocking',
+        user: this.userId ?? 'default',
+        query: '{Topic}',
+        inputs: {
+          title: '{Topic}',
+          outputs: 'tickets',
+          jql: '{Content}',
+          extraText: '{ExtraText}',
+          teamId: '{TeamID}',
+          mentionList: '',
+          ticketIncludes: 'summary, status, assignee, reporter',
+        },
+      });
+    }
+    body = apply(body);
+
+    const response = await fetch(parsed.url, {
+      method: parsed.method,
+      headers: Object.fromEntries(headers),
+      body: parsed.method === 'GET' ? undefined : body,
+    });
+    const rawText = await response.text();
+    if (!response.ok) {
+      throw new Error(
+        `AI Report 请求失败 (${response.status} ${response.statusText}): ${rawText.slice(0, 400)}`,
+      );
+    }
+    const summary = extractHttpPushSummary(rawText) || rawText.slice(0, 2000);
+    return {
+      status: 'success',
+      summary,
+      payload: {
+        endpoint: parsed.url,
+        method: parsed.method,
+        httpStatus: response.status,
+      },
     };
   }
 
@@ -866,13 +1078,13 @@ export class ActionExecutor {
           outcome.queueStatus === 'dead_letter',
           outcome.result,
         ) ?? action;
-      return {
+      return this.finishWithLedgerNotify(updated, {
         actionId: updated.id,
         actionType: updated.actionType,
         queueStatus: updated.queueStatus,
         result: outcome.result,
         error: outcome.errorMessage,
-      };
+      });
     }
     const updated =
       this.actionRepo.markSucceeded(action.id, attemptId, outcome.result) ??
@@ -880,12 +1092,12 @@ export class ActionExecutor {
     if (updated.threadId) {
       this.threadService.refreshThreadDocument(updated.threadId);
     }
-    return {
+    return this.finishWithLedgerNotify(updated, {
       actionId: updated.id,
       actionType: updated.actionType,
       queueStatus: updated.queueStatus,
       result: outcome.result,
-    };
+    });
   }
 
   private async delegateAgent(

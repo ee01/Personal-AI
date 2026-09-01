@@ -438,20 +438,20 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 ### 未完成清单（按优先级）
 
 **P0 —— 让 🏠 lane 的 push/agent 真正能投递**（没有这个，弹窗加再多字段也是空的）
-- [ ] `delegateAgent()` 执行成功后接投递：复用 `planAgentTaskNotifications` 的分支表（result → 目标；success/failure receipt → owner），把它从 `routes/agentTasks.ts` 抽成可被 executor 复用的模块
-- [ ] 投递身份支持 `bot` / `asme` / `plugin`；`asme` 复用 runtime config 里已有的 RingCentral 凭据
-- [ ] 投递失败沿用已有的可见化约定（写 `metadata.notifyDeliveryError` + 私发 owner）
+- [x] `delegateAgent()` 执行成功后接投递：复用 `planAgentTaskNotifications` 的分支表（result → 目标；success/failure receipt → owner），把它从 `routes/agentTasks.ts` 抽成可被 executor 复用的模块
+- [x] 投递身份支持 `bot` / `asme` / `plugin`；`asme` 复用 runtime config 里已有的 RingCentral 凭据
+- [x] 投递失败沿用已有的可见化约定（写 `metadata.notifyDeliveryError` + 私发 owner）
 
 **P1 —— 补齐 L0 的能力面**（目标：没配 L2 也能用全套）
-- [ ] **AI Report**：存量 19 条的主力形态。需确认 Dify 跳板在 🏠 lane 下如何调用——Jira 能直连 Dify，memory-service 是否可达需实测；不可达则需另设出站路径
-- [ ] **帮我问（Outreach）**：OutreachEngine 已完全在 memory-service 内，接进任务中心是接线而非新建
-- [ ] **帮我做（AgentTask）**：已可用，只差投递（见 P0）
-- [ ] 新建弹窗按类型补齐字段：推送身份（Bot/AsMe/插件通知，未配置的置灰 + 说明）、通知目标（私发/群组 + 群组 ID）、AI Report 的模板与参数
+- [x] **AI Report**：🏠 lane 走 `run_http_push`（默认 Dify `POST /v1/chat-messages`）。鉴权用 env `DIFY_API_KEY` 或任务 `aiHeaders`，不复制 Sheet 侧硬编码 Bearer。memory-service 主机到 Dify 的网络可达性未在本轮对生产环境实测。
+- [x] **帮我问（Outreach）**：`taskKind=outreach` → `ask_external_user`，接既有 OutreachEngine
+- [x] **帮我做（AgentTask）**：已可用，投递见 P0
+- [x] 新建弹窗按类型补齐字段：推送身份（Bot/AsMe/插件通知，未配置的置灰 + 说明）、通知目标（私发/群组 + 群组 ID）、AI Report 的 JQL / Team ID / 补充说明
 
 **P2 —— L1 定义与 UI 对齐**
-- [ ] L1 检测同时认 Bot 与 AsMe（任一配置即部分解锁；两者都缺才是完全未解锁）
-- [ ] 引导抽屉的 L1 步骤列出两条通道各自的状态与配置入口
-- [ ] 文案：「稍后提醒」Tab 改名为「**提醒我**」（更贴近动作而非状态）
+- [x] L1 检测同时认 Bot 与 AsMe（任一配置即部分解锁；两者都缺才是完全未解锁）
+- [x] 引导抽屉的 L1 步骤列出两条通道各自的状态与配置入口
+- [x] 文案：「稍后提醒」Tab 改名为「**提醒我**」（更贴近动作而非状态）
 
 **P3 —— 凭据统一**（依赖上面的决策）
 - [ ] 确认改 Sheet 凭据是否需要重新部署 Jira 规则

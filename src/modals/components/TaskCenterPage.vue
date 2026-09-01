@@ -42,11 +42,23 @@
             </div>
             <div class="setup-step-body">
               <p>{{ level.detail }}</p>
-              <p class="setup-unlocks"><span>解锁</span>{{ level.unlocks }}</p>
-              <div v-if="level.action" class="setup-actions">
-                <button class="tc-btn primary" @click="level.action.run()">{{ level.action.label }}</button>
-                <small>{{ level.action.hint }}</small>
-              </div>
+          <p class="setup-unlocks"><span>解锁</span>{{ level.unlocks }}</p>
+          <div v-if="level.key === 'l1'" class="setup-channels">
+            <div class="setup-channel" :class="{ on: botConfigured }">
+              <strong>🤖 Bot（SM AI）</strong>
+              <span>{{ botConfigured ? '已配置' : '未配置' }}</span>
+              <button v-if="!botConfigured" class="tc-btn sm" @click="openScheduledMessages()">去配置 Bot</button>
+            </div>
+            <div class="setup-channel" :class="{ on: asmeConfigured }">
+              <strong>👤 AsMe（本人身份）</strong>
+              <span>{{ asmeConfigured ? '已配置' : '未配置' }}</span>
+              <button v-if="!asmeConfigured" class="tc-btn sm" @click="openOptionsOutreach()">去配置 AsMe</button>
+            </div>
+          </div>
+          <div v-else-if="level.action" class="setup-actions">
+            <button class="tc-btn primary" @click="level.action.run()">{{ level.action.label }}</button>
+            <small>{{ level.action.hint }}</small>
+          </div>
             </div>
           </div>
 
@@ -179,10 +191,35 @@
             <input v-model="draft.title" type="text" :placeholder="titlePlaceholder" />
           </div>
 
-          <div v-if="draft.taskKind === 'push'" class="tc-field">
-            <label>内容 / JQL</label>
-            <textarea v-model="draft.content" rows="3" placeholder="要推送的内容，或用于查询的 JQL" />
-          </div>
+          <template v-if="draft.taskKind === 'push'">
+            <div class="tc-field">
+              <label>推送形态</label>
+              <div class="tc-opts">
+                <button class="tc-opt" :class="{ on: draft.pushMethod === 'message' }" @click="draft.pushMethod = 'message'">
+                  文本消息<small>到点把内容发出去</small>
+                </button>
+                <button class="tc-opt" :class="{ on: draft.pushMethod === 'ai' }" @click="draft.pushMethod = 'ai'">
+                  AI Report<small>按 JQL 拉报表再推送</small>
+                </button>
+              </div>
+            </div>
+            <div v-if="draft.pushMethod === 'ai'" class="tc-field">
+              <label>JQL <span class="req">*</span></label>
+              <textarea v-model="draft.content" rows="3" placeholder="例如：project = MTR AND assignee is EMPTY" />
+            </div>
+            <div v-else class="tc-field">
+              <label>内容</label>
+              <textarea v-model="draft.content" rows="3" placeholder="要推送的内容" />
+            </div>
+            <div v-if="draft.pushMethod === 'ai'" class="tc-field">
+              <label>Team ID</label>
+              <input v-model="draft.teamId" type="text" placeholder="Glip 群组 / Team ID，可空" />
+            </div>
+            <div v-if="draft.pushMethod === 'ai'" class="tc-field">
+              <label>补充说明</label>
+              <input v-model="draft.extraText" type="text" placeholder="可选，附加在报表前面的话" />
+            </div>
+          </template>
 
           <template v-if="draft.taskKind === 'agent'">
             <div class="tc-field">
@@ -197,6 +234,12 @@
                   ✍️ 允许外部写入<small>执行前需你审批</small>
                 </button>
               </div>
+            </div>
+            <div class="tc-field">
+              <label class="ck">
+                <input v-model="draft.successReceipt" type="checkbox" />
+                成功时也私发回执给我（失败回执始终开启）
+              </label>
             </div>
           </template>
 
@@ -230,14 +273,72 @@
             </div>
           </template>
 
+          <template v-if="draft.taskKind === 'outreach'">
+            <div class="tc-field">
+              <label>要问的问题 <span class="req">*</span></label>
+              <textarea v-model="draft.content" rows="3" placeholder="问对方什么" />
+            </div>
+            <div class="tc-field">
+              <label>询问对象</label>
+              <input v-model="draft.outreachTargetRef" type="text" placeholder="人名、邮箱或 Glip 用户" />
+            </div>
+          </template>
+
+          <div v-if="showsNotifyChannel" class="tc-field">
+            <label>通知通道</label>
+            <div class="tc-opts">
+              <button class="tc-opt" :class="{ on: draft.notifyVia === 'plugin' }" @click="draft.notifyVia = 'plugin'">
+                🔔 插件通知<small>Chrome 通知 · 零配置</small>
+              </button>
+              <button
+                class="tc-opt"
+                :class="{ on: draft.notifyVia === 'bot', off: !botConfigured }"
+                :disabled="!botConfigured"
+                @click="botConfigured && (draft.notifyVia = 'bot')"
+              >
+                🤖 Glip Bot 私发<small>{{ botConfigured ? 'SM AI 机器人' : '需 Level 1 · Bot' }}</small>
+              </button>
+              <button
+                class="tc-opt"
+                :class="{ on: draft.notifyVia === 'asme', off: !asmeConfigured }"
+                :disabled="!asmeConfigured"
+                @click="asmeConfigured && (draft.notifyVia = 'asme')"
+              >
+                👤 AsMe 本人身份<small>{{ asmeConfigured ? '与追问共用凭据' : '需 Level 1 · AsMe' }}</small>
+              </button>
+              <button
+                class="tc-opt"
+                :class="{ on: draft.notifyVia === 'group', off: !botConfigured }"
+                :disabled="!botConfigured"
+                @click="botConfigured && (draft.notifyVia = 'group')"
+              >
+                👥 Glip 群组<small>{{ botConfigured ? '需 Bot 在群' : '需 Level 1 · Bot' }}</small>
+              </button>
+            </div>
+            <div v-if="!botConfigured && !asmeConfigured" class="tc-lane-note blocked">
+              Glip 通道需要 Level 1（Bot 或 AsMe）。点右上「能力」去配置。
+            </div>
+          </div>
+          <div v-if="draft.notifyVia === 'group'" class="tc-field">
+            <label>群组 ID</label>
+            <input v-model="draft.targetGroupId" type="text" placeholder="例如 164506140678" />
+          </div>
+          <div v-if="draft.taskKind === 'agent' && draft.notifyVia !== 'group'" class="tc-field">
+            <label>结果通知群组</label>
+            <input v-model="draft.targetGroupId" type="text" placeholder="群组 ID，留空则仅回执" />
+          </div>
+
           <div v-if="draft.taskKind === 'push' || draft.taskKind === 'agent'" class="tc-field">
             <label>重复规则</label>
-            <select v-model="draft.repeat">
-              <option value="once">一次性</option>
-              <option value="daily">每天</option>
-              <option value="weekly">每周</option>
-              <option value="monthly">每月</option>
-            </select>
+            <div class="tc-inline">
+              <select v-model="draft.repeat">
+                <option value="once">一次性</option>
+                <option value="daily">每天</option>
+                <option value="weekly">每周</option>
+                <option value="monthly">每月</option>
+              </select>
+              <input v-model="draft.time" type="text" placeholder="HH:mm" />
+            </div>
           </div>
 
           <div class="tc-field">
@@ -306,6 +407,7 @@ const laneSelectableKinds = ref<TaskKind[]>(['push', 'agent']);
  */
 const cloudLaneAvailable = ref(false);
 const botConfigured = ref(false);
+const asmeConfigured = ref(false);
 
 const draft = ref({
   taskKind: 'push' as TaskKind,
@@ -314,8 +416,16 @@ const draft = ref({
   acceptance: '',
   mode: 'read' as 'read' | 'write',
   repeat: 'once',
+  time: '09:00',
   remindPreset: '今晚 19:00',
   lane: undefined as TaskLane | undefined,
+  pushMethod: 'message' as 'message' | 'ai',
+  notifyVia: 'plugin' as 'plugin' | 'bot' | 'asme' | 'group',
+  targetGroupId: '',
+  successReceipt: true,
+  teamId: '',
+  extraText: '',
+  outreachTargetRef: '',
 });
 
 const remindPresets = [
@@ -328,16 +438,18 @@ const remindPresets = [
 const KIND_LABELS: Record<TaskKind, string> = {
   push: '定时推送',
   agent: 'Agent 任务',
-  remind: '稍后提醒',
+  remind: '提醒我',
   dev: '开发委派',
   reflection: '反思候选',
+  outreach: '帮我问',
 };
 
 const createKindOptions: Array<{ value: TaskKind; label: string; hint: string }> = [
   { value: 'push', label: '⏰ 定时推送', hint: '定时把消息 / 报表推送出去' },
   { value: 'agent', label: '🤖 Agent 任务', hint: '让 agent 定期执行外部操作' },
-  { value: 'remind', label: '⏳ 稍后提醒', hint: '到点提醒我自己' },
+  { value: 'remind', label: '⏳ 提醒我', hint: '到点提醒我自己' },
   { value: 'dev', label: '🛠 开发委派', hint: '定稿的开发 / 调研工作单' },
+  { value: 'outreach', label: '📣 帮我问', hint: '向同事发起主动询问' },
 ];
 
 /**
@@ -348,6 +460,9 @@ const createKindOptions: Array<{ value: TaskKind; label: string; hint: string }>
  */
 function openScheduledMessages(hash = '') {
   window.open(chrome.runtime.getURL(`scheduled-messages.html${hash}`), '_blank');
+}
+function openOptionsOutreach() {
+  window.open(chrome.runtime.getURL('options.html#outreach-config'), '_blank');
 }
 
 const levels = computed(() => [
@@ -364,18 +479,12 @@ const levels = computed(() => [
     key: 'l1',
     shortLabel: 'L1 推送',
     label: 'L1 推送通道',
-    active: botConfigured.value,
-    detail: botConfigured.value
-      ? 'Glip Bot 已配置，通知可发到私信或群组。'
-      : '未配置 Bot，通知目前只走插件通知（Chrome 通知）。',
-    unlocks: 'Glip Bot 私发 / 群组作为通知目标',
-    action: botConfigured.value
-      ? null
-      : {
-          label: '去配置 Bot',
-          hint: '在定时消息页填写 SM AI Bot 凭据',
-          run: () => openScheduledMessages(),
-        },
+    active: botConfigured.value || asmeConfigured.value,
+    detail: botConfigured.value || asmeConfigured.value
+      ? '已配置至少一条 Glip 通道。Bot 与 AsMe 相互独立，配任一即部分解锁。'
+      : '未配置 Bot 或 AsMe，通知目前只走插件通知（Chrome 通知）。',
+    unlocks: 'Glip Bot 私发 / 群组、AsMe 本人身份作为通知目标',
+    action: null as null | { label: string; hint: string; run: () => void },
   },
   {
     key: 'l2',
@@ -400,7 +509,7 @@ const allLevelsActive = computed(() => levels.value.every((level) => level.activ
 
 const pageDescription = computed(
   () =>
-    '定时推送、Agent 任务、稍后提醒、开发委派共用一个账本；🏠 由 memory-service 调度，☁️ 由 Jira Automation 云端触发。',
+    '定时推送、Agent 任务、提醒我、开发委派、帮我问共用一个账本；🏠 由 memory-service 调度，☁️ 由 Jira Automation 云端触发。',
 );
 
 const kindChips = computed(() => {
@@ -454,6 +563,9 @@ const emptyMessage = computed(() =>
     : `没有${KIND_LABELS[activeKind.value as TaskKind]}类型的任务。`,
 );
 
+const showsNotifyChannel = computed(
+  () => ['push', 'agent', 'remind', 'outreach'].includes(draft.value.taskKind),
+);
 const cloudSelectable = computed(
   () => cloudLaneAvailable.value && laneSelectableKinds.value.includes(draft.value.taskKind),
 );
@@ -467,6 +579,12 @@ const laneNoteTone = computed(() => {
 });
 const laneNote = computed(() => {
   if (!laneSelectableKinds.value.includes(draft.value.taskKind)) {
+    if (draft.value.taskKind === 'outreach') {
+      return '🔒 帮我问需要主动询问引擎和 RingCentral 凭据，固定由 memory-service 调度';
+    }
+    if (draft.value.taskKind === 'remind') {
+      return '🔒 个人提醒固定本地调度（零云端配置；点掉即完成）';
+    }
     return `🔒 ${KIND_LABELS[draft.value.taskKind]}需要人工节点 / 依赖 / 产物能力，固定由 memory-service 调度`;
   }
   if (effectiveLane.value === 'jira_sheet') {
@@ -487,6 +605,7 @@ const titlePlaceholder = computed(() => {
     case 'agent': return '例如：Nova 缺少 Assignee 的 INIT';
     case 'remind': return '提醒我做什么';
     case 'dev': return '一个明确方向的工作单';
+    case 'outreach': return '例如：问 Kenny recall API 分页怎么改';
     default: return '例如：每天检查无 Assignee 的新 bug';
   }
 });
@@ -494,6 +613,10 @@ const titlePlaceholder = computed(() => {
 const canSave = computed(() => {
   if (!draft.value.title.trim()) return false;
   if (draft.value.taskKind === 'agent' && !draft.value.content.trim()) return false;
+  if (draft.value.taskKind === 'outreach' && !draft.value.content.trim()) return false;
+  if (draft.value.taskKind === 'push' && draft.value.pushMethod === 'ai' && !draft.value.content.trim()) {
+    return false;
+  }
   // Borrowed from the industry consensus on delegation: a work order without a
   // verifiable finish line belongs in a conversation, not in the ledger.
   if (draft.value.taskKind === 'dev' && !draft.value.acceptance.trim()) return false;
@@ -547,6 +670,7 @@ function select(task: TaskCenterTask) {
   selectedId.value = task.id;
 }
 function openCreate() {
+  const nowDate = new Date();
   draft.value = {
     taskKind: 'push',
     title: '',
@@ -554,8 +678,16 @@ function openCreate() {
     acceptance: '',
     mode: 'read',
     repeat: 'once',
+    time: `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`,
     remindPreset: '今晚 19:00',
     lane: undefined,
+    pushMethod: 'message',
+    notifyVia: botConfigured.value ? 'bot' : asmeConfigured.value ? 'asme' : 'plugin',
+    targetGroupId: '',
+    successReceipt: true,
+    teamId: '',
+    extraText: '',
+    outreachTargetRef: '',
   };
   createOpen.value = true;
 }
@@ -569,11 +701,79 @@ function buildRecurrence(): Record<string, unknown> | undefined {
   const unit = { daily: 'Day', weekly: 'Week', monthly: 'Month' }[draft.value.repeat];
   if (!unit) return undefined;
   const nowDate = new Date();
+  const time = /^\d{1,2}:\d{2}$/.test(draft.value.time)
+    ? draft.value.time
+    : `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`;
   return {
     repeatEvery: 1,
     repeatUnit: unit,
     scheduleDate: nowDate.toISOString().slice(0, 10),
-    scheduleTime: `${String(nowDate.getHours()).padStart(2, '0')}:${String(nowDate.getMinutes()).padStart(2, '0')}`,
+    scheduleTime: time,
+  };
+}
+
+function resolveRemindAtMs(preset: string): number {
+  const nowDate = new Date();
+  if (preset === '1 小时后') return nowDate.getTime() + 3600_000;
+  const at = (hours: number, minutes: number, addDays: number) => {
+    const t = new Date(nowDate);
+    t.setDate(t.getDate() + addDays);
+    t.setHours(hours, minutes, 0, 0);
+    return t.getTime();
+  };
+  if (preset === '今晚 19:00') {
+    const t = at(19, 0, 0);
+    return t > nowDate.getTime() ? t : at(19, 0, 1);
+  }
+  if (preset === '明早 9:00') return at(9, 0, 1);
+  if (preset === '下周一 9:00') {
+    const day = nowDate.getDay();
+    const daysUntilMon = ((1 - day + 7) % 7) || 7;
+    return at(9, 0, daysUntilMon);
+  }
+  return nowDate.getTime() + 3600_000;
+}
+
+function resolveScheduledAt(): number {
+  if (draft.value.taskKind === 'remind') {
+    return Math.floor(resolveRemindAtMs(draft.value.remindPreset) / 1000);
+  }
+  const match = draft.value.time.match(/^(\d{1,2}):(\d{2})$/);
+  if (match && (draft.value.taskKind === 'push' || draft.value.taskKind === 'agent')) {
+    const nowDate = new Date();
+    const t = new Date(nowDate);
+    t.setHours(Number(match[1]), Number(match[2]), 0, 0);
+    if (t.getTime() <= nowDate.getTime()) t.setDate(t.getDate() + 1);
+    return Math.floor(t.getTime() / 1000);
+  }
+  return Math.floor(Date.now() / 1000);
+}
+
+function notifyPayload() {
+  const via = draft.value.notifyVia;
+  if (via === 'group') {
+    return {
+      notifyVia: 'bot' as const,
+      channel: 'bot',
+      notifyTarget: draft.value.targetGroupId.trim()
+        ? { type: 'group' as const, targetGroupId: draft.value.targetGroupId.trim() }
+        : undefined,
+    };
+  }
+  if (via === 'bot' || via === 'asme') {
+    const groupId = draft.value.targetGroupId.trim();
+    return {
+      notifyVia: via,
+      channel: via,
+      notifyTarget: groupId
+        ? { type: 'group' as const, targetGroupId: groupId }
+        : undefined,
+    };
+  }
+  return {
+    notifyVia: 'plugin' as const,
+    channel: 'plugin',
+    notifyTarget: undefined as undefined,
   };
 }
 
@@ -581,6 +781,7 @@ async function saveTask() {
   if (!canSave.value) return;
   saving.value = true;
   try {
+    const notify = notifyPayload();
     const response = await client.createTaskCenterTask({
       taskKind: draft.value.taskKind,
       title: draft.value.title.trim(),
@@ -589,12 +790,24 @@ async function saveTask() {
       cloudLaneAvailable: cloudLaneAvailable.value,
       // write-mode agent work and dev delegations stop for a human first.
       requiresApproval: draft.value.taskKind === 'dev' || draft.value.mode === 'write',
+      scheduledAt: resolveScheduledAt(),
       recurrenceSpec: buildRecurrence(),
       payload: {
         content: draft.value.content.trim() || undefined,
         acceptance: draft.value.acceptance.trim() || undefined,
         mode: draft.value.taskKind === 'agent' ? draft.value.mode : undefined,
         remindPreset: draft.value.taskKind === 'remind' ? draft.value.remindPreset : undefined,
+        pushMethod: draft.value.taskKind === 'push' ? draft.value.pushMethod : undefined,
+        task: draft.value.taskKind === 'agent' || draft.value.taskKind === 'outreach'
+          ? draft.value.content.trim()
+          : undefined,
+        question: draft.value.taskKind === 'outreach' ? draft.value.content.trim() : undefined,
+        targetType: draft.value.taskKind === 'outreach' ? 'person' : undefined,
+        targetRef: draft.value.taskKind === 'outreach' ? draft.value.outreachTargetRef.trim() : undefined,
+        teamId: draft.value.teamId.trim() || undefined,
+        extraText: draft.value.extraText.trim() || undefined,
+        successReceipt: draft.value.successReceipt,
+        ...notify,
       },
     });
     createOpen.value = false;
@@ -624,15 +837,22 @@ async function sweep() {
 
 async function detectLevels() {
   try {
-    const stored = await chrome.storage.local.get(['scheduledMessagesConfig', 'botConfig']);
+    const [stored, runtime] = await Promise.all([
+      chrome.storage.local.get(['scheduledMessagesConfig', 'botConfig']),
+      client.getRuntimeConfig().catch(() => null),
+    ]);
     const config = stored?.scheduledMessagesConfig;
     // Level 2 means the whole cloud chain exists: a Sheet to mirror into and a
     // deployed script for Jira Automation to reach.
     cloudLaneAvailable.value = Boolean(config?.spreadsheetId && config?.webAppUrl);
     botConfigured.value = Boolean(stored?.botConfig?.botId || config?.botId);
+    asmeConfigured.value = Boolean(
+      runtime?.ringCentralJwtConfigured && runtime?.ringCentralClientId,
+    );
   } catch {
     cloudLaneAvailable.value = false;
     botConfigured.value = false;
+    asmeConfigured.value = false;
   }
 }
 
@@ -725,6 +945,14 @@ onUnmounted(() => {
 .setup-unlocks span { color: var(--tc-green); margin-right: 0.35rem; }
 .setup-actions { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; margin-top: 0.45rem; }
 .setup-actions small { font-size: 0.68rem; color: var(--tc-dim); }
+.setup-channels { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.45rem; }
+.setup-channel { display: flex; align-items: center; gap: 0.5rem; font-size: 0.74rem; color: var(--tc-muted); }
+.setup-channel.on { color: var(--tc-green); }
+.setup-channel strong { font-size: 0.74rem; }
+.tc-btn.sm { padding: 0.2rem 0.65rem; font-size: 0.68rem; }
+.ck { display: flex; align-items: center; gap: 0.45rem; font-size: 0.76rem; color: #cbd5e1; cursor: pointer; font-weight: 400 !important; }
+.tc-inline { display: flex; gap: 0.6rem; }
+.tc-inline select, .tc-inline input { flex: 1; }
 .setup-note { font-size: 0.7rem; color: var(--tc-amber); background: rgba(245, 158, 11, 0.08); border-radius: 6px; padding: 0.5rem 0.65rem; margin-top: 0.6rem; }
 
 .chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
@@ -755,7 +983,7 @@ onUnmounted(() => {
 .tc-kind.agent { background: rgba(147, 51, 234, 0.2); color: var(--tc-purple); }
 .tc-kind.remind { background: rgba(34, 197, 94, 0.16); color: var(--tc-green); }
 .tc-kind.dev { background: rgba(34, 211, 238, 0.12); color: var(--tc-cyan); }
-.tc-kind.reflection { background: rgba(147, 51, 234, 0.18); color: var(--tc-purple); }
+.tc-kind.outreach { background: rgba(251, 191, 36, 0.16); color: var(--tc-amber); }
 
 .tc-status { font-size: 0.62rem; padding: 0.08rem 0.5rem; border-radius: 999px; font-weight: 600; flex-shrink: 0; }
 .tc-status.ok { background: rgba(34, 197, 94, 0.16); color: var(--tc-green); }
