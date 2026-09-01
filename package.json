@@ -83,6 +83,7 @@
     "verify:quick-ask:e2e": "npm --prefix desktop-app run test:quick-ask-resume && npm --prefix desktop-app run test:quick-ask-status-card",
     "verify:context-assist-meeting-prep": "node tools/verify-context-assist-meeting-prep.mjs",
     "verify:ringcentral-native-join:e2e": "node tools/verify-ringcentral-native-join-e2e.mjs",
+    "verify:ringcentral-native-join-glip-click": "node tools/verify-ringcentral-native-join-glip-click.mjs",
     "verify:relationship-radar": "npm --prefix memory-service test -- --run src/__tests__/api-relationships.test.ts src/__tests__/migration-relationship-radar-compat.test.ts",
     "verify:relationship-radar:e2e": "node tools/verify-relationship-radar-e2e.mjs",
     "verify:project-dashboard": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-project-dashboard.ts",

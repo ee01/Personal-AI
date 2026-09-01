@@ -1300,6 +1300,25 @@ const GLIP_RINGCENTRAL_VIDEO_JOIN_CONTEXT_SELECTOR = [
   '.conversation-card-wrapper[data-id]',
 ].join(', ');
 
+// A conversation whose name merely contains "join" (for example "Room Smart
+// Join - QR Code") must not be treated as a join control, so the label has to
+// read as the action itself rather than just mention it somewhere.
+const GLIP_RINGCENTRAL_VIDEO_JOIN_ACTION_LABEL_PATTERN = /^join\b/i;
+const GLIP_RINGCENTRAL_VIDEO_JOIN_ACTION_LABEL_MAX_LENGTH = 40;
+
+function isRingCentralVideoJoinActionLabel(
+  value: string | null | undefined,
+): boolean {
+  const label = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (
+    label.length > 0 &&
+    label.length <= GLIP_RINGCENTRAL_VIDEO_JOIN_ACTION_LABEL_MAX_LENGTH &&
+    GLIP_RINGCENTRAL_VIDEO_JOIN_ACTION_LABEL_PATTERN.test(label)
+  );
+}
+
 function getRingCentralVideoJoinTargetFromValue(
   value: unknown,
 ): RingCentralVideoJoinTarget | null {
@@ -1330,16 +1349,23 @@ function findRingCentralVideoJoinTargetInElement(
     }
   }
 
-  const joinAnchor = element.querySelector<HTMLAnchorElement>(
-    GLIP_RINGCENTRAL_VIDEO_JOIN_LINK_SELECTOR,
+  const anchorTargets = Array.from(
+    element.querySelectorAll<HTMLAnchorElement>(
+      GLIP_RINGCENTRAL_VIDEO_JOIN_LINK_SELECTOR,
+    ),
+  )
+    .map((anchor) => getRingCentralVideoJoinTargetFromValue(anchor.href))
+    .filter((target): target is RingCentralVideoJoinTarget => Boolean(target));
+  const distinctMeetingIds = new Set(
+    anchorTargets.map((target) => target.meetingId),
   );
-  if (joinAnchor?.href) {
-    const anchorTarget = getRingCentralVideoJoinTargetFromValue(
-      joinAnchor.href,
-    );
-    if (anchorTarget) {
-      return anchorTarget;
-    }
+  if (distinctMeetingIds.size > 1) {
+    // Several meetings live under this root, so no single one can be attributed
+    // to the click. Let RingCentral handle it instead of guessing.
+    return null;
+  }
+  if (anchorTargets.length > 0) {
+    return anchorTargets[0];
   }
 
   for (const attribute of Array.from(element.attributes || [])) {
@@ -1362,8 +1388,13 @@ function findRingCentralVideoNativeJoinTarget(
     return null;
   }
 
+  // Only the anchor's own href counts. Scanning its subtree or text would let a
+  // plain navigation link (such as a conversation in the sidebar) be replaced
+  // by a meeting mentioned inside it.
   const anchor = findClickedAnchor(event);
-  const anchorTarget = findRingCentralVideoJoinTargetInElement(anchor);
+  const anchorTarget = anchor
+    ? getRingCentralVideoJoinTargetFromValue(anchor.href)
+    : null;
   if (anchorTarget) {
     return anchorTarget;
   }
@@ -1375,31 +1406,24 @@ function findRingCentralVideoNativeJoinTarget(
     return null;
   }
 
-  const label = [
+  const isJoinAction = [
     trigger.getAttribute('aria-label'),
     trigger.getAttribute('title'),
     trigger.textContent,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!/\bjoin\b/i.test(label)) {
+  ].some(isRingCentralVideoJoinActionLabel);
+  if (!isJoinAction) {
     return null;
   }
 
+  // Only the trigger and its own meeting card may supply the meeting. Walking
+  // further up reaches ancestors shared with the open conversation, which is
+  // how a click could pick up a meeting link from an unrelated thread.
   const roots = new Set<Element>([trigger]);
   const contextRoot = trigger.closest<HTMLElement>(
     GLIP_RINGCENTRAL_VIDEO_JOIN_CONTEXT_SELECTOR,
   );
   if (contextRoot) {
     roots.add(contextRoot);
-  }
-
-  let current = trigger.parentElement;
-  while (current && current !== document.body && roots.size < 5) {
-    roots.add(current);
-    current = current.parentElement;
   }
 
   for (const root of roots) {

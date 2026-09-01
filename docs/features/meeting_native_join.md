@@ -1,6 +1,6 @@
 # RingCentral Native Join
 
-_最后更新: 2026-07-14_
+_最后更新: 2026-09-01_
 
 ## 是什么
 
@@ -37,11 +37,12 @@ _最后更新: 2026-07-14_
 8. 链接隐私：完整浏览器链接可能带有 passcode 或其他 query/hash，默认不在浮层正文里展示，但恢复按钮和复制动作必须保留这些参数。
 9. 手动恢复：`Copy link` 成功时必须说明复制的是完整恢复链接且不代表已入会或改默认路径；如果剪贴板写入失败，当前操作已经越过“默认隐藏完整链接”的安全展示层，系统会临时展开完整链接并提醒复制后再隐藏，保证恢复链接仍可用。
 10. 外层跳转包装：只解包常见 redirect 参数；外层域名本身不被当作可信会议来源，解出的目标仍必须是 `v.ringcentral.com` 的安全会议路径。
-11. 手动 App 加会：兜底浮层会展示并可复制已校验的 Meeting ID；如果完整链接里有常见 passcode 参数，也会显示隐藏值的 `Copy passcode`。两者都只是手动输入材料，不会自动加入会议，不会复制完整 URL，也不会改默认路径。原链接带隐藏参数时，完整恢复材料仍走 `Join in browser` / `Copy link` / `Show full link`。
-12. 视窗可达性：恢复面板内容多于可视高度时只让面板内部滚动，不把 `Join in browser`、`Copy link`、`Copy ID` 或默认路径切换挤出屏幕。
-13. 误关恢复：关闭浮层只隐藏完整恢复面板，不证明 app 已接管；短暂恢复条保留 `Restore recovery`，关闭和恢复按钮本身会说明不会自动重试 app、打开浏览器、复制材料、确认入会或改变默认路径。
-14. 浏览器兜底请求：`Join in browser` 成功打开新窗口后，原页只显示短暂请求回执；按钮 hover / 读屏文案会在点击前说明这是新的浏览器窗口请求，不等于确认已进入会议，也不会重试 app、复制链接或改变默认路径。用户从该回执恢复 recovery 面板时，面板要保留“浏览器请求仍未确认”的来源口径，而不是复用“隐藏后恢复”的文案。
-15. 默认路径回执：保存 `Use browser by default` / `Use app by default` 或保存失败时，界面要把这次操作明确成未来偏好写入；它不改变当前会议的 handoff 事实，也不自动触发入会、app retry、浏览器窗口、复制或恢复控件移除。
+11. 点击归属：会议必须来自用户点到的那个入口本身，不能从页面别处「漂移」过来。判定分三层：点到 `<a>` 时只认这个链接自己的 `href`，不扫描它内部的文字或子链接；点到按钮类元素时，它的 `aria-label` / `title` / 文本必须读起来就是加会动作（以 `join` 开头且长度有限），仅仅名字里含 `join` 的会话（例如 `Room Smart Join - QR Code`）不算；确认是加会控件后，只在这个控件和它自己的会议卡片内找链接，不再向上遍历共同祖先。如果同一范围里出现多个不同 meetingId，视为无法归属，直接放行 RingCentral 原生点击。
+12. 手动 App 加会：兜底浮层会展示并可复制已校验的 Meeting ID；如果完整链接里有常见 passcode 参数，也会显示隐藏值的 `Copy passcode`。两者都只是手动输入材料，不会自动加入会议，不会复制完整 URL，也不会改默认路径。原链接带隐藏参数时，完整恢复材料仍走 `Join in browser` / `Copy link` / `Show full link`。
+13. 视窗可达性：恢复面板内容多于可视高度时只让面板内部滚动，不把 `Join in browser`、`Copy link`、`Copy ID` 或默认路径切换挤出屏幕。
+14. 误关恢复：关闭浮层只隐藏完整恢复面板，不证明 app 已接管；短暂恢复条保留 `Restore recovery`，关闭和恢复按钮本身会说明不会自动重试 app、打开浏览器、复制材料、确认入会或改变默认路径。
+15. 浏览器兜底请求：`Join in browser` 成功打开新窗口后，原页只显示短暂请求回执；按钮 hover / 读屏文案会在点击前说明这是新的浏览器窗口请求，不等于确认已进入会议，也不会重试 app、复制链接或改变默认路径。用户从该回执恢复 recovery 面板时，面板要保留“浏览器请求仍未确认”的来源口径，而不是复用“隐藏后恢复”的文案。
+16. 默认路径回执：保存 `Use browser by default` / `Use app by default` 或保存失败时，界面要把这次操作明确成未来偏好写入；它不改变当前会议的 handoff 事实，也不自动触发入会、app retry、浏览器窗口、复制或恢复控件移除。
 
 ## 开关
 
@@ -71,6 +72,12 @@ _最后更新: 2026-07-14_
 - Native scheme 触发使用当前用户点击链路中的临时顶层链接，不依赖 iframe 发起外部协议导航。
 - 解析层只接受 `https://v.ringcentral.com/...`、`http://v.ringcentral.com/...` 和规范化后的 `rcvdt://join/:meetingId`；`http` 入口会在浏览器兜底里升级为 `https`，`/join`、`/launcher` 和 `/conf/on` 输入都会归一到直接浏览器会场 `https://v.ringcentral.com/conf/on/:meetingId`，其他 scheme 即使 host 看起来正确也不会被转换。meetingId 只允许短的安全字母、数字、`-`、`_` 片段，native scheme 也必须只有一个 meetingId path 片段，避免异常 path 被原样透传给 app 重试。提取逻辑会兼容 DOM/JSON 里常见的转义斜杠、`\u003f` / `\u003d` / `\u0026` 标点转义、百分号编码 URL，以及 Google / Outlook / 安全扫描器常见 redirect 参数里的内层会议链接；解包后仍统一回到可信 host 校验。
 
+## 验证
+
+- `npm run verify:ringcentral-native-join-glip-click`：用 Playwright 加载 `dist/contentScriptGlip.js`，在一个「左侧会话列表 + 当前会话」共享祖先的 fixture 上验证点击归属。它断言点名字含 `join` 的会话不会触发 app handoff 且能正常导航，同时会话里贴的会议链接和会议卡片上的 `Join` 按钮各自仍然交给正确的 meetingId。
+- `npm run verify:ringcentral-native-join:e2e`：Video Home 的 `Join` 按钮与兜底浮层 E2E。
+- 两个脚本都读 `dist/`，跑之前先用 `npm start` 编译一次。
+
 ## 产品参考
 
 - RingCentral、Teams 和 Zoom 都把浏览器加入作为无下载或失败恢复路径呈现；本功能保持 native 优先，同时把 Web fallback 做成短暂可见但可恢复的入口：已离开浏览器时自动收起，仍停在原页面时保留恢复按钮，并用交接回执说明当前只是“尝试打开 app”，避免 external-protocol 被取消或没有安装 app 时用户被卡住。Teams / Zoom 这类入会页也会把 app 打开和浏览器加入作为可重复选择的恢复路径；Teams 还保留 Meeting ID + passcode 的手动加入路径，因此本功能补了只复制 Meeting ID 的恢复动作，并在完整链接含常见 passcode 参数时补一个隐藏值的 `Copy passcode`，但仍不把 passcode 默认展示出来。2026-07-01 再核对 RingCentral browser join、Zoom browser join、Teams `Continue on this browser` / Meeting ID fallback、USENIX deep-link hijacking 论文和 Android deep-link 安全建议后，关闭恢复面板也不能被当成“已成功加会”：UI 应保留一个轻量恢复条，同时继续把 custom scheme handoff 视为未确认执行。
@@ -93,3 +100,4 @@ _最后更新: 2026-07-14_
 - 扩展只能拦截 Web 页面 DOM / React 里的入口；如果 RingCentral native app 或系统级弹窗本身不是 Web 页面，Chrome extension 无法注入拦截。
 - RingCentral PWA / 独立来电弹窗中的 `Answer` 不在当前支持范围内，保留 RingCentral 原始行为。
 - 找不到可验证会议链接时，扩展不会阻止 RingCentral Web 的默认点击行为。
+- 拦截范围只覆盖用户点到的入口自身及其会议卡片。左侧会话列表、导航项这类只是名字里带 `join` 的元素不会被当成加会控件，点击它们仍然正常打开会话；页面上别处（包括当前打开的会话）出现的会议链接也不会被算到这次点击头上。

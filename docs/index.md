@@ -219,7 +219,7 @@
 | 会议历史归档 | Meeting Pilot | [meeting_pilot.md](./features/meeting_pilot.md) | `MeetingHistoryPage.vue`，读取失败/加载更多失败有回执；卡片展示 Panorama/PDF 打开范围，按钮 hover/读屏也标明只读、外链安全与禁用边界 |
 | 分层 ASR | Meeting Pilot | [meeting_pilot.md](./features/meeting_pilot.md) | RC Transcript / Web Speech / desktop local / cloud；Speech 面板显示平台转写与上传边界 |
 | Desktop Local ASR / Whisper fallback | Meeting Pilot | [meeting_pilot.md](./features/meeting_pilot.md) | desktop app local ASR chain；Whisper final fallback；Speech 面板显示本地流重试、切层和回执卡只读边界 |
-| NC 加会 | Native Join | [meeting_native_join.md](./features/meeting_native_join.md) | Web meeting 链接转 native app |
+| NC 加会 | Native Join | [meeting_native_join.md](./features/meeting_native_join.md) | Web meeting 链接转 native app；只认用户点到的入口自身及其会议卡片，名字含 join 的会话不会被劫持 |
 | NC 加会浏览器回退 | Native Join | [meeting_native_join.md](./features/meeting_native_join.md) | Video Home Join 按钮点击前说明 app-first / Chrome 提示 / 浏览器恢复边界；默认浏览器、复制完整链接、Meeting ID/passcode 手动恢复、默认路径回执、规范化 app 重试和 fallback UI |
 | Google Slides 项目分析器 | Google Slides Analyzer | [google_slides_analyzer.md](./features/google_slides_analyzer.md) | Slides 分析与建议，含工具栏入口、范围判定和字段选择控制点回执 |
 | Slides 写回预览 | Google Slides Analyzer | [google_slides_analyzer.md](./features/google_slides_analyzer.md) | 字段证据、风险提示、提交中锁定与按钮级写回边界 |
