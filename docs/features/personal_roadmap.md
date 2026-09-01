@@ -53,7 +53,7 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 
 `resolve_item` 不校验版本，是因为发它的时候 Jira issue 已经真的建出来了：用户在创建期间拖一下 bar 就让回填失败的话，key 会永久丢失。`resolve_item` 与 `resolve_draft` 都是幂等的——重复写同一个 mapping 不会二次 bump version，也不会写第二条 activity（创建弹窗与扩展会各写一次子任务 mapping）。
 
-**回填顺带把草稿名固化成备注名**：两者都会 `alias = COALESCE(alias, title)`——只在 `alias` 还没被用户手动设过时才写。原因是 `refresh_from_jira` 只覆盖 `title`（镶入真实 Jira summary），从不动 `alias`；Agent 模式创建时系统 Prompt 明确允许改写 summary（见下），若不固化，用户手打的草稿名会在创建后第一次静默刷新时被换成 Agent 生成的措辞。固化后甘特上展示的名字（`alias || title`）在创建、Agent 改写、后续刷新之间保持不变，hover 才看到正式 summary。备注名换行渲染（`GanttRow.vue` 的 `wrapMode`/`free-h`）只对 ≤40 字符的 alias 生效（`shouldWrapAlias`，`useRoadmapContract.ts`）——固化进来的英文草稿名通常很长，走单行省略而不是把 bar 撑高。
+**回填顺带把草稿名固化成备注名**：两者都会 `alias = COALESCE(alias, title)`——只在 `alias` 还没被用户手动设过时才写。原因是 `refresh_from_jira` 只覆盖 `title`（镶入真实 Jira summary），从不动 `alias`；Agent 模式创建时系统 Prompt 明确允许改写 summary（见下），若不固化，用户手打的草稿名会在创建后第一次静默刷新时被换成 Agent 生成的措辞。固化后甘特上展示的名字（`alias || title`）在创建、Agent 改写、后续刷新之间保持不变，hover 才看到正式 summary。备注名换行渲染（`GanttRow.vue` 的 `wrapMode`/`free-h`）只对 ≤40 字符的 alias 生效（`shouldWrapAlias`，`useRoadmapContract.ts`）——固化进来的英文草稿名通常很长，走单行省略而不是把 bar 撑高。双击已创建条进入备注名编辑时，hint 写「清空回车＝恢复原 ticket 名」；清空后回车会 toast「备注名已清除，恢复展示原 ticket 名」。
 
 ### Backlog 排序：新建的排最前面
 
@@ -104,6 +104,7 @@ Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同�
 - Prompt 草稿按团队写入本机 `localStorage`（`personalroadmap.aiPrompt:<teamId>`）；关闭弹窗再打开会恢复
 - 用户**执行创建**且 Prompt 非空时，写入团队配置 `team.createJiraPrompt`，其他协作者打开弹窗（本机无草稿时）也能看到
 - 执行器选择写入 `localStorage`（`personalroadmap.aiExecutor`）
+- Agent 模式逐行成功时显示紫色 chip「草稿名已存为备注」（hover 说明甘特展示名不变）；完成 toast 追加「草稿名已保留为备注名」
 
 ### fixVersion 自动填
 
@@ -197,7 +198,7 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 | 双指上下滑动 | wheel 落在 `.g-header` / `.g-relruler`（时间标尺）上，且 `|deltaY| > |deltaX|` | 同样触发缩放；标尺没有纵向内容，纵向滑动无歧义。横向滑动仍是平移，不拦截 |
 | 双击标尺 | — | 非 100% → 复位默认；已是 100% → 缩到刚好容纳整条时间轴（`clientWidth / tl.days`） |
 
-连续 wheel 事件按 16ms 合帧成一次缩放，避免每帧都重算几何。缩放级别按 `roadmap.zoom.<teamId>` 存 `localStorage`，只影响本人视图、下次打开恢复；右上角浮出「缩放 143% · 视野约 3.1 个月」提示，900ms 后淡出。人员视图是百分比布局，不受 `DAY_W` 影响。
+连续 wheel 事件按 16ms 合帧成一次缩放，避免每帧都重算几何。缩放级别按 `roadmap.zoom.<teamId>` 存 `localStorage`，只影响本人视图、下次打开恢复；右上角浮出「缩放 **143%** · 视野约 3.1 个月」提示（百分比用橙色强调），900ms 后淡出。人员视图是百分比布局，不受 `DAY_W` 影响。缩放监听挂在滚动容器上且 `passive: false`，才能拦住触控板捏合的默认页面缩放。
 
 ### 两阶段回写（直连路径）
 
@@ -431,7 +432,7 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 - 「其余延至下周 →」：把**该成员未选中、开始日在下周一之前、尚未结束、未完成**的任务（已开始未做完的算，已结束的历史记录不算，下周及以后的远任务不算，已完成的不算）统一延到下周一开始，**长度不变**
 - hover 该按钮会在每条待顺延任务的落点位置画虚线「影子」预览，钳制到 Epic 结束日的会标注「未到下周一（Epic 限制）」
-- 执行后 toast 汇总移动/受限/顶死的数量；再点一次是幂等的（已经落在下周一的不会继续被推）
+- 执行后任务条以 0.35s 滑到新 left（`.res-bar.slide`，与 demo 相同曲线）；toast 汇总移动/受限/顶死的数量；再点一次是幂等的（已经落在下周一的不会继续被推）
 - Esc、点击空白处、切团队或切「近 2 周 / 全部」都会退出聚焦
 
 **按钮三态**（`goState()`，`ResourceView.vue`）：`ready`（有可移动的候选，正常橙色，可点）/ `stuck`（有候选但全部顶到所属 Epic 结束日，没有可后移的空间——按钮变灰但**不用** `disabled`，因为 `pointer-events:none` 会连 hover 提示一起吞掉，用户无法知道为什么点不动；改用 `.soft` 类保持可点/可 hover，hover 提示与点击 toast 都明确给出原因）/ `none`（没有候选：其余任务都已完成或都不在可顺延范围内）。

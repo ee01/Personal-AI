@@ -253,7 +253,10 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .res-gridline{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
 .res-gridline.today{width:2px;background:var(--danger);opacity:.55}
 .res-bar{position:absolute;height:22px;border-radius:6px;display:flex;align-items:center;
-  overflow:hidden;cursor:default;transition:filter .13s,opacity .15s,box-shadow .13s,transform .13s}
+  overflow:hidden;cursor:pointer;transition:filter .13s,opacity .15s,box-shadow .13s,transform .13s}
+/* 顺延落库后条滑到新 left：只在 .slide 上开 left 过渡，避免时间窗 commit 时整排条跟着漂 */
+.res-bar.slide{transition:filter .13s,opacity .15s,box-shadow .13s,transform .13s,
+  left .35s cubic-bezier(.25,.9,.35,1)}
 .res-bar:hover{filter:brightness(1.05)}
 .res-bar .rb-label{padding:0 8px;font-size:10.5px;font-weight:500;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -288,7 +291,6 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
    candidate、顶到 Epic 结束日的 stuck、已完成的 done）——顺延预告靠 rb-shift 角标
    （→ 下周一 / →钳制日期 / ✕）单独传达，不需要连整条都跟着高亮，压暗但保留色相，
    不整体去色，避免和「过去任务」的灰色混淆 */
-.res-bar{cursor:pointer}
 .res-row.focusing{background:#FFFCF4}
 .res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}
 .res-bar.sel{box-shadow:0 0 0 2px var(--cur-deep),0 3px 12px rgba(255,136,0,.4);
@@ -766,6 +768,9 @@ textarea.f-input.f-desc{min-height:60px;font-family:var(--sans);font-size:12.5px
 .ai-row .t{flex:1;line-height:1.45}
 .ai-row .st{flex:none;width:110px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted)}
 .ai-row .st .newkey{color:#2E8540;font-weight:600;animation:cardPop .3s ease}
+.ai-row .st .alias-kept{display:block;margin-top:2px;font-family:var(--sans);font-size:9.5px;
+  color:#6D4FA3;background:#F3EEFA;border-radius:4px;padding:1px 6px;cursor:default;
+  animation:cardPop .3s ease .1s backwards}
 .asg-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:2px}
 .asg-chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;
   border:1px solid var(--line);border-radius:999px;padding:3px 8px;background:#fff}

@@ -83,7 +83,7 @@ function showZoomHint() {
   const spanTxt = span >= 60 ? `${(span / 30.44).toFixed(1)} 个月` : `${Math.round(span / 7)} 周`;
   zoomHint.value = {
     show: true,
-    text: `缩放 ${Math.round((DAY_W.value / DAY_W_DEFAULT) * 100)}%${w ? ` · 视野约 ${spanTxt}` : ''}`,
+    text: `缩放 <b>${Math.round((DAY_W.value / DAY_W_DEFAULT) * 100)}%</b>${w ? ` · 视野约 ${spanTxt}` : ''}`,
   };
   if (zoomHintTimer) clearTimeout(zoomHintTimer);
   zoomHintTimer = setTimeout(() => {
@@ -937,20 +937,27 @@ async function onImportTasks() {
   }
 }
 
+let gScrollEl: HTMLElement | null = null;
 onMounted(() => {
   window.addEventListener('roadmap-card-drag-start', onCardDragStart);
+  gScrollEl = gScroll.value;
+  gScrollEl?.addEventListener('wheel', onGanttWheel, { passive: false });
 });
 onUnmounted(() => {
   window.removeEventListener('roadmap-card-drag-start', onCardDragStart);
+  gScrollEl?.removeEventListener('wheel', onGanttWheel);
+  gScrollEl = null;
   for (const timer of targetSyncTimers.values()) window.clearTimeout(timer);
   targetSyncTimers.clear();
   if (jiraRefreshTimer) window.clearTimeout(jiraRefreshTimer);
+  if (zoomHintTimer) clearTimeout(zoomHintTimer);
+  if (zoomApplyTimer) clearTimeout(zoomApplyTimer);
 });
 </script>
 
 <template>
   <section class="gantt-panel">
-    <div class="zoom-hint" :class="{ show: zoomHint.show }">{{ zoomHint.text }}</div>
+    <div class="zoom-hint" :class="{ show: zoomHint.show }" v-html="zoomHint.text"></div>
     <div class="g-toolbar">
       <div class="view-switch">
         <button
@@ -1157,7 +1164,6 @@ onUnmounted(() => {
       ref="gScroll"
       class="gantt-scroll"
       :class="{ 'rel-on': !!activeRel }"
-      @wheel="onGanttWheel"
     >
       <div class="g-inner" :style="{ width: `${tl.days * DAY_W}px` }">
         <div v-if="activeRel && splitKind" class="g-relruler" @dblclick="onRulerDblClick">

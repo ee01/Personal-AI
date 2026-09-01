@@ -47,7 +47,7 @@ import {
 type RowStatus =
   | { kind: 'pending' }
   | { kind: 'loading' }
-  | { kind: 'ok'; jiraKey: string }
+  | { kind: 'ok'; jiraKey: string; aliasKept?: boolean }
   | { kind: 'error'; message: string };
 
 const AI_EXECUTOR_KEY = 'personalroadmap.aiExecutor';
@@ -287,6 +287,11 @@ function okKey(id: string): string {
   return status.kind === 'ok' ? status.jiraKey : '';
 }
 
+function aliasKeptOf(id: string): boolean {
+  const status = statusOf(id);
+  return status.kind === 'ok' && !!status.aliasKept;
+}
+
 function errorOf(id: string): string {
   const status = statusOf(id);
   return status.kind === 'error' ? status.message : '';
@@ -469,7 +474,11 @@ async function start() {
       if (parentIsDraft) {
         const parent = result.parent;
         if (parent?.jiraKey) {
-          rowStatus.value[parentId] = { kind: 'ok', jiraKey: parent.jiraKey };
+          rowStatus.value[parentId] = {
+            kind: 'ok',
+            jiraKey: parent.jiraKey,
+            aliasKept: agentMode.value,
+          };
           created += 1;
           if (parent.error) {
             rowStatus.value[parentId] = {
@@ -493,6 +502,7 @@ async function start() {
           rowStatus.value[subRowId(sub.id)] = {
             kind: 'ok',
             jiraKey: row.jiraKey,
+            aliasKept: agentMode.value,
           };
           mappings.push({ draftId: sub.id, jiraKey: row.jiraKey });
           created += 1;
@@ -557,7 +567,7 @@ async function start() {
   if (created) {
     state.toast(
       execLabel
-        ? `<span class="ok">✓</span> 已由 <b>${execLabel}</b> 创建 <b>${created}</b> 个 Jira issue`
+        ? `<span class="ok">✓</span> 已由 <b>${execLabel}</b> 创建 <b>${created}</b> 个 Jira issue；草稿名已保留为备注名`
         : `<span class="ok">✓</span> 已创建 <b>${created}</b> 个 Jira issue`,
       toastMs,
     );
@@ -787,6 +797,11 @@ function closeModal() {
               </template>
               <span v-else-if="kindOf(itemRowId(g.item.key)) === 'ok'" class="newkey">
                 ✓ {{ okKey(itemRowId(g.item.key)) }}
+                <span
+                  v-if="aliasKeptOf(itemRowId(g.item.key))"
+                  class="alias-kept"
+                  data-tip="Agent 已规范化 summary||草稿名保留为备注名，甘特展示不变"
+                >草稿名已存为备注</span>
               </span>
               <span
                 v-else-if="kindOf(itemRowId(g.item.key)) === 'error'"
@@ -830,6 +845,11 @@ function closeModal() {
               </template>
               <span v-else-if="kindOf(subRowId(s.id)) === 'ok'" class="newkey">
                 ✓ {{ okKey(subRowId(s.id)) }}
+                <span
+                  v-if="aliasKeptOf(subRowId(s.id))"
+                  class="alias-kept"
+                  data-tip="Agent 已规范化 summary||草稿名保留为备注名，甘特展示不变"
+                >草稿名已存为备注</span>
               </span>
               <span
                 v-else-if="kindOf(subRowId(s.id)) === 'error'"

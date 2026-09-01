@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-08-29*
+*最后更新: 2026-09-01*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -198,6 +198,7 @@
 | Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；含依赖 ticket 缓存；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
 | Roadmap 草稿 description | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 可选录入不挡 Enter 秒建；hover 灰色小字；非 draft 只读镜像 |
 | Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展隐藏按钮 |
+| Roadmap 甘特缩放与人员视图 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 捏合/⌘+滚轮缩放；人员视图色条+聚焦顺延到下周一（条滑动）+ 近 2 周双指平移 |
 | 项目本地查找 | Project Dashboard | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 在当前浏览器本地快照内查找项目、任务、Jira、平台来源和里程碑；输入/清除/查看全部控制点与回执显示当前视图可见/隐藏命中和无外部读写边界 |
 | 项目数据源检查 | Project Dashboard | [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) | Jira/GitHub/Confluence 状态、缺口、检查口径、按钮/收起边界与 warning 状态 |
 | Memory Service watched projects 补齐 | Project Dashboard | [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) | 只补齐本地，不反写 Memory Service；首屏列出新增 / 已匹配项目，收起面板不清空结果 |

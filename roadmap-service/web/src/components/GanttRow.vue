@@ -446,6 +446,7 @@ async function saveAlias() {
     aliasOpen.value = false;
     return;
   }
+  const hadAlias = Boolean(sub ? sub.alias : props.item.alias);
   if (sub) {
     const intent: Record<string, unknown> = {
       op: 'update_sub',
@@ -466,6 +467,7 @@ async function saveAlias() {
     });
   }
   aliasOpen.value = false;
+  if (!text && hadAlias) state.toast('备注名已清除，恢复展示原 ticket 名');
 }
 
 function cancelAlias() {
@@ -1169,7 +1171,11 @@ watch(
         type="button"
         @click="suggestAlias"
       >✦ AI 缩写</button>
-      <span class="ae-hint">Enter 保存 · Esc 取消</span>
+      <span class="ae-hint">{{
+        aliasEditingTitle
+          ? 'Enter 保存 · Esc 取消'
+          : 'Enter 保存 · 清空回车＝恢复原 ticket 名 · Esc 取消'
+      }}</span>
       </div>
       <textarea
         v-if="aliasEditingTitle && aliasDescOpen"

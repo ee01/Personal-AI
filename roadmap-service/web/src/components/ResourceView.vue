@@ -26,15 +26,24 @@ const rootEl = ref<HTMLElement | null>(null);
  * whether a bar is wide enough for the Epic-name prefix chip. */
 const stripPx = ref(0);
 let stripRO: ResizeObserver | null = null;
+let wheelTarget: HTMLElement | null = null;
+let slidingClearTimer: ReturnType<typeof setTimeout> | null = null;
 onMounted(() => {
   const measure = () => {
     stripPx.value = Math.max(0, (rootEl.value?.clientWidth || 0) - 236);
   };
   measure();
   stripRO = new ResizeObserver(measure);
-  if (rootEl.value) stripRO.observe(rootEl.value);
+  if (rootEl.value) {
+    stripRO.observe(rootEl.value);
+  }
 });
-onUnmounted(() => stripRO?.disconnect());
+onUnmounted(() => {
+  stripRO?.disconnect();
+  wheelTarget?.removeEventListener('wheel', onResWheel);
+  wheelTarget = null;
+  if (slidingClearTimer) clearTimeout(slidingClearTimer);
+});
 const assigneeMap = computed(() => teamAssigneeMap(state.snapshot.value));
 function showName(name: string | null | undefined) {
   return dispName(assigneeMap.value, name);
@@ -155,7 +164,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown));
 /** Click on empty space exits focus; clicks on bars/dock/chips handle themselves. */
 function onBackgroundClick(e: MouseEvent) {
   const target = e.target as HTMLElement;
-  if (target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip')) return;
+  if (target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip,.res-today-btn')) return;
   clearResSel();
 }
 
@@ -241,6 +250,8 @@ function onBarClick(s: RoadmapSub, personKey: string) {
 }
 
 const previewPerson = ref<string | null>(null);
+/** 顺延成功后给移动中的条加上 .slide，让 left 以 0.35s 滑到新位置（对齐 demo）。 */
+const slidingIds = ref<Set<string>>(new Set());
 
 /** Fallback hint line for the tooltip (real description still wins via tooltipHintLine). */
 function focusTipHint(s: RoadmapSub, it: RoadmapItem, personKey: string): string {
@@ -294,13 +305,25 @@ async function runDefer(row: { tasks: TaskPair[] }, personKey: string) {
   }
   const subIds = movable.map(({ s }) => s.id);
   const targetStartIso = fmtISO(nextMonday.value);
+  // 先挂上 .slide，再等 snapshot 改 left —— 与 demo「现有条先平滑滑到新位置」同序
+  if (slidingClearTimer) clearTimeout(slidingClearTimer);
+  slidingIds.value = new Set(subIds);
+  await nextTick();
   let summary: { moved: string[]; capped: string[]; stuck: string[] } | null = null;
   try {
     summary = await state.deferSubsToNextMonday(subIds, targetStartIso);
   } catch {
+    slidingIds.value = new Set();
     return; // toast already shown by deferSubsToNextMonday
   }
-  if (!summary) return;
+  if (!summary) {
+    slidingIds.value = new Set();
+    return;
+  }
+  slidingClearTimer = setTimeout(() => {
+    slidingIds.value = new Set();
+    slidingClearTimer = null;
+  }, 420);
   const { moved, capped, stuck } = summary;
   state.toast(
     `<span class="ok">✓</span> 已将 <b>${moved.length}</b> 个任务延至下周一（${fmtMD(nextMonday.value)}）开始` +
@@ -432,14 +455,28 @@ function onResWheel(e: WheelEvent) {
   if (resPanTimer) clearTimeout(resPanTimer);
   resPanTimer = setTimeout(commitResPan, 140);
 }
+onMounted(() => {
+  if (!rootEl.value) return;
+  wheelTarget = rootEl.value;
+  wheelTarget.addEventListener('wheel', onResWheel, { passive: false });
+});
 
 /** Animated jump for the overflow chips / "回到今天": slides by transform when
  * it fits inside the render buffer, otherwise just re-renders at the offset. */
+function clearPanTransform() {
+  panLayers().forEach((el) => {
+    el.classList.remove('settle');
+    el.style.transform = '';
+  });
+  updateStickyLabels(0);
+}
+
 function panBy(dd: number) {
   if (!dd) return;
   if (Math.abs(dd) > BUF.value) {
     resPanPx = 0;
     resOffset.value += dd;
+    nextTick(clearPanTransform);
     return;
   }
   resPanPx = 0;
@@ -450,6 +487,8 @@ function panBy(dd: number) {
   });
   setTimeout(() => {
     resOffset.value += dd;
+    // demo 整树重建会丢掉 transform；Vue 复用节点，必须显式清，否则会叠一次偏移
+    nextTick(clearPanTransform);
   }, 190);
 }
 
@@ -513,7 +552,7 @@ async function commitRename(m: TeamMember) {
 </script>
 
 <template>
-  <div ref="rootEl" class="res-view" @wheel="onResWheel" @click="onBackgroundClick">
+  <div ref="rootEl" class="res-view" @click="onBackgroundClick">
     <div class="res-head">
       <div class="res-corner">
         成员 / 任务
@@ -630,7 +669,6 @@ async function commitRename(m: TeamMember) {
         <template v-if="!allWin">
           <div
             v-for="i in days + BUF * 2"
-            v-show="i > BUF + 1 || allWin"
             :key="`g-${i}`"
             class="res-gridline"
             :style="{ left: `${((i - 1 - BUF) / days) * 100}%` }"
@@ -645,9 +683,11 @@ async function commitRename(m: TeamMember) {
           <div
             v-if="inWindow(s, end)"
             class="res-bar"
+            :data-sid="s.id"
             :class="[
               isDoneStatus(s) ? 'done' : s.temp ? 'draft' : colorCls(s.start!, s.days!),
               {
+                slide: slidingIds.has(s.id),
                 'clip-l': dateMs(s.start!) < dateMs(rangeS),
                 'clip-r': dateMs(end) > dateMs(rangeE),
                 sel: resSel.person === personKeyOf(row) && resSel.ids.has(s.id),
