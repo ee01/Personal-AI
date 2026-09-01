@@ -38,7 +38,7 @@
 | Level | 内容 | 配置成本 | 解锁 |
 |---|---|---|---|
 | **L0 账本** | memory-service 本地账本 + `memory_cron` | 零配置，默认开启 | 四类任务全可创建（🏠 调度）、插件通知 |
-| **L1 推送通道** | Bot（SM AI）/ AsMe RingCentral 凭据 | 中 | Glip 私发 / 群组通知目标 |
+| **L1 推送通道** | Bot（SM AI）**或** AsMe（RingCentral 凭据，本人身份） | 中 | Glip 私发 / 群组通知目标；两条通道相互独立，配任一即部分解锁 |
 | **L2 云端 lane** | Google Sheet + App Script + Jira Automation | 高（需 Google 授权 + Jira 项目 admin） | ☁️ `jira_sheet` 调度器、Timeline 里程碑触发、Drive 附件、AsMe 邮件 |
 
 - **存量用户**：检测到 `scheduledMessagesConfig` 即自动判定 L2 已激活，原 Sheet / Jira 规则**照常运行、无需迁移**；账本以只读镜像方式把存量任务纳入统一列表。
@@ -86,8 +86,13 @@
 | 通道 | 需要 | 未解锁表现 |
 |---|---|---|
 | 🔔 插件通知（Chrome notification） | L0 | 始终可用，L0 默认 |
-| 🤖 Glip Bot 私发 | L1 | 置灰 + "需 Level 1" + 去配置链接 |
-| 👥 Glip 群组 | L1 + Bot 在群 | 同上；投递失败要可见（见下） |
+| 🤖 Glip Bot 私发 | L1（Bot 凭据） | 置灰 + "需 Level 1" + 去配置链接 |
+| 👥 Glip 群组 | L1（Bot 凭据）+ Bot 在群 | 同上；投递失败要可见（见下） |
+| 👤 AsMe 本人身份 | L1（RingCentral 凭据） | 同上；凭据与「追问」共用同一份 runtime config |
+
+**AsMe 的凭据来源**：`getUserRuntimeConfig()` 里的 `ringCentralClientId/Secret/Jwt`，与 OutreachEngine 的「追问」是同一份，`GET /config` 已按 `*Configured` 布尔脱敏、不回传明文。☁️ lane 由 Sheet 临时传入的 `asmeSender` 仍然优先，没有时回落这份——与 notify-config 的「body 优先、表兜底」同构。
+
+> ⚠️ **当前限制**：🏠 lane 的 `push` / `agent` 任务经 `ActionExecutor.delegateAgent()` 执行，这条路径只跑执行器并记录结果，**尚未接投递**——投递逻辑目前只存在于 `POST /agent-tasks/execute` 这条 HTTP 入口上。因此本地调度的推送任务到点会执行但结果不会送达。修复计划见 [plan § 十二 P0](../progressing/agent-task-ledger-plan.md)。
 
 投递失败**不再静默**：Bot 分支检查 `deliverNoticeToGlip` 返回的 `.sent`，失败写入 `params.metadata.notifyDeliveryError` 并私发提示给 owner（不改 run 状态，保持"执行与通知独立"的边界）。
 
@@ -144,7 +149,7 @@ npm run verify:task-center-ui
 | Phase | 内容 | 验收 |
 |---|---|---|
 | **1 通电** ✅ | `recurrence_spec` + `memory_cron` 调度、`parent_action_id`、depends_on 消费、`resume_action_id` 通用续跑、drain 短 interval、`POST /task-center/tasks` 统一入口、任务中心 UI | 两条 lane 的任务共用同一账本/幂等/runtime-status |
-| **2 执行承载** | worker lease 续租、公共池 claim + 空闲判定、`poll()` 接线、file artifact | 30 分钟调研任务在远程 worker 跑完并交回 md 路径 |
+| **2 执行承载** ✅ | worker lease 续租、公共池 claim + 空闲判定、file artifact 契约 | lease 心跳续租；未绑定任务进共享池按 capabilities 领取；`kind:'file'` 收据（路径强制相对、禁 `..`） |
 | **3 人工节点** | `input_required` 通用停靠、反思挂树、产物目录规范 | 反思→批准→执行→产物→review→解锁下游全程可见 |
 | **4 收敛** | Sheet 降只读镜像、GAS access 降 `DOMAIN`、升级通道解冻 | 见 scheduled_messages_manager.md |
 

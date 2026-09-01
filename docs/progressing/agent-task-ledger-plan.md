@@ -380,3 +380,85 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 - 3.x `input_required` 通用停靠、反思候选聚合去重后接入账本、产物目录规范
 - 4.x Sheet 降只读镜像、GAS access 降 `DOMAIN`
 - 待接：Glip 定时消息 / 稍后提醒两个注入入口改写账本 API（见 9.1 改动面表）
+
+---
+
+## 十二、未完成项与 RingCentral 凭据统一（2026-08-30）
+
+### 背景：三个来自实际使用的反馈
+
+1. **L1 的定义漏了 AsMe**：文档写的是「Bot（SM AI）/ AsMe RingCentral 凭据」，但 UI 里的 L1 检测和引导只认 Bot，AsMe（本人身份推送）完全没体现。
+2. **新建「定时推送」弹窗过于简陋**：没有推送身份选择（Bot / AsMe），也没有 AI Report 这种真实在用的推送形态（存量 37 条里 AI 报表占 19 条，是最大头）。
+3. **L0 应当拥有 L2 的几乎全部能力**：没配 L2 的用户也应该能用上比较完整的定时消息 / Agent 任务（AI Report、帮我问、帮我做），而不是只能用一个残缺版。
+
+### ⚠️ 已核实的根因：`push`/`agent` 任务在 🏠 lane 下**根本没有投递环节**
+
+这是比 UI 缺字段更根本的问题，必须先修：
+
+- `push` / `agent` 任务落到 `delegate_agent`，由 `ActionExecutor.delegateAgent()`（`ActionExecutor.ts:891`）执行。
+- 这条路径**只做一件事**：跑执行器、把 envelope 结果写进 `result_json`。**没有任何一步把结果推给用户**。
+- 对比：☁️ lane 的投递是在 `routes/agentTasks.ts` 的 `planAgentTaskNotifications` + `deliverNoticeToGlip` 里做的，而那段代码只在 `POST /agent-tasks/execute` 这条 HTTP 入口上，**到期扫描执行的任务走不到**。
+- 结论：现在通过任务中心创建的 🏠 `push`/`agent` 任务，到点会执行，但**结果不会送到任何人手上**。这就是弹窗里连「通知目标」字段都没有的真实原因——底层还没有那个能力。
+
+`notify_user` 已在本轮补上通道（`bot` / `auto` / `plugin`，见 § 十一），但 `delegate_agent` 这条路径还没有。
+
+### ✅ 已核实：RingCentral 凭据早就在 memory-service 落库了，不需要新建
+
+用户提示「设备池里应该有 RingCentral token 记录，追问功能要用」——核实属实，且比预想的更完整：
+
+| 事实 | 证据 |
+|---|---|
+| 凭据字段已在 per-user runtime config | `runtimeConfig.ts:50-53` —— `ringCentralServerUrl` / `ringCentralClientId` / `ringCentralClientSecret` / `ringCentralJwt` |
+| 持久化在 per-user `runtime-config.json` | `runtimeConfig.ts:91 readPersistedConfig(userDataManager)` |
+| **`GET /config` 已按布尔脱敏，不回传明文** | `routes/config.ts:245-249` —— `ringCentralClientSecretConfigured` / `ringCentralJwtConfigured` |
+| 「追问」正是用这份凭据 | `RingCentralClient` 默认从 `getUserRuntimeConfig()` 取（`RingCentralClient.ts:334`），OutreachEngine 用它发起/收取追问 |
+| Sheet 侧凭据是**另一份**，且刻意不落库 | `agentTasks.ts` 的 `asmeSender` 每次请求临时传入，注释明写 "not persisted" |
+
+**修正上一轮的判断**：我此前认为「AsMe 落库是新增的安全姿态改变」，这是错的——**后端本来就存着同一套 RingCentral 凭据，且脱敏机制已经就位**。所以 AsMe 推送要做的不是新建凭据表，而是：
+
+1. 让 `delegate_agent` / `notify_user` 的投递层在 `via=asme` 时，**复用 `getUserRuntimeConfig()` 里已有的 RingCentral 凭据**构造 `RingCentralClient`（不传 `explicitCredentials` 即可，默认就走这份）。
+2. `agentTasks.ts` 现有的 `asmeSender` 临时传入路径**保留不动**（☁️ lane 由 Sheet 传入的仍然优先），只在没有临时凭据时回落到 runtime config——与 notify-config 的「body 优先、表兜底」同构。
+
+### 待决策：凭据要不要反向复制一份给 Google Sheet
+
+用户提出的关键点：**Sheet + Giraffe 可以脱离 memory-service 独立跑定时推送**，所以 L2 用户的 Sheet 侧也需要这份凭据。
+
+现状是「两份各存各的」：扩展在 Sheet Config 页存一份（`ringcentral_sender_*`），memory-service 在 runtime config 存一份。两边可能不一致，用户要配两次。
+
+三个候选方向（**尚未实施，需要决策**）：
+
+| 方案 | 做法 | 优点 | 风险 |
+|---|---|---|---|
+| A 单向下发（推荐候选） | memory-service 为真源；扩展在保存凭据时同时写 runtime config，并在 L2 已配置时**由扩展**镜像写一份到 Sheet Config | 用户只配一次；Sheet 侧保持独立运行能力 | 需要明确「谁是真源」，避免 Sheet 侧手改后被覆盖 |
+| B 各存各的（现状） | 不动 | 零改动 | 用户配两次；两边不一致时难排查 |
+| C Sheet 为真源 | memory-service 每次执行前从 Sheet 拉 | 单一真源 | memory-service 无 Google 凭据，做不到；且违背「Sheet 降只读镜像」的 Phase 4 方向 |
+
+倾向 A，理由与 Sheet 镜像行同构：**写 Sheet 的动作必须由扩展执行**（Google token 只在扩展手里），memory-service 不可能反向写。但需要先确认一件事：Sheet Config 里的凭据被 Jira Rule 模板在部署时内联替换（`JiraRuleUpdater.ts:406 replaceRingCentralSenderPlaceholders`），**改凭据可能需要重新部署 Jira 规则**才生效——这决定了 A 方案的真实成本，实施前必须核实。
+
+### 未完成清单（按优先级）
+
+**P0 —— 让 🏠 lane 的 push/agent 真正能投递**（没有这个，弹窗加再多字段也是空的）
+- [ ] `delegateAgent()` 执行成功后接投递：复用 `planAgentTaskNotifications` 的分支表（result → 目标；success/failure receipt → owner），把它从 `routes/agentTasks.ts` 抽成可被 executor 复用的模块
+- [ ] 投递身份支持 `bot` / `asme` / `plugin`；`asme` 复用 runtime config 里已有的 RingCentral 凭据
+- [ ] 投递失败沿用已有的可见化约定（写 `metadata.notifyDeliveryError` + 私发 owner）
+
+**P1 —— 补齐 L0 的能力面**（目标：没配 L2 也能用全套）
+- [ ] **AI Report**：存量 19 条的主力形态。需确认 Dify 跳板在 🏠 lane 下如何调用——Jira 能直连 Dify，memory-service 是否可达需实测；不可达则需另设出站路径
+- [ ] **帮我问（Outreach）**：OutreachEngine 已完全在 memory-service 内，接进任务中心是接线而非新建
+- [ ] **帮我做（AgentTask）**：已可用，只差投递（见 P0）
+- [ ] 新建弹窗按类型补齐字段：推送身份（Bot/AsMe/插件通知，未配置的置灰 + 说明）、通知目标（私发/群组 + 群组 ID）、AI Report 的模板与参数
+
+**P2 —— L1 定义与 UI 对齐**
+- [ ] L1 检测同时认 Bot 与 AsMe（任一配置即部分解锁；两者都缺才是完全未解锁）
+- [ ] 引导抽屉的 L1 步骤列出两条通道各自的状态与配置入口
+- [ ] 文案：「稍后提醒」Tab 改名为「**提醒我**」（更贴近动作而非状态）
+
+**P3 —— 凭据统一**（依赖上面的决策）
+- [ ] 确认改 Sheet 凭据是否需要重新部署 Jira 规则
+- [ ] 按决策实施 A 方案：扩展保存时双写，Sheet 侧作为 L2 的独立运行副本
+
+**已完成（本轮）**
+- [x] Phase 2 全部：worker lease 续租、公共池 claim + 空闲判定、file artifact 契约
+- [x] 稍后提醒改写账本 API（不再需要 Google OAuth 和已初始化表格）
+- [x] `notify_user` 支持投递通道（bot / auto / plugin）
+- [x] 能力条压缩为一行 + 引导式初始化抽屉（直达真实配置页）
