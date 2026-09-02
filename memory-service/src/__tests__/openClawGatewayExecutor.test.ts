@@ -56,6 +56,26 @@ class FakeSocket implements GatewayWebSocket {
       return;
     }
     if (frame.method === 'agent.wait') {
+      (this as any).waitCalls = ((this as any).waitCalls || 0) + 1;
+      const timeoutUntil = Number((this as any).waitTimeoutSucceedsAfter || 0);
+      const forceTimeout =
+        Boolean((this as any).waitTimeout) &&
+        (!timeoutUntil || (this as any).waitCalls <= timeoutUntil);
+      if (forceTimeout) {
+        this.emit('message', {
+          data: JSON.stringify({
+            type: 'res',
+            id: frame.id,
+            ok: true,
+            payload: {
+              runId: 'run-123',
+              status: 'timeout',
+              startedAt: 1,
+            },
+          }),
+        });
+        return;
+      }
       if ((this as any).failWait) {
         this.emit('message', {
           data: JSON.stringify({
@@ -562,6 +582,107 @@ describe('OpenClawGatewayExecutor', () => {
 
       expect(result.status).toBe('succeeded');
       expect(result.summary).toBe('done via history');
+    } finally {
+      if (previousDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = previousDataDir;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('confirms a wait timeout and writes the result when the remote run finishes', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-exec-'));
+    const previousDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = tempDir;
+    let socket: FakeSocket | null = null;
+    const FakeWS = vi.fn().mockImplementation(() => {
+      socket = new FakeSocket();
+      (socket as any).waitTimeout = true;
+      (socket as any).waitTimeoutSucceedsAfter = 1;
+      (socket as any).waitSnapshot = true;
+      queueMicrotask(() => socket!.open());
+      return socket;
+    });
+
+    try {
+      const executor = new OpenClawGatewayExecutor(
+        {
+          id: 'gw-main',
+          label: 'GW',
+          type: 'openclaw-gateway',
+          baseUrl: 'http://127.0.0.1:18789',
+          apiKey: 'token',
+          enabled: true,
+        },
+        {
+          WebSocketImpl: FakeWS as any,
+          confirmIntervalsMs: [0, 0, 0],
+          sleep: async () => undefined,
+        },
+      );
+
+      const result = await executor.submit({
+        task: 'open baidu',
+        mode: 'read',
+        threadId: 't1',
+        actionId: 'a-confirm-success',
+        sessionKey: 'session-confirm',
+        timeoutMs: 5000,
+      });
+
+      expect(result.status).toBe('succeeded');
+      expect(result.summary).toBe('done via history');
+      expect(result.payload).toMatchObject({ confirmAttempt: 1 });
+    } finally {
+      if (previousDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = previousDataDir;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps running after wait timeout when confirm checks still see an active run', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-exec-'));
+    const previousDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = tempDir;
+    let socket: FakeSocket | null = null;
+    const FakeWS = vi.fn().mockImplementation(() => {
+      socket = new FakeSocket();
+      (socket as any).waitTimeout = true;
+      (socket as any).sessionPayload = { status: 'running', runId: 'run-123' };
+      queueMicrotask(() => socket!.open());
+      return socket;
+    });
+
+    try {
+      const executor = new OpenClawGatewayExecutor(
+        {
+          id: 'gw-main',
+          label: 'GW',
+          type: 'openclaw-gateway',
+          baseUrl: 'http://127.0.0.1:18789',
+          enabled: true,
+        },
+        {
+          WebSocketImpl: FakeWS as any,
+          confirmIntervalsMs: [0, 0, 0],
+          sleep: async () => undefined,
+        },
+      );
+
+      const result = await executor.submit({
+        task: 'long job',
+        mode: 'read',
+        threadId: 't1',
+        actionId: 'a-confirm-running',
+        sessionKey: 'session-confirm-running',
+        timeoutMs: 5000,
+      });
+
+      expect(result.status).toBe('running');
+      expect(result.remoteRunId).toBe('run-123');
+      expect(result.payload).toMatchObject({
+        confirmedRunning: true,
+        confirmAttempts: 3,
+      });
     } finally {
       if (previousDataDir === undefined) delete process.env.DATA_DIR;
       else process.env.DATA_DIR = previousDataDir;

@@ -154,6 +154,19 @@ function uniqStrings(values: Array<string | undefined | null>): string[] {
   );
 }
 
+function remoteRunIdFromResultJson(raw: string | null): string {
+  const result = safeJsonParse<Record<string, unknown>>(raw, {});
+  if (typeof result.remoteRunId === 'string' && result.remoteRunId.trim()) {
+    return result.remoteRunId.trim();
+  }
+  const payload = result.payload;
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const nested = (payload as Record<string, unknown>).remoteRunId;
+    if (typeof nested === 'string' && nested.trim()) return nested.trim();
+  }
+  return '';
+}
+
 export interface CreateQueuedActionInput {
   id?: string;
   actionType: string;
@@ -207,6 +220,10 @@ export interface RecoverStaleRunningActionsOptions {
   staleAfterSeconds: number;
   currentTime?: number;
   errorMessage?: string;
+  /** Recover only these ids (still must be stale running). */
+  actionIds?: string[];
+  /** Skip rows that already stored a remote run id — confirm those instead. */
+  excludeWithRemoteRunId?: boolean;
 }
 
 export class ActionRepository {
@@ -859,18 +876,15 @@ export class ActionRepository {
     return this.getById(id);
   }
 
-  recoverStaleRunningActions(
+  private selectStaleRunningRows(
     options: RecoverStaleRunningActionsOptions,
-  ): QueuedActionRecord[] {
+  ): ActionRow[] {
     const currentTime = options.currentTime ?? now();
     const staleAfterSeconds = Math.max(
       1,
       Math.floor(options.staleAfterSeconds),
     );
     const cutoff = currentTime - staleAfterSeconds;
-    const errorMessage =
-      options.errorMessage ??
-      `Action execution exceeded stale running timeout (${staleAfterSeconds}s). External side effects may have completed; review before retrying.`;
     const candidates = this.db
       .prepare(
         `SELECT *
@@ -887,7 +901,7 @@ export class ActionRepository {
     // (e.g. Roadmap batch create passes timeoutMs=30min). Reclaiming such a run
     // at the global cutoff would dead-letter work that is still legitimately
     // in flight, so each action's own timeoutMs raises its personal cutoff.
-    const rows = candidates.filter((row) => {
+    let rows = candidates.filter((row) => {
       const params = safeJsonParse<Record<string, unknown>>(row.params_json, {});
       const ownTimeoutMs = Number(params.timeoutMs);
       if (!Number.isFinite(ownTimeoutMs) || ownTimeoutMs <= 0) return true;
@@ -897,6 +911,35 @@ export class ActionRepository {
       );
       return (row.started_at ?? 0) <= currentTime - effective;
     });
+
+    if (options.excludeWithRemoteRunId) {
+      rows = rows.filter((row) => !remoteRunIdFromResultJson(row.result_json));
+    }
+    if (options.actionIds) {
+      const allowed = new Set(options.actionIds);
+      rows = rows.filter((row) => allowed.has(row.id));
+    }
+    return rows;
+  }
+
+  listStaleRunningActions(
+    options: RecoverStaleRunningActionsOptions,
+  ): QueuedActionRecord[] {
+    return this.selectStaleRunningRows(options).map((row) => this.rowToAction(row));
+  }
+
+  recoverStaleRunningActions(
+    options: RecoverStaleRunningActionsOptions,
+  ): QueuedActionRecord[] {
+    const currentTime = options.currentTime ?? now();
+    const staleAfterSeconds = Math.max(
+      1,
+      Math.floor(options.staleAfterSeconds),
+    );
+    const errorMessage =
+      options.errorMessage ??
+      `Action execution exceeded stale running timeout (${staleAfterSeconds}s). External side effects may have completed; review before retrying.`;
+    const rows = this.selectStaleRunningRows(options);
 
     if (rows.length === 0) return [];
 

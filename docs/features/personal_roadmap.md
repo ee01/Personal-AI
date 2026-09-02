@@ -256,7 +256,7 @@ flowchart TD
 |---|---|---|
 | 扩展轮询 `waitForAgentTaskTerminal` | `AGENT_CREATE_TIMEOUT_MS = 30min` | 超时用最后一次 poll 的 artifact 尝试回写；没有 mappings 才把该组标失败 |
 | `executeAgentTask` 请求体 `timeoutMs` | `30min` | 经 `normalizeAgentTaskTimeoutMs`（下限 10min）传到 OpenClaw 网关执行器的等待时长 |
-| 心跳 stale-running 回收 | `max(openClawTimeoutMs+60s, 本 action 的 timeoutMs+120s)` | `ActionRepository.recoverStaleRunningActions` 按每个 action 自己的 `params.timeoutMs` 抬高回收线，避免把仍在跑的长任务判成 `dead_letter` |
+| 心跳 stale-running 回收 | 无 `remoteRunId`：`max(openClawTimeoutMs+60s, 本 action 的 timeoutMs+120s)`；有 `remoteRunId`：先 30/60/120s 确认最多 3 次，对不上才 `dead_letter` | Gateway 超时后保持 running 并对账，避免把仍在跑的长任务判成失败 |
 
 只改前端轮询是不够的：网关等待与心跳回收若仍按 10 分钟，run 会先被判超时/回收。若长期卡在 `queued`，多为 OpenClaw 就绪检查未通过（Options → Agent 执行器 / 网关未配好）；修复后重新点击创建（同 idempotency 会重试 failed/queued）。
 

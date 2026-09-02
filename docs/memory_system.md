@@ -1202,15 +1202,14 @@ OpenClaw 委派不是无限等待。每个用户都可以配置：
 
 当前行为是：
 
-- 单次委派超过 `openClawTimeoutMs` 会被本地 `AbortController` 中断
-- 结果标记为 `timeout`
-- action 队列状态进入 `failed`
-- 重试次数继续累计，超过阈值后进入 `dead_letter`
-- 如果 Memory Service 在等待 OpenClaw 时被重启、网络连接断开，或外部任务已经完成但结果没有回流，Action Queue 可能只剩下 `running` 状态；系统会按 `openClawTimeoutMs + 60 秒` 判断 stale running，并把 `delegate_openclaw` 落为 `dead_letter`，同时写入 `lastError` 提醒先确认外部副作用
-- stale running 不会自动重试，特别是上传文件、发送消息、写 Drive / Jira 这类外部写操作，必须由用户确认外部结果后再决定是否手动重试
+- 单次委派的本地 `agent.wait` 超过 `openClawTimeoutMs` 后，不会把远端 run 当成已经失败
+- 超时后按 30s / 60s / 120s 最多确认 3 次：仍在跑就保持 `running`，已结束就写入结果，3 次都对不上才进入 `dead_letter`
+- 心跳不会把带 `remoteRunId` 的 stale `running` 盲回收；打开动作队列页也不会因此把记录标死
+- 没有 `remoteRunId` 的旧路径仍按 `openClawTimeoutMs + 60 秒` 判断 stale running
+- stale / 确认耗尽都不会自动重试外部写操作，必须由用户确认外部结果后再决定是否手动重试
 
-这意味着如果外部系统很慢，系统不会卡死，但也可能出现“外部真实还没跑完，本地先超时”的情况。  
-对于耗时较长的外部系统，应当按用户或环境把 `openClawTimeoutMs` 调大；但如果问题是外部已经完成、Memory Service 没拿到最终返回，单纯调大超时只会延后恢复，不能代替 stale running 保护。
+这意味着如果外部系统很慢，本地先结束等待，但会继续确认远端是否还在跑，而不是把 10 分钟超时直接当成任务失败原因。
+对于耗时较长的外部系统，仍应把 `openClawTimeoutMs` / 任务 `timeoutMs` 调到覆盖预期时长；确认环用来接住“已经跑完但结果晚回流”，不能代替把超时设够。
 
 ### 用户级配置
 

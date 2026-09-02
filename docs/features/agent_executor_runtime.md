@@ -67,10 +67,14 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 ## OpenClaw Gateway（Block C）
 
 - 执行是 WebSocket 长等待，不是 HTTP 短请求：先 `agent`（约 30s 拿 `runId`），再 `agent.wait`（本地 RPC 超时 ≈ `timeoutMs + 5s`，默认约 10 分钟）
-- `agent.wait` 超时会关本地这条 WS 等待，并做一次短 reconcile（再 `agent.wait` 5s + `sessions.*`）；**不会**因此取消 OpenClaw 远端 run
-- 心跳侧 stale reclaim 是另一条线：`openClawTimeoutMs + 60s`（默认 660s）仍停在 `running` 时，本地标 `dead_letter`。远端 agent 可能还在跑，所以文案要求先核对外部副作用再重试
-- 当前没有“超时后再按间隔确认 N 次”的轮询环；`poll()` 只用于断连后单次对账。若任务经常超过 10 分钟才出结果，应先调大 `timeoutMs` / `openClawTimeoutMs`，或后续加 backoff 确认，而不是把 660s 当成远端已停
-- 持久化 `remoteRunId` / `sessionKey` / cursor 到 `result_json`（running 期间 `patchRunningResult`）
+- `agent.wait` 超时（snapshot `timeout` 或本地 RPC timeout）**不会**取消远端 run，也不会立刻 `dead_letter`
+- 超时后进入确认环：间隔 **30s / 60s / 120s**，最多 3 次，用 `remoteRunId` 再 `agent.wait` + `sessions.*` 对账
+  - 确认已结束 → 写入最终结果
+  - 确认仍在跑 / wait 仍 timeout → 保持 `running` 并续等
+  - 3 次都对不上（`input_required`、找不到 run、对账异常）→ `dead_letter`，文案要求先核对外部副作用
+- 心跳 / Task drain 对已过 stale 线但仍带 `remoteRunId` 的 `running` 行走同一套确认，而不是盲回收；`GET /actions` 打开页面也不会把这类行直接标死
+- 无 `remoteRunId` 的旧执行器仍按 `openClawTimeoutMs + 60s`（及本 action `timeoutMs + 120s`）stale reclaim
+- 持久化 `remoteRunId` / `sessionKey` / cursor / `confirmAttempt` 到 `result_json`
 - 断连 reconcile：仍在跑 → `queue_status=running`；确认无 run → `failed`；不确定 → `input_required`
 - **不做**：OpenClaw/Codex 侧 `cleanup retired shared client` 根治（协作事项）
 

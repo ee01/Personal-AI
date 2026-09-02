@@ -202,4 +202,37 @@ describe('Action API', () => {
     expect(response.statusCode).not.toBe(400);
     expect(response.json()).toHaveProperty('probeReceipt.probeOnly', true);
   });
+
+  it('does not dead-letter a stale gateway run with remoteRunId on list', async () => {
+    const repo = new ActionRepository(db);
+    const action = repo.create({
+      id: 'action-stale-remote',
+      actionType: 'delegate_agent',
+      title: 'Keep confirming',
+      params: { task: 'long job', mode: 'read', timeoutMs: 5000 },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+    repo.markRunning(action.id);
+    repo.patchRunningResult(action.id, {
+      status: 'running',
+      remoteRunId: 'run-list-keep',
+    });
+    const staleStartedAt = Math.floor(Date.now() / 1000) - 800;
+    db.prepare('UPDATE proposed_actions SET started_at = ? WHERE id = ?').run(
+      staleStartedAt,
+      action.id,
+    );
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/actions?actionId=action-stale-remote',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items[0]).toMatchObject({
+      id: 'action-stale-remote',
+      queueStatus: 'running',
+    });
+    expect(repo.getById(action.id)?.queueStatus).toBe('running');
+  });
 });

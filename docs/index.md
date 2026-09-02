@@ -271,7 +271,7 @@
 | 梦境重放 | 反思与梦境 | [memory_system.md](./memory_system.md) | `DreamInsights.vue` / `dreams/*.md`，含本页范围、复核视图筛选、只读边界和可见复核入口 |
 | 动作队列 | 动作与确认 | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions`；按最近活动时间倒序；筛选空结果、普通动作、按钮 hover/读屏和操作提交都有边界回执 |
 | 执行就绪契约 | 动作与确认 | [action_readiness_contracts.md](./features/action_readiness_contracts.md) | `delegate_openclaw` dispatch 前按鉴权、能力、输入与 proof 失败关闭；`agent_task` 只检查 gateway 连接层；probe 不提交原任务，Reflection 不堆积阻断动作 |
-| OpenClaw 外部委派 | 动作与确认 | [memory_system.md](./memory_system.md) | `delegate_openclaw` action；自动调度卡片和 transcript 展开按钮显示只读/触发边界 |
+| OpenClaw 外部委派 | 动作与确认 | [memory_system.md](./memory_system.md) | `delegate_openclaw` / Gateway `agent.wait` 超时后 30/60/120s 确认最多 3 次；带 `remoteRunId` 的 running 不盲回收 |
 | 决策中心 | 动作与确认 | [memory_system.md](./memory_system.md) | `DecisionCenter.vue` / `confirm_requests`；通知深链未命中显示已读队列与部分失败口径，审核包复制与处理按钮显示剪贴板/证据/写入边界 |
 | 记忆搜索结果页 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `SearchResultPage.vue`；普通搜索零 Recall LLM，用户可主动请求带证据 ID、快照/缓存/耗时回执的结果总结；类型筛选和安全打开边界保持可见 |
 | 搜索结果有用/不相关反馈 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `/feedback`，按 target type 记录；按钮 hover/读屏说明有用、不相关和撤销的写入边界 |

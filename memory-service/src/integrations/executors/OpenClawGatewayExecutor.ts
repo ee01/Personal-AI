@@ -14,6 +14,13 @@ import {
 } from './agentResultPrompt.js';
 import type { AgentExecutorInstance } from './executorRegistry.js';
 import {
+  GATEWAY_RUN_CONFIRM_INTERVALS_MS,
+  defaultGatewayConfirmSleep,
+  isAgentRunTerminalStatus,
+  isWaitRpcTimeout,
+  shouldContinueWaiting,
+} from './gatewayRunConfirm.js';
+import {
   OpenClawGatewayClient,
   type GatewayWebSocketConstructor,
 } from '../openclaw/OpenClawGatewayClient.js';
@@ -314,6 +321,8 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
       onProgress?: (patch: GatewayProgressPatch) => void | Promise<void>;
       WebSocketImpl?: GatewayWebSocketConstructor;
       defaultTimeoutMs?: number;
+      confirmIntervalsMs?: readonly number[];
+      sleep?: (ms: number) => Promise<void>;
     } = {},
   ) {
     this.id = instance.id;
@@ -384,7 +393,7 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
           { runId: remoteRunId, timeoutMs },
           timeoutMs + 5_000,
         );
-        return await resolveResultAfterWait(client, {
+        const resolved = await resolveResultAfterWait(client, {
           waited,
           remoteRunId,
           sessionKey,
@@ -392,15 +401,37 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
           mode: request.mode,
           task: request.task,
         });
+        if (resolved.status === 'timeout') {
+          return await this.confirmRemoteRun(client, {
+            remoteRunId,
+            sessionKey,
+            targetSystem: request.targetSystem,
+            mode: request.mode,
+            task: request.task,
+            networkError: resolved.summary,
+          });
+        }
+        return resolved;
       } catch (waitError) {
+        const networkError =
+          waitError instanceof Error ? waitError.message : String(waitError);
+        if (isWaitRpcTimeout(waitError)) {
+          return await this.confirmRemoteRun(client, {
+            remoteRunId,
+            sessionKey,
+            targetSystem: request.targetSystem,
+            mode: request.mode,
+            task: request.task,
+            networkError,
+          });
+        }
         return await this.reconcileAfterDisconnect(client, {
           remoteRunId,
           sessionKey,
           targetSystem: request.targetSystem,
           mode: request.mode,
           task: request.task,
-          networkError:
-            waitError instanceof Error ? waitError.message : String(waitError),
+          networkError,
         });
       }
     } catch (error) {
@@ -436,19 +467,127 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
   async poll(
     remoteRunId: string,
     cursor?: string,
+    context?: {
+      sessionKey?: string;
+      targetSystem?: string;
+      mode?: 'read' | 'write';
+      task?: string;
+    },
   ): Promise<AgentResultEnvelope> {
     const client = this.createClient(30_000);
     try {
       await client.connect();
       return await this.reconcileAfterDisconnect(client, {
         remoteRunId,
-        sessionKey: '',
+        sessionKey: context?.sessionKey || '',
+        targetSystem: context?.targetSystem,
+        mode: context?.mode,
+        task: context?.task,
         eventCursor: cursor,
         networkError: 'poll',
       });
     } finally {
       client.close();
     }
+  }
+
+  private confirmIntervals(): readonly number[] {
+    const configured = this.options.confirmIntervalsMs;
+    if (configured && configured.length > 0) return configured;
+    return GATEWAY_RUN_CONFIRM_INTERVALS_MS;
+  }
+
+  private async confirmRemoteRun(
+    client: OpenClawGatewayClient,
+    input: {
+      remoteRunId: string;
+      sessionKey: string;
+      targetSystem?: string;
+      mode?: 'read' | 'write';
+      task?: string;
+      networkError: string;
+    },
+  ): Promise<AgentResultEnvelope> {
+    const intervals = this.confirmIntervals();
+    const sleep = this.options.sleep ?? defaultGatewayConfirmSleep;
+    let last: AgentResultEnvelope | undefined;
+    let inconclusive = 0;
+
+    for (let index = 0; index < intervals.length; index += 1) {
+      await sleep(intervals[index] ?? 0);
+      last = await this.reconcileAfterDisconnect(client, {
+        ...input,
+        networkError: `confirm:${index + 1}:${input.networkError}`,
+      });
+      const annotated = this.annotateConfirm(last, {
+        attempt: index + 1,
+        attempts: intervals.length,
+        inconclusive,
+        networkError: input.networkError,
+      });
+      if (isAgentRunTerminalStatus(annotated.status)) {
+        return annotated;
+      }
+      if (shouldContinueWaiting(annotated.status)) {
+        last = annotated;
+        continue;
+      }
+      inconclusive += 1;
+      last = annotated;
+    }
+
+    if (last && shouldContinueWaiting(last.status)) {
+      return {
+        ...last,
+        status: 'running',
+        summary:
+          last.status === 'running'
+            ? last.summary
+            : `agent.wait 已超时，但 remote run ${input.remoteRunId} 在 ${intervals.length} 次确认中仍在执行；保持 running 以便后续对账。`,
+        payload: {
+          ...(last.payload || {}),
+          confirmedRunning: true,
+          confirmAttempts: intervals.length,
+          confirmInconclusive: inconclusive,
+        },
+      };
+    }
+
+    return {
+      status: 'timeout',
+      summary: `OpenClaw Gateway remote run ${input.remoteRunId} 在 ${intervals.length} 次状态确认后仍无法对上最终结果`,
+      artifacts: [],
+      remoteRunId: input.remoteRunId,
+      sessionKey: input.sessionKey,
+      payload: {
+        confirmAttempts: intervals.length,
+        confirmInconclusive: inconclusive,
+        lastStatus: last?.status,
+        networkError: input.networkError,
+        lastPayload: last?.payload,
+      },
+    };
+  }
+
+  private annotateConfirm(
+    envelope: AgentResultEnvelope,
+    input: {
+      attempt: number;
+      attempts: number;
+      inconclusive: number;
+      networkError: string;
+    },
+  ): AgentResultEnvelope {
+    return {
+      ...envelope,
+      payload: {
+        ...(envelope.payload || {}),
+        confirmAttempt: input.attempt,
+        confirmAttempts: input.attempts,
+        confirmInconclusive: input.inconclusive,
+        confirmNetworkError: input.networkError,
+      },
+    };
   }
 
   async cancel(remoteRunId: string): Promise<AgentResultEnvelope> {

@@ -7,11 +7,12 @@ Deterministically verify Agent Executor architecture contracts without live Open
 ## Real Scenarios
 
 1. Gateway `agent.wait` 断连但 `sessions.*` 仍显示 running → 保持 `running`，不得直接 `failed`。
-2. OpenClaw 返回 `observedFields` 对象形状 → 仍通过可验证 artifact。
-3. MCP 仅有 `memory.read` → `memory_evidence_get` 拒绝原文。
-4. 空 `agentExecutors` + legacy OpenClaw 开启 → 合成 `openclaw` 默认执行器。
-5. mock ACP stdio → 成功 envelope + verifiable artifact。
-6. A2A `taskId`/`contextId` ↔ `agent_run_id`/`agent_conversation_id`。
+2. Gateway `agent.wait` 超时后确认环读到最终结果 → 写入 `succeeded`，不得直接 `dead_letter`。
+3. OpenClaw 返回 `observedFields` 对象形状 → 仍通过可验证 artifact。
+4. MCP 仅有 `memory.read` → `memory_evidence_get` 拒绝原文。
+5. 空 `agentExecutors` + legacy OpenClaw 开启 → 合成 `id=openclaw` 的 Gateway 默认执行器。
+6. mock ACP stdio → 成功 envelope + verifiable artifact。
+7. A2A `taskId`/`contextId` ↔ `agent_run_id`/`agent_conversation_id`。
 
 ## Steps
 
@@ -23,6 +24,7 @@ Deterministically verify Agent Executor architecture contracts without live Open
 ## Pass Criteria
 
 - Gateway reconcile must prefer `running` over hard fail when remote session is active
+- Gateway wait timeout must confirm the remote run and accept a later success instead of dead-lettering
 - Object-shaped `observedFields` must count as verifiable
 - Raw evidence fetch must require `evidence.raw.read`
 - Empty registry must synthesize legacy OpenClaw defaults

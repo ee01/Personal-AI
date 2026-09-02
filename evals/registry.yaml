@@ -1005,7 +1005,7 @@ suites:
 
   - id: agent-executor-runtime
     title: Agent Executor Runtime Eval
-    description: 确定性验证 Gateway reconcile、artifact observedFields 形状、MCP 证据门控、ACP envelope、executor registry 合成与 A2A id 映射。
+    description: 确定性验证 Gateway reconcile、wait 超时确认环、artifact observedFields 形状、MCP 证据门控、ACP envelope、executor registry 合成与 A2A id 映射。
     enabled: true
     workflow: evals/workflows/agent-executor-runtime/experience.md
     cases: evals/cases/agent-executor-runtime/cases.jsonl
@@ -1031,5 +1031,5 @@ suites:
         - evals/**
         - docs/features/agent_executor_runtime.md
       validate:
-        - npm --prefix memory-service test -- --run src/__tests__/openClawGatewayExecutor.test.ts src/__tests__/acpExecutor.test.ts src/__tests__/mcpTools.test.ts src/__tests__/a2aRoutes.test.ts src/__tests__/executorRegistry.test.ts
+        - npm --prefix memory-service test -- --run src/__tests__/openClawGatewayExecutor.test.ts src/__tests__/actionExecutor.test.ts src/__tests__/actionRepositoryStaleRunning.test.ts src/__tests__/acpExecutor.test.ts src/__tests__/mcpTools.test.ts src/__tests__/a2aRoutes.test.ts src/__tests__/executorRegistry.test.ts
         - npm run eval:run -- --suite agent-executor-runtime --no-repair
