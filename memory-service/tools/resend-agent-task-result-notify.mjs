@@ -72,12 +72,13 @@ const body = config.notifyTemplate
 const target = resolveExplicitAgentTaskResultTarget(config.notifyTarget);
 if (!target) {
   console.log(JSON.stringify({ phase: 'formatted_no_target', body }, null, 2));
+  manager.closeAll();
   process.exit(0);
 }
 
 const sent = await new NotificationCenterService(ctx.db).deliverNoticeToGlip({
-  sourceRef: `agent_task:${actionId}:result:resend`,
-  title: `任务完成: ${action.title}`,
+  sourceRef: `agent_task:${actionId}:result:resend:${Date.now()}`,
+  title: '',
   body,
   mention: true,
   targetUserId: target.targetUserId,
@@ -98,4 +99,5 @@ console.log(
     2,
   ),
 );
+manager.closeAll();
 process.exit(sent.sent ? 0 : 1);

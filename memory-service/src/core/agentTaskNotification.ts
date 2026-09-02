@@ -7,6 +7,7 @@ import {
   extractSummaryFromMixedText,
 } from '../integrations/executors/agentResultEnvelope.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
+import { composeNoticeMarkdown } from '../utils/botSender.js';
 import { getLLMClient, type LLMOptions, type LLMResponse } from '../llm/LLMClient.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
@@ -288,7 +289,7 @@ export async function deliverAgentTaskAsMeNotice(input: {
     return { sent: false, error: 'RingCentral not configured for AsMe notify' };
   }
 
-  const text = `**${input.title}**\n\n${input.body}`;
+  const text = composeNoticeMarkdown(input.title, input.body);
   try {
     const targetGroupId = input.targetGroupId?.trim();
     if (targetGroupId) {
@@ -912,9 +913,9 @@ export async function deliverAgentTaskRunNotifications(input: {
     const noticeTitle =
       delivery.kind === 'failure_receipt'
         ? `帮我做失败: ${title}`
-        : delivery.kind === 'result'
-          ? `任务完成: ${title}`
-          : `帮我做完成: ${title}`;
+        : delivery.kind === 'success_receipt'
+          ? `帮我做完成: ${title}`
+          : '';
     const sourceRef = `agent_task:${input.action.id}:${delivery.kind}:${index}`;
     const deliveryVia = resolveAgentTaskDeliveryVia(delivery.kind, config.notifyVia);
 

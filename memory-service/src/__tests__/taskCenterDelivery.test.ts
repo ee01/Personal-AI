@@ -6,6 +6,7 @@ import {
   shouldDeliverLedgerNotifications,
 } from '../core/agentTaskNotification.js';
 import { NotificationCenterService } from '../core/NotificationCenterService.js';
+import { composeNoticeMarkdown } from '../utils/botSender.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { getTestDb } from './setup.js';
 
@@ -129,5 +130,53 @@ describe('Task Center home-lane delivery', () => {
     const stored = repo.getById(action.id);
     const metadata = stored?.params?.metadata as Record<string, unknown>;
     expect(String(metadata.notifyDeliveryError)).toContain('bot not a member');
+  });
+
+  it('sends group result notices as the body only, without 任务完成', async () => {
+    const glip = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true });
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team 的 Epics',
+      taskKind: 'agent',
+      sourceKind: 'agent_task',
+      params: {
+        task: '查找缺少 Team 的 Epic',
+        metadata: {
+          notifyVia: 'bot',
+          successReceipt: false,
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        },
+      },
+      executionMode: 'auto',
+    });
+
+    await deliverAgentTaskRunNotifications({
+      db,
+      userId: 'esone.qiu',
+      action,
+      execution: {
+        queueStatus: 'succeeded',
+        result: {
+          status: 'success',
+          summary: 'JQL 命中 1 张',
+          artifacts: [
+            {
+              kind: 'note',
+              content: '* NOVA-7248 Debug @Tony Lin',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(glip).toHaveBeenCalled();
+    const payload = glip.mock.calls[0][0] as { title: string; body: string };
+    expect(payload.title).toBe('');
+    expect(payload.body).not.toContain('任务完成');
+    expect(payload.body).toContain('Nova 缺少 Team 的 Epics');
+    expect(payload.body).toContain('* NOVA-7248 Debug @Tony Lin');
+    expect(composeNoticeMarkdown(payload.title, payload.body)).toBe(payload.body.trim());
   });
 });

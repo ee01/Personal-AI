@@ -24,7 +24,7 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
   - 失败回执始终 Bot 私发本人；仅 `notify: false`（API 级，如 AR）可完全静默
   - `notifyVia`：成功结果可为 `bot`（默认）或 `asme`；回执始终 Bot。AsMe 使用 Sheet RingCentral sender token（与 AsMe 发消息相同），失败不回退 Bot
   - `notifyTarget` / `successReceipt` / `notifyVia` / `notifyTemplate` 由插件在保存 Sheet 行时**直接注册**到 `agent_task_notify_configs`（按 `sheetMessageId`），`/agent-tasks/execute` 的请求体缺哪个字段就回落读这张表，请求体给了值则请求体优先。这样即使触发链路（Apps Script）版本落后、没转发某个字段，通知语义也不受影响
-  - 发到 `notifyTarget` 的正文只有两种来源：模板格式化成功的结果，或者本地按模板/artifact 整理后的公告文本——**不会**是私密回执体（Run id / 触发来源 / Sheet 账本边界说明）；后者只用于 `success_receipt` / `failure_receipt` 两种回执
+  - 发到 `notifyTarget` 的正文只有两种来源：模板格式化成功的结果，或者本地按模板/artifact 整理后的公告文本——**不会**是私密回执体（Run id / 触发来源 / Sheet 账本边界说明）；后者只用于 `success_receipt` / `failure_receipt` 两种回执。结果通知不加 `任务完成:` 前缀，正文即模板内容
   - 模板格式化走 Memory Service 自己的 LLM（`getLLMClient`，服务端 key），**不**再委派 OpenClaw 执行器。模板若含 markdown 链接或写明要带链接，由 LLM 按模板输出可点击链接；本地填空只铺列表，不臆造站点 URL。LLM 异常或输出不可用时，用 artifact / 信封里的列表按模板本地填空，仍不静默
   - 执行器**不会**按 Glip 模板写最终回复。`notifyTemplate` 只抽成证据字段提示（如 `entity_key` / `url` / `title` / `assignee`）写进共享 system prompt；Jira 对象收据要求 `metadata.entityKey` + 实际实例的 `metadata.url` + summary，有经办人则带 `metadata.assignee`。通知模板正文不会作为 Task/最终格式下达给 OpenClaw
   - 结果投递（`result` 类型）的成功/失败会写入 `channel_delivery_records`；`GET /agent-tasks/runtime-status` 返回 `resultNotifyDelivery: { delivered, error? }`；投递失败时会额外私发 owner 一条说明，避免"回执说成功、群里却什么都没收到"的静默
