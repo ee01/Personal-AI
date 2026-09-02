@@ -467,8 +467,15 @@ export async function formatSuccessNotificationWithTemplate(input: {
         generate(
           [
             '你只负责把 Agent task 执行结果整理成 Glip 通知正文。',
-            '不要执行外部操作，不要编造未出现在证据里的 Jira key / URL / 人名。',
+            '不要执行外部操作，不要编造未出现在证据里的标识 / 人名。',
             '严格按用户模板的结构输出（标题行、分隔线、列表项、结尾说明）。',
+            templateRequestsLinks(template)
+              ? [
+                  '用户模板要求列表项带可点击链接（markdown `[text](url)`，或模板文字写了要带链接 / link）。',
+                  '模板里的 xxx、Nova-xxx、http://xxx 只是占位示例：请替换成证据里的真实条目，并输出 markdown 链接，不要把标识写成纯文本。',
+                  '证据里已有 URL 时必须用证据 URL；证据没有完整 URL 时，按模板给出的链接格式补全可点击地址，不要照抄 xxx 占位符。',
+                ].join('')
+              : '',
             '只输出最终通知正文，不要 JSON、不要 markdown 代码围栏、不要解释。',
             '',
             `任务标题: ${input.title}`,
@@ -478,6 +485,9 @@ export async function formatSuccessNotificationWithTemplate(input: {
             evidence.lines.length
               ? `已整理的列表项:\n${evidence.lines.join('\n')}`
               : '没有可列出的条目。',
+            evidence.urls.length
+              ? `证据中的 URL:\n${evidence.urls.join('\n')}`
+              : '证据中没有现成 URL。',
             `本地兜底文案:\n${structuredFallback}`,
           ].join('\n'),
           {
@@ -515,12 +525,55 @@ export async function formatSuccessNotificationWithTemplate(input: {
 export interface NotificationEvidence {
   summary: string;
   lines: string[];
+  urls: string[];
+}
+
+function pushHttpUrl(value: unknown, urls: string[]): void {
+  if (typeof value === 'string' && /^https?:\/\//i.test(value.trim())) {
+    urls.push(value.trim());
+  }
+}
+
+function collectArtifactUrls(record: Record<string, unknown>, urls: string[]): void {
+  for (const key of ['url', 'href', 'link']) {
+    pushHttpUrl(record[key], urls);
+  }
+  const metadata = asRecord(record.metadata);
+  for (const key of ['url', 'href', 'link', 'browseUrl']) {
+    pushHttpUrl(metadata[key], urls);
+  }
+  const content = typeof record.content === 'string' ? record.content : '';
+  const title = typeof record.title === 'string' ? record.title : '';
+  for (const text of [content, title]) {
+    const matches = text.match(/https?:\/\/[^\s)\]>'"]+/gi);
+    if (matches) urls.push(...matches);
+  }
+}
+
+function evidenceLineFromArtifact(art: Record<string, unknown>): string | undefined {
+  const metadata = asRecord(art.metadata);
+  const title = typeof art.title === 'string' ? art.title.trim() : '';
+  const entityKey =
+    nonEmptyString(metadata.entityKey) ||
+    (/^[A-Z][A-Z0-9]+-\d+$/.test(title) ? title : undefined);
+  if (!entityKey) return undefined;
+  const summary =
+    (title && title !== entityKey ? title : '') ||
+    nonEmptyString(metadata.summary) ||
+    '';
+  const assignee = nonEmptyString(metadata.assignee);
+  const parts = [
+    entityKey,
+    summary,
+    assignee ? `@${assignee.replace(/^@/, '')}` : '',
+  ].filter(Boolean);
+  return `* ${parts.join(' ')}`;
 }
 
 export function extractNotificationEvidence(
   result?: Record<string, unknown>,
 ): NotificationEvidence {
-  if (!result) return { summary: '', lines: [] };
+  if (!result) return { summary: '', lines: [], urls: [] };
 
   const nestedEnvelopes: Record<string, unknown>[] = [];
   const rawSummary = typeof result.summary === 'string' ? result.summary : '';
@@ -536,15 +589,18 @@ export function extractNotificationEvidence(
   }
 
   const lines: string[] = [];
+  const urls: string[] = [];
   let summary = '';
 
   const collectFromEnvelope = (envelope: Record<string, unknown>) => {
+    collectArtifactUrls(envelope, urls);
     if (typeof envelope.summary === 'string' && envelope.summary.trim()) {
       const next = envelope.summary.trim();
       if (!summary || next.length > summary.length) summary = next;
     }
     const innerArtifacts = Array.isArray(envelope.artifacts) ? envelope.artifacts : [];
     for (const inner of innerArtifacts) {
+      collectArtifactUrls(asRecord(inner), urls);
       const art = asRecord(inner);
       const content = typeof art.content === 'string' ? art.content.trim() : '';
       if (looksLikeListContent(content)) {
@@ -552,11 +608,18 @@ export function extractNotificationEvidence(
           const trimmed = line.trim();
           if (trimmed) lines.push(normalizeEvidenceLine(trimmed));
         }
+      } else {
+        const structured = evidenceLineFromArtifact(art);
+        if (structured) lines.push(structured);
       }
     }
   };
 
   for (const envelope of nestedEnvelopes) collectFromEnvelope(envelope);
+
+  for (const artifact of artifacts) {
+    collectArtifactUrls(asRecord(artifact), urls);
+  }
 
   if (!lines.length) {
     for (const artifact of artifacts) {
@@ -567,6 +630,11 @@ export function extractNotificationEvidence(
           const trimmed = line.trim();
           if (trimmed) lines.push(normalizeEvidenceLine(trimmed));
         }
+        continue;
+      }
+      const structured = evidenceLineFromArtifact(art);
+      if (structured) {
+        lines.push(structured);
         continue;
       }
       const title = typeof art.title === 'string' ? art.title.trim() : '';
@@ -584,7 +652,15 @@ export function extractNotificationEvidence(
   return {
     summary: summary.replace(/\{[\s\S]*$/, '').trim(),
     lines: uniqueNonEmpty(lines),
+    urls: uniqueNonEmpty(urls),
   };
+}
+
+export function templateRequestsLinks(template: string): boolean {
+  const text = template.trim();
+  if (!text) return false;
+  if (/\[[^\]]+\]\([^)]+\)/.test(text)) return true;
+  return /链接|超链接|\blinks?\b/i.test(text);
 }
 
 export function applyNotifyTemplateLocally(

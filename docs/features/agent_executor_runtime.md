@@ -25,7 +25,8 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
   - `notifyVia`：成功结果可为 `bot`（默认）或 `asme`；回执始终 Bot。AsMe 使用 Sheet RingCentral sender token（与 AsMe 发消息相同），失败不回退 Bot
   - `notifyTarget` / `successReceipt` / `notifyVia` / `notifyTemplate` 由插件在保存 Sheet 行时**直接注册**到 `agent_task_notify_configs`（按 `sheetMessageId`），`/agent-tasks/execute` 的请求体缺哪个字段就回落读这张表，请求体给了值则请求体优先。这样即使触发链路（Apps Script）版本落后、没转发某个字段，通知语义也不受影响
   - 发到 `notifyTarget` 的正文只有两种来源：模板格式化成功的结果，或者本地按模板/artifact 整理后的公告文本——**不会**是私密回执体（Run id / 触发来源 / Sheet 账本边界说明）；后者只用于 `success_receipt` / `failure_receipt` 两种回执
-  - 模板格式化走 Memory Service 自己的 LLM（`getLLMClient`，服务端 key），**不**再委派 OpenClaw 执行器。LLM 异常或输出不可用时，用 artifact / 信封里的列表按模板本地填空，仍不静默
+  - 模板格式化走 Memory Service 自己的 LLM（`getLLMClient`，服务端 key），**不**再委派 OpenClaw 执行器。模板若含 markdown 链接或写明要带链接，由 LLM 按模板输出可点击链接；本地填空只铺列表，不臆造站点 URL。LLM 异常或输出不可用时，用 artifact / 信封里的列表按模板本地填空，仍不静默
+  - 执行器**不会**按 Glip 模板写最终回复。`notifyTemplate` 只抽成证据字段提示（如 `entity_key` / `url` / `title` / `assignee`）写进共享 system prompt；Jira 对象收据要求 `metadata.entityKey` + 实际实例的 `metadata.url` + summary，有经办人则带 `metadata.assignee`。通知模板正文不会作为 Task/最终格式下达给 OpenClaw
   - 结果投递（`result` 类型）的成功/失败会写入 `channel_delivery_records`；`GET /agent-tasks/runtime-status` 返回 `resultNotifyDelivery: { delivered, error? }`；投递失败时会额外私发 owner 一条说明，避免"回执说成功、群里却什么都没收到"的静默
 - `proposed_actions.idempotency_key`：**UNIQUE**；幂等键确定性（无 `Date.now()` 兜底）
 - 队列态含 `input_required` / `running`；Gateway 断连后可停在可恢复态，不把网络层失败直接等同业务失败
@@ -62,7 +63,7 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 
 共享契约：`agentResultContract.ts` — success 必须带可验证 artifact；`observedFields` 接受 **array 或 object**。查询/扫描类任务正确查到 0 个匹配是合法 success，不算缺证据：交一张 `kind: 'query_result'`（或 `metadata.matchCount === 0`）+ `sourceSystem` + `query`（实际查询语句）+ `verification` 的收据即可，不要求 `entityId`；系统提示词（`agentResultPrompt.ts`）已教会 agent 这个模式。
 
-用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
+用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。若任务带了 `notifyTemplate`，prompt 只注入「通知还需要哪些字段」，不把模板当最终回复；Jira 收据约定带 browse/self URL。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
 
 ## OpenClaw Gateway（Block C）
 

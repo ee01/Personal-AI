@@ -8,6 +8,7 @@ import {
   buildAgentResultSystemPrompt,
   buildAgentResultUserPrompt,
   detectTaskReceiptHints,
+  extractNotifyEvidenceFields,
 } from '../integrations/executors/agentResultPrompt.js';
 
 const NOVA_MARKDOWN = `已按 Asia/Shanghai 当前季度 2026-Q3 检查并同步 Committed：
@@ -36,12 +37,61 @@ describe('agentResultPrompt', () => {
 
     expect(prompt).toContain('用户的 Task 只描述要做什么');
     expect(prompt).toContain('Likely sourceSystem: jira');
+    expect(prompt).toContain('metadata.url=你实际请求的 Jira 实例');
     expect(prompt).not.toContain('Target system: agent_task');
     expect(user).toContain(task);
     expect(user).toContain('回报格式由系统规定');
     expect(detectTaskReceiptHints(task, 'agent_task').likelySourceSystem).toBe(
       'jira',
     );
+  });
+
+  it('asks the executor for template evidence fields without dumping the Glip template', () => {
+    const task = '查找 Nova 缺少 Team 的 Epics';
+    const template = `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](http://xxx) summary @INIT.assginee
+* ...
+
+以上 Epic 麻烦各位 leads 来看看添加上对应的 Team`;
+    const prompt = buildAgentResultSystemPrompt(
+      {
+        task,
+        mode: 'read',
+        targetSystem: 'agent_task',
+        metadata: {
+          notifyTemplate: template,
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+          executorId: 'openclaw',
+        },
+      },
+      { runtime: 'openclaw' },
+    );
+    const user = buildAgentResultUserPrompt({
+      task,
+      mode: 'read',
+      metadata: {
+        notifyTemplate: template,
+        notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        executorId: 'openclaw',
+      },
+    });
+
+    expect(prompt).toContain(
+      'Notification evidence fields (collect on each listed object; do not write the announcement): entity_key, url, title, assignee.',
+    );
+    expect(prompt).toContain('不要填写用户的通知模板');
+    expect(prompt).not.toContain('以上 Epic 麻烦各位 leads');
+    expect(user).not.toContain('notifyTemplate');
+    expect(user).not.toContain('以上 Epic 麻烦各位 leads');
+    expect(user).toContain('"executorId":"openclaw"');
+    expect(extractNotifyEvidenceFields(template)).toEqual([
+      'entity_key',
+      'url',
+      'title',
+      'assignee',
+    ]);
   });
 });
 

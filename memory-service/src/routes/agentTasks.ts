@@ -411,6 +411,9 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const notifyVia = normalizeAgentTaskNotifyVia(
         body.notifyVia !== undefined ? body.notifyVia : storedNotifyConfig?.notifyVia,
       );
+      const notifyTemplate =
+        nonEmptyString(body.notifyTemplate) ??
+        nonEmptyString(storedNotifyConfig?.notifyTemplate);
       const asmeSender = normalizeAsMeSenderCredentials(body.asmeSender);
       const resultTarget = resolveExplicitAgentTaskResultTarget(notifyTarget);
       // API response: prefer explicit result target; otherwise report owner receipt fallback.
@@ -440,7 +443,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
             targetSystem,
             taskKind,
             executionHints,
-            notifyTemplate: body.notifyTemplate,
+            notifyTemplate,
             triggerSource,
             arBindingId,
             notifyTarget,
