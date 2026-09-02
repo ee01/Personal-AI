@@ -1,6 +1,6 @@
 # 定时消息统一管理功能（任务中心 ☁️ jira_sheet lane）
 
-*最后更新: 2026-08-28*
+*最后更新: 2026-09-02*
 
 > **定位**：本文是[任务中心](task_center.md)的 **Level 2 / ☁️ `jira_sheet` lane** 子文档，覆盖 Google Sheet + App Script + Jira Automation 这条云端 24/7 调度链路的全部实现细节（数据模型、执行匹配与幂等、Config 同步、Timeline 缓存、App Script 自动更新）。
 >
@@ -12,7 +12,7 @@
 
 ## 大白话运行逻辑
 
-这个功能把“什么时候发什么消息 / 什么时候让 Agent 做什么”拆成三层：Google Sheet 是用户可编辑的计划表，执行引擎负责按时间发出或触发，memory-service runtime 负责 Outreach 这类需要等回复、追问和记录状态的任务，也负责 AgentTask 的 run 账本、OpenClaw 调用、artifact 和 Bot 通知。
+这个功能把“什么时候发什么消息 / 什么时候让 Agent 做什么”拆成三层：Google Sheet 是用户可编辑的计划表，执行引擎负责按时间发出或触发，memory-service runtime 负责 Outreach 这类需要等回复、追问和记录状态的任务，也负责 AgentTask 的 run 账本、OpenClaw 执行、artifact，以及 Memory Service 自己发出的结果通知。
 
 结果主要受这些因素影响：
 
@@ -631,8 +631,8 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
   - 帮我做弹窗可选 AsMe；Sheet RingCentral sender 未就绪时标「可预览 · 待配置」，保存会被拦截。入口与顶部 AsMe tab 的「配置 @ 人发送能力」相同。
 - **通知配置不再单靠 Apps Script 转发**：管理页保存/编辑 AgentTask 行时，除了写 Sheet 列，还会把 `notifyTarget`/`Agent_Notify_Success_Receipt`/`Agent_Notify_Via`/`Agent_Notify_Template` 通过 `SYNC_AGENT_TASK_NOTIFY_CONFIG` 直接注册到 memory-service（`POST /agent-tasks/notify-config`，按 `sheetMessageId` 存表）；`Push_Method` 从 AgentTask 切走时会调用 `DELETE .../notify-config/:sheetMessageId` 清掉这条。`/agent-tasks/execute` 收到请求时，body 里没带的字段会回落读这张表，body 显式给的值仍优先。这样即使线上 Apps Script 版本落后（某个字段还没加进模板转发逻辑），通知配置依然正确——不需要先升级脚本。保存回执里会提示这次同步是否成功。
 - `Agent_Notify_Template` 只影响成功结果通知文案；原始 OpenClaw task、artifact 和 payload 不会被通知模板改写。成功回执（无结果目标时）与失败回执均用默认摘要，不套模板。
-- **发到结果通知目标的正文，绝不会是回执体**：没配模板、或模板格式化失败时，`result` 类型的兜底文案只有「标题 + 结果摘要」两行，不含 `Run: <uuid>`/`触发: jira_rule`/`边界: Sheet 只记录计划...` 这类只对 owner 有意义的内部记账字段——那套字段专属 `success_receipt`/`failure_receipt` 两种私密回执。模板格式化本身经一次内部 OpenClaw 委派调用；调用抛异常、返回非 `success`、或摘要为空，都会记录 warn（附具体原因）后回落到这个纯公告文本，不会静默换成回执体。
-- 推送在 memory-service 拿到 OpenClaw 输出后由代码层完成：Bot 走 `NotificationCenterService` → Bot API；AsMe 走 Sheet RingCentral sender JWT（`RingCentralClient` 显式凭据，不写进 action 账本）。**不会**把“通知到某群”写进任务 prompt。
+- **发到结果通知目标的正文，绝不会是回执体**：没配模板、或模板格式化失败时，`result` 类型的兜底文案是「标题 + 清洗后的结果摘要」，若 artifact 里已有列表则按 `Agent_Notify_Template` 本地填空；不含 `Run: <uuid>`/`触发: jira_rule`/`边界: Sheet 只记录计划...` 这类只对 owner 有意义的内部记账字段——那套字段专属 `success_receipt`/`failure_receipt` 两种私密回执。模板格式化走 Memory Service 自己的 LLM（服务端 key），不委派 OpenClaw；LLM 抛异常或输出不可用时记录 warn 后回落到上述本地填空，不会静默换成回执体。
+- 推送在 memory-service 拿到执行结果后由代码层完成：Bot 走 `NotificationCenterService` → Bot API；AsMe 走 Sheet RingCentral sender JWT（`RingCentralClient` 显式凭据，不写进 action 账本）。**不会**把“通知到某群”写进任务 prompt，也**不会**为了整理文案再跑一轮 OpenClaw。
 - 结果投递（`result` 类型）成功与否会写进 `channel_delivery_records`；管理页 `GET /agent-tasks/runtime-status` 会带回 `resultNotifyDelivery: { delivered, error? }`。投递失败（例如 SM AI Bot 不在目标群）时，除了记录，还会私发 owner 一条「通知投递失败: <原因>」——避免"任务回执显示 success、目标群却什么都没收到"这种情况只能靠翻服务端日志才能发现。
 
 #### 7. AR 绑定来源

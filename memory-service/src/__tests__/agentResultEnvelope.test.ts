@@ -153,4 +153,46 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.summary).toContain('缺少可验证 artifact');
   });
+
+  it('uses the JSON envelope summary when the model prefixes it with prose', () => {
+    const parsed = parseAgentResultEnvelope(
+      [
+        '数据已全部齐备并回读验证：11 张 Epic 均缺少 Team。',
+        '',
+        JSON.stringify({
+          status: 'success',
+          summary: 'JQL 命中 11 张 Nova 缺少 Team 的 Epic',
+          artifacts: [
+            {
+              kind: 'query_result',
+              title: 'Nova 缺少 Team 的 Epics',
+              content: '* NOVA-7248 Debug @Tony Lin',
+              metadata: {
+                sourceSystem: 'jira',
+                query: 'project=NOVA and cf[17553] is EMPTY',
+                verification: 'jql_requery',
+                matchCount: 11,
+              },
+            },
+          ],
+        }),
+      ].join('\n'),
+      { mode: 'read', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.summary).toBe('JQL 命中 11 张 Nova 缺少 Team 的 Epic');
+    expect(parsed.summary).not.toContain('"artifacts"');
+  });
+
+  it('does not keep truncated JSON in the summary when the envelope is cut off', () => {
+    const parsed = parseAgentResultEnvelope(
+      '数据已全部齐备并回读验证：11 张 Epic 均缺少 Team。\n\n{"status":"success","summary":"JQL 命中 11 张 Nova 缺少 Team 的 Epic","artifacts":[{"kind":"note","content":"* NOVA-7248 Debug @Tony Lin',
+      { mode: 'read', targetSystem: 'jira', task: '查找缺少 Team 的 Epic' },
+    );
+
+    expect(parsed.summary).toContain('JQL 命中 11 张 Nova 缺少 Team 的 Epic');
+    expect(parsed.summary).not.toContain('"artifacts"');
+    expect(parsed.summary).not.toContain('数据已全部齐备');
+  });
 });

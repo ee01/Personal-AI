@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
-import { OpenClawDelegationService } from '../integrations/OpenClawDelegationService.js';
+import { runWithUsageContext } from '../analytics/usageContext.js';
+import {
+  extractAgentResultJson,
+  extractSummaryFromMixedText,
+} from '../integrations/executors/agentResultEnvelope.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
+import { getLLMClient, type LLMOptions, type LLMResponse } from '../llm/LLMClient.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
 import { ChannelDeliveryRepository } from '../repositories/ChannelDeliveryRepository.js';
@@ -164,14 +169,29 @@ export function buildDefaultNotificationBody(input: {
 export function buildAgentTaskResultAnnouncementBody(input: {
   title: string;
   summary?: string;
+  result?: Record<string, unknown>;
+  template?: string;
 }): string {
-  const lines = [input.title, input.summary ? compactText(input.summary, 1200) : ''];
-  return lines.filter(Boolean).join('\n');
+  const evidence = extractNotificationEvidence(input.result);
+  const summary = evidence.summary || input.summary || '';
+  if (input.template?.trim() && evidence.lines.length > 0) {
+    return applyNotifyTemplateLocally(input.template, evidence);
+  }
+  const lines = [
+    input.title,
+    summary ? compactText(summary, 1200) : '',
+    ...evidence.lines,
+  ];
+  return uniqueNonEmpty(lines).join('\n');
 }
 
 export function getExecutionSummary(result?: Record<string, unknown>): string | undefined {
+  const evidence = extractNotificationEvidence(result);
+  if (evidence.summary) return evidence.summary;
   const summary = result?.summary;
-  return typeof summary === 'string' && summary.trim() ? summary.trim() : undefined;
+  if (typeof summary !== 'string' || !summary.trim()) return undefined;
+  const cleaned = extractSummaryFromMixedText(summary);
+  return cleaned.trim() || undefined;
 }
 
 export function getResultStatus(result?: Record<string, unknown>, queueStatus?: string): string {
@@ -405,9 +425,9 @@ interface FormatSuccessNotificationLogger {
 }
 
 /**
- * Formats the group/private result notification through an OpenClaw delegate
- * call so it follows the user's template. The delegate is marked
- * `notificationOnly` so its success envelope is accepted on the summary alone.
+ * Formats the group/private result notification with Memory Service's own LLM
+ * (not the Agent executor). Push to Glip is also Memory Service. If the LLM
+ * call fails, fall back to a local template fill from artifacts.
  */
 export async function formatSuccessNotificationWithTemplate(input: {
   template: string;
@@ -420,58 +440,245 @@ export async function formatSuccessNotificationWithTemplate(input: {
   taskId: string;
   actionId: string;
   log: FormatSuccessNotificationLogger;
+  generate?: (prompt: string, options?: LLMOptions) => Promise<LLMResponse>;
 }): Promise<string> {
+  void input.userDataManager;
   const template = input.template.trim();
   if (!template) return input.defaultBody;
 
-  const formatter = new OpenClawDelegationService(input.userDataManager, input.userId);
-  let outcome;
+  const evidence = extractNotificationEvidence(input.result);
+  const structuredFallback =
+    evidence.lines.length > 0
+      ? applyNotifyTemplateLocally(template, evidence)
+      : input.defaultBody;
+
+  let content: string;
   try {
-    outcome = await formatter.delegate({
-      task: [
-        '你只负责把 Agent task 执行结果整理成通知文案，不执行外部操作，不改变 artifact。',
-        '这是纯文案任务：summary 就是交付物，不需要回读外部系统，也不需要可验证 artifact 收据，artifacts 留空即可。',
-        '请按用户给出的模板风格输出可以直接私发给用户的中文通知。',
-        '返回 JSON envelope，其中 summary 字段就是最终通知正文。',
-        '',
-        `任务标题: ${input.title}`,
-        `任务内容: ${input.task}`,
-        `用户通知模板: ${template}`,
-        `默认摘要:\n${input.defaultBody}`,
-        `原始结果 JSON:\n${JSON.stringify(input.result ?? {}, null, 2)}`,
-      ].join('\n'),
-      mode: 'read',
-      targetSystem: 'agent_task_notification',
-      threadId: `agent-task-notification:${input.title}`,
-      actionId: `agent-task-notification:${randomUUID()}`,
-      sessionKey: `agent-task-notification:${input.title}:${Date.now()}`,
-      metadata: {
-        notificationOnly: true,
-        template,
+    const generate =
+      input.generate ?? ((prompt, options) => getLLMClient().generate(prompt, options));
+    const response = await runWithUsageContext(
+      {
+        userId: input.userId,
+        capability: 'scheduled_messages',
+        feature: 'agent_task_notify_template',
+        side: 'backend',
       },
-    });
+      () =>
+        generate(
+          [
+            '你只负责把 Agent task 执行结果整理成 Glip 通知正文。',
+            '不要执行外部操作，不要编造未出现在证据里的 Jira key / URL / 人名。',
+            '严格按用户模板的结构输出（标题行、分隔线、列表项、结尾说明）。',
+            '只输出最终通知正文，不要 JSON、不要 markdown 代码围栏、不要解释。',
+            '',
+            `任务标题: ${input.title}`,
+            `任务内容: ${input.task}`,
+            `用户通知模板:\n${template}`,
+            `已整理的证据摘要:\n${evidence.summary || '(无)'}`,
+            evidence.lines.length
+              ? `已整理的列表项:\n${evidence.lines.join('\n')}`
+              : '没有可列出的条目。',
+            `本地兜底文案:\n${structuredFallback}`,
+          ].join('\n'),
+          {
+            scenario: 'drafting',
+            maxTokens: 2000,
+            timeoutMs: 45_000,
+            systemPrompt:
+              '你是 Personal AI 的通知文案整理器。只输出可直接发给用户的中文通知正文。',
+          },
+        ),
+    );
+    content = response.content || '';
   } catch (error) {
     input.log.warn(
       { err: error, taskId: input.taskId, actionId: input.actionId },
-      'AgentTask notification template formatting threw; using default body',
+      'AgentTask notification template formatting threw; using structured fallback',
     );
-    return input.defaultBody;
+    return structuredFallback;
   }
 
-  if (outcome.status === 'success' && outcome.summary?.trim()) {
-    return outcome.summary.trim();
-  }
+  const formatted = notificationBodyFromLlm(content);
+  if (formatted) return formatted;
 
   input.log.warn(
     {
       taskId: input.taskId,
       actionId: input.actionId,
-      delegationStatus: outcome.status,
-      hasSummary: Boolean(outcome.summary?.trim()),
+      hasLlmContent: Boolean(content.trim()),
     },
-    'AgentTask notification template formatting did not return a usable summary; using default body',
+    'AgentTask notification template formatting did not return a usable body; using structured fallback',
   );
-  return input.defaultBody;
+  return structuredFallback;
+}
+
+export interface NotificationEvidence {
+  summary: string;
+  lines: string[];
+}
+
+export function extractNotificationEvidence(
+  result?: Record<string, unknown>,
+): NotificationEvidence {
+  if (!result) return { summary: '', lines: [] };
+
+  const nestedEnvelopes: Record<string, unknown>[] = [];
+  const rawSummary = typeof result.summary === 'string' ? result.summary : '';
+  const fromSummary = extractAgentResultJson(rawSummary);
+  if (fromSummary) nestedEnvelopes.push(fromSummary);
+
+  const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  for (const artifact of artifacts) {
+    const art = asRecord(artifact);
+    const content = typeof art.content === 'string' ? art.content : '';
+    const nested = extractAgentResultJson(content);
+    if (nested) nestedEnvelopes.push(nested);
+  }
+
+  const lines: string[] = [];
+  let summary = '';
+
+  const collectFromEnvelope = (envelope: Record<string, unknown>) => {
+    if (typeof envelope.summary === 'string' && envelope.summary.trim()) {
+      const next = envelope.summary.trim();
+      if (!summary || next.length > summary.length) summary = next;
+    }
+    const innerArtifacts = Array.isArray(envelope.artifacts) ? envelope.artifacts : [];
+    for (const inner of innerArtifacts) {
+      const art = asRecord(inner);
+      const content = typeof art.content === 'string' ? art.content.trim() : '';
+      if (looksLikeListContent(content)) {
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed) lines.push(normalizeEvidenceLine(trimmed));
+        }
+      }
+    }
+  };
+
+  for (const envelope of nestedEnvelopes) collectFromEnvelope(envelope);
+
+  if (!lines.length) {
+    for (const artifact of artifacts) {
+      const art = asRecord(artifact);
+      const content = typeof art.content === 'string' ? art.content.trim() : '';
+      if (looksLikeListContent(content) && !content.trimStart().startsWith('{')) {
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed) lines.push(normalizeEvidenceLine(trimmed));
+        }
+        continue;
+      }
+      const title = typeof art.title === 'string' ? art.title.trim() : '';
+      if (/^[A-Z][A-Z0-9]+-\d+/.test(title) && !content.trimStart().startsWith('{')) {
+        const suffix = content && !content.includes('{') ? ` ${compactText(content, 80)}` : '';
+        lines.push(normalizeEvidenceLine(`* ${title}${suffix}`.trim()));
+      }
+    }
+  }
+
+  if (!summary && rawSummary.trim()) {
+    summary = extractSummaryFromMixedText(rawSummary);
+  }
+
+  return {
+    summary: summary.replace(/\{[\s\S]*$/, '').trim(),
+    lines: uniqueNonEmpty(lines),
+  };
+}
+
+export function applyNotifyTemplateLocally(
+  template: string,
+  evidence: NotificationEvidence,
+): string {
+  const templateLines = template.replace(/\r\n/g, '\n').split('\n');
+  const bulletIndexes = templateLines
+    .map((line, index) => (isTemplatePlaceholderLine(line) ? index : -1))
+    .filter((index) => index >= 0);
+
+  const replacement = evidence.lines.length
+    ? evidence.lines.map((line) => (line.startsWith('*') ? line : `* ${line}`))
+    : [];
+
+  if (bulletIndexes.length === 0) {
+    return uniqueNonEmpty([
+      template.trim(),
+      evidence.summary,
+      ...replacement,
+    ]).join('\n');
+  }
+
+  const start = bulletIndexes[0];
+  let end = start;
+  while (end + 1 < templateLines.length && isTemplatePlaceholderLine(templateLines[end + 1])) {
+    end += 1;
+  }
+  while (end + 1 < templateLines.length && templateLines[end + 1].trim() === '') {
+    if (end + 2 < templateLines.length && !isTemplatePlaceholderLine(templateLines[end + 2])) {
+      break;
+    }
+    end += 1;
+  }
+
+  const next = [
+    ...templateLines.slice(0, start),
+    ...replacement,
+    ...templateLines.slice(end + 1),
+  ];
+  return next.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function isTemplatePlaceholderLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (trimmed === '*' || trimmed === '* ...' || trimmed === '...') return true;
+  return trimmed.startsWith('*') && (/xxx/i.test(trimmed) || trimmed.includes('...'));
+}
+
+function looksLikeListContent(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed || trimmed.startsWith('{')) return false;
+  return /^\*\s+\S+/m.test(trimmed) || /^[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed);
+}
+
+function normalizeEvidenceLine(line: string): string {
+  const trimmed = line.trim().replace(/^[-•]\s+/, '* ');
+  if (trimmed.startsWith('*')) return trimmed;
+  if (/^[A-Z][A-Z0-9]+-\d+/.test(trimmed)) return `* ${trimmed}`;
+  return trimmed;
+}
+
+function uniqueNonEmpty(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function notificationBodyFromLlm(content: string): string | undefined {
+  const trimmed = content.trim();
+  if (!trimmed) return undefined;
+  const fenced = trimmed.match(/```(?:[\w-]+)?\s*([\s\S]*?)```/);
+  const candidate = (fenced ? fenced[1] : trimmed).trim();
+  if (!candidate) return undefined;
+
+  const envelope = extractAgentResultJson(candidate);
+  if (envelope && typeof envelope.summary === 'string' && envelope.summary.trim()) {
+    const summary = envelope.summary.trim();
+    if (!/"artifacts"\s*:/.test(summary)) return summary;
+  }
+  if (/^\s*\{/.test(candidate) && /"status"\s*:/.test(candidate)) {
+    return undefined;
+  }
+  if (/"artifacts"\s*:/.test(candidate) && /"status"\s*:/.test(candidate)) {
+    return undefined;
+  }
+  return candidate;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -595,6 +802,8 @@ export async function deliverAgentTaskRunNotifications(input: {
   const resultAnnouncementBody = buildAgentTaskResultAnnouncementBody({
     title,
     summary,
+    result: input.execution.result,
+    template: succeeded ? config.notifyTemplate : undefined,
   });
 
   let templatedResultBody = resultAnnouncementBody;
