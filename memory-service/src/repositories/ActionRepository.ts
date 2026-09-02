@@ -421,14 +421,15 @@ export class ActionRepository {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Newest activity first. Status-bucket ordering hid recent dead_letter /
+    // succeeded runs behind older failed rows on source-filtered Action Queue.
     const rows = this.db
       .prepare(
         `SELECT *
          FROM proposed_actions
          ${whereClause}
          ORDER BY
-           CASE queue_status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END ASC,
-           priority DESC,
+           COALESCE(finished_at, started_at, created_at) DESC,
            created_at DESC
          LIMIT ? OFFSET ?`,
       )

@@ -76,6 +76,49 @@ describe('Action API', () => {
     });
   });
 
+  it('lists actions by latest activity time, not queue-status buckets', async () => {
+    const repo = new ActionRepository(db);
+    const olderFailed = repo.create({
+      id: 'action-older-failed',
+      actionType: 'delegate_agent',
+      title: 'Older failed run',
+      createdAt: 1_787_742_069,
+      sourceKind: 'agent_task',
+      sourceRefId: 'msg_sort_time',
+      queueStatus: 'failed',
+    });
+    const newerDeadLetter = repo.create({
+      id: 'action-newer-dead-letter',
+      actionType: 'delegate_agent',
+      title: 'Newer dead letter run',
+      createdAt: 1_788_314_099,
+      sourceKind: 'agent_task',
+      sourceRefId: 'msg_sort_time',
+      queueStatus: 'dead_letter',
+    });
+    db.prepare(
+      `UPDATE proposed_actions
+       SET started_at = ?, finished_at = ?
+       WHERE id = ?`,
+    ).run(1_787_742_069, 1_787_742_182, olderFailed.id);
+    db.prepare(
+      `UPDATE proposed_actions
+       SET started_at = ?, finished_at = ?
+       WHERE id = ?`,
+    ).run(1_788_314_174, 1_788_314_897, newerDeadLetter.id);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/actions?sourceKind=agent_task&sourceRefId=msg_sort_time&limit=10',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.map((item: { id: string }) => item.id)).toEqual([
+      'action-newer-dead-letter',
+      'action-older-failed',
+    ]);
+  });
+
   it('returns readiness receipts and refuses retry while a contract is blocked', async () => {
     const repo = new ActionRepository(db);
     const action = repo.create({

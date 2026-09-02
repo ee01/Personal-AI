@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-09-01*
+*最后更新: 2026-09-02*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -269,7 +269,7 @@
 | 自我反思线程 | 反思与梦境 | [memory_system.md](./memory_system.md) | `ReflectionThreadService` 与 UI 线程页；列表显示已读取/总计、当前切片逾期数和只读分页回执，详情页显示手动反思 / 暂停 / 恢复 / 关闭的操作范围回执 |
 | 反思本地研究补查 | 反思与梦境 | [memory_system.md](./memory_system.md) | 反思 run 内查询本地记忆和派生证据；详情页显示本轮研究范围、trace 卡、研究证据采用回执和手动推进 / 动作 / transcript / 会话导航控件边界 |
 | 梦境重放 | 反思与梦境 | [memory_system.md](./memory_system.md) | `DreamInsights.vue` / `dreams/*.md`，含本页范围、复核视图筛选、只读边界和可见复核入口 |
-| 动作队列 | 动作与确认 | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions`；筛选空结果、普通动作、按钮 hover/读屏和操作提交都有边界回执 |
+| 动作队列 | 动作与确认 | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions`；按最近活动时间倒序；筛选空结果、普通动作、按钮 hover/读屏和操作提交都有边界回执 |
 | 执行就绪契约 | 动作与确认 | [action_readiness_contracts.md](./features/action_readiness_contracts.md) | `delegate_openclaw` dispatch 前按鉴权、能力、输入与 proof 失败关闭；`agent_task` 只检查 gateway 连接层；probe 不提交原任务，Reflection 不堆积阻断动作 |
 | OpenClaw 外部委派 | 动作与确认 | [memory_system.md](./memory_system.md) | `delegate_openclaw` action；自动调度卡片和 transcript 展开按钮显示只读/触发边界 |
 | 决策中心 | 动作与确认 | [memory_system.md](./memory_system.md) | `DecisionCenter.vue` / `confirm_requests`；通知深链未命中显示已读队列与部分失败口径，审核包复制与处理按钮显示剪贴板/证据/写入边界 |

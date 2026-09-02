@@ -1,6 +1,6 @@
 # Agent Executor Runtime
 
-*最后更新: 2026-08-28*
+*最后更新: 2026-09-02*
 
 Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契约、记忆工具、对外被调用」拆成稳定分层。Sheet / Jira 只负责计划与触发；执行账本在 memory-service。
 
@@ -16,6 +16,7 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
 
 ## 控制面（Block A）
 
+- `GET /api/v1/actions`：动作队列按最近活动时间倒序（`COALESCE(finished_at, started_at, created_at)`），不按 `running → queued → failed → 其他` 分桶
 - `POST /api/v1/agent-tasks/execute`：**入队即返回**（202/accepted），后台执行与通知解耦
 - 通知语义（结果通知 vs 回执）：
   - `notifyTarget` 存在 → **成功**时发结果到目标（可套用 `notifyTemplate`）；**失败不发目标**
@@ -65,6 +66,10 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 
 ## OpenClaw Gateway（Block C）
 
+- 执行是 WebSocket 长等待，不是 HTTP 短请求：先 `agent`（约 30s 拿 `runId`），再 `agent.wait`（本地 RPC 超时 ≈ `timeoutMs + 5s`，默认约 10 分钟）
+- `agent.wait` 超时会关本地这条 WS 等待，并做一次短 reconcile（再 `agent.wait` 5s + `sessions.*`）；**不会**因此取消 OpenClaw 远端 run
+- 心跳侧 stale reclaim 是另一条线：`openClawTimeoutMs + 60s`（默认 660s）仍停在 `running` 时，本地标 `dead_letter`。远端 agent 可能还在跑，所以文案要求先核对外部副作用再重试
+- 当前没有“超时后再按间隔确认 N 次”的轮询环；`poll()` 只用于断连后单次对账。若任务经常超过 10 分钟才出结果，应先调大 `timeoutMs` / `openClawTimeoutMs`，或后续加 backoff 确认，而不是把 660s 当成远端已停
 - 持久化 `remoteRunId` / `sessionKey` / cursor 到 `result_json`（running 期间 `patchRunningResult`）
 - 断连 reconcile：仍在跑 → `queue_status=running`；确认无 run → `failed`；不确定 → `input_required`
 - **不做**：OpenClaw/Codex 侧 `cleanup retired shared client` 根治（协作事项）
