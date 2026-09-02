@@ -635,6 +635,24 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 推送在 memory-service 拿到执行结果后由代码层完成：Bot 走 `NotificationCenterService` → Bot API；AsMe 走 Sheet RingCentral sender JWT（`RingCentralClient` 显式凭据，不写进 action 账本）。**不会**把“通知到某群”写进任务 prompt，也**不会**为了整理文案再跑一轮 OpenClaw。
 - 结果投递（`result` 类型）成功与否会写进 `channel_delivery_records`；管理页 `GET /agent-tasks/runtime-status` 会带回 `resultNotifyDelivery: { delivered, error? }`。投递失败（例如 SM AI Bot 不在目标群）时，除了记录，还会私发 owner 一条「通知投递失败: <原因>」——避免"任务回执显示 success、目标群却什么都没收到"这种情况只能靠翻服务端日志才能发现。
 
+#### AgentTask 成功通知：执行 / 整理 / 投递
+
+成功后的 Glip 通知分三段，职责不要混：
+
+| 阶段 | 谁做 | 输入 | 输出 |
+|------|------|------|------|
+| 执行 | OpenClaw / ACP 执行器 | Sheet `Content`（任务描述） | JSON 信封 + artifact 收据（账本真源） |
+| 证据提示 | `agentResultPrompt.ts` | `notifyTemplate` 抽出的字段需求（`entity_key` / `url` / `title` / `assignee`） | 写进执行器 system prompt，**不是** Glip 正文 |
+| 整理 | Memory Service LLM（`formatSuccessNotificationWithTemplate`） | `Agent_Notify_Template` + artifact / summary | 按模板排版的群消息正文 |
+| 投递 | `deliverAgentTaskRunNotifications` | 整理后的正文 | Bot / AsMe / Chrome plugin |
+
+边界：
+
+- 执行器**不**按 `Agent_Notify_Template` 写最终回复；Jira 类任务应在 artifact 里带 `metadata.entityKey`、`metadata.url`（实际实例 browse/self）、summary、assignee（如有）。
+- 整理层**不**检索记忆、**不**委派 OpenClaw；LLM 失败时回落本地按模板填空（只铺列表，不臆造 URL）。
+- 发到结果目标的 Glip 消息**不加** `任务完成: <Topic>` 前缀，正文即模板内容；`帮我做完成` / `帮我做失败` 私密回执仍保留标题前缀。
+- `notifyTemplate` 在 `/agent-tasks/execute` 会回落读 `agent_task_notify_configs`（body 显式值优先），并写入 action metadata 供执行器证据提示使用。
+
 #### 7. AR 绑定来源
 
 - AR 数据的右键入口、DOM 替换、overlay、页面 `ON/OFF` 开关和 binding 语义锚点，以 [Personal AI AR Data](./ar_data_overlay.md) 为 source of truth。
@@ -854,7 +872,8 @@ A:
 
 ## 最近更新
 
-- 2026-09-02：AgentTask 成功通知模板格式化改走 Memory Service 自己的 LLM；模板若要求链接，由 LLM 按模板输出 markdown 链接。执行器仍交 JSON 信封 + artifact：`notifyTemplate` 只抽成证据字段提示，Jira 收据约定带实际实例的 browse/self URL，不把 Glip 模板当最终回复。成功结果通知不再加 `任务完成: <Topic>` 前缀。
+- 2026-09-02：AgentTask 成功通知拆成「执行 → 整理 → 投递」三段：执行器仍交 JSON 信封 + artifact，`notifyTemplate` 只抽证据字段提示（key / url / title / assignee），Jira 收据约定带实际实例 browse/self URL；模板格式化改走 Memory Service LLM（不委派 OpenClaw），失败回落本地填空；成功结果通知不再加 `任务完成: <Topic>` 前缀。OpenClaw Gateway `agent.wait` 超时后进入 30s/60s/120s 确认环，N 次对不上才 `dead_letter`。
+- 2026-08-28：AgentTask 结果通知配置由插件在保存时直接注册到 memory-service（`agent_task_notify_configs`），不再单靠 Apps Script 版本转发；`result` 类型投递不配模板或模板格式化失败时，兜底文案改成「标题 + 摘要」的纯公告，不再误发只给 owner 看的回执体（Run id / 触发来源 / Sheet 账本边界）；模板格式化失败会记录具体原因，不再静默；结果投递失败会写入 `channel_delivery_records` 并私发 owner 说明，`runtime-status` 一并暴露 `resultNotifyDelivery`；查询/扫描类任务查到 0 个匹配现在算合法 success（`query_result` 收据），不再被判成缺证据的 error。
 - 2026-08-21：已完成的单次任务改成仍有下次执行的重复任务时，会自动从 `Done` 恢复为 `Active` 并把 `Exec_Count` 归零；执行器只领取 Active 行，已完成行没有单独的“恢复”按钮。
 - 2026-08-21：托管 JiraAutomation 行编辑保存会保留 `Automation_Link`；`undefined` 不再把规则入口整行写空。改 Topic 继续同步 Jira Rule 名称，不再只在托管后第一次编辑生效。
 

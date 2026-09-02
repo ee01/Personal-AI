@@ -65,6 +65,20 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 
 用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。若任务带了 `notifyTemplate`，prompt 只注入「通知还需要哪些字段」，不把模板当最终回复；Jira 收据约定带 browse/self URL。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
 
+### AgentTask 通知与执行分层
+
+```text
+Sheet Content (任务)  →  执行器 (OpenClaw/ACP)  →  JSON 信封 + artifacts
+                              ↑
+                    notifyTemplate 抽证据字段提示
+                              ↓
+notifyTemplate + artifacts  →  Memory Service LLM 整理  →  Glip 正文（无 任务完成 前缀）
+```
+
+- 执行：`agentResultPrompt.ts` + `agentResultEnvelope.ts`；`notifyTemplate` 正文不进 Task，只影响 system prompt 里的证据字段列表。
+- 整理：`agentTaskNotification.ts` 的 `formatSuccessNotificationWithTemplate`；用服务端 LLM key，失败回落 `applyNotifyTemplateLocally`。
+- 投递：`deliverAgentTaskRunNotifications` → Bot / AsMe / plugin；`success_receipt` / `failure_receipt` 仍带 `帮我做完成` / `帮我做失败` 标题。
+
 ## OpenClaw Gateway（Block C）
 
 - 执行是 WebSocket 长等待，不是 HTTP 短请求：先 `agent`（约 30s 拿 `runId`），再 `agent.wait`（本地 RPC 超时 ≈ `timeoutMs + 5s`，默认约 10 分钟）
