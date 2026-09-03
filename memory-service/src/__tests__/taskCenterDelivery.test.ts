@@ -132,6 +132,126 @@ describe('Task Center home-lane delivery', () => {
     expect(String(metadata.notifyDeliveryError)).toContain('bot not a member');
   });
 
+  it('keeps a 0-match write run out of the target chat and marks the ledger', async () => {
+    const glip = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true });
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team 的 Epics（自动填入 INIT）',
+      taskKind: 'agent',
+      sourceKind: 'agent_task',
+      params: {
+        task: '回填 Team',
+        mode: 'write',
+        metadata: {
+          notifyVia: 'bot',
+          successReceipt: false,
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        },
+      },
+      executionMode: 'auto',
+    });
+
+    const result = await deliverAgentTaskRunNotifications({
+      db,
+      userId: 'esone.qiu',
+      action,
+      execution: {
+        queueStatus: 'succeeded',
+        result: {
+          status: 'success',
+          summary: '10 个 Epic 的 INIT 都是多团队，未回填',
+          artifacts: [
+            {
+              kind: 'query_result',
+              title: 'Team 回填扫描结果：0 个 Epic 需更新',
+              metadata: { sourceSystem: 'jira', matchCount: 0 },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(glip).not.toHaveBeenCalled();
+    expect(result.emptyResultSkipped).toBe(true);
+    const stored = repo.getById(action.id);
+    const metadata = stored?.params?.metadata as Record<string, any>;
+    expect(metadata.notifyEmptyResultSkipped).toMatchObject({ mode: 'write' });
+  });
+
+  it('still pushes a 0-match write run when the task opted in', async () => {
+    const glip = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true });
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team 的 Epics（自动填入 INIT）',
+      taskKind: 'agent',
+      sourceKind: 'agent_task',
+      params: {
+        task: '回填 Team',
+        mode: 'write',
+        metadata: {
+          notifyVia: 'bot',
+          successReceipt: false,
+          notifyWhenEmpty: true,
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        },
+      },
+      executionMode: 'auto',
+    });
+
+    const result = await deliverAgentTaskRunNotifications({
+      db,
+      userId: 'esone.qiu',
+      action,
+      execution: {
+        queueStatus: 'succeeded',
+        result: { status: 'success', summary: '未回填任何 Epic' },
+      },
+    });
+
+    expect(result.delivered).toBe(1);
+    expect(result.emptyResultSkipped).toBeUndefined();
+    expect(glip).toHaveBeenCalled();
+  });
+
+  it('still pushes a 0-match read scan, which is the mode default', async () => {
+    const glip = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true });
+    const action = repo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova 缺少 Team 的 Epics',
+      taskKind: 'agent',
+      sourceKind: 'agent_task',
+      params: {
+        task: '查找缺少 Team 的 Epic',
+        mode: 'read',
+        metadata: {
+          notifyVia: 'bot',
+          successReceipt: false,
+          notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        },
+      },
+      executionMode: 'auto',
+    });
+
+    const result = await deliverAgentTaskRunNotifications({
+      db,
+      userId: 'esone.qiu',
+      action,
+      execution: {
+        queueStatus: 'succeeded',
+        result: { status: 'success', summary: 'JQL 命中 0 张' },
+      },
+    });
+
+    expect(result.delivered).toBe(1);
+    expect(glip).toHaveBeenCalled();
+  });
+
   it('sends group result notices as the body only, without 任务完成', async () => {
     const glip = vi
       .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')

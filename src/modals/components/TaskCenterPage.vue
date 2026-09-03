@@ -241,6 +241,23 @@
                 成功时也私发回执给我（失败回执始终开启）
               </label>
             </div>
+            <div class="tc-field">
+              <label class="ck">
+                <input
+                  :checked="notifyWhenEmpty"
+                  type="checkbox"
+                  @change="notifyWhenEmptyChoice = ($event.target as HTMLInputElement).checked"
+                />
+                0 匹配也推送结果通知
+              </label>
+              <small class="tc-hint">
+                {{ notifyWhenEmptyChoice === null
+                  ? (draft.mode === 'write'
+                      ? '按执行边界取默认值：写入任务改到 0 条时不推送，只留 run 账本。'
+                      : '按执行边界取默认值：只读查询查到 0 条也会推送。')
+                  : '已显式设置，不再跟随执行边界。' }}
+              </small>
+            </div>
           </template>
 
           <template v-if="draft.taskKind === 'remind'">
@@ -427,6 +444,16 @@ const draft = ref({
   extraText: '',
   outreachTargetRef: '',
 });
+
+/**
+ * null means the task never chose, so the switch keeps following the execution
+ * boundary: a write run that changed nothing stays quiet, a read scan still
+ * reports its 0 hits.
+ */
+const notifyWhenEmptyChoice = ref<boolean | null>(null);
+const notifyWhenEmpty = computed(
+  () => notifyWhenEmptyChoice.value ?? draft.value.mode !== 'write',
+);
 
 const remindPresets = [
   { label: '1 小时后', ms: 3600_000 },
@@ -689,6 +716,7 @@ function openCreate() {
     extraText: '',
     outreachTargetRef: '',
   };
+  notifyWhenEmptyChoice.value = null;
   createOpen.value = true;
 }
 function showToast(message: string) {
@@ -807,6 +835,7 @@ async function saveTask() {
         teamId: draft.value.teamId.trim() || undefined,
         extraText: draft.value.extraText.trim() || undefined,
         successReceipt: draft.value.successReceipt,
+        notifyWhenEmpty: draft.value.taskKind === 'agent' ? notifyWhenEmpty.value : undefined,
         ...notify,
       },
     });
@@ -1026,6 +1055,7 @@ onUnmounted(() => {
 }
 .tc-field textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; resize: vertical; }
 .tc-field input:focus, .tc-field textarea:focus, .tc-field select:focus { border-color: rgba(59, 130, 246, 0.5); }
+.tc-hint { display: block; margin-top: 0.28rem; font-size: 0.68rem; color: var(--tc-dim); line-height: 1.45; }
 .tc-opts { display: flex; gap: 0.45rem; flex-wrap: wrap; }
 .tc-opt { border: 1px solid var(--tc-line); background: rgba(255, 255, 255, 0.03); color: var(--tc-muted); border-radius: 8px; padding: 0.45rem 0.8rem; font-size: 0.74rem; cursor: pointer; text-align: left; font-family: inherit; }
 .tc-opt.on { background: rgba(59, 130, 246, 0.18); border-color: rgba(59, 130, 246, 0.5); color: var(--tc-accent); font-weight: 600; }

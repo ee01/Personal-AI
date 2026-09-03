@@ -21,13 +21,15 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
 - 通知语义（结果通知 vs 回执）：
   - `notifyTarget` 存在 → **成功**时发结果到目标（可套用 `notifyTemplate`）；**失败不发目标**
   - `successReceipt`（默认 `true`）→ 成功时额外 Bot 私发本人；目标已是本人私发时去重合并
+  - `notifyWhenEmpty`：查到 / 改到 0 条时是否仍推结果通知。任务显式给了值就用它；没给时按 `mode` 推导——`write` 默认静默（只记 run 账本），`read` 默认仍推。成功/失败回执不受影响
   - 失败回执始终 Bot 私发本人；仅 `notify: false`（API 级，如 AR）可完全静默
   - `notifyVia`：成功结果可为 `bot`（默认）或 `asme`；回执始终 Bot。AsMe 使用 Sheet RingCentral sender token（与 AsMe 发消息相同），失败不回退 Bot
-  - `notifyTarget` / `successReceipt` / `notifyVia` / `notifyTemplate` 由插件在保存 Sheet 行时**直接注册**到 `agent_task_notify_configs`（按 `sheetMessageId`），`/agent-tasks/execute` 的请求体缺哪个字段就回落读这张表，请求体给了值则请求体优先。这样即使触发链路（Apps Script）版本落后、没转发某个字段，通知语义也不受影响
+  - `notifyTarget` / `successReceipt` / `notifyVia` / `notifyTemplate` / `notifyWhenEmpty` 由插件在保存 Sheet 行时**直接注册**到 `agent_task_notify_configs`（按 `sheetMessageId`），`/agent-tasks/execute` 的请求体缺哪个字段就回落读这张表，请求体给了值则请求体优先。这样即使触发链路（Apps Script）版本落后、没转发某个字段，通知语义也不受影响
   - 发到 `notifyTarget` 的正文只有两种来源：模板格式化成功的结果，或者本地按模板/artifact 整理后的公告文本——**不会**是私密回执体（Run id / 触发来源 / Sheet 账本边界说明）；后者只用于 `success_receipt` / `failure_receipt` 两种回执。结果通知不加 `任务完成:` 前缀，正文即模板内容
   - 模板格式化走 Memory Service 自己的 LLM（`getLLMClient`，服务端 key），**不**再委派 OpenClaw 执行器。模板若含 markdown 链接或写明要带链接，由 LLM 按模板输出可点击链接；本地填空只铺列表，不臆造站点 URL。LLM 异常或输出不可用时，用 artifact / 信封里的列表按模板本地填空，仍不静默
   - 模板骨架（标题行、`----` 分隔线、结尾说明行含 cc @提醒）**始终由模板本身决定**：LLM 只负责中间列表行，输出回来后 `enforceTemplateScaffolding` 会用模板重新锚定首尾，模型漏写或截断的分隔线 / 结尾句会被补回，不会重复
   - 扫描/回填类任务合法命中 0 条时（`query_result` + `matchCount: 0`，没有可列的条目）**不调 LLM**：直接按模板本地填空，把列表位置换成一行 `本次没有符合条件的条目：<执行摘要>`，标题行、分隔线、结尾 cc 行照常保留。避免 0 条结果被写成一段自由散文、丢掉模板格式
+  - 若该次 run 被 `notifyWhenEmpty` 判定为静默，结果通知不投递；run 的 `params.metadata.notifyEmptyResultSkipped` 会记下时间和原因，成功/失败回执仍按原开关走
   - 执行器**不会**按 Glip 模板写最终回复。`notifyTemplate` 只抽成证据字段提示（如 `entity_key` / `url` / `title` / `assignee`）写进共享 system prompt；Jira 对象收据要求 `metadata.entityKey` + 实际实例的 `metadata.url` + summary，有经办人则带 `metadata.assignee`。通知模板正文不会作为 Task/最终格式下达给 OpenClaw
   - 结果投递（`result` 类型）的成功/失败会写入 `channel_delivery_records`；`GET /agent-tasks/runtime-status` 返回 `resultNotifyDelivery: { delivered, error? }`；投递失败时会额外私发 owner 一条说明，避免"回执说成功、群里却什么都没收到"的静默
 - `proposed_actions.idempotency_key`：**UNIQUE**；幂等键确定性（无 `Date.now()` 兜底）

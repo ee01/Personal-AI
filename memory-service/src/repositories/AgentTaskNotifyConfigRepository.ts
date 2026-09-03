@@ -10,6 +10,8 @@ export interface AgentTaskNotifyConfigInput {
   successReceipt?: 'Y' | 'N';
   notifyVia?: 'bot' | 'asme';
   notifyTemplate?: string;
+  /** 'Y' | 'N'; omit to let the delivery layer derive it from the task mode. */
+  notifyWhenEmpty?: 'Y' | 'N';
 }
 
 export interface AgentTaskNotifyConfigRecord {
@@ -18,6 +20,7 @@ export interface AgentTaskNotifyConfigRecord {
   successReceipt?: 'Y' | 'N';
   notifyVia?: 'bot' | 'asme';
   notifyTemplate?: string;
+  notifyWhenEmpty?: 'Y' | 'N';
   updatedAt: number;
 }
 
@@ -27,7 +30,12 @@ interface AgentTaskNotifyConfigRow {
   success_receipt: string | null;
   notify_via: string | null;
   notify_template: string | null;
+  notify_when_empty: string | null;
   updated_at: number;
+}
+
+function toYesNo(value: string | null): 'Y' | 'N' | undefined {
+  return value === 'Y' || value === 'N' ? value : undefined;
 }
 
 function toRecord(row: AgentTaskNotifyConfigRow): AgentTaskNotifyConfigRecord {
@@ -43,11 +51,10 @@ function toRecord(row: AgentTaskNotifyConfigRow): AgentTaskNotifyConfigRecord {
   return {
     sheetMessageId: row.sheet_message_id,
     notifyTarget,
-    successReceipt: row.success_receipt === 'Y' || row.success_receipt === 'N'
-      ? row.success_receipt
-      : undefined,
+    successReceipt: toYesNo(row.success_receipt),
     notifyVia: row.notify_via === 'asme' ? 'asme' : row.notify_via === 'bot' ? 'bot' : undefined,
     notifyTemplate: row.notify_template?.trim() || undefined,
+    notifyWhenEmpty: toYesNo(row.notify_when_empty),
     updatedAt: row.updated_at,
   };
 }
@@ -64,7 +71,8 @@ export class AgentTaskNotifyConfigRepository {
   get(sheetMessageId: string): AgentTaskNotifyConfigRecord | null {
     const row = this.db
       .prepare(
-        `SELECT sheet_message_id, notify_target_json, success_receipt, notify_via, notify_template, updated_at
+        `SELECT sheet_message_id, notify_target_json, success_receipt, notify_via,
+                notify_template, notify_when_empty, updated_at
          FROM agent_task_notify_configs
          WHERE sheet_message_id = ?`,
       )
@@ -78,13 +86,15 @@ export class AgentTaskNotifyConfigRepository {
     this.db
       .prepare(
         `INSERT INTO agent_task_notify_configs
-           (sheet_message_id, notify_target_json, success_receipt, notify_via, notify_template, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+           (sheet_message_id, notify_target_json, success_receipt, notify_via,
+            notify_template, notify_when_empty, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(sheet_message_id) DO UPDATE SET
            notify_target_json = excluded.notify_target_json,
            success_receipt = excluded.success_receipt,
            notify_via = excluded.notify_via,
            notify_template = excluded.notify_template,
+           notify_when_empty = excluded.notify_when_empty,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -93,6 +103,7 @@ export class AgentTaskNotifyConfigRepository {
         input.successReceipt ?? null,
         input.notifyVia ?? null,
         input.notifyTemplate?.trim() || null,
+        input.notifyWhenEmpty ?? null,
         now(),
       );
   }

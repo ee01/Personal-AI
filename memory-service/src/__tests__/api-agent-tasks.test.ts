@@ -362,6 +362,67 @@ describe('AgentTask notify-config fallback', () => {
     });
   });
 
+  it('stores notifyWhenEmpty and lets execute read it back for a write task', async () => {
+    const upsert = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/notify-config',
+      payload: {
+        sheetMessageId: 'msg_notify_empty_1',
+        notifyTarget: { type: 'group', targetGroupId: '164506140678' },
+        notifyWhenEmpty: 'Y',
+      },
+    });
+    expect(upsert.json()).toMatchObject({ config: { notifyWhenEmpty: 'Y' } });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload: {
+        taskId: 'agent-task-notify-empty-on',
+        sheetMessageId: 'msg_notify_empty_1',
+        task: 'Backfill Team from INIT',
+        mode: 'write',
+        executor: 'openclaw',
+        idempotencyKey: 'agent-task-notify-empty-on',
+      },
+    });
+
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as { notification: { notifyWhenEmpty: boolean } };
+    expect(body.notification.notifyWhenEmpty).toBe(true);
+  });
+
+  it('reports the mode default for notifyWhenEmpty when nothing was registered', async () => {
+    const write = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload: {
+        taskId: 'agent-task-notify-empty-default-write',
+        sheetMessageId: 'msg_notify_empty_write',
+        task: 'Backfill Team from INIT',
+        mode: 'write',
+        executor: 'openclaw',
+        idempotencyKey: 'agent-task-notify-empty-default-write',
+      },
+    });
+    const read = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agent-tasks/execute',
+      payload: {
+        taskId: 'agent-task-notify-empty-default-read',
+        sheetMessageId: 'msg_notify_empty_read',
+        task: 'Find Epics without Team',
+        executor: 'openclaw',
+        idempotencyKey: 'agent-task-notify-empty-default-read',
+      },
+    });
+
+    expect((write.json() as { notification: { notifyWhenEmpty: boolean } }).notification.notifyWhenEmpty)
+      .toBe(false);
+    expect((read.json() as { notification: { notifyWhenEmpty: boolean } }).notification.notifyWhenEmpty)
+      .toBe(true);
+  });
+
   it('falls back to the registered config when the deployed caller omits fields (Case 2a)', async () => {
     await app.inject({
       method: 'POST',

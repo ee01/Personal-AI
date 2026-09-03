@@ -91,6 +91,8 @@ export interface ScheduledMessage {
   Agent_Notify_Success_Receipt?: 'Y' | 'N' | string;
   /** bot (default) | asme. Result notification identity only; receipts stay Bot. */
   Agent_Notify_Via?: 'bot' | 'asme' | string;
+  /** Y = push even when the run matched nothing; N = stay quiet. Empty = follow Agent_Mode. */
+  Agent_Notify_When_Empty?: 'Y' | 'N' | string;
   Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
   Agent_AR_Binding_ID?: string;
   Agent_Last_Run_At?: string;
@@ -148,6 +150,8 @@ export interface CreateMessageFormData {
   Agent_Notify_Success_Receipt?: 'Y' | 'N' | string;
   /** bot (default) | asme. Result notification identity only; receipts stay Bot. */
   Agent_Notify_Via?: 'bot' | 'asme' | string;
+  /** Y = push even when the run matched nothing; N = stay quiet. Empty = follow Agent_Mode. */
+  Agent_Notify_When_Empty?: 'Y' | 'N' | string;
   Agent_Trigger_Source?: 'jira_rule' | 'memory_cron' | 'ar' | string;
   Agent_AR_Binding_ID?: string;
   Agent_Last_Run_At?: string;

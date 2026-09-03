@@ -331,6 +331,12 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
           notifyTarget,
           successReceipt: payload.successReceipt !== false,
           notifyTemplate: payload.notifyTemplate,
+          // Left undefined when the task never chose, so the delivery layer
+          // can fall back to the mode default (write quiet, read still pushes).
+          notifyWhenEmpty:
+            payload.notifyWhenEmpty === undefined
+              ? undefined
+              : payload.notifyWhenEmpty !== false,
         },
       },
       // Dev delegations and write-mode agent work stop for a human before they

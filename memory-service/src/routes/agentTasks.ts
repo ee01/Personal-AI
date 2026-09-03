@@ -16,6 +16,7 @@ import {
   resolveAgentTaskDeliveryVia,
   resolveAgentTaskNotificationTarget,
   resolveExplicitAgentTaskResultTarget,
+  shouldNotifyEmptyResult,
   type AgentTaskNotifyTarget,
   type AgentTaskNotifyVia,
   type ResolvedAgentTaskNotificationTarget,
@@ -76,6 +77,8 @@ interface AgentTaskExecuteBody {
   successReceipt?: boolean;
   /** Result notification identity. Receipts always use Bot. */
   notifyVia?: 'bot' | 'asme';
+  /** Push the result notice even when the run matched nothing. Default: read yes, write no. */
+  notifyWhenEmpty?: boolean;
   /** Sheet AsMe RingCentral sender credentials. Used only for notifyVia=asme; not persisted. */
   asmeSender?: {
     clientId?: string;
@@ -414,6 +417,13 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const notifyTemplate =
         nonEmptyString(body.notifyTemplate) ??
         nonEmptyString(storedNotifyConfig?.notifyTemplate);
+      // Undefined stays undefined so the delivery layer can apply the mode default.
+      const notifyWhenEmpty =
+        body.notifyWhenEmpty !== undefined
+          ? body.notifyWhenEmpty !== false
+          : storedNotifyConfig?.notifyWhenEmpty !== undefined
+            ? storedNotifyConfig.notifyWhenEmpty !== 'N'
+            : undefined;
       const asmeSender = normalizeAsMeSenderCredentials(body.asmeSender);
       const resultTarget = resolveExplicitAgentTaskResultTarget(notifyTarget);
       // API response: prefer explicit result target; otherwise report owner receipt fallback.
@@ -449,6 +459,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
             notifyTarget,
             successReceipt,
             notifyVia,
+            notifyWhenEmpty,
             source: body.source,
             scheduleSpec: body.scheduleSpec,
             suppressRecoveryNotifications: body.notify === false,
@@ -536,6 +547,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           reason: shouldNotify ? 'queued_for_delivery' : 'notification_disabled',
           successReceipt,
           notifyVia,
+          notifyWhenEmpty: shouldNotifyEmptyResult({ mode: mode ?? 'read', notifyWhenEmpty }),
         },
       });
     },
@@ -555,6 +567,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       successReceipt?: 'Y' | 'N' | boolean;
       notifyVia?: 'bot' | 'asme';
       notifyTemplate?: string;
+      notifyWhenEmpty?: 'Y' | 'N' | boolean;
     };
   }>('/agent-tasks/notify-config', async (request, reply) => {
     const body = request.body ?? {};
@@ -574,6 +587,12 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           : undefined;
     const notifyVia =
       body.notifyVia === 'asme' ? 'asme' : body.notifyVia === 'bot' ? 'bot' : undefined;
+    const notifyWhenEmpty =
+      body.notifyWhenEmpty === 'Y' || body.notifyWhenEmpty === true
+        ? 'Y'
+        : body.notifyWhenEmpty === 'N' || body.notifyWhenEmpty === false
+          ? 'N'
+          : undefined;
 
     repo.upsert({
       sheetMessageId,
@@ -581,6 +600,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       successReceipt,
       notifyVia,
       notifyTemplate: nonEmptyString(body.notifyTemplate),
+      notifyWhenEmpty,
     });
 
     return reply.status(200).send({ ok: true, config: repo.get(sheetMessageId) });

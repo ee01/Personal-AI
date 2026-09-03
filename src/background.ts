@@ -1187,6 +1187,12 @@ function buildAgentTaskNotifyTargetPayload(
   return glipUserName ? { type: 'private', glipUserName } : null;
 }
 
+/** Empty means the task never chose, so memory-service derives it from Agent_Mode. */
+function normalizeAgentNotifyWhenEmpty(value?: string): 'Y' | 'N' | undefined {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized === 'Y' || normalized === 'N' ? normalized : undefined;
+}
+
 async function syncAgentTaskNotifyConfigMirror(message: ScheduledMessage): Promise<void> {
   if (message.Push_Method !== 'AgentTask') return;
   const client = getMemoryServiceClient();
@@ -1196,6 +1202,7 @@ async function syncAgentTaskNotifyConfigMirror(message: ScheduledMessage): Promi
     successReceipt: message.Agent_Notify_Success_Receipt === 'N' ? 'N' : 'Y',
     notifyVia: message.Agent_Notify_Via === 'asme' ? 'asme' : 'bot',
     notifyTemplate: message.Agent_Notify_Template?.trim() || undefined,
+    notifyWhenEmpty: normalizeAgentNotifyWhenEmpty(message.Agent_Notify_When_Empty),
   });
 }
 

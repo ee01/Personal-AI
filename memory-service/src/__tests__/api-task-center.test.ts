@@ -156,6 +156,31 @@ describe('Task Center API', () => {
         targetGroupId: '164506140678',
       });
     });
+
+    it('keeps notifyWhenEmpty unset when the task never chose', async () => {
+      const chosen = await post({
+        taskKind: 'agent',
+        title: '回填 Team',
+        payload: { task: '回填', mode: 'write', notifyWhenEmpty: false },
+      });
+      const untouched = await post({
+        taskKind: 'agent',
+        title: '查 Team',
+        payload: { task: '查询' },
+      });
+
+      const repo = new ActionRepository(db);
+      const chosenMetadata = repo.getById(chosen.json().task.id)?.params?.metadata as Record<
+        string,
+        unknown
+      >;
+      const untouchedMetadata = repo.getById(untouched.json().task.id)?.params?.metadata as Record<
+        string,
+        unknown
+      >;
+      expect(chosenMetadata.notifyWhenEmpty).toBe(false);
+      expect(untouchedMetadata.notifyWhenEmpty).toBeUndefined();
+    });
   });
 
   describe('validation', () => {

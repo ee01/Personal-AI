@@ -843,6 +843,39 @@ export interface LedgerNotifyConfig {
   triggerSource: string;
   taskId: string;
   task: string;
+  /** External effect boundary of the run; decides the notifyWhenEmpty default. */
+  mode: 'read' | 'write';
+  /** Undefined means the task never chose, so the mode default applies. */
+  notifyWhenEmpty?: boolean;
+}
+
+function readOptionalBoolean(...values: unknown[]): boolean | undefined {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      if (normalized === 'Y' || normalized === 'TRUE') return true;
+      if (normalized === 'N' || normalized === 'FALSE') return false;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A write task that changed nothing is noise in the target chat; a read/scan
+ * task that legitimately found 0 hits is still information. So the switch is
+ * per task, and when it was never set the run mode decides.
+ */
+export function shouldNotifyEmptyResult(config: {
+  mode: 'read' | 'write';
+  notifyWhenEmpty?: boolean;
+}): boolean {
+  return config.notifyWhenEmpty ?? config.mode !== 'write';
+}
+
+/** True when the run succeeded but produced nothing listable to announce. */
+export function isEmptyResultOutcome(result?: Record<string, unknown>): boolean {
+  return extractNotificationEvidence(result).lines.length === 0;
 }
 
 /**
@@ -879,6 +912,11 @@ export function readLedgerNotifyConfig(action: QueuedActionRecord): LedgerNotify
     nonEmptyString(metadata.triggerSource) ||
     nonEmptyString(action.sourceKind) ||
     'task_center';
+  const mode = params.mode === 'write' || metadata.mode === 'write' ? 'write' : 'read';
+  const notifyWhenEmpty = readOptionalBoolean(
+    metadata.notifyWhenEmpty,
+    params.notifyWhenEmpty,
+  );
   return {
     notify,
     successReceipt,
@@ -888,6 +926,8 @@ export function readLedgerNotifyConfig(action: QueuedActionRecord): LedgerNotify
     triggerSource,
     taskId,
     task,
+    mode,
+    notifyWhenEmpty,
   };
 }
 
@@ -911,20 +951,51 @@ export async function deliverAgentTaskRunNotifications(input: {
   };
   asmeSender?: ReturnType<typeof normalizeAsMeSenderCredentials>;
   log?: FormatSuccessNotificationLogger;
-}): Promise<{ attempted: number; delivered: number; errors: string[] }> {
+}): Promise<{
+  attempted: number;
+  delivered: number;
+  errors: string[];
+  emptyResultSkipped?: boolean;
+}> {
   const config = readLedgerNotifyConfig(input.action);
   const succeeded = input.execution.queueStatus === 'succeeded';
   const ownerUserId = input.userId || 'default';
   const resultTarget = resolveExplicitAgentTaskResultTarget(config.notifyTarget);
-  const deliveries = planAgentTaskNotifications({
+  const planned = planAgentTaskNotifications({
     succeeded,
     notify: config.notify,
     successReceipt: config.successReceipt,
     resultTarget,
     ownerUserId,
   });
+
+  // A run that matched nothing can stay out of the target chat. The owner
+  // receipt and the run ledger still record it, so nothing becomes invisible.
+  const skipEmptyResult =
+    succeeded &&
+    isEmptyResultOutcome(input.execution.result) &&
+    !shouldNotifyEmptyResult(config);
+  const deliveries = skipEmptyResult
+    ? planned.filter((delivery) => delivery.kind !== 'result')
+    : planned;
+
+  if (skipEmptyResult && planned.some((delivery) => delivery.kind === 'result')) {
+    new ActionRepository(input.db).patchParamsMetadata(input.action.id, {
+      notifyEmptyResultSkipped: {
+        at: now(),
+        mode: config.mode,
+        reason: 'no listable item in result',
+      },
+    });
+  }
+
   if (deliveries.length === 0) {
-    return { attempted: 0, delivered: 0, errors: [] };
+    return {
+      attempted: 0,
+      delivered: 0,
+      errors: [],
+      emptyResultSkipped: skipEmptyResult || undefined,
+    };
   }
 
   const log = input.log ?? {
@@ -1093,7 +1164,12 @@ export async function deliverAgentTaskRunNotifications(input: {
     });
   }
 
-  return { attempted: deliveries.length, delivered, errors };
+  return {
+    attempted: deliveries.length,
+    delivered,
+    errors,
+    emptyResultSkipped: skipEmptyResult || undefined,
+  };
 }
 
 function writePluginNotice(input: {

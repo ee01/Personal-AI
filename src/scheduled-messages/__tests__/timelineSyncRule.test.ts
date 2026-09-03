@@ -1937,7 +1937,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.12\.1';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.13\.0';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -2060,6 +2060,25 @@ readPayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Legacy', Content: 'I
   );
   assert.equal(context.writePayload.mode, 'write');
   assert.equal(context.readPayload.mode, 'read');
+});
+
+test('Apps Script forwards AgentTask notifyWhenEmpty only when the column was set', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = createMarkExecutedVmContext(
+    [['ID'], ['dummy']], [], [], {},
+    [['Key', 'Value'], ['agent_task_webhook_url', 'POST http://memory.example/api/v1/agent-tasks/execute']],
+  );
+  vm.runInNewContext(
+    `${appScript}
+onPayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Scan', Content: 'Find', Agent_Notify_When_Empty: 'Y' }, 'MSG-on', 'exec-on').body);
+offPayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Backfill', Content: 'Set', Agent_Mode: 'write', Agent_Notify_When_Empty: 'N' }, 'MSG-off', 'exec-off').body);
+unsetPayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Legacy', Content: 'Find' }, 'MSG-unset', 'exec-unset').body);`,
+    context,
+  );
+  assert.equal(context.onPayload.notifyWhenEmpty, true);
+  assert.equal(context.offPayload.notifyWhenEmpty, false);
+  // Legacy rows must stay absent so memory-service applies the mode default.
+  assert.equal('notifyWhenEmpty' in context.unsetPayload, false);
 });
 
 test('Apps Script forwards selected AgentTask executor and omits empty sentinel', () => {

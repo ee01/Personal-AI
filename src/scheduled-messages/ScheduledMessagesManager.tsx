@@ -6612,6 +6612,7 @@ const AddMessageDialog: React.FC<{
         Agent_Notify_Template: editingMessage.Agent_Notify_Template,
         Agent_Notify_Success_Receipt: editingMessage.Agent_Notify_Success_Receipt,
         Agent_Notify_Via: editingMessage.Agent_Notify_Via,
+        Agent_Notify_When_Empty: editingMessage.Agent_Notify_When_Empty,
         Agent_Trigger_Source: editingMessage.Agent_Trigger_Source || 'jira_rule',
         Agent_AR_Binding_ID: editingMessage.Agent_AR_Binding_ID,
         Agent_Last_Run_At: editingMessage.Agent_Last_Run_At,
@@ -6716,6 +6717,17 @@ const AddMessageDialog: React.FC<{
       ? 'asme'
       : 'bot';
   });
+  // Empty Sheet value means "never chosen", so the checkbox keeps following the
+  // execution boundary until the user decides for this task.
+  const [agentNotifyWhenEmptyChoice, setAgentNotifyWhenEmptyChoice] =
+    useState<'Y' | 'N' | null>(() => {
+      const stored = String(editingMessage?.Agent_Notify_When_Empty || '').trim().toUpperCase();
+      return stored === 'Y' || stored === 'N' ? stored : null;
+    });
+  const agentNotifyWhenEmpty =
+    agentNotifyWhenEmptyChoice === null
+      ? formData.Agent_Mode !== 'write'
+      : agentNotifyWhenEmptyChoice === 'Y';
   const [scheduleQueueSuggestionReceipt, setScheduleQueueSuggestionReceipt] =
     useState<ScheduleQueueDraftSuggestionReceipt | null>(null);
   const [userTags, setUserTags] = useState<string[]>(getInitialUserTags);
@@ -7802,6 +7814,9 @@ ${content}
       Agent_Notify_Via: formData.Push_Method === 'AgentTask'
         ? (agentNotifyVia === 'asme' ? 'asme' : 'bot')
         : undefined,
+      Agent_Notify_When_Empty: formData.Push_Method === 'AgentTask'
+        ? (agentNotifyWhenEmpty ? 'Y' : 'N')
+        : undefined,
       Agent_Trigger_Source: formData.Push_Method === 'AgentTask'
         ? 'jira_rule'
         : undefined,
@@ -8868,6 +8883,28 @@ ${content}
                     <strong>失败回执始终开启</strong>，不受此开关影响——任务失败一定会 Bot 私发回执给我，失败信息不会发到上面的通知目标。
                   </small>
                 </div>
+
+                {agentResultNotifyEnabled && (
+                  <div style={{ marginTop: '14px' }}>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '13px', cursor: 'pointer', userSelect: 'none' }}>
+                      <input
+                        type="checkbox"
+                        checked={agentNotifyWhenEmpty}
+                        onChange={(event) => setAgentNotifyWhenEmptyChoice(event.target.checked ? 'Y' : 'N')}
+                        style={{ marginTop: '2px' }}
+                      />
+                      <span><strong>0 匹配也推送结果通知</strong>（查到 / 改到 0 条时仍发到通知目标）</span>
+                    </label>
+                    <small style={{ ...dialogStyles.hint, marginLeft: '24px', display: 'block' }}>
+                      {agentNotifyWhenEmptyChoice === null
+                        ? (formData.Agent_Mode === 'write'
+                            ? '当前按执行边界取默认值：允许外部写入的任务改到 0 条时不推送，只留 run 账本。'
+                            : '当前按执行边界取默认值：只读查询任务查到 0 条也会推送。')
+                        : '已为这条任务显式设置，不再跟随执行边界。'}
+                      {' '}关掉后 0 匹配只记 run 账本，成功/失败回执不受影响。
+                    </small>
+                  </div>
+                )}
 
                 <div
                   style={{

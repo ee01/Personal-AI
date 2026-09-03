@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.12.1';
-var APP_SCRIPT_LAST_UPDATED = '2026-08-17';
+var APP_SCRIPT_VERSION = '2.13.0';
+var APP_SCRIPT_LAST_UPDATED = '2026-09-03';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -2822,6 +2822,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         Agent_Notify_Template: rowData.Agent_Notify_Template || '',
         Agent_Notify_Success_Receipt: rowData.Agent_Notify_Success_Receipt || '',
         Agent_Notify_Via: rowData.Agent_Notify_Via || '',
+        Agent_Notify_When_Empty: rowData.Agent_Notify_When_Empty || '',
         Agent_Trigger_Source: rowData.Agent_Trigger_Source || '',
         Agent_AR_Binding_ID: rowData.Agent_AR_Binding_ID || '',
         Agent_Last_Run_At: rowData.Agent_Last_Run_At || '',
@@ -3376,6 +3377,8 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
   const successReceipt = successReceiptRaw !== 'N';
   const notifyViaRaw = (message.Agent_Notify_Via || '').toString().trim().toLowerCase();
   const notifyVia = notifyViaRaw === 'asme' ? 'asme' : 'bot';
+  // Empty column stays out of the payload so memory-service applies the mode default.
+  const notifyWhenEmptyRaw = (message.Agent_Notify_When_Empty || '').toString().trim().toUpperCase();
   const executor = (message.Agent_Executor || '').toString().trim();
   const agentMode = (message.Agent_Mode || 'read').toString().trim().toLowerCase() === 'write'
     ? 'write'
@@ -3405,6 +3408,9 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
   };
   if (executor) {
     payload.executor = executor;
+  }
+  if (notifyWhenEmptyRaw === 'Y' || notifyWhenEmptyRaw === 'N') {
+    payload.notifyWhenEmpty = notifyWhenEmptyRaw === 'Y';
   }
   const notifyTarget = buildAgentTaskNotifyTarget(message);
   if (notifyTarget) {
