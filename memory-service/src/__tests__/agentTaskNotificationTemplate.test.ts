@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import {
   applyNotifyTemplateLocally,
+  enforceTemplateScaffolding,
   extractNotificationEvidence,
   formatSuccessNotificationWithTemplate,
   templateRequestsLinks,
@@ -136,6 +137,63 @@ describe('formatSuccessNotificationWithTemplate', () => {
     expect(log.warn.mock.calls[0][1]).toMatch(/did not return a usable body/);
   });
 
+  it('restores the separator and closing line when the LLM drops them', async () => {
+    generateMock.mockResolvedValue({
+      content:
+        '-- Nova 缺少 Team 的 Epics --\n\n* [NOVA-7248](https://jira.example.com/browse/NOVA-7248) Debug @Tony Lin\n\n以上 Epic 麻烦各位 leads',
+    });
+    const log = { warn: vi.fn() };
+
+    const body = await formatSuccessNotificationWithTemplate({ ...baseInput, log });
+
+    expect(body).toBe(`-- Nova 缺少 Team 的 Epics --
+----
+
+* [NOVA-7248](https://jira.example.com/browse/NOVA-7248) Debug @Tony Lin
+
+以上 Epic 麻烦各位 leads 来看看添加上对应的 Team`);
+  });
+
+  it('keeps the template shape without calling the LLM when nothing matched', async () => {
+    const log = { warn: vi.fn() };
+
+    const body = await formatSuccessNotificationWithTemplate({
+      ...baseInput,
+      template: `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](https://jira.ringcentral.com/browse/{key}) summary
+* ...
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`,
+      task: '读取 Epic 的 parent link INIT，只有一个 Team 时回填',
+      defaultBody: 'Nova 缺少 Team 的 Epics（自动填入 INIT）\n未更新任何 Epic',
+      result: {
+        status: 'success',
+        summary:
+          'JQL 命中 10 个 Team 为空的 Epic，所有 INIT 均为多团队（2-12 个），故未更新任何 Epic 的 Team 值。',
+        artifacts: [
+          {
+            kind: 'query_result',
+            title: 'Team 回填扫描结果：0 个 Epic 需更新',
+            content: '扫描 10 个 Epic（NOVA-17664/17657/7248），所有 INIT Team 均>1，未做写入。',
+            metadata: { sourceSystem: 'jira', matchCount: 0 },
+          },
+        ],
+      },
+      log,
+    });
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(body).toBe(`-- Nova 缺少 Team 的 Epics --
+----
+
+本次没有符合条件的条目：JQL 命中 10 个 Team 为空的 Epic，所有 INIT 均为多团队（2-12 个），故未更新任何 Epic 的 Team 值。
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it('skips the LLM call entirely for a blank template', async () => {
     const log = { warn: vi.fn() };
 
@@ -224,6 +282,46 @@ describe('extractNotificationEvidence / applyNotifyTemplateLocally', () => {
 * NOVA-11419 HA @Kingle Zhuang
 
 以上 Epic 麻烦各位 leads 来看看添加上对应的 Team`);
+  });
+
+  it('keeps the header, separator and closing line when there is no evidence line', () => {
+    const body = applyNotifyTemplateLocally(
+      `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](https://jira.ringcentral.com/browse/{key}) summary
+* ...
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`,
+      { summary: '10 个 Epic 的 INIT 都是多团队，未回填', lines: [], urls: [] },
+    );
+
+    expect(body).toBe(`-- Nova 缺少 Team 的 Epics --
+----
+
+本次没有符合条件的条目：10 个 Epic 的 INIT 都是多团队，未回填
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`);
+  });
+
+  it('does not duplicate the closing line when the model only echoed part of it', () => {
+    const body = enforceTemplateScaffolding(
+      `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](http://xxx) summary
+* ...
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`,
+      '-- Nova 缺少 Team 的 Epics --\n\n* NOVA-7248 Debug\n\ncc @sophia.lin',
+    );
+
+    expect(body).toBe(`-- Nova 缺少 Team 的 Epics --
+----
+
+* NOVA-7248 Debug
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`);
   });
 
   it('detects link intent from markdown or explicit wording', () => {

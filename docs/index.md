@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-09-02*
+*最后更新: 2026-09-03*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -140,7 +140,7 @@
 | Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
-| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP local 或 remote Worker）；成功通知分执行/整理/投递三段，结果群消息按模板直发、不加 `任务完成` 前缀 |
+| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP local 或 remote Worker）；成功通知分执行/整理/投递三段，结果群消息按模板直发、不加 `任务完成` 前缀；模板骨架（标题行/分隔线/结尾 cc 行）由模板锚定，命中 0 条时不调 LLM、只把列表位置换成一行说明 |
 | 执行器连通性测试 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options「测试 / 深度测试」；`POST /agent-executors/:id/probe`；stage=dns/connect/auth/ready；缓存 5 分钟；不跑 LLM |
 | Agent Worker 远程执行 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | ACP `runtime=remote` 入队 `awaiting_claim`；pair/heartbeat/claim/report + lease fencing；Desktop 内嵌或 headless `install.sh` |
 | Agent Workflow 多 Agent 编排 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 标准消息入口 workflow（`ANALYSIS_TYPE=agentWorkflow`）；低置信度复核和保存样例删除都有本地边界回执 |
@@ -194,7 +194,7 @@
 | Roadmap 变更历史 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 团队层操作日志 drawer，不展示个人记忆 |
 | Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删；新建后置顶 Backlog 首位 |
 | Roadmap draft 排期 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 判据只有 `jiraKey === null`；斜纹 bar 与 DRAFT 角标；draft 进 memory 但合成 key 不进 aliases |
-| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；组内部分成功仍回写 jiraKey |
+| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；fixVersion 按 Target End 落点列（跨列留空交 Agent） |
 | 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 background 代发 sync；落选 archived；与 Target 回写独立 |
 | Memory Service 自托管 | 记忆平台 | [self-hosting-memory-service.md](./self-hosting-memory-service.md) | Docker + Options 填地址；bootstrap / 设备 key / CORS 默认全关 |
 | 重点项目消息观察（不通知） | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | focus project 注入消息分析，只入库不 Glip 提醒 |
@@ -203,7 +203,7 @@
 | Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；含依赖 ticket 缓存；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
 | Roadmap 草稿 description | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 可选录入不挡 Enter 秒建；hover 灰色小字；非 draft 只读镜像 |
 | Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展隐藏按钮 |
-| Roadmap 甘特缩放与人员视图 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 捏合/⌘+滚轮缩放；人员视图色条+聚焦顺延到下周一（条滑动）+ 近 2 周双指平移 |
+| Roadmap 甘特缩放与人员视图 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 捏合/⌘+滚轮缩放；人员视图色条+聚焦顺延（Original Estimate 最短人天 / 缩短 / 延长 Epic）+ 近 2 周双指平移 |
 | 项目本地查找 | Project Dashboard | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 在当前浏览器本地快照内查找项目、任务、Jira、平台来源和里程碑；输入/清除/查看全部控制点与回执显示当前视图可见/隐藏命中和无外部读写边界 |
 | 项目数据源检查 | Project Dashboard | [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) | Jira/GitHub/Confluence 状态、缺口、检查口径、按钮/收起边界与 warning 状态 |
 | Memory Service watched projects 补齐 | Project Dashboard | [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) | 只补齐本地，不反写 Memory Service；首屏列出新增 / 已匹配项目，收起面板不清空结果 |

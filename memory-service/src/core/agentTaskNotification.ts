@@ -175,8 +175,8 @@ export function buildAgentTaskResultAnnouncementBody(input: {
 }): string {
   const evidence = extractNotificationEvidence(input.result);
   const summary = evidence.summary || input.summary || '';
-  if (input.template?.trim() && evidence.lines.length > 0) {
-    return applyNotifyTemplateLocally(input.template, evidence);
+  if (input.template?.trim()) {
+    return applyNotifyTemplateLocally(input.template, { ...evidence, summary });
   }
   const lines = [
     input.title,
@@ -448,10 +448,13 @@ export async function formatSuccessNotificationWithTemplate(input: {
   if (!template) return input.defaultBody;
 
   const evidence = extractNotificationEvidence(input.result);
-  const structuredFallback =
-    evidence.lines.length > 0
-      ? applyNotifyTemplateLocally(template, evidence)
-      : input.defaultBody;
+  const structuredFallback = applyNotifyTemplateLocally(template, evidence);
+
+  // Nothing to list means the LLM would only rewrite prose, and it then tends to
+  // drop the separator and the closing cc line. Fill the template deterministically.
+  if (evidence.lines.length === 0) {
+    return structuredFallback;
+  }
 
   let content: string;
   try {
@@ -470,6 +473,8 @@ export async function formatSuccessNotificationWithTemplate(input: {
             '你只负责把 Agent task 执行结果整理成 Glip 通知正文。',
             '不要执行外部操作，不要编造未出现在证据里的标识 / 人名。',
             '严格按用户模板的结构输出（标题行、分隔线、列表项、结尾说明）。',
+            '模板的标题行、分隔线（例如 ---- 这一行）和结尾说明行必须原样保留、顺序不变；结尾说明里的 @ 提醒也要保留，不要只留 cc 部分。',
+            '中间只放真实条目，一行一条并保留模板的 * 前缀；不要把列表改写成整段散文。',
             templateRequestsLinks(template)
               ? [
                   '用户模板要求列表项带可点击链接（markdown `[text](url)`，或模板文字写了要带链接 / link）。',
@@ -510,7 +515,7 @@ export async function formatSuccessNotificationWithTemplate(input: {
   }
 
   const formatted = notificationBodyFromLlm(content);
-  if (formatted) return formatted;
+  if (formatted) return enforceTemplateScaffolding(template, formatted);
 
   input.log.warn(
     {
@@ -664,6 +669,18 @@ export function templateRequestsLinks(template: string): boolean {
   return /链接|超链接|\blinks?\b/i.test(text);
 }
 
+/**
+ * A scan/write task that legitimately matched nothing still owes the reader the
+ * template shape: header, separator and the closing line (which usually carries
+ * the cc mention). Only the list rows collapse into one explanation row.
+ */
+function emptyListRow(summary: string): string {
+  const reason = summary.trim();
+  return reason
+    ? `本次没有符合条件的条目：${compactText(reason, 900)}`
+    : '本次没有符合条件的条目。';
+}
+
 export function applyNotifyTemplateLocally(
   template: string,
   evidence: NotificationEvidence,
@@ -675,12 +692,12 @@ export function applyNotifyTemplateLocally(
 
   const replacement = evidence.lines.length
     ? evidence.lines.map((line) => (line.startsWith('*') ? line : `* ${line}`))
-    : [];
+    : [emptyListRow(evidence.summary)];
 
   if (bulletIndexes.length === 0) {
     return uniqueNonEmpty([
       template.trim(),
-      evidence.summary,
+      evidence.lines.length ? evidence.summary : '',
       ...replacement,
     ]).join('\n');
   }
@@ -703,6 +720,58 @@ export function applyNotifyTemplateLocally(
     ...templateLines.slice(end + 1),
   ];
   return next.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * The LLM keeps the wording but sometimes loses the template frame (separator
+ * line, closing line with the cc mention). Re-anchor the frame from the template
+ * and let the model own only the middle rows.
+ */
+export function enforceTemplateScaffolding(template: string, body: string): string {
+  const templateLines = template.replace(/\r\n/g, '\n').split('\n');
+  const firstPlaceholder = templateLines.findIndex(isTemplatePlaceholderLine);
+  if (firstPlaceholder < 0) return body.trim();
+
+  let lastPlaceholder = firstPlaceholder;
+  while (
+    lastPlaceholder + 1 < templateLines.length &&
+    isTemplatePlaceholderLine(templateLines[lastPlaceholder + 1])
+  ) {
+    lastPlaceholder += 1;
+  }
+
+  const head = templateLines.slice(0, firstPlaceholder);
+  const tail = templateLines.slice(lastPlaceholder + 1);
+  const frame = [...head, ...tail];
+  const middle = body
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter((line) => !isFrameEcho(line, frame));
+
+  return [...head, ...middle, ...tail]
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeForCompare(line: string): string {
+  return line.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * True when the model line is the template frame said again, possibly truncated
+ * or slightly extended, so the frame is not duplicated after re-anchoring.
+ */
+function isFrameEcho(line: string, frame: string[]): boolean {
+  const value = normalizeForCompare(line);
+  if (!value || /^\*\s/.test(value)) return false;
+  return frame.some((candidate) => {
+    const other = normalizeForCompare(candidate);
+    if (!other) return false;
+    if (other === value) return true;
+    const [shorter, longer] = value.length <= other.length ? [value, other] : [other, value];
+    return shorter.length >= 4 && longer.includes(shorter);
+  });
 }
 
 function isTemplatePlaceholderLine(line: string): boolean {
