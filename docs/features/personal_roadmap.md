@@ -108,10 +108,20 @@ Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同�
 
 ### fixVersion 自动填
 
-团队配置了发布时间表后，按各行 **Target End**（或 `start + days - 1`）经 `catchRelease` 匹配最近 Pro release：
+团队配置了发布时间表后，创建弹窗按各行 **Target End**（或 `start + days - 1`）匹配 **落点列**，不是 Gantt hover 里的「可赶 Sprint」。
 
-- 全部落同一 release → 字段直接填入
-- 跨 release → 字段留空 + 列表逐行绿色 chip；用户输入固定值覆盖全部
+两套口径不要混用：
+
+| 口径 | 函数 | 用在哪 | 含义 |
+|---|---|---|---|
+| **落点列** | `landRelease` / `landReleaseName`（`useReleaseRuler.ts`） | 创建 Jira 的共享 `fixVersion` 字段、逐行绿色 chip、Agent `suggestedFixVersion` | Target End 落在发布时间表哪一列。半开区间 `[上一班分割, 本班分割)`，分割竖线是**下一列的左边界**；最后一列右端 inclusive。Target End 正好压在 `26.3.320` 的 Pro 竖线上时，列名是下一班（如 `26.4.110`），不是 `26.3.320` |
+| **可赶 Sprint** | `catchRelease` | Gantt 拖动 / hover「赶 AIA 26.3.320（Pro 09-14）」 | 结束日当天或之后最近一班 **Pro**。同一天可以「赶上一班」，但视觉落点已经在下一列 |
+
+共享字段怎么填：
+
+- **全部落同一列** → 字段直接填入；提示「已按任务 Target End 在发布时间表上的落点列填入，可修改」
+- **落在不同列** → **共享字段留空**，不猜一个统一值。列表仍逐行显示绿色 chip。Agent 模式按各任务 `suggestedFixVersion` 分别填写（Prompt 写明「不要统一覆盖」）；直连 API 每行写入 `fixVersion 覆盖值 || 该行 suggestedFixVersion`
+- 用户在共享字段输入固定值 → 覆盖全部行
 - 插件侧 `buildJiraCreateFields` 写 `fixVersions`：exact → **唯一后缀匹配**（解决表里 `26.3.220` vs Jira `Nova 26.3.220`）；歧义/无匹配则丢字段并带回 warning，不阻断创建
 
 Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器查当前 sprint。
@@ -305,7 +315,7 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有
 
 ## 数据库迁移
 
-`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除。扩展侧早就在批量刷新时请求 `status` 字段（依赖 ticket 一直在用），这次只是把它也落到 `subs` 表并下发给前端，不需要改扩展。
+`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除；`014_subs_original_estimate_days` 给 `subs` 加 `original_estimate_days`——Jira Original Estimate 向上取整折算的人天（1 人天 = 8 小时），导入 Task / 打开页 `refresh_from_jira` 写入，人员视图「其余延至下周」拿它当最小任务长度（空则默认 3 人天）。
 
 **顺序约束**：`Database.ts` 是先 `db.exec(schema.sql)` 再跑迁移。所以 `schema.sql` 里**不能**出现引用新列的索引——已有部署还没 ALTER 过，启动时就会崩。`idx_items_jira_key` 因此由迁移 `003` 创建而不是写在 `schema.sql` 里。`schema.sql` 只负责让全新库一次到位，迁移负责把老库补齐。description 列写在 `schema.sql` 里但不建索引。
 
@@ -408,7 +418,7 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 - **前缀 chip**（条足够宽才出现，实际像素宽 > 110px）：备注名优先，超 14 字截断
 - 工具栏「主任务」图例是纯静态色板对照，**不**联动高亮——早期版本 hover 任务条/图例会把同 Epic 的条一起点亮、其余压暗，实测这个联动经常和下面「聚焦」的选中态互相抢视觉焦点，已去掉
 
-高亮/压暗**只由选中驱动**，不由 hover 驱动，且只影响当前正在操作的这个人：进入「聚焦」（见下）时，当前人员**只有选中的任务**用 `.sel` 高亮（橙色描边 + ✓），**其余全部**（含会被顺延移动的候选、顶到 Epic 结束日的 stuck、下面说的已完成 done）统一压暗（`.res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}`）——早期版本让「会被移动的候选」也跟着高亮，实测容易和「已经在做」混在一起分不清，顺延预告改成只靠 `rb-shift` 角标（→下周一 / →钳制日期 / ✕）单独传达；其他人员的任务条不受任何影响，正常显示。
+高亮/压暗**只由选中驱动**，不由 hover 驱动，且只影响当前正在操作的这个人：进入「聚焦」（见下）时，当前人员**只有选中的任务**用 `.sel` 高亮（橙色描边 + ✓），**其余全部**（含会被顺延移动的候选、放不下最小人天的 stuck、下面说的已完成 done）统一压暗（`.res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}`）——早期版本让「会被移动的候选」也跟着高亮，实测容易和「已经在做」混在一起分不清，顺延预告改成只靠 `rb-shift` 角标（→下周一 / →缩短 / ✕）单独传达；其他人员的任务条不受任何影响，正常显示。
 
 ### 已完成任务的配色
 
@@ -430,14 +440,19 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 人员视图**单击**一个子任务条把它标成「正在做」（可继续单击多选）；点到**另一个成员**的任务，会对那个人重新开始多选；**已完成**（见上）的任务不参与选中。选中后该成员名下出现操作面板：
 
-- 「其余延至下周 →」：把**该成员未选中、开始日在下周一之前、尚未结束、未完成**的任务（已开始未做完的算，已结束的历史记录不算，下周及以后的远任务不算，已完成的不算）统一延到下周一开始，**长度不变**
-- hover 该按钮会在每条待顺延任务的落点位置画虚线「影子」预览，钳制到 Epic 结束日的会标注「未到下周一（Epic 限制）」
-- 执行后任务条以 0.35s 滑到新 left（`.res-bar.slide`，与 demo 相同曲线）；toast 汇总移动/受限/顶死的数量；再点一次是幂等的（已经落在下周一的不会继续被推）
+- 「其余延至下周 →」：把**该成员未选中、开始日在下周一之前、尚未结束、未完成**的任务（已开始未做完的算，已结束的历史记录不算，下周及以后的远任务不算，已完成的不算）统一延到**下周一开始**
+- **长度优先保持**；从下周一到所属 Epic Target End 摆不下原长度、但还摆得下最小人天时，**缩短**任务条（角标「→缩短」）
+- 最小人天 = Jira **Original Estimate** 向上取整折算的人天（1 人天 = 8 小时，存在 `subs.original_estimate_days`）；没填则默认 **3 人天**
+- 若「下周一 → 当前 Epic Target End」连最小人天都摆不下：按钮保持可点（不再灰掉当死），点开确认框——**延长相关 Epic 的排期结束日到 mm-dd**（多 Epic 时列出各自日期），或**取消顺延**。确认后同一条 `defer_subs` 先拉长 Epic，再移动/缩短任务
+- hover 该按钮会在能放下的任务落点画虚线「影子」预览（缩短的影子带「缩短」）；放不下的任务不画影子，靠红色 ✕ 角标
+- 执行后任务条以 0.35s 滑到新 left（`.res-bar.slide`，与 demo 相同曲线）；toast 汇总移动 / 缩短 / 延长 Epic / 仍放不下的数量；再点一次是幂等的（已经落在下周一且长度合法的不会继续被推）
 - Esc、点击空白处、切团队或切「近 2 周 / 全部」都会退出聚焦
 
-**按钮三态**（`goState()`，`ResourceView.vue`）：`ready`（有可移动的候选，正常橙色，可点）/ `stuck`（有候选但全部顶到所属 Epic 结束日，没有可后移的空间——按钮变灰但**不用** `disabled`，因为 `pointer-events:none` 会连 hover 提示一起吞掉，用户无法知道为什么点不动；改用 `.soft` 类保持可点/可 hover，hover 提示与点击 toast 都明确给出原因）/ `none`（没有候选：其余任务都已完成或都不在可顺延范围内）。
+**按钮三态**（`goState()`，`ResourceView.vue`）：`ready`（候选都能放下或缩短后放下，正常橙色，可点）/ `needs-extend`（至少一条连最小人天都摆不下——按钮**不**变灰，点开延长 Epic 确认框）/ `none`（没有候选：其余任务都已完成或都不在可顺延范围内；用 `.soft` 变灰但仍可 hover / 点击，因为 `disabled` + `pointer-events:none` 会连说明一起吞掉）。
 
-后端新 intent **`{ op: 'defer_subs', subIds: string[], targetStart: 'YYYY-MM-DD' }`**（`TeamService.ts` `applyIntent` 分支）：`targetStart` 由前端算好下周一显式传入，避免服务端时区歧义；服务端逐条按 `shift = min(diffDays(sub.start, targetStart), diffDays(subEnd, epicEnd))` 移动 `start_date`（`days` 不变），`shift > 0` 才算移动，一条聚合 activity；返回 `{ moved, capped, stuck }`（**subId 数组**，供前端精确定位需要回写 Jira Target 的那几条，而不只是计数）。服务端只按 Epic 跨度钳制，**不**检查「是否已过期」——那是纯前端的 `isDeferCandidate` 概念，调用方要自己先过滤掉不该顺延的任务再拼 `subIds`。为避免批量竞态与 N 条 activity/SSE 噪音，这里刻意不复用逐条 `update_sub`，也没有做乐观并发的 `baseVersions` 参数（这是低风险的批量整理操作，真发生并发冲突时下一次刷新自然纠正）。执行成功后 `ResourceView.vue` 把移动的 subId 上抛给 `GanttPanel.vue`，复用已有的 `scheduleTargetDateSync` 防抖队列回写 Jira Target Start/End。
+前端预告与服务端共用同一套 `planDeferToTarget`（服务端 `src/core/deferPlan.ts`，页面 `web/src/composables/useDeferPlan.ts`，避免 Vite 从 server src 打包）。拟合结果：`fit` 整段平移、`shrink` 缩到「下周一到 Epic 结束」的剩余天数、`needs-extend` 算出 `neededEpicEnd`、`noop` 已在目标日。
+
+后端 intent **`{ op: 'defer_subs', subIds, targetStart, extendEpics?: [{ itemKey, end }] }`**（`TeamService.ts` `applyIntent` 分支）：`targetStart` 由前端算好下周一显式传入，避免服务端时区歧义。服务端先按 `extendEpics` 拉长对应 Epic 的 `days` / `target_end`（只允许往后，不缩短），再逐条跑 `planDeferToTarget`；`fit`/`shrink` 才改 `start_date`/`days`，`needs-extend`/`noop` 进 `stuck`。返回 `{ moved, shrunk, stuck, extended }`（**id 数组**，供前端精确定位需要回写 Jira Target 的那几条，而不只是计数）。服务端**不**检查「是否已过期」——那是纯前端的 `isDeferCandidate` 概念，调用方要自己先过滤掉不该顺延的任务再拼 `subIds`。为避免批量竞态与 N 条 activity/SSE 噪音，这里刻意不复用逐条 `update_sub`，也没有做乐观并发的 `baseVersions` 参数（这是低风险的批量整理操作，真发生并发冲突时下一次刷新自然纠正）。执行成功后 `ResourceView.vue` 把移动的 subId 与被拉长的 Epic `itemKey` 上抛给 `GanttPanel.vue`，复用已有的 `scheduleTargetDateSync` 防抖队列回写 Jira Target Start/End。
 
 ## 阶段节点与外部依赖（Markers）
 
@@ -475,10 +490,10 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 | 能力 | 凭据优先级 | 展示 / 行为 |
 |---|---|---|
-| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重 |
+| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重（含 `originalEstimateDays`） |
 | **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期（避免打开页静默刷新用旧 Target 把 bar 盖回去）；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast。成功后轻 toast |
 | **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；无扩展/未映射 toast「未回写 assignee」；置空先 confirm |
-| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务最多 50 key，再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。主/子任务按 Target 可能挪 bar；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新 |
+| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务最多 50 key，再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。主/子任务按 Target 可能挪 bar；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新 |
 
 注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。description ≠ alias：alias 永不回写 Jira。读方向（Jira→owner）未映射用实名入成员表；写方向（owner→Jira）必须有映射。空 assignee 刷新不清空 Roadmap Owner。
 
@@ -521,7 +536,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - 阶段 chips：点主体切换展示，点 🏁 设结束分割节点；结束节点勾选锁定
 - **结束点语义（关键）**：`splitPhase` 标记的是「本 release 列的右边界 / 切到下一 release 的切换日」，不是本列起点。`relSegments` 对每个有该阶段的 release 取半开区间 `[上一班同阶段, 本班同阶段)`；首列无上一班时，若本班还有更早阶段则用最早阶段，否则向前垫 4 天。没有该阶段的 release（如仅有 Pro 的 RIO 热修）不单独成列，刻度叠在所在 Sprint 内
 - Release 过滤：全部 / 仅大版本 / 自定义通配符；实时预览保留与划线过滤名单；非法正则或滤空则兜底不过滤
-- 过滤作用于分段、刻度、竖线与「可赶 Sprint」；阶段 chips / 数据预览仍看全量表
+- 过滤作用于分段、刻度、竖线、「可赶 Sprint」与创建 Jira 的 **Target End 落点列**；阶段 chips / 数据预览仍看全量表
 - 工具栏 `Sprint | 月份` 开关仅会话级（`rulerMode`），不改团队配置、刷新恢复 Sprint
 - 「可赶 Sprint」提示（bar tooltip / 拖拽浮签）走**过滤后**数据口径，临时切月份仍保留
 - 人员视图不显示标尺开关与阶段图例
@@ -537,13 +552,16 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 
 ## 源码入口
 
-- `roadmap-service/`（`src/core/JqlIntrospect.ts`、`JiraClient.ts`、`TargetSync.ts`、`src/storage/Database.ts` 的迁移表）
+- `roadmap-service/`（`src/core/JqlIntrospect.ts`、`JiraClient.ts`、`TargetSync.ts`、`originalEstimate.ts`、`deferPlan.ts`、`src/storage/Database.ts` 的迁移表）
 - `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker、`epicColor`/`epicShort`/`shouldWrapAlias`）
+- `roadmap-service/web/src/composables/useReleaseRuler.ts`（`landRelease` 落点列 vs `catchRelease` 可赶 Sprint）
+- `roadmap-service/web/src/composables/useCreateJiraAgentPrompt.ts`（多 fixVersion 时共享字段留空、按行 `suggestedFixVersion`）
 - `roadmap-service/web/src/composables/useExtensionBridge.ts`（直连 / Agent create bridge）
 - `roadmap-service/web/src/components/modals/AiCreateModal.vue`（双路径创建弹窗）
 - `roadmap-service/web/src/composables/useMarkerFloats.ts`（阶段节点 / 外部依赖浮层；依赖 Jira 缓存确认写 ETA）
 - `roadmap-service/web/src/composables/useRoadmapApi.ts`（known-teams / edit token localStorage、`deferSubs`）
 - `roadmap-service/web/src/composables/useGeometry.ts`（`DAY_W` 响应式天宽、时间轴几何换算）
+- `roadmap-service/web/src/composables/useDeferPlan.ts`（人员视图顺延预告，镜像服务端 `deferPlan.ts`）
 - `roadmap-service/web/src/components/ResourceView.vue`（人员视图：车道装箱、Epic 归属可视化、时间窗平移、聚焦顺延）
 - `roadmap-service/web/src/components/GanttPanel.vue`（缩放手势、工具栏图例、Jira Target 回写队列）
 - `roadmap-service/web/src/components/TopBar.vue`
@@ -558,7 +576,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的整体移动/Epic 端钳制/幂等/跳过无效 id、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 sub `status` 的镜像与幂等）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 sub `status` / `originalEstimateDays` 的镜像与幂等）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
 - Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）

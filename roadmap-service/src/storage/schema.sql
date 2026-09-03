@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS subs (
   created_by TEXT NOT NULL DEFAULT '',
   description TEXT,
   status TEXT,
+  original_estimate_days INTEGER,
   version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

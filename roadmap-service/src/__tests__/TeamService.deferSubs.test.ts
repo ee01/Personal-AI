@@ -87,10 +87,10 @@ beforeAll(() => {
 });
 
 describe('defer_subs', () => {
-  it('moves a sub to targetStart, clamps another to the Epic end, and leaves an already-past-target one stuck', () => {
+  it('moves a sub to targetStart, shrinks another to remaining room, and leaves an already-on-target one stuck', () => {
     epicKey = buildEpic('2026-08-17', 34); // ends 2026-09-19
-    const roomy = addSub(epicKey, 'roomy', '2026-08-28', 6); // ends 09-02, plenty of room before Epic end
-    const tight = addSub(epicKey, 'tight', '2026-08-24', 26); // ends 09-18, only 1 day of room
+    const roomy = addSub(epicKey, 'roomy', '2026-08-28', 6); // fits with original length
+    const tight = addSub(epicKey, 'tight', '2026-08-24', 26); // 26d does not fit from Monday; shrink
     const already = addSub(epicKey, 'already-there', '2026-08-31', 3); // starts on targetStart already
 
     const result = expectOk(
@@ -102,15 +102,17 @@ describe('defer_subs', () => {
     );
     expect(result.deferSummary).toEqual({
       moved: [roomy, tight],
-      capped: [tight],
+      shrunk: [tight],
       stuck: [already],
+      extended: [],
     });
 
     const snapshot = result.snapshot;
     expect(subOf(snapshot, epicKey, roomy).start).toBe('2026-08-31');
-    expect(subOf(snapshot, epicKey, roomy).days).toBe(6); // length unchanged
-    expect(subOf(snapshot, epicKey, tight).start).toBe('2026-08-25'); // clamped: only 1 day of room
-    expect(subOf(snapshot, epicKey, already).start).toBe('2026-08-31'); // untouched
+    expect(subOf(snapshot, epicKey, roomy).days).toBe(6);
+    expect(subOf(snapshot, epicKey, tight).start).toBe('2026-08-31');
+    expect(subOf(snapshot, epicKey, tight).days).toBe(20); // 08-31 → 09-19
+    expect(subOf(snapshot, epicKey, already).start).toBe('2026-08-31');
   });
 
   it('is idempotent — running it again on the already-moved subs is a no-op', () => {
@@ -135,9 +137,13 @@ describe('defer_subs', () => {
         targetStart: '2026-08-31',
       }),
     );
-    expect(second.deferSummary).toEqual({ moved: [], capped: [], stuck: [sub] });
+    expect(second.deferSummary).toEqual({
+      moved: [],
+      shrunk: [],
+      stuck: [sub],
+      extended: [],
+    });
     expect(subOf(second.snapshot, epicKey, sub).start).toBe('2026-08-31');
-    // No-op shouldn't bump the version either.
     expect(subOf(second.snapshot, epicKey, sub).version).toBe(afterFirst.version);
   });
 
@@ -152,12 +158,8 @@ describe('defer_subs', () => {
         targetStart: '2026-08-31',
       }),
     );
-    // The server clamps by Epic end only; a caller is expected to filter by
-    // "already ended" client-side (see ResourceView.isDeferCandidate) before
-    // ever sending the id — but if it does arrive, the Epic here still has
-    // 2026-01-01 + 300 days of room, so the move still lands on targetStart.
-    // This test documents that the server is not itself the "is it in the
-    // past" gate — it only clamps to the parent Epic's span.
+    // The server is not itself the "is it in the past" gate — callers filter
+    // with isDeferCandidate. This Epic still has room, so the move lands.
     expect(result.deferSummary!.moved).toEqual([past]);
     expect(subOf(result.snapshot, epicKey, past).start).toBe('2026-08-31');
   });
@@ -171,8 +173,6 @@ describe('defer_subs', () => {
     const noDatesId = itemOf(draftNoDates, epicKey).subs.find(
       (s) => s.title === 'no dates yet',
     )!.id;
-    // add_sub always seeds a start/days (defaults), so force it back to null
-    // to exercise the "skip incomplete rows" branch explicitly.
     expectOk(
       apply(teamId, {
         op: 'update_sub',
@@ -191,10 +191,10 @@ describe('defer_subs', () => {
     );
     expect(result.deferSummary!.moved).toEqual([real]);
     expect(
-      result.deferSummary!.capped.concat(result.deferSummary!.stuck),
+      result.deferSummary!.shrunk.concat(result.deferSummary!.stuck),
     ).not.toContain(noDatesId);
     expect(
-      result.deferSummary!.capped.concat(result.deferSummary!.stuck),
+      result.deferSummary!.shrunk.concat(result.deferSummary!.stuck),
     ).not.toContain('sub-does-not-exist');
   });
 
@@ -204,5 +204,40 @@ describe('defer_subs', () => {
     expect(
       apply(teamId, { op: 'defer_subs', subIds: [sub] }),
     ).toEqual({ ok: false, error: 'target_start_required' });
+  });
+
+  it('leaves a sub stuck when Monday-to-Epic-end cannot fit min days, then extends when asked', () => {
+    epicKey = buildEpic('2026-07-25', 44); // ends 2026-09-06
+    const sub = addSub(epicKey, 'pinned', '2026-09-01', 9);
+
+    const blocked = expectOk(
+      apply(teamId, {
+        op: 'defer_subs',
+        subIds: [sub],
+        targetStart: '2026-09-07',
+      }),
+    );
+    expect(blocked.deferSummary).toMatchObject({
+      moved: [],
+      stuck: [sub],
+      extended: [],
+    });
+    expect(subOf(blocked.snapshot, epicKey, sub).start).toBe('2026-09-01');
+    expect(subOf(blocked.snapshot, epicKey, sub).days).toBe(9);
+
+    const extended = expectOk(
+      apply(teamId, {
+        op: 'defer_subs',
+        subIds: [sub],
+        targetStart: '2026-09-07',
+        extendEpics: [{ itemKey: epicKey, end: '2026-09-09' }],
+      }),
+    );
+    expect(extended.deferSummary!.moved).toEqual([sub]);
+    expect(extended.deferSummary!.extended).toEqual([epicKey]);
+    expect(extended.deferSummary!.shrunk).toEqual([sub]);
+    expect(itemOf(extended.snapshot, epicKey).targetEnd).toBe('2026-09-09');
+    expect(subOf(extended.snapshot, epicKey, sub).start).toBe('2026-09-07');
+    expect(subOf(extended.snapshot, epicKey, sub).days).toBe(3);
   });
 });

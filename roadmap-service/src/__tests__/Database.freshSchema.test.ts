@@ -36,12 +36,13 @@ describe('a database created from schema.sql', () => {
       '011_teams_jira_refreshed_at',
       '012_marker_jira_cache',
       '013_subs_status',
+      '014_subs_original_estimate_days',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
         (row) => row.name,
       ),
-    ).toEqual(expect.arrayContaining(['cleared', 'description', 'status']));
+    ).toEqual(expect.arrayContaining(['cleared', 'description', 'status', 'original_estimate_days']));
     expect(
       (db.pragma('table_info(items)') as Array<{ name: string }>).map(
         (row) => row.name,

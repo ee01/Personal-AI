@@ -343,6 +343,7 @@ describe('create-jira payload', () => {
         targetStart: '2026-07-01',
         targetEnd: '2026-08-01',
         fixVersion: null,
+        suggestedFixVersion: null,
         description: null,
       },
       children: [
@@ -354,6 +355,7 @@ describe('create-jira payload', () => {
           parentItemKey: 'LOCAL-ab12cd34',
           parentJiraKey: null,
           fixVersion: null,
+          suggestedFixVersion: null,
           assignee: null,
           description: null,
         },
@@ -389,8 +391,11 @@ describe('create-jira payload', () => {
           'LOCAL-ab12cd34': '26.3.220',
           d1: '26.4.10',
         },
-      }).children[0].fixVersion,
-    ).toBe('26.5.0');
+      }).children[0],
+    ).toMatchObject({
+      fixVersion: '26.5.0',
+      suggestedFixVersion: '26.4.10',
+    });
   });
 
   it('omits the parent and passes its key when the issue already exists', () => {

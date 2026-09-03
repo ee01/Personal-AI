@@ -5,6 +5,7 @@ import {
   PARENT_FIELD,
   PARENT_LINK_FIELD,
 } from './JqlIntrospect.js';
+import { originalEstimateFromJiraFields } from './originalEstimate.js';
 
 export class JiraHttpError extends Error {
   status: number;
@@ -25,6 +26,7 @@ export interface RemoteTask {
   targetStart: string | null;
   targetEnd: string | null;
   assignee: string | null;
+  originalEstimateDays?: number | null;
 }
 
 function authHeaders(): Record<string, string> {
@@ -131,6 +133,7 @@ export async function jiraSearchChildTasks(
     'summary',
     'issuetype',
     'assignee',
+    'timeoriginalestimate',
     config.jira.fieldTargetStart,
     config.jira.fieldTargetEnd,
     'parent',
@@ -174,6 +177,7 @@ export async function jiraSearchChildTasks(
           targetStart: toIsoDate(f[config.jira.fieldTargetStart]),
           targetEnd: toIsoDate(f[config.jira.fieldTargetEnd]),
           assignee: assignee?.displayName?.trim() || null,
+          originalEstimateDays: originalEstimateFromJiraFields(f),
         });
       }
 

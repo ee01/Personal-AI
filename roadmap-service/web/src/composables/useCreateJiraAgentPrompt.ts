@@ -33,6 +33,8 @@ export function buildAgentCreatePrompt(input: {
   members: TeamMember[];
   items: RoadmapItem[];
   drafts: Array<{ item: RoadmapItem; sub: RoadmapSub }>;
+  /** Per-draft Target End landing (release column), keyed by sub.id / item.key. */
+  suggestedFixVersions?: Record<string, string | null | undefined>;
   /** Optional pre-fetched Epic descriptions keyed by Jira key. */
   epicDescriptions?: Record<string, string | null | undefined>;
 }): string {
@@ -40,14 +42,29 @@ export function buildAgentCreatePrompt(input: {
   L.push('【System Prompt】', ROADMAP_CREATE_JIRA_SYSTEM_PROMPT);
   L.push('', '【用户 Prompt】', input.userPrompt.trim() || '（空）');
   L.push('', '【字段约束】已填字段为硬约束，其余由你决定');
+  const override = input.fixVersion.trim();
+  const suggestedValues = [
+    ...new Set(
+      Object.values(input.suggestedFixVersions || {}).filter(
+        (v): v is string => Boolean(v && String(v).trim()),
+      ),
+    ),
+  ];
+  let fixVersionConstraint: string;
+  if (override) {
+    fixVersionConstraint = override;
+  } else if (suggestedValues.length === 1) {
+    fixVersionConstraint = `未统一指定；各任务 Target End 落点均为 ${suggestedValues[0]}，请按此填写`;
+  } else if (suggestedValues.length > 1) {
+    fixVersionConstraint = `任务落在不同 release（${suggestedValues.join(' / ')}），请按各任务 suggestedFixVersion（Target End 落点列）分别填写，不要统一覆盖`;
+  } else {
+    fixVersionConstraint = '（由 Agent 决定）';
+  }
   const fields: Array<[string, string]> = [
     ['Project', input.projectKey],
     ['主任务类型', input.itemType],
     ['子任务类型', input.subType],
-    [
-      'fixVersion',
-      input.fixVersion || '按发布时间表以任务 Target End 匹配',
-    ],
+    ['fixVersion', fixVersionConstraint],
     ['Sprint', input.sprint || '查询并填当前 Sprint'],
   ];
   for (const [k, v] of fields) {
@@ -79,10 +96,19 @@ export function buildAgentCreatePrompt(input: {
     const parentKey = item.jiraKey || item.key;
     const userDesc = String(sub.description || '').trim();
     const parentDesc = String(item.description || '').trim();
+    const suggested =
+      input.suggestedFixVersions?.[sub.id] ||
+      input.suggestedFixVersions?.[item.key] ||
+      null;
     L.push(
       `${i + 1}. [父 ${parentKey}] ${sub.title}` +
         (start && end ? ` · ${fmtMD(start)} → ${fmtMD(end)}` : '') +
         ` · assignee: ${r.full || r.name}${r.fallback ? '（创建人回落）' : ''}` +
+        (override
+          ? ''
+          : suggested
+            ? ` · suggestedFixVersion: ${suggested}`
+            : '') +
         ` · description: ${
           userDesc
             ? '综合父 Epic 描述 + 本标题 + 下行用户描述生成（可改写，勿丢约束）'

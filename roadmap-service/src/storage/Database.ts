@@ -158,6 +158,14 @@ const MIGRATIONS: Migration[] = [
       addColumn(database, 'subs', 'status', 'TEXT');
     },
   },
+  {
+    id: '014_subs_original_estimate_days',
+    up: (database) => {
+      // Mirrored Jira Original Estimate, ceiled to 8h man-days. Defer uses this
+      // as the minimum bar length (default 3 when null).
+      addColumn(database, 'subs', 'original_estimate_days', 'INTEGER');
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

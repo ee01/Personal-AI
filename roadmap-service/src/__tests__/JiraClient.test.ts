@@ -90,6 +90,7 @@ describe('JiraClient', () => {
         targetStart: '2026-08-03',
         targetEnd: '2026-08-10',
         assignee: 'Vivi',
+        originalEstimateDays: null,
       },
     ]);
   });

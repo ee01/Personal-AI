@@ -567,6 +567,7 @@ async function silentRefreshFromJira() {
           targetEnd: issue.targetEnd,
           assignee: issue.assignee,
           status: issue.status,
+          originalEstimateDays: issue.originalEstimateDays,
         },
       })),
     });
@@ -813,13 +814,23 @@ async function commitBar(
   }
 }
 
-/** After a "其余延至下周" batch commit, resource view only knows which subIds
- * moved — the snapshot it committed already has their new dates, so read
- * those back and queue the same debounced Jira Target sync a drag would. */
-function onDeferCommitted(subIds: string[]) {
+/** After a "其余延至下周" batch commit, resource view reports which subIds
+ * moved and which Epic itemKeys were extended — the snapshot already has the
+ * new dates, so queue the same debounced Jira Target sync a drag would. */
+function onDeferCommitted(payload: { subIds: string[]; itemKeys: string[] }) {
+  const moved = new Set(payload.subIds || []);
+  const itemKeys = new Set(payload.itemKeys || []);
   for (const it of state.scheduledItems.value) {
+    if (itemKeys.has(it.key) && it.jiraKey && it.start && it.days) {
+      scheduleTargetDateSync({
+        itemKey: it.key,
+        jiraKey: it.jiraKey,
+        start: it.start,
+        days: it.days,
+      });
+    }
     for (const s of it.subs) {
-      if (!subIds.includes(s.id) || !s.key || !s.start || !s.days) continue;
+      if (!moved.has(s.id) || !s.key || !s.start || !s.days) continue;
       scheduleTargetDateSync({ subId: s.id, jiraKey: s.key, start: s.start, days: s.days });
     }
   }

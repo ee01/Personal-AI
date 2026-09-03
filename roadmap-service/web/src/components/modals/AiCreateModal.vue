@@ -18,9 +18,7 @@ import {
   type AgentExecutorOption,
 } from '../../composables/useExtensionBridge';
 import {
-  catchRelease,
-  relParsed,
-  type ParsedReleaseSchedule,
+  landReleaseName,
   type ReleaseSheetConfig,
 } from '../../composables/useReleaseRuler';
 import { addD, fmtISO } from '../../composables/useGeometry';
@@ -144,6 +142,7 @@ const fullAgentPrompt = computed(() => {
     members: state.snapshot.value?.members || [],
     items: state.snapshot.value?.items || [],
     drafts,
+    suggestedFixVersions: fixVersionByKey.value,
   });
 });
 
@@ -157,13 +156,12 @@ const needsSubType = computed(() => groups.value.some((g) => g.subs.length > 0))
 const needsParent = computed(() => groups.value.some((g) => isDraftItem(g.item)));
 const agentMode = computed(() => prompt.value.trim().length > 0);
 
-const teamRel = computed<ParsedReleaseSchedule | null>(() => {
+const teamSheet = computed<ReleaseSheetConfig | null>(() => {
   const cfg = state.snapshot.value?.team.releaseSheet as
     | ReleaseSheetConfig
     | null
     | undefined;
-  if (!cfg?.rows?.length) return null;
-  return relParsed(cfg);
+  return cfg?.rows?.length ? cfg : null;
 });
 
 function endDateOf(row: {
@@ -184,8 +182,8 @@ function suggestedFixVersion(row: {
   days?: number | null;
 }): string | null {
   const end = endDateOf(row);
-  if (!end || !teamRel.value) return null;
-  return catchRelease(end, teamRel.value)?.release || null;
+  if (!end || !teamSheet.value) return null;
+  return landReleaseName(end, teamSheet.value);
 }
 
 const fixVersionByKey = computed(() => {
@@ -210,25 +208,25 @@ const uniqueSuggestedReleases = computed(() => {
 });
 
 const fixVersionNote = computed(() => {
-  if (!teamRel.value) {
-    return '配置发布时间表（JQL ✎ 弹窗）后可按 Target End 自动填写';
+  if (!teamSheet.value) {
+    return '配置发布时间表（JQL ✎ 弹窗）后可按 Target End 落点列自动填写';
   }
   if (uniqueSuggestedReleases.value.length === 1) {
-    return '已按任务 Target End 落点自动填入，可修改';
+    return '已按任务 Target End 在发布时间表上的落点列填入，可修改';
   }
   if (uniqueSuggestedReleases.value.length > 1) {
-    return `任务落在不同 release（${uniqueSuggestedReleases.value.join(' / ')}），逐条按 Target End 匹配；输入固定值可覆盖全部`;
+    return `任务落在不同 release（${uniqueSuggestedReleases.value.join(' / ')}），共享字段留空；Agent 按各任务落点自行判断。输入固定值可覆盖全部`;
   }
-  return '所有任务的 Target End 之后没有匹配的 release';
+  return '所有任务的 Target End 没有落在任何 release 列';
 });
 
 const fixVersionPlaceholder = computed(() => {
   if (agentMode.value && !fixVersion.value.trim()) {
     return '自动 · 由 Agent 决定';
   }
-  if (!teamRel.value) return '如 26.3.220';
+  if (!teamSheet.value) return '如 26.3.220';
   if (uniqueSuggestedReleases.value.length === 1) return uniqueSuggestedReleases.value[0];
-  return '自动 · 按各任务 Target End 匹配';
+  return '留空 · Agent 按各任务落点判断';
 });
 
 const agentPlaceholder = '自动 · 由 Agent 决定';
@@ -395,6 +393,7 @@ function promptForGroup(group: DraftGroup): string {
     members: state.snapshot.value?.members || [],
     items: state.snapshot.value?.items || [],
     drafts: group.subs.map((sub) => ({ item: group.item, sub })),
+    suggestedFixVersions: fixVersionByKey.value,
   });
 }
 
@@ -782,7 +781,7 @@ function closeModal() {
               :data-tip="g.item.description"
             >≡ 描述</span>
             <span
-              v-if="teamRel && isDraftItem(g.item)"
+              v-if="teamSheet && isDraftItem(g.item)"
               class="fv-chip"
               :class="{ none: !fixVersionByKey[g.item.key] }"
             >
@@ -822,7 +821,7 @@ function closeModal() {
               :data-tip="s.description"
             >≡ 描述</span>
             <span
-              v-if="teamRel"
+              v-if="teamSheet"
               class="fv-chip"
               :class="{ none: !fixVersionByKey[s.id] }"
             >

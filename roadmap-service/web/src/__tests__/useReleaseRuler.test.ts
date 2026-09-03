@@ -3,6 +3,7 @@ import {
   applyReleaseFilter,
   buildReleaseSheetConfig,
   catchRelease,
+  landRelease,
   extractSheetId,
   isMajorRelease,
   kindsInParsed,
@@ -114,6 +115,16 @@ describe('useReleaseRuler', () => {
       'pro',
       'mr',
     ]);
+  });
+
+  it('lands a Target End on the next column when it sits on a split (not catchRelease)', () => {
+    const parsed = parseReleaseRows(rows);
+    const pro130 = parsed.phases.find(
+      (p) => p.kind === 'pro' && p.release === '26.3.130',
+    )!;
+    // catchRelease = "可赶 26.3.130"；落点列是下一班（竖线是下一列左边界）
+    expect(catchRelease(pro130.date, parsed)?.release).toBe('26.3.130');
+    expect(landRelease(pro130.date, parsed, 'pro')?.rel.name).toBe('26.3.135');
   });
 
   it('finds the next catchable Pro sprint', () => {

@@ -245,6 +245,7 @@ export type RemoteChildTask = {
   targetStart: string | null;
   targetEnd: string | null;
   assignee: string | null;
+  originalEstimateDays?: number | null;
 };
 
 /** Search child Tasks under Epics via extension Options JIRA_API_TOKEN. */
@@ -314,6 +315,7 @@ export type JiraRefreshIssue = {
   targetEnd: string | null;
   assignee: string | null;
   status: string | null;
+  originalEstimateDays?: number | null;
   fetchedAt: number;
 };
 

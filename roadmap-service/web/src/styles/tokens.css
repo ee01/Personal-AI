@@ -288,8 +288,8 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .epic-legend .ep-dot{width:5px;height:13px;border-radius:3px;flex:none}
 /* ---- 聚焦当前任务：单击多选「正在做」，其余任务一键延至下周 ----
    高亮 = 已标记「正在做」的选中条，仅此一种；非高亮 = 其余全部（包括会被顺延移动的
-   candidate、顶到 Epic 结束日的 stuck、已完成的 done）——顺延预告靠 rb-shift 角标
-   （→ 下周一 / →钳制日期 / ✕）单独传达，不需要连整条都跟着高亮，压暗但保留色相，
+   candidate、放不下最小人天的 stuck、已完成的 done）——顺延预告靠 rb-shift 角标
+   （→下周一 / →缩短 / ✕）单独传达，不需要连整条都跟着高亮，压暗但保留色相，
    不整体去色，避免和「过去任务」的灰色混淆 */
 .res-row.focusing{background:#FFFCF4}
 .res-row.focusing .res-bar:not(.sel):not(.ghost){opacity:.55}

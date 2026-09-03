@@ -402,4 +402,50 @@ describe('refresh_from_jira sub status', () => {
     const same = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-500')!.subs[0];
     expect(same.version).toBe(version);
   });
+
+  it('mirrors Original Estimate man-days onto the sub', () => {
+    const snapshot = createTeam({
+      name: 'SubEstimateRefresh',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [{ key: 'NOVA-600', type: 'Epic', title: 'P', quarter: '2026-Q3' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey: 'NOVA-600',
+        title: 'child',
+        start: '2026-08-01',
+        days: 8,
+      }),
+    );
+    const sub = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-600')!.subs[0];
+    expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: sub.id, jiraKey: 'NOVA-601' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-601',
+            fetchedAt: Date.now() + 1000,
+            fields: { originalEstimateDays: 5 },
+          },
+        ],
+      }),
+    );
+    const refreshed = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-600')!.subs[0];
+    expect(refreshed.originalEstimateDays).toBe(5);
+  });
 });

@@ -361,6 +361,25 @@ function toIsoDate(raw: unknown): string | undefined {
   return text.slice(0, 10);
 }
 
+function originalEstimateToManDays(fields: Record<string, unknown>): number | null {
+  const seconds = fields.timeoriginalestimate;
+  let n: number | null = null;
+  if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {
+    n = seconds;
+  } else if (typeof seconds === 'string' && seconds.trim()) {
+    const parsed = Number(seconds);
+    if (Number.isFinite(parsed) && parsed > 0) n = parsed;
+  } else {
+    const tracking = fields.timetracking as
+      | { originalEstimateSeconds?: unknown }
+      | undefined;
+    const track = tracking?.originalEstimateSeconds;
+    if (typeof track === 'number' && Number.isFinite(track) && track > 0) n = track;
+  }
+  if (n == null) return null;
+  return Math.max(1, Math.ceil(n / (8 * 3600)));
+}
+
 function estimateWeeks(fields: Record<string, unknown>): number | undefined {
   const dev = fields[JIRA_FIELD_DEV_ESTIMATE];
   const asNumber =
@@ -491,6 +510,7 @@ export type RemoteChildTask = {
   targetStart: string | null;
   targetEnd: string | null;
   assignee: string | null;
+  originalEstimateDays: number | null;
 };
 
 function childLinkClause(linkField: string | null, epicKeys: string[]): string {
@@ -547,6 +567,7 @@ async function handleSearchChildTasks(
     'summary',
     'issuetype',
     'assignee',
+    'timeoriginalestimate',
     'parent',
     JIRA_FIELD_TARGET_START,
     JIRA_FIELD_TARGET_END,
@@ -594,6 +615,7 @@ async function handleSearchChildTasks(
           targetStart: toIsoDate(f[JIRA_FIELD_TARGET_START]),
           targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]),
           assignee: assignee?.displayName?.trim() || null,
+          originalEstimateDays: originalEstimateToManDays(f),
         });
       }
       if (!page.length) break;
@@ -650,6 +672,7 @@ type JiraRefreshIssue = {
   targetEnd: string | null;
   assignee: string | null;
   status: string | null;
+  originalEstimateDays: number | null;
   fetchedAt: number;
 };
 
@@ -688,6 +711,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     JIRA_FIELD_TARGET_END,
     'assignee',
     'status',
+    'timeoriginalestimate',
   ];
   const fetchedAt = Date.now();
   const out: JiraRefreshIssue[] = [];
@@ -725,6 +749,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
         targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]) || null,
         assignee: jiraAssigneeDisplay(f.assignee),
         status: jiraStatusName(f.status),
+        originalEstimateDays: originalEstimateToManDays(f),
         fetchedAt,
       });
     }
@@ -850,6 +875,7 @@ type CreateJiraParentInput = {
   targetStart: string | null;
   targetEnd: string | null;
   fixVersion?: string | null;
+  suggestedFixVersion?: string | null;
   description?: string | null;
 };
 
@@ -861,6 +887,7 @@ type CreateJiraChildInput = {
   parentItemKey: string;
   parentJiraKey: string | null;
   fixVersion?: string | null;
+  suggestedFixVersion?: string | null;
   assignee?: string | null;
   description?: string | null;
 };
@@ -1472,7 +1499,7 @@ function buildAgentCreateTaskText(payload: AgentCreateJiraPayload): string {
     '## 结果契约（必须遵守）',
     '1. 只为下方「draftId 索引」里列出的 draft 创建 Jira issue（parent 的 draftId 就是 itemKey）。不要创建索引以外的任务。',
     '2. 若 parentJiraKey 已存在，子任务必须 link 到该父 issue。',
-    '3. 未填 Sprint 时查询并填入当前 active sprint；未填 fixVersion 时可用 suggestedFixVersion。',
+    '3. 未填 Sprint 时查询并填入当前 active sprint。constraints.fixVersion 已填则为硬约束（全部行同一值）。未填时按各任务 suggestedFixVersion（Target End 在发布时间表上的落点列）分别填写；没有建议则自行判断。不要把落在不同 release 的任务写成同一个 fixVersion。',
     '4. Assignee 按 Prompt 中的映射表检索 Jira 用户后填写；未映射可留空。',
     '5. 新建子任务必须填写 description：按 System Prompt，用父 Epic description + 子任务标题生成。',
     '6. 最终必须返回可验证 artifact：content 为 JSON 字符串。允许部分成功：',
@@ -1483,11 +1510,11 @@ function buildAgentCreateTaskText(payload: AgentCreateJiraPayload): string {
     '',
     '## draftId 索引（便于核对）',
     payload.parent
-      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)}`
+      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''}`
       : '（无 parent draft）',
     ...(payload.children || []).map(
       (c) =>
-        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} description=required`,
+        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} suggestedFixVersion=${c.suggestedFixVersion || c.fixVersion || ''} description=required`,
     ),
   ].join('\n');
 }

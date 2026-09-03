@@ -302,10 +302,14 @@ export function createRoadmapState() {
   /** "其余延至下周": batch-moves subs and reports which ones actually moved so
    * the caller can toast a summary and Jira-sync the moved ones. Null subIds
    * (already resolved, editable off, etc.) return null — nothing to report. */
-  async function deferSubsToNextMonday(subIds: string[], targetStart: string) {
+  async function deferSubsToNextMonday(
+    subIds: string[],
+    targetStart: string,
+    extendEpics: Array<{ itemKey: string; end: string }> = [],
+  ) {
     if (!teamId.value || !editable.value || !subIds.length) return null;
     try {
-      const data = await api.deferSubs(teamId.value, subIds, targetStart);
+      const data = await api.deferSubs(teamId.value, subIds, targetStart, extendEpics);
       commitSnapshot(data.snapshot);
       return data.deferSummary || null;
     } catch (err: unknown) {

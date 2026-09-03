@@ -507,8 +507,10 @@ export interface CreateJiraParent {
   projectKey: string;
   targetStart: string | null;
   targetEnd: string | null;
-  /** Per-row Fix Version override / auto suggestion. */
+  /** Uniform override, or per-row landing when the shared field is empty. */
   fixVersion?: string | null;
+  /** Target End 落点列；Agent 在共享字段留空时按此分别填写。 */
+  suggestedFixVersion?: string | null;
   description?: string | null;
 }
 
@@ -521,6 +523,7 @@ export interface CreateJiraChild {
   /** Set when the parent issue already exists, so the extension can link right away. */
   parentJiraKey: string | null;
   fixVersion?: string | null;
+  suggestedFixVersion?: string | null;
   /** Jira username (firstname.lastname); omit / null → leave assignee empty. */
   assignee?: string | null;
   description?: string | null;
@@ -619,19 +622,24 @@ export function buildCreateJiraPayload(
           targetStart: group.item.targetStart ?? null,
           targetEnd: group.item.targetEnd ?? null,
           fixVersion: override || parentSuggested || null,
+          suggestedFixVersion: parentSuggested || null,
           description: group.item.description ?? null,
         }
       : null,
-    children: group.subs.map((sub) => ({
-      draftId: sub.id,
-      title: sub.title,
-      issueType: fields.subType,
-      projectKey: fields.projectKey,
-      parentItemKey: group.item.key,
-      parentJiraKey: group.item.jiraKey ?? null,
-      fixVersion: override || fields.fixVersionByKey?.[sub.id] || null,
-      assignee: fields.assigneeByDraftId?.[sub.id] || null,
-      description: sub.description ?? null,
-    })),
+    children: group.subs.map((sub) => {
+      const suggested = fields.fixVersionByKey?.[sub.id] || null;
+      return {
+        draftId: sub.id,
+        title: sub.title,
+        issueType: fields.subType,
+        projectKey: fields.projectKey,
+        parentItemKey: group.item.key,
+        parentJiraKey: group.item.jiraKey ?? null,
+        fixVersion: override || suggested,
+        suggestedFixVersion: suggested,
+        assignee: fields.assigneeByDraftId?.[sub.id] || null,
+        description: sub.description ?? null,
+      };
+    }),
   };
 }

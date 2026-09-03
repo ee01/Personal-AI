@@ -26,7 +26,6 @@ import {
   addDaysIso,
   clipDescription,
   daysBetweenIso,
-  diffDaysIso,
   importedTaskSpan,
   looksFullName,
   mergeAssigneeMapIdentities,
@@ -35,6 +34,11 @@ import {
   ownerMatchesAssignee,
   parseAssigneeMap,
 } from './assigneeMap.js';
+import { planDeferToTarget } from './deferPlan.js';
+import {
+  coerceOriginalEstimateDays,
+  originalEstimateFromJiraFields,
+} from './originalEstimate.js';
 
 function parseJsonArray(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -211,6 +215,10 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
       version: sub.version,
       description: sub.description || null,
       status: sub.status || null,
+      originalEstimateDays:
+        typeof sub.original_estimate_days === 'number'
+          ? sub.original_estimate_days
+          : null,
     })),
     markers: markers.map(mapMarker),
   };
@@ -750,7 +758,12 @@ export function applyIntent(
       ok: true;
       snapshot: TeamSnapshot;
       itemKey?: string;
-      deferSummary?: { moved: string[]; capped: string[]; stuck: string[] };
+      deferSummary?: {
+        moved: string[];
+        shrunk: string[];
+        stuck: string[];
+        extended: string[];
+      };
     }
   | { ok: false; error: string; current?: unknown } {
   const team = getTeam(teamId);
@@ -763,7 +776,14 @@ export function applyIntent(
   /** Set by `add_item` so the caller can locate the row it just created. */
   let createdItemKey: string | null = null;
   /** Set by `defer_subs` so the caller can toast counts + know which subs to Jira-sync. */
-  let deferSummary: { moved: string[]; capped: string[]; stuck: string[] } | undefined;
+  let deferSummary:
+    | {
+        moved: string[];
+        shrunk: string[];
+        stuck: string[];
+        extended: string[];
+      }
+    | undefined;
 
   if (op === 'update_jql') {
     const releaseSheet = normalizeReleaseSheetInput(intent.releaseSheet);
@@ -1837,15 +1857,35 @@ export function applyIntent(
       return { ok: true, snapshot: getTeamSnapshot(teamId)! };
     }
   } else if (op === 'defer_subs') {
-    // "其余延至下周": move each sub's start to `targetStart` (client sends the
-    // computed next-Monday date — the server just clamps and applies), length
-    // unchanged. Clamped to the parent Epic's gantt end so a task never gets
-    // pushed past its own Epic; a sub already past that end doesn't move at all.
+    // "其余延至下周": move each sub so it starts on `targetStart` (next Monday).
+    // Length stays when the Epic still has room; otherwise shrink down to
+    // Original Estimate man-days (default 3). Callers that cannot fit even
+    // that minimum pass `extendEpics` after the user confirms stretching the
+    // parent Epic Target End.
     const subIds = Array.isArray(intent.subIds) ? intent.subIds.map(String) : [];
     const targetStart = isoDateOrNull(intent.targetStart);
     if (!targetStart) return { ok: false, error: 'target_start_required' };
+    const extended: string[] = [];
+    const extendRaw = Array.isArray(intent.extendEpics) ? intent.extendEpics : [];
+    for (const row of extendRaw) {
+      if (!row || typeof row !== 'object') continue;
+      const ext = row as Record<string, unknown>;
+      const itemKey = String(ext.itemKey || '').trim();
+      const end = isoDateOrNull(ext.end);
+      if (!itemKey || !end) continue;
+      const item = getItem(teamId, itemKey);
+      if (!item || !item.start_date || !item.days) continue;
+      const currentEnd = addDaysIso(item.start_date, item.days - 1);
+      if (end <= currentEnd) continue;
+      const nextDays = daysBetweenIso(item.start_date, end);
+      db.prepare(
+        `UPDATE items SET days = ?, target_end = ?, version = version + 1, updated_at = ?
+         WHERE team_id = ? AND key = ?`,
+      ).run(nextDays, end, ts, teamId, itemKey);
+      extended.push(itemKey);
+    }
     const moved: string[] = [];
-    const capped: string[] = [];
+    const shrunk: string[] = [];
     const stuck: string[] = [];
     for (const subId of subIds) {
       const sub = db
@@ -1854,34 +1894,42 @@ export function applyIntent(
       if (!sub || sub.cleared || !sub.start_date || !sub.days) continue;
       const item = getItem(teamId, sub.item_key);
       if (!item || !item.start_date || !item.days) continue;
-      const epicEnd = addDaysIso(item.start_date, item.days - 1);
-      const subEnd = addDaysIso(sub.start_date, sub.days - 1);
-      const want = diffDaysIso(sub.start_date, targetStart);
-      const maxByEpic = diffDaysIso(subEnd, epicEnd);
-      const shift = Math.min(want, maxByEpic);
-      if (shift <= 0) {
+      const plan = planDeferToTarget({
+        subStart: sub.start_date,
+        subDays: sub.days,
+        epicStart: item.start_date,
+        epicDays: item.days,
+        targetStart,
+        originalEstimateDays: sub.original_estimate_days,
+      });
+      if (
+        plan.fit === 'noop' ||
+        plan.fit === 'needs-extend' ||
+        !plan.nextStart ||
+        !plan.nextDays
+      ) {
         stuck.push(subId);
         continue;
       }
-      const nextStart = addDaysIso(sub.start_date, shift);
       db.prepare(
-        `UPDATE subs SET start_date = ?, version = version + 1, updated_at = ? WHERE id = ?`,
-      ).run(nextStart, ts, subId);
+        `UPDATE subs SET start_date = ?, days = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+      ).run(plan.nextStart, plan.nextDays, ts, subId);
       moved.push(subId);
-      if (shift < want) capped.push(subId);
+      if (plan.fit === 'shrink') shrunk.push(subId);
     }
-    deferSummary = { moved, capped, stuck };
-    if (moved.length) {
+    deferSummary = { moved, shrunk, stuck, extended };
+    if (moved.length || extended.length) {
       writeActivity({
         teamId,
         actor,
         op,
         targetType: 'sub',
-        targetKey: subIds[0] || '',
+        targetKey: subIds[0] || extended[0] || '',
         summary: {
           movedCount: moved.length,
-          cappedCount: capped.length,
+          shrunkCount: shrunk.length,
           stuckCount: stuck.length,
+          extendedCount: extended.length,
           targetStart,
         },
       });
@@ -2025,6 +2073,9 @@ function normalizeRemoteTasks(raw: unknown): RemoteTask[] {
       targetStart: r.targetStart ? String(r.targetStart) : null,
       targetEnd: r.targetEnd ? String(r.targetEnd) : null,
       assignee: r.assignee ? String(r.assignee) : null,
+      originalEstimateDays: coerceOriginalEstimateDays(
+        r.originalEstimateDays ?? r.timeoriginalestimate,
+      ),
     });
   }
   return out;
@@ -2106,8 +2157,9 @@ export function importRemoteTasks(
     db.prepare(
       `INSERT INTO subs (
         id, team_id, item_key, jira_key, title, alias, owner,
-        start_date, days, is_draft, cleared, created_by, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, 0, ?, 1, ?, ?)`,
+        start_date, days, is_draft, cleared, created_by, original_estimate_days,
+        version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, 0, ?, ?, 1, ?, ?)`,
     ).run(
       id,
       teamId,
@@ -2118,6 +2170,7 @@ export function importRemoteTasks(
       start,
       days,
       actor.name,
+      task.originalEstimateDays ?? null,
       ts,
       ts,
     );
@@ -2262,6 +2315,12 @@ function applyRefreshFromJira(
         ? String(fields.assignee || '').trim() || null
         : undefined;
     const status = jiraStatusName(fields.status);
+    const originalEstimateDays =
+      fields.originalEstimateDays !== undefined
+        ? coerceOriginalEstimateDays(fields.originalEstimateDays)
+        : fields.timeoriginalestimate !== undefined
+          ? originalEstimateFromJiraFields(fields)
+          : undefined;
 
     const item = db
       .prepare(`SELECT * FROM items WHERE team_id = ? AND jira_key = ?`)
@@ -2348,18 +2407,24 @@ function applyRefreshFromJira(
         }
       }
       const nextStatus = status !== undefined ? status : sub.status;
+      const nextEstimate =
+        originalEstimateDays !== undefined
+          ? originalEstimateDays
+          : sub.original_estimate_days;
       const same =
         nextTitle === sub.title &&
         (nextDesc || null) === (sub.description || null) &&
         (nextStart || null) === (sub.start_date || null) &&
         nextDays === sub.days &&
         (nextOwner || null) === (sub.owner || null) &&
-        (nextStatus || null) === (sub.status || null);
+        (nextStatus || null) === (sub.status || null) &&
+        (nextEstimate || null) === (sub.original_estimate_days || null);
       if (same) continue;
       const result = db
         .prepare(
           `UPDATE subs SET
             title = ?, description = ?, start_date = ?, days = ?, owner = ?, status = ?,
+            original_estimate_days = ?,
             version = version + 1, updated_at = ?
            WHERE id = ? AND version = ?`,
         )
@@ -2370,6 +2435,7 @@ function applyRefreshFromJira(
           nextDays,
           nextOwner,
           nextStatus,
+          nextEstimate,
           ts,
           sub.id,
           sub.version,

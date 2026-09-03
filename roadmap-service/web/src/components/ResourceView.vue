@@ -18,6 +18,7 @@ import {
 import type { RoadmapItem, RoadmapSub, TeamMember } from '../types';
 import { dispName, teamAssigneeMap } from '../composables/useAssigneeMap';
 import { tooltipHintLine, epicColor, epicShort, isDoneStatus } from '../composables/useRoadmapContract';
+import { planDeferToTarget } from '../composables/useDeferPlan';
 
 const props = defineProps<{ tl: Timeline }>();
 const state = useRoadmapState();
@@ -132,10 +133,12 @@ const unassigned = computed(() => {
    单击任务条标记「正在做」，可继续单击多选；点到另一个成员的任务对那个人重新开始
    多选。顺延对象 = 该成员未选中 && 未清理 && 开始日 < 下周一 && 尚未结束的任务
    （已开始未做完的同样算，已结束的历史记录不算，下周及以后的远任务不算）；开始日
-   移到下周一，长度不变，每条最多顺延到所属 Epic 的结束日。服务端是权威计算
-   （见 TeamService.applyIntent 的 defer_subs 分支）；这里的 deferPlan 只用于
-   UI 预告角标 / hover 影子，双方公式必须一致。 */
-const emit = defineEmits<{ (e: 'defer-committed', subIds: string[]): void }>();
+   移到下周一。长度优先保持；不够则按 Jira Original Estimate（空则 3 人天）缩小。
+   若下周一到 Epic 结束日仍摆不下最小人天，弹窗询问是否延长 Epic Target End。
+   服务端是权威计算（TeamService.defer_subs）；这里的 deferPlan 只用于 UI 预告。 */
+const emit = defineEmits<{
+  (e: 'defer-committed', payload: { subIds: string[]; itemKeys: string[] }): void;
+}>();
 
 const UNASSIGNED_KEY = '__un';
 const resSel = ref<{ person: string | null; ids: Set<string> }>({ person: null, ids: new Set() });
@@ -164,7 +167,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown));
 /** Click on empty space exits focus; clicks on bars/dock/chips handle themselves. */
 function onBackgroundClick(e: MouseEvent) {
   const target = e.target as HTMLElement;
-  if (target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip,.res-today-btn')) return;
+  if (target.closest('.res-bar,.rp-focus,.rp-del,.rp-name,.rp-name-edit,.res-add,.res-chip,.res-today-btn,.modal-back')) return;
   clearResSel();
 }
 
@@ -181,13 +184,16 @@ function isDeferCandidate(s: RoadmapSub): boolean {
   return dateMs(end) >= dateMs(today) && dateMs(s.start) < dateMs(nextMonday.value);
 }
 
-/** want = days to reach next Monday; shift = that, clamped to the Epic's end. */
+/** Plan moving this sub onto next Monday, shrinking to Original Estimate if needed. */
 function deferPlan(s: RoadmapSub, it: RoadmapItem) {
-  const want = diffD(s.start!, nextMonday.value);
-  const epicEnd = addD(it.start!, (it.days || 1) - 1);
-  const subEnd = addD(s.start!, (s.days || 1) - 1);
-  const maxByEpic = diffD(subEnd, epicEnd);
-  return { want, shift: Math.max(0, Math.min(want, maxByEpic)) };
+  return planDeferToTarget({
+    subStart: s.start!,
+    subDays: s.days || 1,
+    epicStart: it.start!,
+    epicDays: it.days || 1,
+    targetStart: nextMonday.value,
+    originalEstimateDays: s.originalEstimateDays,
+  });
 }
 
 function personKeyOf(row: { virtual: boolean; m: TeamMember | null }): string {
@@ -204,27 +210,39 @@ function moversOf(row: { tasks: TaskPair[] }, personKey: string): TaskPair[] {
 }
 
 function movableOf(row: { tasks: TaskPair[] }, personKey: string): TaskPair[] {
-  return moversOf(row, personKey).filter(({ s, it }) => deferPlan(s, it).shift > 0);
+  return moversOf(row, personKey).filter(({ s, it }) => {
+    const fit = deferPlan(s, it).fit;
+    return fit === 'fit' || fit === 'shrink';
+  });
+}
+
+function needingExtendOf(row: { tasks: TaskPair[] }, personKey: string): TaskPair[] {
+  return moversOf(row, personKey).filter(({ s, it }) => deferPlan(s, it).fit === 'needs-extend');
 }
 
 /**
- * 「其余延至下周」按钮三态：ready 可执行；stuck 有候选但全部顶到所属 Epic 结束日，
- * 用提示说明原因而不是静默灰掉（灰掉 + pointer-events:none 会连 hover 提示一起吞掉）；
+ * 「其余延至下周」按钮：ready 可直接执行；needs-extend 点开确认框延长 Epic；
  * none 没有候选（都已完成 / 都不在可顺延范围内）。
  */
-function goState(row: { tasks: TaskPair[] }, personKey: string): 'ready' | 'stuck' | 'none' {
+function goState(row: { tasks: TaskPair[] }, personKey: string): 'ready' | 'needs-extend' | 'none' {
   const movers = moversOf(row, personKey);
   if (!movers.length) return 'none';
-  return movableOf(row, personKey).length ? 'ready' : 'stuck';
+  if (needingExtendOf(row, personKey).length) return 'needs-extend';
+  return 'ready';
 }
 
 function goTip(row: { tasks: TaskPair[] }, personKey: string): string {
-  const state = goState(row, personKey);
-  if (state === 'ready') {
-    return `把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一（${fmtMD(nextMonday.value)}）开始，任务长度不变||已开始未做完的同样延后；开始日已在下周及以后的远任务、已完成、标记「正在做」的都不动。每条最多顺延到所属 Epic 结束日||hover 可预览落点；延完再按一次不会继续往后推`;
+  const stateKind = goState(row, personKey);
+  if (stateKind === 'ready') {
+    return `把 TA 其余开始日在下周一之前、尚未结束的任务，统一延至下周一（${fmtMD(nextMonday.value)}）开始||已开始未做完的同样延后。长度优先保持；空间不够时按 Jira Original Estimate（空则 3 人天）缩小||hover 可预览落点；延完再按一次不会继续往后推`;
   }
-  if (state === 'stuck') {
-    return `这 ${moversOf(row, personKey).length} 个待顺延任务都已顶到所属 Epic 的结束日，没有可后移的空间||可以调整 Epic 的排期结束日，或手动处理这些任务`;
+  if (stateKind === 'needs-extend') {
+    const needing = needingExtendOf(row, personKey);
+    const latest = needing.reduce((max, { s, it }) => {
+      const end = deferPlan(s, it).neededEpicEnd;
+      return !max || end > max ? end : max;
+    }, null as Date | null);
+    return `这 ${needing.length} 个任务从下周一到当前 Epic 结束日，放不下最小人天（Original Estimate，空则 3 天）||点击后可选择把 Epic 排期结束日延长到 ${latest ? fmtMD(latest) : '所需日期'}，或取消顺延`;
   }
   return '没有需要顺延的任务||其余任务不在可顺延范围内，或已标记完成，不需要处理';
 }
@@ -264,57 +282,132 @@ function focusTipHint(s: RoadmapSub, it: RoadmapItem, personKey: string): string
     return `${base}||已标记「正在做」· 再次单击取消`;
   }
   if (!isDeferCandidate(s)) return base;
-  const { want, shift } = deferPlan(s, it);
-  if (shift <= 0) return `${base}||待延至下周 · 但已顶到所属 Epic 结束日，无法后移`;
-  if (shift < want) {
-    return `${base}||待延至下周 · 受所属 Epic 结束日限制，只能移到 ${fmtMD(addD(s.start!, shift))}（未到下周一）`;
+  const plan = deferPlan(s, it);
+  if (plan.fit === 'needs-extend') {
+    return `${base}||待延至下周 · 下周一到 Epic 结束日放不下最小人天（${plan.minDays}d），需延长 Epic 到 ${fmtMD(plan.neededEpicEnd)}`;
   }
-  return `${base}||待延至下周 · 一键后开始日移到下周一 ${fmtMD(nextMonday.value)}，长度不变`;
+  if (plan.fit === 'shrink') {
+    return `${base}||待延至下周 · 开始日移到下周一 ${fmtMD(nextMonday.value)}，长度从 ${s.days}d 缩到 ${plan.nextDays}d（Original Estimate ${plan.minDays}d）`;
+  }
+  if (plan.fit === 'fit') {
+    return `${base}||待延至下周 · 一键后开始日移到下周一 ${fmtMD(nextMonday.value)}`;
+  }
+  return base;
 }
 
 /** Ghost preview bars for the movable set — shown while hovering "其余延至下周". */
 function deferGhosts(row: { placed: ReturnType<typeof placeLanes>['placed'] }, personKey: string) {
   if (previewPerson.value !== personKey) return [];
-  const out: Array<{ id: string; cs: Date | string; newStart: Date; frac: number; li: number; clamped: boolean }> = [];
+  const out: Array<{
+    id: string;
+    cs: Date | string;
+    newStart: Date;
+    frac: number;
+    li: number;
+    shrunk: boolean;
+  }> = [];
   for (const { s, it, li } of row.placed) {
     if (resSel.value.ids.has(s.id) || !isDeferCandidate(s)) continue;
-    const { want, shift } = deferPlan(s, it);
-    if (shift <= 0) continue;
-    const ns = addD(s.start!, shift);
-    const ne = addD(ns, (s.days || 1) - 1);
+    const plan = deferPlan(s, it);
+    if (!plan.nextStart || !plan.nextDays) continue;
+    const ns = plan.nextStart;
+    const ne = addD(ns, plan.nextDays - 1);
     if (dateMs(ne) < dateMs(rangeS.value) || dateMs(ns) > dateMs(rangeE.value)) continue;
     const cs = dateMs(ns) < dateMs(rangeS.value) ? rangeS.value : ns;
     const ce = dateMs(ne) > dateMs(rangeE.value) ? rangeE.value : ne;
-    out.push({ id: s.id, cs, newStart: ns, frac: (diffD(cs, ce) + 1) / days.value, li, clamped: shift < want });
+    out.push({
+      id: s.id,
+      cs,
+      newStart: ns,
+      frac: (diffD(cs, ce) + 1) / days.value,
+      li,
+      shrunk: plan.fit === 'shrink',
+    });
   }
   return out;
 }
 
+type ExtendPrompt = {
+  subIds: string[];
+  epics: Array<{ itemKey: string; title: string; end: string }>;
+  neededEnd: string;
+};
+
+const extendPrompt = ref<ExtendPrompt | null>(null);
+
+function buildExtendPrompt(needing: TaskPair[]): ExtendPrompt {
+  const byEpic = new Map<string, { itemKey: string; title: string; end: Date }>();
+  for (const { s, it } of needing) {
+    const plan = deferPlan(s, it);
+    const existing = byEpic.get(it.key);
+    if (!existing || plan.neededEpicEnd > existing.end) {
+      byEpic.set(it.key, {
+        itemKey: it.key,
+        title: it.alias || it.title,
+        end: plan.neededEpicEnd,
+      });
+    }
+  }
+  const epics = [...byEpic.values()].map((e) => ({
+    itemKey: e.itemKey,
+    title: e.title,
+    end: fmtISO(e.end),
+  }));
+  const neededEnd = epics.reduce((max, e) => (e.end > max ? e.end : max), epics[0]?.end || '');
+  return {
+    subIds: needing.map(({ s }) => s.id),
+    epics,
+    neededEnd,
+  };
+}
+
 async function runDefer(row: { tasks: TaskPair[] }, personKey: string) {
   previewPerson.value = null;
-  const movable = movableOf(row, personKey);
-  if (!movable.length) {
-    // soft-disabled 仍可点，用 toast 说明原因（不是静默无反应）
-    const movers = moversOf(row, personKey);
-    state.toast(
-      movers.length
-        ? `这 ${movers.length} 个待顺延任务都已顶到所属 Epic 的结束日，没有可后移的空间`
-        : '没有需要顺延的任务',
-    );
+  const movers = moversOf(row, personKey);
+  if (!movers.length) {
+    state.toast('没有需要顺延的任务');
     return;
   }
-  const subIds = movable.map(({ s }) => s.id);
+  const needing = needingExtendOf(row, personKey);
+  const allIds = movers.map(({ s }) => s.id);
+  if (needing.length) {
+    const prompt = buildExtendPrompt(needing);
+    prompt.subIds = allIds;
+    extendPrompt.value = prompt;
+    return;
+  }
+  await commitDefer(allIds, []);
+}
+
+async function confirmExtendAndDefer() {
+  const prompt = extendPrompt.value;
+  if (!prompt) return;
+  extendPrompt.value = null;
+  await commitDefer(
+    prompt.subIds,
+    prompt.epics.map((e) => ({ itemKey: e.itemKey, end: e.end })),
+  );
+}
+
+async function commitDefer(
+  subIds: string[],
+  extendEpics: Array<{ itemKey: string; end: string }>,
+) {
   const targetStartIso = fmtISO(nextMonday.value);
-  // 先挂上 .slide，再等 snapshot 改 left —— 与 demo「现有条先平滑滑到新位置」同序
   if (slidingClearTimer) clearTimeout(slidingClearTimer);
   slidingIds.value = new Set(subIds);
   await nextTick();
-  let summary: { moved: string[]; capped: string[]; stuck: string[] } | null = null;
+  let summary: {
+    moved: string[];
+    shrunk: string[];
+    stuck: string[];
+    extended: string[];
+  } | null = null;
   try {
-    summary = await state.deferSubsToNextMonday(subIds, targetStartIso);
+    summary = await state.deferSubsToNextMonday(subIds, targetStartIso, extendEpics);
   } catch {
     slidingIds.value = new Set();
-    return; // toast already shown by deferSubsToNextMonday
+    return;
   }
   if (!summary) {
     slidingIds.value = new Set();
@@ -324,13 +417,18 @@ async function runDefer(row: { tasks: TaskPair[] }, personKey: string) {
     slidingIds.value = new Set();
     slidingClearTimer = null;
   }, 420);
-  const { moved, capped, stuck } = summary;
+  const { moved, shrunk, stuck, extended } = summary;
   state.toast(
     `<span class="ok">✓</span> 已将 <b>${moved.length}</b> 个任务延至下周一（${fmtMD(nextMonday.value)}）开始` +
-      (capped.length ? `，其中 ${capped.length} 个受 Epic 结束限制未到下周一` : '') +
-      (stuck.length ? `；${stuck.length} 个已顶到 Epic 结束未动` : ''),
+      (shrunk.length ? `，其中 ${shrunk.length} 个按估算缩短了长度` : '') +
+      (extended.length
+        ? `；已延长 ${extended.length} 个 Epic 结束日到 ${fmtMD(extendEpics[0]?.end || nextMonday.value)}`
+        : '') +
+      (stuck.length ? `；${stuck.length} 个仍放不下未动` : ''),
   );
-  if (moved.length) emit('defer-committed', moved);
+  if (moved.length || extended.length) {
+    emit('defer-committed', { subIds: moved, itemKeys: extended });
+  }
 }
 
 function pct(d: Date | string) {
@@ -646,7 +744,7 @@ async function commitRename(m: TeamMember) {
             <div class="rpf-btns">
               <button
                 class="rpf-go"
-                :class="{ soft: goState(row, personKeyOf(row)) !== 'ready' }"
+                :class="{ soft: goState(row, personKeyOf(row)) === 'none' }"
                 :data-tip="goTip(row, personKeyOf(row))"
                 @mouseenter="previewPerson = personKeyOf(row)"
                 @mouseleave="previewPerson = null"
@@ -700,13 +798,12 @@ async function commitRename(m: TeamMember) {
                   resSel.person === personKeyOf(row) &&
                   !resSel.ids.has(s.id) &&
                   isDeferCandidate(s) &&
-                  deferPlan(s, it).shift <= 0,
+                  deferPlan(s, it).fit === 'needs-extend',
                 'at-cap':
                   resSel.person === personKeyOf(row) &&
                   !resSel.ids.has(s.id) &&
                   isDeferCandidate(s) &&
-                  deferPlan(s, it).shift > 0 &&
-                  deferPlan(s, it).shift < deferPlan(s, it).want,
+                  deferPlan(s, it).fit === 'shrink',
               },
             ]"
             :style="{
@@ -738,10 +835,10 @@ async function commitRename(m: TeamMember) {
               "
               class="rb-shift"
             >{{
-              deferPlan(s, it).shift <= 0
+              deferPlan(s, it).fit === 'needs-extend'
                 ? '✕'
-                : deferPlan(s, it).shift < deferPlan(s, it).want
-                  ? `→${fmtMD(addD(s.start!, deferPlan(s, it).shift))}`
+                : deferPlan(s, it).fit === 'shrink'
+                  ? '→缩短'
                   : '→下周一'
             }}</span>
           </div>
@@ -750,10 +847,10 @@ async function commitRename(m: TeamMember) {
           v-for="g in deferGhosts(row, personKeyOf(row))"
           :key="`ghost-${g.id}`"
           class="res-bar ghost"
-          :class="{ clamped: g.clamped }"
+          :class="{ clamped: g.shrunk }"
           :style="{ left: `${pct(g.cs)}%`, width: `${g.frac * 100}%`, top: `${8 + g.li * 27}px` }"
         >
-          <span class="rb-label">→ {{ fmtMD(g.newStart) }}{{ g.clamped ? ' · 未到下周一（Epic 限制）' : '' }}</span>
+          <span class="rb-label">→ {{ fmtMD(g.newStart) }}{{ g.shrunk ? ' · 缩短' : '' }}</span>
         </div>
       </div>
         <button
@@ -790,6 +887,38 @@ async function commitRename(m: TeamMember) {
         @keydown.enter="addMember"
         @keydown.esc="addingMember = false"
       />
+    </div>
+  </div>
+
+  <div
+    v-if="extendPrompt"
+    class="modal-back show"
+    @click.self="extendPrompt = null"
+  >
+    <div class="modal" style="width: 460px">
+      <div class="m-head">
+        <div class="m-title">顺延需要延长 Epic</div>
+        <div class="m-sub">
+          从下周一（{{ fmtMD(nextMonday) }}）到当前 Epic 结束日，放不下这些任务的最小人天（Jira Original Estimate，空则 3 天）。
+        </div>
+      </div>
+      <div class="m-body">
+        <p>
+          是否把相关 Epic 的排期结束日延长到
+          <b>{{ fmtMD(extendPrompt.neededEnd) }}</b>？
+        </p>
+        <div v-if="extendPrompt.epics.length > 1" class="ai-list">
+          <div v-for="e in extendPrompt.epics" :key="e.itemKey" class="ai-row">
+            <span class="epic-ref">{{ e.itemKey }}</span>
+            <span class="t">{{ e.title }}</span>
+            <span class="st">→ {{ fmtMD(e.end) }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="m-foot">
+        <button class="btn btn-ghost" @click="extendPrompt = null">取消顺延</button>
+        <button class="btn btn-primary" @click="confirmExtendAndDefer">延长并顺延</button>
+      </div>
     </div>
   </div>
 </template>

@@ -83,6 +83,8 @@ export interface RoadmapSub {
   description?: string | null;
   /** Mirrored Jira workflow status (e.g. 'Closed', 'Resolved'); null until first Jira refresh. */
   status?: string | null;
+  /** Mirrored Jira Original Estimate, ceiled to man-days; null if empty. */
+  originalEstimateDays?: number | null;
 }
 
 export interface RoadmapItem {

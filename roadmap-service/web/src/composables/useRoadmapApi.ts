@@ -250,11 +250,21 @@ export function useRoadmapApi() {
    * `deferSummary` to build an accurate toast and know which subs to
    * Jira-sync, both keyed by subId.
    */
-  async function deferSubs(teamId: string, subIds: string[], targetStart: string) {
+  async function deferSubs(
+    teamId: string,
+    subIds: string[],
+    targetStart: string,
+    extendEpics: Array<{ itemKey: string; end: string }> = [],
+  ) {
     return apiFetch<{
       ok: true;
       snapshot: TeamSnapshot;
-      deferSummary?: { moved: string[]; capped: string[]; stuck: string[] };
+      deferSummary?: {
+        moved: string[];
+        shrunk: string[];
+        stuck: string[];
+        extended: string[];
+      };
     }>(`/api/v1/teams/${teamId}/intents`, {
       teamId,
       method: 'POST',
@@ -262,6 +272,7 @@ export function useRoadmapApi() {
         op: 'defer_subs',
         subIds,
         targetStart,
+        extendEpics,
         ...actorPayload.value,
         shareToken: getShareToken(teamId),
       }),
@@ -277,6 +288,7 @@ export function useRoadmapApi() {
       targetStart?: string | null;
       targetEnd?: string | null;
       assignee?: string | null;
+      originalEstimateDays?: number | null;
     }>,
   ) {
     return apiFetch<{

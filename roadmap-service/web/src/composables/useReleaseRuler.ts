@@ -342,6 +342,53 @@ export function relSegments(
   });
 }
 
+function toLocalDay(end: Date | string): Date {
+  if (end instanceof Date) return strip(end);
+  const text = String(end).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const [y, m, d] = text.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return strip(new Date(text));
+}
+
+/**
+ * Release column the date lands in on the Sprint ruler.
+ * Half-open `[start, end)` so a date sitting on a split line belongs to the
+ * next release (the vertical marker is the next column's left edge). The last
+ * column is inclusive on the end so a Target End on the final split still
+ * matches. This is what "Target End 落点" means — not `catchRelease`
+ * (nearest Pro on/after, i.e. "可赶 Sprint").
+ */
+export function landRelease(
+  end: Date | string,
+  parsed: ParsedReleaseSchedule | null | undefined,
+  splitKind?: PhaseRulerKind | string | null,
+): ReleaseSegment | null {
+  if (!parsed) return null;
+  const endT = toLocalDay(end).getTime();
+  const segs = relSegments(parsed, pickSplit(splitKind, parsed));
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    const startT = strip(seg.start).getTime();
+    const endBoundT = strip(seg.end).getTime();
+    const last = i === segs.length - 1;
+    if (endT >= startT && (last ? endT <= endBoundT : endT < endBoundT)) {
+      return seg;
+    }
+  }
+  return null;
+}
+
+export function landReleaseName(
+  end: Date | string,
+  cfg: ReleaseSheetConfig | null | undefined,
+): string | null {
+  if (!cfg?.rows?.length) return null;
+  const parsed = relParsed(cfg);
+  return landRelease(end, parsed, cfg.splitPhase)?.rel.name || null;
+}
+
 /** Nearest Pro on/after end date — "可赶 Sprint" hint. */
 export function catchRelease(
   end: Date | string,
