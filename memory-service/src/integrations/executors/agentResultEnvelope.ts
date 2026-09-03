@@ -101,6 +101,44 @@ export function extractAgentResultJson(
   return findEnvelopeObject(text);
 }
 
+/**
+ * When the model prefixes a JSON envelope with prose (or truncates the JSON),
+ * do not treat the mixed dump as the summary.
+ */
+export function extractSummaryFromMixedText(raw: string): string {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const parsed = extractAgentResultJson(text);
+  if (typeof parsed?.summary === 'string' && parsed.summary.trim()) {
+    return parsed.summary.trim();
+  }
+  const envelopeStart = text.search(/\{\s*"status"\s*:/i);
+  const before =
+    envelopeStart > 0 ? text.slice(0, envelopeStart).trim() : '';
+  if (
+    before &&
+    before.length <= 500 &&
+    !/"artifacts"\s*:/.test(before) &&
+    !before.includes('{')
+  ) {
+    return before;
+  }
+  const match = text.match(/"summary"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (match) {
+    try {
+      const decoded = JSON.parse(`"${match[1]}"`);
+      if (typeof decoded === 'string' && decoded.trim()) return decoded.trim();
+    } catch {
+      if (match[1].trim()) return match[1].trim();
+    }
+  }
+  const firstLine = text
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('{') && !line.startsWith('"status"'));
+  return (firstLine || text).slice(0, 500);
+}
+
 export function parseAgentResultEnvelope(
   text: string,
   options: ParseAgentResultOptions = {},
@@ -115,7 +153,7 @@ export function parseAgentResultEnvelope(
     const summary =
       typeof parsed.summary === 'string' && parsed.summary.trim()
         ? parsed.summary.trim()
-        : raw.slice(0, 500);
+        : extractSummaryFromMixedText(raw);
     const payload =
       parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
         ? (parsed.payload as Record<string, unknown>)
@@ -178,7 +216,7 @@ export function recoverMarkdownReceipt(
   if (FAILURE_CLAIM_RE.test(raw) && !SUCCESS_CLAIM_RE.test(raw)) {
     return {
       status: 'error',
-      summary: raw.slice(0, 500),
+      summary: extractSummaryFromMixedText(raw).slice(0, 500),
       artifacts: [],
       payload: { rawText: raw, recoveredFrom: 'markdown_failure_claim' },
     };
@@ -216,7 +254,7 @@ export function recoverMarkdownReceipt(
   if (!canRecover) {
     return {
       status: 'error',
-      summary: raw.slice(0, 500),
+      summary: extractSummaryFromMixedText(raw).slice(0, 500) || raw.slice(0, 500),
       artifacts: [],
       payload: {
         rawText: raw,
@@ -230,7 +268,10 @@ export function recoverMarkdownReceipt(
   const verification = hasWriteProof
     ? inferVerification(raw)
     : 'markdown_observation';
-  const summary = (summaryOverride || raw).slice(0, 500);
+  const summary = (summaryOverride || extractSummaryFromMixedText(raw)).slice(
+    0,
+    500,
+  );
   const artifacts: AgentResultArtifact[] = entities.map((entityKey) => ({
     kind: sourceSystem === 'jira' ? 'jira_issue' : 'note',
     title: entityKey,
@@ -373,7 +414,13 @@ function findEnvelopeObject(text: string): Record<string, unknown> | null {
       last = parsed;
     }
   }
-  return last;
+  if (last) return last;
+  const start = text.search(/\{\s*"status"\s*:/i);
+  if (start >= 0) {
+    const repaired = parseJsonObjectOrRepair(text.slice(start));
+    if (looksLikeAgentResultEnvelope(repaired)) return repaired;
+  }
+  return null;
 }
 
 function tryParsePrefixObject(slice: string): Record<string, unknown> | null {

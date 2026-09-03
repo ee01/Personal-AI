@@ -295,7 +295,7 @@ Heartbeat / Action Runtime 会执行已到期且可自动执行的动作。
 
 - `requiresApproval=false` 时，可走自动执行链路
 - `requiresApproval=true` 时，动作保留为待批准状态
-- 自动执行中的 OpenClaw 动作如果超过用户配置的 `openClawTimeoutMs + 60 秒` 仍停在 `running`，会被恢复为 `dead_letter` 并保留 `lastError`；系统不会自动重试外部写操作，避免文件上传、消息发送或 Drive link 发送重复发生
+- 自动执行中的 OpenClaw 动作如果本地 `agent.wait` 超时，会按 30s/60s/120s 最多确认 3 次远端 `remoteRunId`；仍在跑则保持 `running`，3 次都对不上才 `dead_letter`。没有 `remoteRunId` 的旧路径仍按 `openClawTimeoutMs + 60 秒` 回收。系统不会自动重试外部写操作。
 
 ## Agent Workflow 编排引擎（agentWorkflow 分析模式）
 

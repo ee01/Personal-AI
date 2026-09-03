@@ -76,6 +76,49 @@ describe('Action API', () => {
     });
   });
 
+  it('lists actions by latest activity time, not queue-status buckets', async () => {
+    const repo = new ActionRepository(db);
+    const olderFailed = repo.create({
+      id: 'action-older-failed',
+      actionType: 'delegate_agent',
+      title: 'Older failed run',
+      createdAt: 1_787_742_069,
+      sourceKind: 'agent_task',
+      sourceRefId: 'msg_sort_time',
+      queueStatus: 'failed',
+    });
+    const newerDeadLetter = repo.create({
+      id: 'action-newer-dead-letter',
+      actionType: 'delegate_agent',
+      title: 'Newer dead letter run',
+      createdAt: 1_788_314_099,
+      sourceKind: 'agent_task',
+      sourceRefId: 'msg_sort_time',
+      queueStatus: 'dead_letter',
+    });
+    db.prepare(
+      `UPDATE proposed_actions
+       SET started_at = ?, finished_at = ?
+       WHERE id = ?`,
+    ).run(1_787_742_069, 1_787_742_182, olderFailed.id);
+    db.prepare(
+      `UPDATE proposed_actions
+       SET started_at = ?, finished_at = ?
+       WHERE id = ?`,
+    ).run(1_788_314_174, 1_788_314_897, newerDeadLetter.id);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/actions?sourceKind=agent_task&sourceRefId=msg_sort_time&limit=10',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.map((item: { id: string }) => item.id)).toEqual([
+      'action-newer-dead-letter',
+      'action-older-failed',
+    ]);
+  });
+
   it('returns readiness receipts and refuses retry while a contract is blocked', async () => {
     const repo = new ActionRepository(db);
     const action = repo.create({
@@ -158,5 +201,38 @@ describe('Action API', () => {
     // all; rejecting delegate_agent left blocked Agent Tasks with no way back.
     expect(response.statusCode).not.toBe(400);
     expect(response.json()).toHaveProperty('probeReceipt.probeOnly', true);
+  });
+
+  it('does not dead-letter a stale gateway run with remoteRunId on list', async () => {
+    const repo = new ActionRepository(db);
+    const action = repo.create({
+      id: 'action-stale-remote',
+      actionType: 'delegate_agent',
+      title: 'Keep confirming',
+      params: { task: 'long job', mode: 'read', timeoutMs: 5000 },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+    repo.markRunning(action.id);
+    repo.patchRunningResult(action.id, {
+      status: 'running',
+      remoteRunId: 'run-list-keep',
+    });
+    const staleStartedAt = Math.floor(Date.now() / 1000) - 800;
+    db.prepare('UPDATE proposed_actions SET started_at = ? WHERE id = ?').run(
+      staleStartedAt,
+      action.id,
+    );
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/actions?actionId=action-stale-remote',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items[0]).toMatchObject({
+      id: 'action-stale-remote',
+      queueStatus: 'running',
+    });
+    expect(repo.getById(action.id)?.queueStatus).toBe('running');
   });
 });

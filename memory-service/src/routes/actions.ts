@@ -43,6 +43,7 @@ export async function actionRoutes(app: FastifyInstance): Promise<void> {
         actionType,
         staleAfterSeconds,
         errorMessage: buildOpenClawStaleRunningError(staleAfterSeconds),
+        excludeWithRemoteRunId: true,
       });
     }
     const result = repo.list({

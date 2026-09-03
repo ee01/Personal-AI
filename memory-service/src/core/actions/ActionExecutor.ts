@@ -12,9 +12,18 @@ import {
   isSupportedExecutorType,
 } from '../../integrations/executors/executorFactory.js';
 import {
+  GATEWAY_RUN_CONFIRM_MAX_ATTEMPTS,
+  buildGatewayConfirmExhaustedError,
+  isAgentRunTerminalStatus,
+  nextGatewayConfirmIntervalMs,
+  readActionRemoteRunId,
+  shouldContinueWaiting,
+} from '../../integrations/executors/gatewayRunConfirm.js';
+import {
   isAcpExecutorType,
   isAgentDelegateActionType,
   resolveExecutorForDelegation,
+  AGENT_ACTION_TYPES,
   type AgentExecutorInstance,
 } from '../../integrations/executors/executorRegistry.js';
 import {
@@ -289,16 +298,15 @@ export class ActionExecutor {
       this.userDataManager,
     );
     const staleError = buildOpenClawStaleRunningError(staleAfterSeconds);
-    this.actionRepo.recoverStaleRunningActions({
-      actionType: 'delegate_openclaw',
-      staleAfterSeconds,
-      errorMessage: staleError,
-    });
-    this.actionRepo.recoverStaleRunningActions({
-      actionType: 'delegate_agent',
-      staleAfterSeconds,
-      errorMessage: staleError,
-    });
+    await this.confirmStaleRemoteRuns(staleAfterSeconds);
+    for (const actionType of AGENT_ACTION_TYPES) {
+      this.actionRepo.recoverStaleRunningActions({
+        actionType,
+        staleAfterSeconds,
+        errorMessage: staleError,
+        excludeWithRemoteRunId: true,
+      });
+    }
     try {
       const workerRepo = new AgentWorkerRepository(this.db);
       for (const lease of workerRepo.listExpiredLeases()) {
@@ -317,6 +325,123 @@ export class ActionExecutor {
     }
 
     return results;
+  }
+
+  /**
+   * Stale gateway runs with a remoteRunId are confirmed, not blindly dead-lettered.
+   * Still-running keeps the local row running. N inconclusive checks reclaim it.
+   */
+  private async confirmStaleRemoteRuns(staleAfterSeconds: number): Promise<void> {
+    const nowMs = Date.now();
+    for (const actionType of AGENT_ACTION_TYPES) {
+      const stale = this.actionRepo.listStaleRunningActions({
+        actionType,
+        staleAfterSeconds,
+      });
+      for (const action of stale) {
+        const remoteRunId = readActionRemoteRunId(action.result);
+        if (!remoteRunId) continue;
+        if (!this.isGatewayConfirmDue(action, nowMs)) continue;
+
+        const params = safeJsonValue(action.params);
+        const executorInstance = this.resolveExecutorForAction(action, params);
+        if (!executorInstance || !isSupportedExecutorType(executorInstance.type)) {
+          this.recordInconclusiveRemoteConfirm(action, remoteRunId, staleAfterSeconds);
+          continue;
+        }
+        const executor = createAgentExecutor(executorInstance, {
+          delegationService: this.delegationService,
+          userId: this.userId ?? 'default',
+          defaultTimeoutMs: getUserRuntimeConfig(this.userDataManager)
+            .openClawTimeoutMs,
+        });
+        if (!executor.poll) {
+          this.recordInconclusiveRemoteConfirm(action, remoteRunId, staleAfterSeconds);
+          continue;
+        }
+
+        try {
+          const envelope = await executor.poll(remoteRunId, undefined, {
+            sessionKey:
+              typeof action.result?.sessionKey === 'string'
+                ? action.result.sessionKey
+                : undefined,
+            targetSystem:
+              typeof params.targetSystem === 'string'
+                ? params.targetSystem
+                : undefined,
+            mode: params.mode === 'write' ? 'write' : 'read',
+            task:
+              typeof params.task === 'string' ? params.task : action.title,
+          });
+          if (isAgentRunTerminalStatus(envelope.status)) {
+            await this.applyWorkerEnvelope(action.id, envelope);
+            continue;
+          }
+          if (shouldContinueWaiting(envelope.status)) {
+            this.actionRepo.patchRunningResult(action.id, {
+              ...envelope,
+              remoteRunId,
+              confirmAttempt: this.confirmAttempt(action) + 1,
+              lastConfirmAtMs: nowMs,
+              lastConfirmStatus: envelope.status,
+            });
+            continue;
+          }
+          this.recordInconclusiveRemoteConfirm(action, remoteRunId, staleAfterSeconds);
+        } catch {
+          this.recordInconclusiveRemoteConfirm(action, remoteRunId, staleAfterSeconds);
+        }
+      }
+    }
+  }
+
+  private confirmAttempt(action: QueuedActionRecord): number {
+    const raw = action.result?.confirmAttempt;
+    return typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  }
+
+  private inconclusiveConfirmCount(action: QueuedActionRecord): number {
+    const raw = action.result?.inconclusiveConfirmCount;
+    return typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  }
+
+  private isGatewayConfirmDue(action: QueuedActionRecord, nowMs: number): boolean {
+    const lastConfirmAtMs =
+      typeof action.result?.lastConfirmAtMs === 'number' &&
+      Number.isFinite(action.result.lastConfirmAtMs)
+        ? action.result.lastConfirmAtMs
+        : (action.startedAt ?? 0) * 1000;
+    const interval = nextGatewayConfirmIntervalMs(this.confirmAttempt(action));
+    return nowMs - lastConfirmAtMs >= interval;
+  }
+
+  private recordInconclusiveRemoteConfirm(
+    action: QueuedActionRecord,
+    remoteRunId: string,
+    staleAfterSeconds: number,
+  ): void {
+    const next = this.inconclusiveConfirmCount(action) + 1;
+    if (next >= GATEWAY_RUN_CONFIRM_MAX_ATTEMPTS) {
+      this.actionRepo.recoverStaleRunningActions({
+        actionType: action.actionType,
+        staleAfterSeconds,
+        actionIds: [action.id],
+        errorMessage: buildGatewayConfirmExhaustedError(
+          remoteRunId,
+          GATEWAY_RUN_CONFIRM_MAX_ATTEMPTS,
+        ),
+      });
+      return;
+    }
+    this.actionRepo.patchRunningResult(action.id, {
+      ...(action.result || {}),
+      remoteRunId,
+      confirmAttempt: this.confirmAttempt(action) + 1,
+      inconclusiveConfirmCount: next,
+      lastConfirmAtMs: Date.now(),
+      lastConfirmStatus: 'inconclusive',
+    });
   }
 
   /**

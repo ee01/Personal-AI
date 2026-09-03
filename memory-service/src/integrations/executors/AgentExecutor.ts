@@ -49,7 +49,16 @@ export interface AgentExecutor {
   readonly id: string;
   readonly type: string;
   submit(request: AgentSubmitRequest): Promise<AgentResultEnvelope>;
-  poll?(remoteRunId: string, cursor?: string): Promise<AgentResultEnvelope>;
+  poll?(
+    remoteRunId: string,
+    cursor?: string,
+    context?: {
+      sessionKey?: string;
+      targetSystem?: string;
+      mode?: 'read' | 'write';
+      task?: string;
+    },
+  ): Promise<AgentResultEnvelope>;
   cancel?(remoteRunId: string): Promise<AgentResultEnvelope>;
   resume?(remoteRunId: string, input: Record<string, unknown>): Promise<AgentResultEnvelope>;
 }

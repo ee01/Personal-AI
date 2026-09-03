@@ -381,6 +381,26 @@ describe('AgentTask notifyVia', () => {
     expect(result.sent).toBe(false);
     expect(result.error).toMatch(/RingCentral not configured/i);
   });
+
+  it('sends result bodies without a title prefix', async () => {
+    const result = await deliverAgentTaskAsMeNotice({
+      ringClient: {
+        isConfigured: () => true,
+        resolveTarget: async () => ({ status: 'unresolved' }),
+        resolveDirectConversationChatId: async () => null,
+        sendMessage: async (input) => {
+          expect(input.text).toBe('-- Nova 缺少 Team 的 Epics --\n* NOVA-7248 Debug');
+          expect(input.text).not.toContain('任务完成');
+          expect(input.text).not.toContain('**');
+          return { chatId: '164506140678', postId: 'post-3' };
+        },
+      },
+      title: '',
+      body: '-- Nova 缺少 Team 的 Epics --\n* NOVA-7248 Debug',
+      targetGroupId: '164506140678',
+    });
+    expect(result.sent).toBe(true);
+  });
 });
 
 describe('buildAgentTaskResultAnnouncementBody', () => {

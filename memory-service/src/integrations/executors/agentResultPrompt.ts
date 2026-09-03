@@ -14,6 +14,17 @@ const GENERIC_TARGET_SYSTEMS = new Set([
 const JIRA_KEY_RE = /\b[A-Z][A-Z0-9]{1,19}-\d+\b/g;
 const URL_RE = /\bhttps?:\/\/[^\s)\]>'"]+/gi;
 
+const NOTIFY_METADATA_KEYS = new Set([
+  'notifyTemplate',
+  'notifyTarget',
+  'successReceipt',
+  'notifyVia',
+  'suppressRecoveryNotifications',
+]);
+
+export const NOTIFY_EVIDENCE_FIELDS = ['entity_key', 'url', 'title', 'assignee'] as const;
+export type NotifyEvidenceField = (typeof NOTIFY_EVIDENCE_FIELDS)[number];
+
 export type AgentResultPromptRuntime = 'openclaw' | 'acp' | 'worker';
 
 export type AgentResultPromptInput = {
@@ -34,6 +45,55 @@ export type TaskReceiptHints = {
 export function isGenericTargetSystem(value?: string): boolean {
   const normalized = value?.trim().toLowerCase();
   return !normalized || GENERIC_TARGET_SYSTEMS.has(normalized);
+}
+
+export function readNotifyTemplateFromMetadata(
+  metadata?: Record<string, unknown>,
+): string | undefined {
+  const value = metadata?.notifyTemplate;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function omitNotifyFieldsFromExecutorMetadata(
+  metadata?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (NOTIFY_METADATA_KEYS.has(key)) continue;
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/**
+ * Turn a free-text notify template into evidence fields the executor should
+ * collect. This is not the Glip output format.
+ */
+export function extractNotifyEvidenceFields(template?: string): NotifyEvidenceField[] {
+  const text = template?.trim() ?? '';
+  if (!text) return [];
+  const fields = new Set<NotifyEvidenceField>();
+  const hasMarkdownLink = /\[[^\]]+\]\([^)]+\)/.test(text);
+  if (hasMarkdownLink || /链接|超链接|\blinks?\b/i.test(text)) {
+    fields.add('url');
+    fields.add('entity_key');
+  }
+  if (/assignee|assginee|负责人|经办人|@INIT|@[A-Za-z]/.test(text)) {
+    fields.add('assignee');
+  }
+  if (/\bsummary\b|标题|主题/i.test(text) || (hasMarkdownLink && /\]\([^)]+\)\s+\S/.test(text))) {
+    fields.add('title');
+  }
+  if (
+    /[A-Za-z][A-Za-z0-9]*-xxx\b|[A-Z][A-Z0-9]+-\d+/.test(text) ||
+    /\b(jira|epic|issue|ticket|工单)\b/i.test(text) ||
+    (/\bxxx\b/i.test(text) && text.includes('*'))
+  ) {
+    fields.add('entity_key');
+    if (!fields.has('title') && text.includes('*')) fields.add('title');
+  }
+  return NOTIFY_EVIDENCE_FIELDS.filter((field) => fields.has(field));
 }
 
 export function detectTaskReceiptHints(
@@ -71,6 +131,7 @@ export function buildAgentResultSystemPrompt(
 ): string {
   const runtime = options.runtime ?? 'openclaw';
   const hints = detectTaskReceiptHints(input.task, input.targetSystem);
+  const notifyFields = extractNotifyEvidenceFields(readNotifyTemplateFromMetadata(input.metadata));
   const opening =
     runtime === 'acp'
       ? '你是 Personal AI 通过 ACP 调用的编码代理。优先用本地文件系统、git、测试和 CLI。需要记忆时用 personal-memory MCP，不要编造记忆。'
@@ -78,7 +139,7 @@ export function buildAgentResultSystemPrompt(
         ? '你是 Personal AI 通过远程 Worker ACP 调用的执行代理。'
         : '你是 Personal AI 派出的外部执行代理。';
 
-  const hintLines = buildHintLines(input, hints);
+  const hintLines = buildHintLines(input, hints, notifyFields);
 
   return [
     opening,
@@ -92,7 +153,7 @@ export function buildAgentResultSystemPrompt(
     '工作方式：',
     '1. 先完成任务（读取或修改外部系统）。',
     '2. 用工具/API 回读确认真实结果。',
-    '3. 最后一条助手消息必须是且仅是一个 JSON 信封，不要用 Markdown 当最终回复。',
+    '3. 最后一条助手消息必须是且仅是一个 JSON 信封，不要用 Markdown 当最终回复，也不要填写用户的通知模板。',
     '',
     'JSON 信封：',
     '{"status":"success|capability_missing|auth_error|need_human_decision|error","summary":"给人看的一两句结果","artifacts":[{"kind":"note","title":"...","content":"...","metadata":{}}],"payload":{}}',
@@ -108,6 +169,7 @@ export function buildAgentResultSystemPrompt(
     '- 查询/扫描类任务正确地查到 0 个符合条件的对象，是合法的 success，不是失败：交一张 kind="query_result" 的收据（不需要 entityKey），metadata.sourceSystem + metadata.query（实际查询语句，如 JQL）+ metadata.verification（如 jql_requery）+ metadata.matchCount=0，content 里说明检查过哪些候选、为什么都不满足条件。',
     '',
     '例子（Jira 写）：每个更新的 issue 一张收据，sourceSystem=jira, entityKey=NOVA-17023, verification=rest_api_readback, operation=update, changedFields=["Committed"]。',
+    'Jira 对象收据（读或写都适用）：每个 issue 单独一张，kind=jira_issue 或 note；metadata.entityKey=NOVA-123；metadata.url=你实际请求的 Jira 实例上的 browse/self 链接（从 API 的 self / html 字段取，不要编造主机名）；title=issue summary；若 issue 有经办人则 metadata.assignee=显示名。列表/扫描任务不要把所有 key 只塞进一段纯文本而丢掉 url。',
     '例子（浏览器读）：sourceSystem=chrome, entityKey=页面 URL, verification=page_url, observedFields=["url","title"]。',
     '例子（文件/代码）：sourceSystem=filesystem, entityKey=路径, verification=git_status 或 file_read。',
     '- 产出文件的任务（调研报告、方案文档、幻灯片）：交一张 kind="file" 的收据，metadata.path 写相对用户数据目录的路径（如 research/xxx.md，不要写绝对路径或 ..），metadata.verification 说明怎么确认写成功（如 file_write / git_status），content 写一句产物摘要。文件本身由你写盘，账本只记路径。',
@@ -121,17 +183,16 @@ export function buildAgentResultSystemPrompt(
 }
 
 export function buildAgentResultUserPrompt(input: AgentResultPromptInput): string {
+  const metadata = omitNotifyFieldsFromExecutorMetadata(input.metadata);
   return [
     input.threadId ? `Thread ID: ${input.threadId}` : undefined,
     input.runId ? `Run ID: ${input.runId}` : undefined,
-    input.metadata
-      ? `Context metadata: ${JSON.stringify(input.metadata)}`
-      : undefined,
+    metadata ? `Context metadata: ${JSON.stringify(metadata)}` : undefined,
     '',
     'Task:',
     input.task,
     '',
-    '[Personal AI] 回报格式由系统规定，不在 Task 里。完成后最后一条消息只输出 JSON 信封。',
+    '[Personal AI] 回报格式由系统规定，不在 Task 里。完成后最后一条消息只输出 JSON 信封。不要输出通知模板或群消息正文。',
   ]
     .filter((line) => line !== undefined)
     .join('\n');
@@ -140,6 +201,7 @@ export function buildAgentResultUserPrompt(input: AgentResultPromptInput): strin
 function buildHintLines(
   input: AgentResultPromptInput,
   hints: TaskReceiptHints,
+  notifyFields: NotifyEvidenceField[],
 ): string[] {
   const lines: string[] = [];
   if (hints.likelySourceSystem) {
@@ -155,6 +217,14 @@ function buildHintLines(
   }
   if (input.mode === 'write') {
     lines.push('This is a write task: confirm by readback before status=success.');
+  }
+  if (notifyFields.length > 0) {
+    lines.push(
+      `Notification evidence fields (collect on each listed object; do not write the announcement): ${notifyFields.join(', ')}.`,
+    );
+    lines.push(
+      'A later formatter will turn artifacts into the user-facing notice. If a requested field was not on the object, say so in content; do not fabricate URLs, names, or keys.',
+    );
   }
   return lines;
 }

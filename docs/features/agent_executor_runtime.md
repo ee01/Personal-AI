@@ -1,6 +1,6 @@
 # Agent Executor Runtime
 
-*最后更新: 2026-08-28*
+*最后更新: 2026-09-02*
 
 Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契约、记忆工具、对外被调用」拆成稳定分层。Sheet / Jira 只负责计划与触发；执行账本在 memory-service。
 
@@ -16,6 +16,7 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
 
 ## 控制面（Block A）
 
+- `GET /api/v1/actions`：动作队列按最近活动时间倒序（`COALESCE(finished_at, started_at, created_at)`），不按 `running → queued → failed → 其他` 分桶
 - `POST /api/v1/agent-tasks/execute`：**入队即返回**（202/accepted），后台执行与通知解耦
 - 通知语义（结果通知 vs 回执）：
   - `notifyTarget` 存在 → **成功**时发结果到目标（可套用 `notifyTemplate`）；**失败不发目标**
@@ -23,8 +24,9 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
   - 失败回执始终 Bot 私发本人；仅 `notify: false`（API 级，如 AR）可完全静默
   - `notifyVia`：成功结果可为 `bot`（默认）或 `asme`；回执始终 Bot。AsMe 使用 Sheet RingCentral sender token（与 AsMe 发消息相同），失败不回退 Bot
   - `notifyTarget` / `successReceipt` / `notifyVia` / `notifyTemplate` 由插件在保存 Sheet 行时**直接注册**到 `agent_task_notify_configs`（按 `sheetMessageId`），`/agent-tasks/execute` 的请求体缺哪个字段就回落读这张表，请求体给了值则请求体优先。这样即使触发链路（Apps Script）版本落后、没转发某个字段，通知语义也不受影响
-  - 发到 `notifyTarget` 的正文只有两种来源：模板格式化成功的结果，或者「标题 + 结果摘要」的纯公告文本——**不会**是私密回执体（Run id / 触发来源 / Sheet 账本边界说明）；后者只用于 `success_receipt` / `failure_receipt` 两种回执
-  - 模板格式化经一次内部 OpenClaw 委派调用；调用异常、返回非 success、或摘要为空，都会记录 warn（含具体原因）后回落到纯公告文本，不会静默
+  - 发到 `notifyTarget` 的正文只有两种来源：模板格式化成功的结果，或者本地按模板/artifact 整理后的公告文本——**不会**是私密回执体（Run id / 触发来源 / Sheet 账本边界说明）；后者只用于 `success_receipt` / `failure_receipt` 两种回执。结果通知不加 `任务完成:` 前缀，正文即模板内容
+  - 模板格式化走 Memory Service 自己的 LLM（`getLLMClient`，服务端 key），**不**再委派 OpenClaw 执行器。模板若含 markdown 链接或写明要带链接，由 LLM 按模板输出可点击链接；本地填空只铺列表，不臆造站点 URL。LLM 异常或输出不可用时，用 artifact / 信封里的列表按模板本地填空，仍不静默
+  - 执行器**不会**按 Glip 模板写最终回复。`notifyTemplate` 只抽成证据字段提示（如 `entity_key` / `url` / `title` / `assignee`）写进共享 system prompt；Jira 对象收据要求 `metadata.entityKey` + 实际实例的 `metadata.url` + summary，有经办人则带 `metadata.assignee`。通知模板正文不会作为 Task/最终格式下达给 OpenClaw
   - 结果投递（`result` 类型）的成功/失败会写入 `channel_delivery_records`；`GET /agent-tasks/runtime-status` 返回 `resultNotifyDelivery: { delivered, error? }`；投递失败时会额外私发 owner 一条说明，避免"回执说成功、群里却什么都没收到"的静默
 - `proposed_actions.idempotency_key`：**UNIQUE**；幂等键确定性（无 `Date.now()` 兜底）
 - 队列态含 `input_required` / `running`；Gateway 断连后可停在可恢复态，不把网络层失败直接等同业务失败
@@ -61,11 +63,33 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 
 共享契约：`agentResultContract.ts` — success 必须带可验证 artifact；`observedFields` 接受 **array 或 object**。查询/扫描类任务正确查到 0 个匹配是合法 success，不算缺证据：交一张 `kind: 'query_result'`（或 `metadata.matchCount === 0`）+ `sourceSystem` + `query`（实际查询语句）+ `verification` 的收据即可，不要求 `entityId`；系统提示词（`agentResultPrompt.ts`）已教会 agent 这个模式。
 
-用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
+用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。若任务带了 `notifyTemplate`，prompt 只注入「通知还需要哪些字段」，不把模板当最终回复；Jira 收据约定带 browse/self URL。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
+
+### AgentTask 通知与执行分层
+
+```text
+Sheet Content (任务)  →  执行器 (OpenClaw/ACP)  →  JSON 信封 + artifacts
+                              ↑
+                    notifyTemplate 抽证据字段提示
+                              ↓
+notifyTemplate + artifacts  →  Memory Service LLM 整理  →  Glip 正文（无 任务完成 前缀）
+```
+
+- 执行：`agentResultPrompt.ts` + `agentResultEnvelope.ts`；`notifyTemplate` 正文不进 Task，只影响 system prompt 里的证据字段列表。
+- 整理：`agentTaskNotification.ts` 的 `formatSuccessNotificationWithTemplate`；用服务端 LLM key，失败回落 `applyNotifyTemplateLocally`。
+- 投递：`deliverAgentTaskRunNotifications` → Bot / AsMe / plugin；`success_receipt` / `failure_receipt` 仍带 `帮我做完成` / `帮我做失败` 标题。
 
 ## OpenClaw Gateway（Block C）
 
-- 持久化 `remoteRunId` / `sessionKey` / cursor 到 `result_json`（running 期间 `patchRunningResult`）
+- 执行是 WebSocket 长等待，不是 HTTP 短请求：先 `agent`（约 30s 拿 `runId`），再 `agent.wait`（本地 RPC 超时 ≈ `timeoutMs + 5s`，默认约 10 分钟）
+- `agent.wait` 超时（snapshot `timeout` 或本地 RPC timeout）**不会**取消远端 run，也不会立刻 `dead_letter`
+- 超时后进入确认环：间隔 **30s / 60s / 120s**，最多 3 次，用 `remoteRunId` 再 `agent.wait` + `sessions.*` 对账
+  - 确认已结束 → 写入最终结果
+  - 确认仍在跑 / wait 仍 timeout → 保持 `running` 并续等
+  - 3 次都对不上（`input_required`、找不到 run、对账异常）→ `dead_letter`，文案要求先核对外部副作用
+- 心跳 / Task drain 对已过 stale 线但仍带 `remoteRunId` 的 `running` 行走同一套确认，而不是盲回收；`GET /actions` 打开页面也不会把这类行直接标死
+- 无 `remoteRunId` 的旧执行器仍按 `openClawTimeoutMs + 60s`（及本 action `timeoutMs + 120s`）stale reclaim
+- 持久化 `remoteRunId` / `sessionKey` / cursor / `confirmAttempt` 到 `result_json`
 - 断连 reconcile：仍在跑 → `queue_status=running`；确认无 run → `failed`；不确定 → `input_required`
 - **不做**：OpenClaw/Codex 侧 `cleanup retired shared client` 根治（协作事项）
 

@@ -24,6 +24,15 @@ export function userIdToEmail(userId: string): string {
   return `${userId}@ringcentral.com`;
 }
 
+/** Glip markdown for a notice. Result announcements omit title so the body is the whole message. */
+export function composeNoticeMarkdown(title: string | undefined, body: string): string {
+  const heading = title?.trim() ?? '';
+  const text = body.trim();
+  if (!heading) return text;
+  if (!text) return `**${heading}**`;
+  return `**${heading}**\n\n${text}`;
+}
+
 export class BotSender {
   private config: BotConfig;
 
@@ -61,7 +70,7 @@ export class BotSender {
     const useTeamTarget = Boolean(explicitTargetGroupId) || this.config.botType === 'team';
     const targetTeamId = explicitTargetGroupId || this.config.botTeamId;
 
-    const formattedMessage = `**${title}**\n\n${body}`;
+    const formattedMessage = composeNoticeMarkdown(title, body);
     const url = `${this.config.botApiBaseUrl}/${useTeamTarget ? 'team' : 'user'}/message`;
 
     const payload = useTeamTarget

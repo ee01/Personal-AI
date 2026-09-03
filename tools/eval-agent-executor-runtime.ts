@@ -48,6 +48,10 @@ class FakeSocket {
   readyState = 1;
   private listeners = new Map<string, Array<(event: any) => void>>();
   sessionPayload: Record<string, unknown> = { status: 'running', runId: 'run-1' };
+  failWait = true;
+  waitCalls = 0;
+  waitTimeoutUntil = 0;
+  runId = 'run-1';
 
   addEventListener(type: string, listener: (event: any) => void) {
     const list = this.listeners.get(type) || [];
@@ -74,18 +78,102 @@ class FakeSocket {
           type: 'res',
           id: frame.id,
           ok: true,
-          payload: { runId: 'run-1' },
+          payload: { runId: this.runId },
         }),
       });
       return;
     }
     if (frame.method === 'agent.wait') {
+      this.waitCalls += 1;
+      if (this.waitTimeoutUntil > 0 && this.waitCalls <= this.waitTimeoutUntil) {
+        this.emit('message', {
+          data: JSON.stringify({
+            type: 'res',
+            id: frame.id,
+            ok: true,
+            payload: { runId: this.runId, status: 'timeout', startedAt: 1 },
+          }),
+        });
+        return;
+      }
+      if (this.failWait) {
+        this.emit('message', {
+          data: JSON.stringify({
+            type: 'res',
+            id: frame.id,
+            ok: false,
+            error: { message: 'fetch failed' },
+          }),
+        });
+        return;
+      }
       this.emit('message', {
         data: JSON.stringify({
           type: 'res',
           id: frame.id,
-          ok: false,
-          error: { message: 'fetch failed' },
+          ok: true,
+          payload: {
+            runId: this.runId,
+            status: 'ok',
+            startedAt: 1,
+            endedAt: 2,
+            stopReason: 'stop',
+          },
+        }),
+      });
+      return;
+    }
+    if (frame.method === 'chat.history') {
+      this.emit('message', {
+        data: JSON.stringify({
+          type: 'res',
+          id: frame.id,
+          ok: true,
+          payload: {
+            messages: [
+              {
+                role: 'assistant',
+                text: JSON.stringify({
+                  status: 'success',
+                  summary: 'done via history',
+                  artifacts: [
+                    {
+                      kind: 'note',
+                      content: 'opened',
+                      metadata: {
+                        sourceSystem: 'chrome',
+                        entityId: '1',
+                        verification: 'read',
+                        observedFields: ['url'],
+                      },
+                    },
+                  ],
+                }),
+              },
+            ],
+          },
+        }),
+      });
+      return;
+    }
+    if (frame.method === 'sessions.resolve') {
+      this.emit('message', {
+        data: JSON.stringify({
+          type: 'res',
+          id: frame.id,
+          ok: true,
+          payload: { ok: true, key: 'agent:main:s1' },
+        }),
+      });
+      return;
+    }
+    if (frame.method === 'sessions.preview') {
+      this.emit('message', {
+        data: JSON.stringify({
+          type: 'res',
+          id: frame.id,
+          ok: true,
+          payload: { messages: [] },
         }),
       });
       return;
@@ -160,6 +248,43 @@ async function runScenario(item: EvalCase): Promise<Record<string, unknown>> {
         status: result.status,
         remoteRunId: result.remoteRunId,
         stillRunning: Boolean((result.payload as any)?.stillRunning),
+      };
+    }
+    case 'gateway_wait_timeout_confirm': {
+      const FakeWS = function FakeWS() {
+        const socket = new FakeSocket();
+        socket.failWait = false;
+        socket.waitTimeoutUntil = 1;
+        socket.runId = 'run-123';
+        queueMicrotask(() => socket.open());
+        return socket;
+      } as any;
+      const executor = new OpenClawGatewayExecutor(
+        {
+          id: 'gw',
+          label: 'GW',
+          type: 'openclaw-gateway',
+          baseUrl: 'http://127.0.0.1:18789',
+          enabled: true,
+        },
+        {
+          WebSocketImpl: FakeWS,
+          confirmIntervalsMs: [0, 0, 0],
+          sleep: async () => undefined,
+        },
+      );
+      const result = await executor.submit({
+        task: 'long job',
+        mode: 'read',
+        threadId: 't1',
+        actionId: 'a-timeout-confirm',
+        sessionKey: 's-timeout',
+        timeoutMs: 3000,
+      });
+      return {
+        status: result.status,
+        remoteRunId: result.remoteRunId,
+        confirmAttempt: (result.payload as any)?.confirmAttempt,
       };
     }
     case 'artifact_observed_fields_object': {

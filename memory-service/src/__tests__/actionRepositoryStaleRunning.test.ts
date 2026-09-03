@@ -71,4 +71,23 @@ describe('ActionRepository.recoverStaleRunningActions', () => {
     expect(recovered.map((a) => a.id)).toEqual([id]);
     expect(repo.getById(id)?.queueStatus).toBe('dead_letter');
   });
+
+  it('can skip reclaiming stale runs that already have a remoteRunId', () => {
+    const currentTime = 2_000_000;
+    const id = createRunning({ mode: 'read' }, currentTime - 700);
+    db.prepare(`UPDATE proposed_actions SET result_json = ? WHERE id = ?`).run(
+      JSON.stringify({ status: 'running', remoteRunId: 'run-keep' }),
+      id,
+    );
+
+    const recovered = repo.recoverStaleRunningActions({
+      actionType: 'delegate_agent',
+      staleAfterSeconds: 660,
+      currentTime,
+      excludeWithRemoteRunId: true,
+    });
+
+    expect(recovered).toEqual([]);
+    expect(repo.getById(id)?.queueStatus).toBe('running');
+  });
 });

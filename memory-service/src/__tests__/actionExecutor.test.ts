@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
+import { OpenClawGatewayExecutor } from '../integrations/executors/OpenClawGatewayExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { ReflectionThreadRepository } from '../repositories/ReflectionThreadRepository.js';
@@ -250,6 +251,134 @@ describe('ActionExecutor', () => {
     expect(attempt.status).toBe('dead_letter');
     expect(attempt.error_message).toContain('avoid duplicate writes');
     expect(attempt.finished_at).toEqual(expect.any(Number));
+  });
+
+  it('polls a stale gateway run instead of dead-lettering it while the remote is still active', async () => {
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawTimeoutMs: 5000,
+        agentExecutors: [
+          {
+            id: 'gw-main',
+            label: 'GW',
+            type: 'openclaw-gateway',
+            baseUrl: 'http://127.0.0.1:18789',
+            enabled: true,
+          },
+        ],
+        executorDefaults: {
+          agent_task: 'gw-main',
+          reflection_research: 'gw-main',
+        },
+      }),
+    );
+    const poll = vi.spyOn(OpenClawGatewayExecutor.prototype, 'poll').mockResolvedValue({
+      status: 'running',
+      summary: 'remote still running',
+      artifacts: [],
+      remoteRunId: 'run-stale',
+      sessionKey: 'session-stale',
+    });
+
+    const action = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova Epics',
+      params: {
+        task: 'fill team',
+        mode: 'read',
+        targetSystem: 'agent_task',
+        timeoutMs: 5000,
+      },
+      executionMode: 'auto',
+      sourceKind: 'agent_task',
+      sourceRefId: 'msg_stale_confirm',
+      queueStatus: 'queued',
+    });
+    actionRepo.markRunning(action.id);
+    actionRepo.patchRunningResult(action.id, {
+      status: 'running',
+      remoteRunId: 'run-stale',
+      sessionKey: 'session-stale',
+    });
+    const staleStartedAt = Math.floor(Date.now() / 1000) - 700;
+    db.prepare('UPDATE proposed_actions SET started_at = ? WHERE id = ?').run(
+      staleStartedAt,
+      action.id,
+    );
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    await executor.runDueActions();
+
+    expect(poll).toHaveBeenCalled();
+    const updated = actionRepo.getById(action.id);
+    expect(updated?.queueStatus).toBe('running');
+    expect(updated?.result?.confirmAttempt).toBe(1);
+    expect(updated?.lastError).toBeUndefined();
+  });
+
+  it('dead-letters a stale gateway run after inconclusive confirms are exhausted', async () => {
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        openClawEnabled: true,
+        openClawTimeoutMs: 5000,
+        agentExecutors: [
+          {
+            id: 'gw-main',
+            label: 'GW',
+            type: 'openclaw-gateway',
+            baseUrl: 'http://127.0.0.1:18789',
+            enabled: true,
+          },
+        ],
+        executorDefaults: {
+          agent_task: 'gw-main',
+          reflection_research: 'gw-main',
+        },
+      }),
+    );
+    vi.spyOn(OpenClawGatewayExecutor.prototype, 'poll').mockResolvedValue({
+      status: 'input_required',
+      summary: 'status unclear',
+      artifacts: [],
+      remoteRunId: 'run-miss',
+    });
+
+    const action = actionRepo.create({
+      actionType: 'delegate_agent',
+      title: 'Nova Epics',
+      params: { task: 'fill team', mode: 'read', timeoutMs: 5000 },
+      executionMode: 'auto',
+      queueStatus: 'queued',
+    });
+    actionRepo.markRunning(action.id);
+    actionRepo.patchRunningResult(action.id, {
+      status: 'running',
+      remoteRunId: 'run-miss',
+    });
+    const staleStartedAt = Math.floor(Date.now() / 1000) - 700;
+    db.prepare('UPDATE proposed_actions SET started_at = ? WHERE id = ?').run(
+      staleStartedAt,
+      action.id,
+    );
+
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    for (let i = 0; i < 3; i += 1) {
+      const current = actionRepo.getById(action.id);
+      if (current?.result) {
+        actionRepo.patchRunningResult(action.id, {
+          ...current.result,
+          lastConfirmAtMs: 0,
+        });
+      }
+      await executor.runDueActions();
+    }
+
+    const updated = actionRepo.getById(action.id);
+    expect(updated?.queueStatus).toBe('dead_letter');
+    expect(updated?.lastError).toContain('could not be confirmed after 3 status checks');
   });
 
   it('records explicit approval before executing approval-required manual actions', async () => {
