@@ -843,9 +843,9 @@ export interface LedgerNotifyConfig {
   triggerSource: string;
   taskId: string;
   task: string;
-  /** External effect boundary of the run; decides the notifyWhenEmpty default. */
+  /** External effect boundary of the run; recorded when an empty result is skipped. */
   mode: 'read' | 'write';
-  /** Undefined means the task never chose, so the mode default applies. */
+  /** Undefined means the task never chose, so empty results stay silent. */
   notifyWhenEmpty?: boolean;
 }
 
@@ -862,15 +862,15 @@ function readOptionalBoolean(...values: unknown[]): boolean | undefined {
 }
 
 /**
- * A write task that changed nothing is noise in the target chat; a read/scan
- * task that legitimately found 0 hits is still information. So the switch is
- * per task, and when it was never set the run mode decides.
+ * A run that matched nothing is noise in the target chat unless this task
+ * opted in. Read and write share that default: stay quiet, keep the ledger.
  */
 export function shouldNotifyEmptyResult(config: {
-  mode: 'read' | 'write';
+  mode?: 'read' | 'write';
   notifyWhenEmpty?: boolean;
 }): boolean {
-  return config.notifyWhenEmpty ?? config.mode !== 'write';
+  void config.mode;
+  return config.notifyWhenEmpty === true;
 }
 
 /** True when the run succeeded but produced nothing listable to announce. */

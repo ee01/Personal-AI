@@ -392,7 +392,7 @@ describe('AgentTask notify-config fallback', () => {
     expect(body.notification.notifyWhenEmpty).toBe(true);
   });
 
-  it('reports the mode default for notifyWhenEmpty when nothing was registered', async () => {
+  it('reports notifyWhenEmpty as false for both modes when nothing was registered', async () => {
     const write = await app.inject({
       method: 'POST',
       url: '/api/v1/agent-tasks/execute',
@@ -420,7 +420,7 @@ describe('AgentTask notify-config fallback', () => {
     expect((write.json() as { notification: { notifyWhenEmpty: boolean } }).notification.notifyWhenEmpty)
       .toBe(false);
     expect((read.json() as { notification: { notifyWhenEmpty: boolean } }).notification.notifyWhenEmpty)
-      .toBe(true);
+      .toBe(false);
   });
 
   it('falls back to the registered config when the deployed caller omits fields (Case 2a)', async () => {

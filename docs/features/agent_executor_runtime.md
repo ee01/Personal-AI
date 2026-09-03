@@ -21,7 +21,7 @@ Personal AI 的 Agent 执行控制面：把「入队、选执行器、证据契�
 - 通知语义（结果通知 vs 回执）：
   - `notifyTarget` 存在 → **成功**时发结果到目标（可套用 `notifyTemplate`）；**失败不发目标**
   - `successReceipt`（默认 `true`）→ 成功时额外 Bot 私发本人；目标已是本人私发时去重合并
-  - `notifyWhenEmpty`：查到 / 改到 0 条时是否仍推结果通知。任务显式给了值就用它；没给时按 `mode` 推导——`write` 默认静默（只记 run 账本），`read` 默认仍推。成功/失败回执不受影响
+  - `notifyWhenEmpty`：查到 / 改到 0 条时是否仍推结果通知。默认不推（read / write 相同）；任务显式设为 true/`Y` 才推。成功/失败回执不受影响
   - 失败回执始终 Bot 私发本人；仅 `notify: false`（API 级，如 AR）可完全静默
   - `notifyVia`：成功结果可为 `bot`（默认）或 `asme`；回执始终 Bot。AsMe 使用 Sheet RingCentral sender token（与 AsMe 发消息相同），失败不回退 Bot
   - `notifyTarget` / `successReceipt` / `notifyVia` / `notifyTemplate` / `notifyWhenEmpty` 由插件在保存 Sheet 行时**直接注册**到 `agent_task_notify_configs`（按 `sheetMessageId`），`/agent-tasks/execute` 的请求体缺哪个字段就回落读这张表，请求体给了值则请求体优先。这样即使触发链路（Apps Script）版本落后、没转发某个字段，通知语义也不受影响

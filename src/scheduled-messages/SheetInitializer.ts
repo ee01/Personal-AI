@@ -36,7 +36,7 @@ type InitializationSetupMetadata = Pick<
  * - v2.10: 删除 Agent_Task_Prompt（任务描述统一 Content）；新增 Agent_Notify_Success_Receipt（成功回执开关）
  * - v2.11: 新增 Agent_Notify_Via（结果通知身份 bot/asme）
  * - v2.12: 新增 Agent_Mode（只读/外部写入边界；旧任务默认 read）
- * - v2.13: 新增 Agent_Notify_When_Empty（0 匹配是否仍推结果通知；空=按 Agent_Mode 定）
+ * - v2.13: 新增 Agent_Notify_When_Empty（0 匹配是否仍推结果通知；空/N=不推）
  */
 export const MESSAGES_SCHEMA = {
   version: '2.13',

@@ -627,7 +627,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - **结果通知**与**回执**是两个独立概念：
   - 结果通知：由 Sheet 的 `Glip_User_Name` / `Glip_Team_ID` 是否非空表示开关；开启后 AppScript 构造 `notifyTarget`，memory-service 仅在**成功**时把结果（可套用 `Agent_Notify_Template`）发到该目标。失败**不会**发到结果通知目标。
   - 成功回执：`Agent_Notify_Success_Receipt`（`Y`/空=开，`N`=关，默认开）控制成功时是否额外 Bot 私发本人；若结果通知目标已是本人私发则去重合并为一条。
-  - 0 匹配是否推结果：`Agent_Notify_When_Empty`（`Y`/`N`；空=未显式选择）控制查到 / 改到 0 条时是否仍发结果通知。空值时按 `Agent_Mode` 推导——`write` 默认静默（只记 run 账本），`read` 默认仍推；成功/失败回执不受影响。帮我做弹窗在开启结果通知时显示该开关，勾选后即显式写入 `Y`/`N`。
+  - 0 匹配是否推结果：`Agent_Notify_When_Empty`（`Y`=仍推，`N`/空=不推）控制查到 / 改到 0 条时是否仍发结果通知。read / write 默认都不推，只记 run 账本；成功/失败回执不受影响。帮我做弹窗在开启结果通知时显示该开关，勾选后写入 `Y`。
   - 失败回执：始终 Bot 私发本人（不可关）；唯一例外是 API 级 `notify: false`（AR 等程序化调用），UI 永不产生该值。
   - 成功结果通知的发送身份由 `Agent_Notify_Via` 决定：`bot`（默认）走 SM AI Bot API；`asme` 走与顶部 AsMe 发消息 tab 同一套 Sheet RingCentral sender（`ringcentral_sender_client_id/secret/jwt`）。回执始终 Bot。AsMe 投递失败不会静默改成 Bot。
   - 帮我做弹窗可选 AsMe；Sheet RingCentral sender 未就绪时标「可预览 · 待配置」，保存会被拦截。入口与顶部 AsMe tab 的「配置 @ 人发送能力」相同。
@@ -695,7 +695,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 | Agent_Notify_Template | String | ❌ | 成功结果通知的文案模板（仅结果通知目标；不改变原始结果） |
 | Agent_Notify_Success_Receipt | String | ❌ | `Y`/空=开（默认），`N`=关；只控制成功回执，失败回执始终开启 |
 | Agent_Notify_Via | String | ❌ | `bot`（默认）或 `asme`；只影响成功结果通知身份，回执仍 Bot |
-| Agent_Notify_When_Empty | String | ❌ | `Y`/`N`；空=未显式选择，按 `Agent_Mode` 推导（write 默认静默、read 默认仍推） |
+| Agent_Notify_When_Empty | String | ❌ | `Y`=仍推；`N`/空=不推（read / write 相同） |
 | Agent_Trigger_Source | String | ❌   | `jira_rule`，未来可扩展为 `memory_cron`              |
 | Agent_AR_Binding_ID | String  | ❌   | 仅 AR 入口创建的重复任务会写入                       |
 | Agent_Last_Run_At  | DateTime | ❌   | 最近一次被 Jira Rule 触发 memory-service 的时间；列表打开时可由 runtime-status 叠加覆盖展示 |
@@ -880,7 +880,7 @@ A:
 - 2026-08-21：已完成的单次任务改成仍有下次执行的重复任务时，会自动从 `Done` 恢复为 `Active` 并把 `Exec_Count` 归零；执行器只领取 Active 行，已完成行没有单独的“恢复”按钮。
 - 2026-08-21：托管 JiraAutomation 行编辑保存会保留 `Automation_Link`；`undefined` 不再把规则入口整行写空。改 Topic 继续同步 Jira Rule 名称，不再只在托管后第一次编辑生效。
 
-- 2026-09-03：帮我做新增 `Agent_Notify_When_Empty`（v2.13 / Apps Script `2.13.0`）。查到 / 改到 0 条时是否仍推结果通知；空值按 `Agent_Mode` 推导（write 默认静默、read 默认仍推），成功/失败回执不受影响。通知配置表同步存该字段。
+- 2026-09-03：帮我做新增 `Agent_Notify_When_Empty`（v2.13 / Apps Script `2.13.0`）。查到 / 改到 0 条时是否仍推结果通知；默认不推（read / write 相同），成功/失败回执不受影响。通知配置表同步存该字段。
 - 2026-08-17：帮我做结果通知身份开放 AsMe（v2）。Sheet `Agent_Notify_Via` + Apps Script `2.12.1` 透传 `notifyVia` 与 Sheet `ringcentral_sender_*`（与 AsMe 发消息同一套 token）；memory-service 成功结果以本人身份发送，回执仍 Bot。
 - 2026-08-14：帮我做新建弹窗可选择 Agent 执行器（默认 Options `agent_task`）；Apps Script `2.11.1` 透传选中实例 id，空值不再写死 `openclaw`。
 - 2026-08-14：v1 `executor=openclaw` 不再钉死本机 `id=openclaw` Gateway；Agent Task 走 Options `executorDefaults.agent_task`。Dify jumpboard 同步去掉该硬编码。

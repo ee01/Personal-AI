@@ -3377,7 +3377,7 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
   const successReceipt = successReceiptRaw !== 'N';
   const notifyViaRaw = (message.Agent_Notify_Via || '').toString().trim().toLowerCase();
   const notifyVia = notifyViaRaw === 'asme' ? 'asme' : 'bot';
-  // Empty column stays out of the payload so memory-service applies the mode default.
+  // Empty column stays out of the payload so memory-service keeps empty results silent.
   const notifyWhenEmptyRaw = (message.Agent_Notify_When_Empty || '').toString().trim().toUpperCase();
   const executor = (message.Agent_Executor || '').toString().trim();
   const agentMode = (message.Agent_Mode || 'read').toString().trim().toLowerCase() === 'write'

@@ -2077,7 +2077,7 @@ unsetPayload = JSON.parse(buildAgentTaskApiPayload({ Topic: 'Legacy', Content: '
   );
   assert.equal(context.onPayload.notifyWhenEmpty, true);
   assert.equal(context.offPayload.notifyWhenEmpty, false);
-  // Legacy rows must stay absent so memory-service applies the mode default.
+  // Legacy rows must stay absent so memory-service keeps empty results silent.
   assert.equal('notifyWhenEmpty' in context.unsetPayload, false);
 });
 

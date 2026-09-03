@@ -77,7 +77,7 @@ interface AgentTaskExecuteBody {
   successReceipt?: boolean;
   /** Result notification identity. Receipts always use Bot. */
   notifyVia?: 'bot' | 'asme';
-  /** Push the result notice even when the run matched nothing. Default: read yes, write no. */
+  /** Push the result notice even when the run matched nothing. Default: stay quiet. */
   notifyWhenEmpty?: boolean;
   /** Sheet AsMe RingCentral sender credentials. Used only for notifyVia=asme; not persisted. */
   asmeSender?: {
@@ -417,7 +417,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const notifyTemplate =
         nonEmptyString(body.notifyTemplate) ??
         nonEmptyString(storedNotifyConfig?.notifyTemplate);
-      // Undefined stays undefined so the delivery layer can apply the mode default.
+      // Undefined stays undefined so the delivery layer applies the shared default (stay quiet).
       const notifyWhenEmpty =
         body.notifyWhenEmpty !== undefined
           ? body.notifyWhenEmpty !== false

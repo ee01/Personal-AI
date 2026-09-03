@@ -332,7 +332,7 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
           successReceipt: payload.successReceipt !== false,
           notifyTemplate: payload.notifyTemplate,
           // Left undefined when the task never chose, so the delivery layer
-          // can fall back to the mode default (write quiet, read still pushes).
+          // applies the shared default (stay quiet for both read and write).
           notifyWhenEmpty:
             payload.notifyWhenEmpty === undefined
               ? undefined

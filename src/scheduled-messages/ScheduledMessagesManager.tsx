@@ -6717,17 +6717,14 @@ const AddMessageDialog: React.FC<{
       ? 'asme'
       : 'bot';
   });
-  // Empty Sheet value means "never chosen", so the checkbox keeps following the
-  // execution boundary until the user decides for this task.
+  // Empty Sheet value means "never chosen": leave the checkbox off until the
+  // user opts in to pushing empty results.
   const [agentNotifyWhenEmptyChoice, setAgentNotifyWhenEmptyChoice] =
     useState<'Y' | 'N' | null>(() => {
       const stored = String(editingMessage?.Agent_Notify_When_Empty || '').trim().toUpperCase();
       return stored === 'Y' || stored === 'N' ? stored : null;
     });
-  const agentNotifyWhenEmpty =
-    agentNotifyWhenEmptyChoice === null
-      ? formData.Agent_Mode !== 'write'
-      : agentNotifyWhenEmptyChoice === 'Y';
+  const agentNotifyWhenEmpty = agentNotifyWhenEmptyChoice === 'Y';
   const [scheduleQueueSuggestionReceipt, setScheduleQueueSuggestionReceipt] =
     useState<ScheduleQueueDraftSuggestionReceipt | null>(null);
   const [userTags, setUserTags] = useState<string[]>(getInitialUserTags);
@@ -8896,12 +8893,7 @@ ${content}
                       <span><strong>0 匹配也推送结果通知</strong>（查到 / 改到 0 条时仍发到通知目标）</span>
                     </label>
                     <small style={{ ...dialogStyles.hint, marginLeft: '24px', display: 'block' }}>
-                      {agentNotifyWhenEmptyChoice === null
-                        ? (formData.Agent_Mode === 'write'
-                            ? '当前按执行边界取默认值：允许外部写入的任务改到 0 条时不推送，只留 run 账本。'
-                            : '当前按执行边界取默认值：只读查询任务查到 0 条也会推送。')
-                        : '已为这条任务显式设置，不再跟随执行边界。'}
-                      {' '}关掉后 0 匹配只记 run 账本，成功/失败回执不受影响。
+                      默认不推送：查到 / 改到 0 条只记 run 账本。勾选后才会发到通知目标。成功/失败回执不受影响。
                     </small>
                   </div>
                 )}

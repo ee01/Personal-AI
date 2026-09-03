@@ -1187,7 +1187,7 @@ function buildAgentTaskNotifyTargetPayload(
   return glipUserName ? { type: 'private', glipUserName } : null;
 }
 
-/** Empty means the task never chose, so memory-service derives it from Agent_Mode. */
+/** Empty means the task never chose, so memory-service keeps empty results silent. */
 function normalizeAgentNotifyWhenEmpty(value?: string): 'Y' | 'N' | undefined {
   const normalized = String(value || '').trim().toUpperCase();
   return normalized === 'Y' || normalized === 'N' ? normalized : undefined;

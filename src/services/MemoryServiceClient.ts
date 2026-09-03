@@ -6988,7 +6988,7 @@ export class MemoryServiceClient {
     successReceipt?: 'Y' | 'N';
     notifyVia?: 'bot' | 'asme';
     notifyTemplate?: string;
-    /** Omit to let memory-service derive it from the task mode. */
+    /** Omit to keep empty results silent (the shared default). */
     notifyWhenEmpty?: 'Y' | 'N';
   }): Promise<{ ok: boolean; config: Record<string, any> }> {
     return this.request('POST', '/agent-tasks/notify-config', body);

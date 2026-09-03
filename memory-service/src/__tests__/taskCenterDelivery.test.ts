@@ -121,7 +121,11 @@ describe('Task Center home-lane delivery', () => {
       action,
       execution: {
         queueStatus: 'succeeded',
-        result: { status: 'success', summary: '已同步' },
+        result: {
+          status: 'success',
+          summary: '已同步',
+          artifacts: [{ kind: 'note', content: '* INIT-1 Committed=Yes' }],
+        },
       },
     });
 
@@ -217,7 +221,7 @@ describe('Task Center home-lane delivery', () => {
     expect(glip).toHaveBeenCalled();
   });
 
-  it('still pushes a 0-match read scan, which is the mode default', async () => {
+  it('keeps a 0-match read scan out of the target chat by default', async () => {
     const glip = vi
       .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
       .mockResolvedValue({ sent: true });
@@ -248,8 +252,9 @@ describe('Task Center home-lane delivery', () => {
       },
     });
 
-    expect(result.delivered).toBe(1);
-    expect(glip).toHaveBeenCalled();
+    expect(result.delivered).toBe(0);
+    expect(result.emptyResultSkipped).toBe(true);
+    expect(glip).not.toHaveBeenCalled();
   });
 
   it('sends group result notices as the body only, without 任务完成', async () => {

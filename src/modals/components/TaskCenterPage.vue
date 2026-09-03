@@ -251,11 +251,7 @@
                 0 匹配也推送结果通知
               </label>
               <small class="tc-hint">
-                {{ notifyWhenEmptyChoice === null
-                  ? (draft.mode === 'write'
-                      ? '按执行边界取默认值：写入任务改到 0 条时不推送，只留 run 账本。'
-                      : '按执行边界取默认值：只读查询查到 0 条也会推送。')
-                  : '已显式设置，不再跟随执行边界。' }}
+                默认不推送：查到 / 改到 0 条只记 run 账本。勾选后才会发到通知目标。
               </small>
             </div>
           </template>
@@ -446,14 +442,11 @@ const draft = ref({
 });
 
 /**
- * null means the task never chose, so the switch keeps following the execution
- * boundary: a write run that changed nothing stays quiet, a read scan still
- * reports its 0 hits.
+ * null means the task never chose. Empty results stay silent until the user
+ * opts in; read and write share that default.
  */
 const notifyWhenEmptyChoice = ref<boolean | null>(null);
-const notifyWhenEmpty = computed(
-  () => notifyWhenEmptyChoice.value ?? draft.value.mode !== 'write',
-);
+const notifyWhenEmpty = computed(() => notifyWhenEmptyChoice.value === true);
 
 const remindPresets = [
   { label: '1 小时后', ms: 3600_000 },
@@ -835,7 +828,10 @@ async function saveTask() {
         teamId: draft.value.teamId.trim() || undefined,
         extraText: draft.value.extraText.trim() || undefined,
         successReceipt: draft.value.successReceipt,
-        notifyWhenEmpty: draft.value.taskKind === 'agent' ? notifyWhenEmpty.value : undefined,
+        notifyWhenEmpty:
+          draft.value.taskKind === 'agent' && notifyWhenEmptyChoice.value !== null
+            ? notifyWhenEmpty.value
+            : undefined,
         ...notify,
       },
     });
