@@ -37,6 +37,8 @@ describe('agentResultPrompt', () => {
 
     expect(prompt).toContain('用户的 Task 只描述要做什么');
     expect(prompt).toContain('Likely sourceSystem: jira');
+    expect(prompt).toContain('outcome');
+    expect(prompt).not.toContain('initKeys');
     expect(prompt).toContain('metadata.url=你实际请求的 Jira 实例');
     expect(prompt).not.toContain('Target system: agent_task');
     expect(user).toContain(task);
@@ -190,25 +192,51 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.summary).not.toContain('缺少可验证 artifact');
   });
 
-  it('accepts grouped Jira read receipts that list initKeys per team bucket', () => {
+  it('accepts a read scan when the executor returns a closed outcome', () => {
     const parsed = parseAgentResultEnvelope(
       JSON.stringify({
         status: 'success',
-        summary:
-          '成功读取 filter=153978 (Nova INITs 26Q3) 中 75 个活跃 INIT，按 39 个 Team 分组展示',
+        summary: '成功读取 filter=153978 中 75 个活跃 INIT，按 39 个 Team 分组展示',
+        outcome: {
+          mode: 'read',
+          verdict: 'observed',
+          sourceSystem: 'jira',
+          method: 'jql_requery',
+          subject: 'filter=153978 AND status not in (Closed)',
+          count: 75,
+        },
         artifacts: [
           {
             kind: 'note',
             title: 'Team: UX AIR Pro / NOVA (27 INITs)',
-            content:
-              '共 27 个活跃 INIT 关联到此 Team\nJQL 链接: https://jira.ringcentral.com/issues/?jql=filter%3D153978',
+            content: 'INIT-22901, INIT-23362, INIT-26132',
+            metadata: { team: 'UX AIR Pro / NOVA', initKeys: ['INIT-22901'] },
+          },
+        ],
+      }),
+      { mode: 'read', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.outcome?.count).toBe(75);
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
+  });
+
+  it('does not treat domain key lists like initKeys as proof of success', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary: '成功读取 75 个活跃 INIT，按 39 个 Team 分组展示',
+        artifacts: [
+          {
+            kind: 'note',
+            title: 'Team: UX AIR Pro / NOVA (27 INITs)',
+            content: '共 27 个活跃 INIT',
             metadata: {
               sourceSystem: 'jira',
               entityKey: 'team:UX AIR Pro / NOVA',
-              entityUrl:
-                'https://jira.ringcentral.com/issues/?jql=filter%3D153978%20AND%20status%20not%20in%20%28Closed%29',
+              entityUrl: 'https://jira.ringcentral.com/issues/?jql=filter%3D153978',
               verification: 'jql_requery',
-              team: 'UX AIR Pro / NOVA',
               initCount: 27,
               initKeys: ['INIT-22901', 'INIT-23362', 'INIT-26132'],
             },
@@ -218,8 +246,76 @@ describe('parseAgentResultEnvelope', () => {
       { mode: 'read', targetSystem: 'jira' },
     );
 
+    expect(parsed.status).toBe('error');
+    expect(parsed.summary).toContain('缺少可验证 artifact');
+  });
+
+  it('accepts a query_result covering the whole scan without per-group proof', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary: '75 个活跃 INIT 按 Team 分组',
+        artifacts: [
+          {
+            kind: 'query_result',
+            title: 'Nova INITs still open',
+            content: '75 issues across 39 teams',
+            metadata: {
+              sourceSystem: 'jira',
+              query: 'filter=153978 AND status not in (Closed)',
+              verification: 'jql_requery',
+              matchCount: 75,
+            },
+          },
+        ],
+      }),
+      { mode: 'read', targetSystem: 'jira' },
+    );
+
     expect(parsed.status).toBe('succeeded');
-    expect(parsed.summary).not.toContain('缺少可验证 artifact');
+  });
+
+  it('rejects a write outcome that claims mutations but names no objects', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary: '已更新 4 个 Epic',
+        outcome: {
+          mode: 'write',
+          verdict: 'mutated',
+          sourceSystem: 'jira',
+          method: 'rest_api_readback',
+          subject: 'project=NOVA AND Committed != Yes',
+          count: 4,
+        },
+        artifacts: [{ kind: 'note', title: 'done', content: 'trust me' }],
+      }),
+      { mode: 'write', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('error');
+    expect(parsed.summary).toContain('缺少可验证 artifact');
+  });
+
+  it('accepts a write noop outcome when nothing needed changing', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary: '查询后无需更新',
+        outcome: {
+          mode: 'write',
+          verdict: 'noop',
+          sourceSystem: 'jira',
+          method: 'jql_requery',
+          subject: 'project=NOVA AND Committed != Yes',
+          count: 0,
+        },
+        artifacts: [],
+      }),
+      { mode: 'write', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
   });
 
   it('still rejects success with only a bare note and no query proof', () => {

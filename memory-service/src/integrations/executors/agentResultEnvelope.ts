@@ -11,6 +11,7 @@ import {
 } from './agentResultPrompt.js';
 import {
   hasVerifiableArtifact,
+  readAgentTaskOutcome,
   type AgentResultArtifact,
 } from './agentResultContract.js';
 
@@ -158,8 +159,14 @@ export function parseAgentResultEnvelope(
       parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
         ? (parsed.payload as Record<string, unknown>)
         : { raw: parsed };
+    const outcome = readAgentTaskOutcome(parsed.outcome ?? payload.outcome);
+    const proofOptions = {
+      targetSystem: options.targetSystem,
+      mode: options.mode,
+      outcome: outcome ?? parsed.outcome ?? payload.outcome,
+    };
 
-    if (status === 'succeeded' && !hasVerifiableArtifact(artifacts, options)) {
+    if (status === 'succeeded' && !hasVerifiableArtifact(artifacts, proofOptions)) {
       return {
         status: 'error',
         summary: `${summary}（缺少可验证 artifact）`,
@@ -175,8 +182,9 @@ export function parseAgentResultEnvelope(
       status,
       summary,
       artifacts,
+      outcome,
       transcript: typeof parsed.transcript === 'string' ? parsed.transcript : undefined,
-      payload,
+      payload: outcome ? { ...payload, outcome } : payload,
     };
   }
 

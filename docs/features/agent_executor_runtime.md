@@ -66,7 +66,15 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 - 远程首次连接可能需在 OpenClaw 侧批准 pairing（`openclaw devices list` / approve）
 | `acp-codex` / `acp-claude-code` / `acp-cursor` | `AcpExecutor` | stdio 驱动官方 ACP adapter（Cursor 走仓库内 `cursor-acp` shim）；注入 Personal AI MCP |
 
-共享契约：`agentResultContract.ts` — success 必须带可验证 artifact；`observedFields` 接受 **array 或 object**。查询/扫描类任务正确查到 0 个匹配是合法 success，不算缺证据：交一张 `kind: 'query_result'`（或 `metadata.matchCount === 0`）+ `sourceSystem` + `query`（实际查询语句）+ `verification` 的收据即可，不要求 `entityId`；系统提示词（`agentResultPrompt.ts`）已教会 agent 这个模式。
+共享契约：`agentResultContract.ts` — 执行器自己判断读/写是否做成，但 `status=success` 不够。Personal AI 只认封闭结构，不把业务分组字段或对象列表字段名当成成功证据。
+
+成功（读）：信封带 `outcome`（`mode=read`，`verdict=observed|empty`，`sourceSystem`，`method`，可复跑的 `subject`，`count>=0`），或一张 `kind: query_result`（`sourceSystem` + `query`/`url` + `verification` + `matchCount`，0 合法），或单对象收据（`entityKey` + `observedFields`）。按 Team 分组的 note 是展示明细，不是成功条件。
+
+成功（写）：`outcome.verdict=mutated` 且 `count>0`，并且每个改过的对象有 `entityKey` + `operation` + `changedFields`；或 `verdict=noop`/`empty` 且 `count=0`（确认无需改）。
+
+失败：执行器报 `error` / `capability_missing` / `auth_error` / `need_human_decision`；或声称 success 但既没有合法 outcome 也没有上述收据 → 改判 `missing_verifiable_artifact`。
+
+`observedFields` 接受 **array 或 object**。系统提示词（`agentResultPrompt.ts`）把这套 outcome/收据教给执行器。
 
 用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。若任务带了 `notifyTemplate`，prompt 只注入「通知还需要哪些字段」，不把模板当最终回复；Jira 收据约定带 browse/self URL。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
 

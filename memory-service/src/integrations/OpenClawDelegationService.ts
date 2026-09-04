@@ -50,6 +50,7 @@ interface Envelope {
   status?: string;
   summary?: string;
   artifacts?: unknown[];
+  outcome?: unknown;
   transcript?: unknown;
   payload?: Record<string, unknown>;
   question?: string;
@@ -64,9 +65,12 @@ interface StructuredObservation {
 function hasVerifiableArtifact(
   artifacts: DelegationArtifact[],
   input: DelegationRequest,
+  outcome?: unknown,
 ): boolean {
   return sharedHasVerifiableArtifact(artifacts, {
     targetSystem: input.targetSystem,
+    mode: input.mode,
+    outcome,
   });
 }
 
@@ -669,6 +673,7 @@ export class OpenClawDelegationService {
       }
 
       const normalizedStatus = this.normalizeStatus(envelope.status);
+      const proofOutcome = envelope.outcome ?? envelope.payload?.outcome;
       const artifacts = normalizedStatus === 'success'
         ? enrichArtifactsWithDelegationContext(
             coerceArtifacts(envelope.artifacts),
@@ -681,7 +686,7 @@ export class OpenClawDelegationService {
       if (
         normalizedStatus === 'success' &&
         !isNotificationOnlyRequest(input) &&
-        !hasVerifiableArtifact(artifacts, input)
+        !hasVerifiableArtifact(artifacts, input, proofOutcome)
       ) {
         return {
           status: 'error',

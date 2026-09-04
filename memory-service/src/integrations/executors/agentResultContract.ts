@@ -84,71 +84,126 @@ export function hasMetadataObservedFields(
   return keys.some((key) => normalizeObservedFieldLabels(metadata[key]).length > 0);
 }
 
-function hasListedEntityKeys(metadata: Record<string, unknown>): boolean {
-  for (const key of ['initKeys', 'issueKeys', 'entityKeys', 'ticketKeys']) {
-    const value = metadata[key];
-    if (
-      Array.isArray(value) &&
-      value.some((item) => typeof item === 'string' && item.trim().length > 0)
-    ) {
-      return true;
-    }
-  }
-  return false;
+function artifactHasBody(artifact: AgentResultArtifact): boolean {
+  return (
+    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
+    (typeof artifact.title === 'string' && artifact.title.trim().length > 0)
+  );
 }
 
-/**
- * Read/write receipts can prove themselves through observed/changed fields,
- * operations, timestamps, or grouped Jira reads that list the keys they scanned.
- */
-export function hasMetadataProofFields(
+function artifactVerification(
   metadata: Record<string, unknown> | undefined,
 ): boolean {
-  if (!metadata) return false;
-  if (hasMetadataObservedFields(metadata)) return true;
-  if (Boolean(getMetadataString(metadata, ['operation', 'operationType', 'action']))) {
-    return true;
+  return (
+    metadata?.verified === true ||
+    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']))
+  );
+}
+
+function readMatchCount(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
   }
-  if (Boolean(getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']))) {
-    return true;
+  return undefined;
+}
+
+export type AgentTaskOutcomeVerdict = 'observed' | 'empty' | 'mutated' | 'noop';
+
+/**
+ * Executor-owned judgment. Personal AI does not infer success from domain
+ * field names; it only accepts this closed shape (or one of the three
+ * artifact receipts below).
+ */
+export interface AgentTaskOutcome {
+  mode: 'read' | 'write';
+  verdict: AgentTaskOutcomeVerdict;
+  sourceSystem: string;
+  method: string;
+  subject: string;
+  count: number;
+}
+
+export type VerifiableProofOptions = {
+  targetSystem?: string;
+  mode?: 'read' | 'write';
+  outcome?: unknown;
+};
+
+export function readAgentTaskOutcome(value: unknown): AgentTaskOutcome | undefined {
+  const record =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  if (!record) return undefined;
+
+  const modeRaw = String(record.mode || '').trim().toLowerCase();
+  const mode = modeRaw === 'write' || modeRaw === 'read' ? modeRaw : undefined;
+  const verdictRaw = String(record.verdict || '').trim().toLowerCase();
+  const verdict =
+    verdictRaw === 'observed' ||
+    verdictRaw === 'empty' ||
+    verdictRaw === 'mutated' ||
+    verdictRaw === 'noop'
+      ? verdictRaw
+      : undefined;
+  const sourceSystem = getMetadataString(record, ['sourceSystem', 'targetSystem', 'system']);
+  const method = getMetadataString(record, ['method', 'verification', 'verificationMethod']);
+  const subject = getMetadataString(record, ['subject', 'query', 'jql', 'url']);
+  const count = readMatchCount(record.count ?? record.matchCount);
+  if (!mode || !verdict || !sourceSystem || !method || !subject || count === undefined) {
+    return undefined;
   }
-  if (hasListedEntityKeys(metadata)) return true;
-  const count = metadata.initCount ?? metadata.matchCount;
-  if (typeof count === 'number' && Number.isFinite(count) && count >= 0) {
-    return Boolean(
-      getMetadataString(metadata, ['query', 'jql', 'queryText', 'entityUrl', 'url']),
-    );
-  }
-  return false;
+  return { mode, verdict, sourceSystem, method, subject, count };
 }
 
 /**
- * A task can legitimately touch zero entities — a conditional sync that finds no
- * qualifying record, a scan that comes back clean. That is a verified negative
- * result, not a missing receipt, so it needs its own artifact shape: `kind:
- * 'query_result'` (or an explicit `metadata.matchCount === 0`) backed by the
- * query that was run and how it was executed, instead of an entity identity.
+ * The executor judged the run; this checks that the judgment is internally
+ * consistent and, for a write that claims mutations, that it named the
+ * objects it changed. Presentation notes (team buckets, etc.) are not proof.
  */
-export function isVerifiedEmptyResultArtifact(artifact: AgentResultArtifact): boolean {
+export function isVerifiedOutcome(
+  outcome: AgentTaskOutcome | undefined,
+  artifacts: AgentResultArtifact[],
+  options: VerifiableProofOptions = {},
+): boolean {
+  if (!outcome) return false;
+  if (options.mode && outcome.mode !== options.mode) return false;
+
+  if (outcome.mode === 'read') {
+    if (outcome.verdict === 'empty') return outcome.count === 0;
+    return outcome.verdict === 'observed';
+  }
+
+  if (outcome.verdict === 'noop' || outcome.verdict === 'empty') {
+    return outcome.count === 0;
+  }
+  if (outcome.verdict !== 'mutated' || outcome.count <= 0) return false;
+  return artifacts.some((artifact) => hasVerifiableEntityArtifact(artifact, options));
+}
+
+/**
+ * Scan / list / group / 0-match receipt. matchCount is a query cardinality,
+ * not a domain-specific key list. 0 is a verified negative, not a failure.
+ */
+export function isVerifiedQueryResultArtifact(artifact: AgentResultArtifact): boolean {
   const metadata = artifact.metadata;
   const kind = typeof artifact.kind === 'string' ? artifact.kind.trim().toLowerCase() : '';
-  const matchCount = metadata?.matchCount;
-  const isZeroMatch =
-    kind === 'query_result' ||
-    matchCount === 0 ||
-    matchCount === '0';
-  if (!isZeroMatch) return false;
+  const matchCount = readMatchCount(metadata?.matchCount);
+  if (kind !== 'query_result' && matchCount === undefined) return false;
+  if (matchCount === undefined) return false;
 
   const sourceSystem = getMetadataString(metadata, ['sourceSystem', 'targetSystem', 'system']);
-  const query = getMetadataString(metadata, ['query', 'jql', 'queryText']);
-  const verification =
-    metadata?.verified === true ||
-    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
-  const hasBody =
-    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
-    (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
+  const query = getMetadataString(metadata, ['query', 'jql', 'queryText', 'url', 'entityUrl']);
+  return Boolean(
+    sourceSystem && query && artifactVerification(metadata) && artifactHasBody(artifact),
+  );
+}
 
-  return Boolean(sourceSystem && query && verification && hasBody);
+/** @deprecated Use isVerifiedQueryResultArtifact — 0-match is one of its cases. */
+export function isVerifiedEmptyResultArtifact(artifact: AgentResultArtifact): boolean {
+  return isVerifiedQueryResultArtifact(artifact);
 }
 
 /**
@@ -168,14 +223,7 @@ export function isVerifiedFileArtifact(artifact: AgentResultArtifact): boolean {
   const filePath = getMetadataString(metadata, ['path', 'filePath', 'relativePath']);
   if (!filePath || !isSafeRelativeArtifactPath(filePath)) return false;
 
-  const verification =
-    metadata?.verified === true ||
-    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
-  const hasBody =
-    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
-    (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
-
-  return Boolean(verification && hasBody);
+  return Boolean(artifactVerification(metadata) && artifactHasBody(artifact));
 }
 
 /** Relative, no traversal, no absolute or Windows-drive prefix, no NUL. */
@@ -191,7 +239,7 @@ export function isSafeRelativeArtifactPath(value: string): boolean {
 
 function hasVerifiableEntityArtifact(
   artifact: AgentResultArtifact,
-  options: { targetSystem?: string },
+  options: VerifiableProofOptions,
 ): boolean {
   const metadata = artifact.metadata;
   const sourceSystem =
@@ -206,31 +254,34 @@ function hasVerifiableEntityArtifact(
     'ticketKey',
     'issueKey',
   ]);
-  const verification =
-    metadata?.verified === true ||
-    Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
-  const hasProofFields = hasMetadataProofFields(metadata);
-  const hasBody =
-    (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
-    (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
+  const hasObservedFields = hasMetadataObservedFields(metadata);
+  const hasOperation = Boolean(
+    getMetadataString(metadata, ['operation', 'operationType', 'action']),
+  );
+  const hasObservedAt = Boolean(
+    getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']),
+  );
 
   return Boolean(
     sourceSystem &&
       entityId &&
-      verification &&
-      hasBody &&
-      hasProofFields,
+      artifactVerification(metadata) &&
+      artifactHasBody(artifact) &&
+      (hasObservedFields || hasOperation || hasObservedAt),
   );
 }
 
 export function hasVerifiableArtifact(
   artifacts: AgentResultArtifact[],
-  options: { targetSystem?: string } = {},
+  options: VerifiableProofOptions = {},
 ): boolean {
+  if (isVerifiedOutcome(readAgentTaskOutcome(options.outcome), artifacts, options)) {
+    return true;
+  }
   return artifacts.some(
     (artifact) =>
       hasVerifiableEntityArtifact(artifact, options) ||
-      isVerifiedEmptyResultArtifact(artifact) ||
+      isVerifiedQueryResultArtifact(artifact) ||
       isVerifiedFileArtifact(artifact),
   );
 }
