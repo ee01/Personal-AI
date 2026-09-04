@@ -175,15 +175,16 @@ export function buildAgentTaskResultAnnouncementBody(input: {
 }): string {
   const evidence = extractNotificationEvidence(input.result);
   const summary = evidence.summary || input.summary || '';
+  const lines = isEmptyResultOutcome(input.result) ? [] : evidence.lines;
   if (input.template?.trim()) {
-    return applyNotifyTemplateLocally(input.template, { ...evidence, summary });
+    return applyNotifyTemplateLocally(input.template, { ...evidence, summary, lines });
   }
-  const lines = [
+  const announcement = [
     input.title,
     summary ? compactText(summary, 1200) : '',
-    ...evidence.lines,
+    ...lines,
   ];
-  return uniqueNonEmpty(lines).join('\n');
+  return uniqueNonEmpty(announcement).join('\n');
 }
 
 export function getExecutionSummary(result?: Record<string, unknown>): string | undefined {
@@ -448,11 +449,17 @@ export async function formatSuccessNotificationWithTemplate(input: {
   if (!template) return input.defaultBody;
 
   const evidence = extractNotificationEvidence(input.result);
-  const structuredFallback = applyNotifyTemplateLocally(template, evidence);
+  // A 0-match run still ships diagnostic artifacts, and those keys must not be
+  // listed as if they were results.
+  const emptyOutcome = isEmptyResultOutcome(input.result);
+  const structuredFallback = applyNotifyTemplateLocally(
+    template,
+    emptyOutcome ? { ...evidence, lines: [] } : evidence,
+  );
 
   // Nothing to list means the LLM would only rewrite prose, and it then tends to
   // drop the separator and the closing cc line. Fill the template deterministically.
-  if (evidence.lines.length === 0) {
+  if (emptyOutcome || evidence.lines.length === 0) {
     return structuredFallback;
   }
 
@@ -873,8 +880,82 @@ export function shouldNotifyEmptyResult(config: {
   return config.notifyWhenEmpty === true;
 }
 
-/** True when the run succeeded but produced nothing listable to announce. */
+/** Payload counters that describe what the run actually did. */
+const OUTCOME_COUNT_KEY =
+  /(updated|created|changed|written|posted|filled|linked|transitioned|commented|resolved|deleted|applied|synced)/i;
+/** Payload counters that only describe how wide the scan was. */
+const SCAN_COUNT_KEY = /(matched|scanned|candidate|found|queried)/i;
+/** Artifact operations that only appear once a real item was touched. */
+const WRITE_OPERATIONS = new Set([
+  'update',
+  'create',
+  'delete',
+  'transition',
+  'comment',
+  'link',
+  'assign',
+  'move',
+]);
+
+interface CountSignal {
+  positive: boolean;
+  zero: boolean;
+}
+
+function readCountSignal(
+  payload: Record<string, unknown>,
+  keyPattern: RegExp,
+): CountSignal {
+  const signal: CountSignal = { positive: false, zero: false };
+  for (const [key, value] of Object.entries(payload)) {
+    if (!keyPattern.test(key)) continue;
+    const count = Array.isArray(value)
+      ? value.length
+      : typeof value === 'number' && Number.isFinite(value)
+        ? value
+        : undefined;
+    if (count === undefined) continue;
+    if (count > 0) signal.positive = true;
+    else signal.zero = true;
+  }
+  return signal;
+}
+
+/**
+ * Executors report emptiness in several shapes, and they disagree on what
+ * `matchCount` means: some count the JQL hits, others count the rows that
+ * survived the task's own filter. So read the signals in precedence order —
+ * what the run changed beats what it touched, which beats what it scanned —
+ * and only fall back to counting listable evidence when nothing is declared.
+ *
+ * True when the run succeeded but produced nothing worth announcing.
+ */
 export function isEmptyResultOutcome(result?: Record<string, unknown>): boolean {
+  if (!result) return true;
+
+  const payload = asRecord(result.payload);
+  const outcome = readCountSignal(payload, OUTCOME_COUNT_KEY);
+  if (outcome.positive) return false;
+  if (outcome.zero) return true;
+
+  const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  const scan: CountSignal = { positive: false, zero: false };
+  for (const artifact of artifacts) {
+    const metadata = asRecord(asRecord(artifact).metadata);
+    if (Array.isArray(metadata.changedFields) && metadata.changedFields.length) return false;
+    const operation = nonEmptyString(metadata.operation);
+    if (operation && WRITE_OPERATIONS.has(operation.toLowerCase())) return false;
+    const matchCount = metadata.matchCount;
+    if (typeof matchCount === 'number' && Number.isFinite(matchCount)) {
+      if (matchCount > 0) scan.positive = true;
+      else scan.zero = true;
+    }
+  }
+
+  const payloadScan = readCountSignal(payload, SCAN_COUNT_KEY);
+  if (scan.positive || payloadScan.positive) return false;
+  if (scan.zero || payloadScan.zero) return true;
+
   return extractNotificationEvidence(result).lines.length === 0;
 }
 

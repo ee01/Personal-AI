@@ -5,6 +5,7 @@ import {
   enforceTemplateScaffolding,
   extractNotificationEvidence,
   formatSuccessNotificationWithTemplate,
+  isEmptyResultOutcome,
   templateRequestsLinks,
 } from '../core/agentTaskNotification.js';
 
@@ -194,6 +195,49 @@ describe('formatSuccessNotificationWithTemplate', () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it('treats a 0-match run as empty even when its diagnostic note carries INIT keys', async () => {
+    const log = { warn: vi.fn() };
+
+    const body = await formatSuccessNotificationWithTemplate({
+      ...baseInput,
+      template: `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](https://jira.ringcentral.com/browse/{key}) summary
+* ...
+
+以上 Epic 自动填入 INIT 的 Team cc @sophia.lin`,
+      result: {
+        status: 'success',
+        summary: 'JQL 扫描到 8 个 Team 为空的 NOVA Epic；所有 INIT 的 Team 数量均不为 1，因此 0 个 Epic 被更新。',
+        artifacts: [
+          {
+            kind: 'query_result',
+            title: 'NOVA Epic Team 回填扫描',
+            content: 'JQL 命中 8 个 Epic，0 个满足回填条件，未执行写入。',
+            metadata: { sourceSystem: 'jira', matchCount: 0 },
+          },
+          {
+            kind: 'note',
+            title: '初始检查：INIT Team 均非唯一',
+            content: 'INIT-28290(2): Nova Vox-Moutai；INIT-28986(3)；INIT-26177(2)。均不满足唯一条件。',
+            metadata: {
+              sourceSystem: 'jira',
+              entityKey: 'INIT-28290,INIT-28986,INIT-26177',
+            },
+          },
+        ],
+        payload: { scannedEpics: ['NOVA-17657', 'NOVA-17391'], updatedEpics: [] },
+      },
+      log,
+    });
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(body).toContain('本次没有符合条件的条目：');
+    expect(body).not.toContain('INIT-28290');
+    expect(body).toContain('以上 Epic 自动填入 INIT 的 Team cc @sophia.lin');
+  });
+
   it('skips the LLM call entirely for a blank template', async () => {
     const log = { warn: vi.fn() };
 
@@ -329,5 +373,59 @@ describe('extractNotificationEvidence / applyNotifyTemplateLocally', () => {
     expect(templateRequestsLinks('请把每条结果做成可点击链接')).toBe(true);
     expect(templateRequestsLinks('Please include links for each item')).toBe(true);
     expect(templateRequestsLinks('* NOVA-xxx summary @owner')).toBe(false);
+  });
+});
+
+describe('isEmptyResultOutcome', () => {
+  it('lets an outcome counter override a wide scan count', () => {
+    expect(
+      isEmptyResultOutcome({
+        artifacts: [{ kind: 'query_result', metadata: { matchCount: 10 } }],
+        payload: { scannedEpics: ['NOVA-1'], epicsUpdated: 0 },
+      }),
+    ).toBe(true);
+    expect(
+      isEmptyResultOutcome({
+        artifacts: [{ kind: 'query_result', metadata: { matchCount: 0 } }],
+        payload: { updatedKeys: ['NOVA-1'] },
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps a write run that produced per-item receipts', () => {
+    expect(
+      isEmptyResultOutcome({
+        artifacts: [
+          {
+            kind: 'note',
+            title: 'NOVA-17800',
+            metadata: { entityKey: 'NOVA-17800', operation: 'update', changedFields: ['Committed'] },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps a read scan that only reports how many rows it found', () => {
+    expect(
+      isEmptyResultOutcome({
+        artifacts: [{ kind: 'query_result', metadata: { matchCount: 8 } }],
+      }),
+    ).toBe(false);
+    expect(
+      isEmptyResultOutcome({
+        artifacts: [{ kind: 'query_result', metadata: { matchCount: 0 } }],
+      }),
+    ).toBe(true);
+  });
+
+  it('falls back to listable evidence when the run declares no counters', () => {
+    expect(
+      isEmptyResultOutcome({
+        artifacts: [{ kind: 'jira_issue', title: 'NOVA-7248', metadata: { entityKey: 'NOVA-7248' } }],
+      }),
+    ).toBe(false);
+    expect(isEmptyResultOutcome({ status: 'success', summary: '没有命中' })).toBe(true);
+    expect(isEmptyResultOutcome(undefined)).toBe(true);
   });
 });
