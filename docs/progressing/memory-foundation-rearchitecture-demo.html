@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆基础架构重构 · 示意</title>
+<style>
+  :root{--bg:#f7f6f2;--ink:#1f2328;--muted:#6b7280;--line:#d9d6cf;--card:#fff;
+        --l0:#e8eef7;--l1:#fff3d6;--l2:#e6f4ea;--l3:#f3e8ff;--l4:#fde8e8;--l5:#e0f2f1;--ops:#eeeeee;
+        --accent:#c2410c;--ok:#15803d;--warn:#b45309}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,"PingFang SC","Noto Sans SC",Segoe UI,Roboto,sans-serif}
+  header{padding:28px 32px 8px}
+  h1{margin:0 0 6px;font-size:22px;letter-spacing:.2px}
+  .sub{color:var(--muted)}
+  main{padding:8px 32px 48px;max-width:1240px}
+  section{margin:28px 0}
+  h2{font-size:16px;margin:0 0 12px;border-left:4px solid var(--accent);padding-left:10px}
+  .grid{display:grid;gap:12px}
+  .planes{grid-template-columns:1fr 1fr 1fr}
+  .plane{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .plane h3{margin:0 0 8px;font-size:14px}
+  .plane ol{margin:0;padding-left:18px}
+  .plane li{margin:3px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-left:6px;vertical-align:middle}
+  .tag.zero{border-color:var(--ok);color:var(--ok)}
+  .tag.cheap{border-color:var(--warn);color:var(--warn)}
+  .tag.smart{border-color:var(--accent);color:var(--accent)}
+  .layers{display:flex;flex-direction:column;gap:6px}
+  .layer{display:grid;grid-template-columns:150px 1fr 260px;gap:12px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .layer b{font-size:13px}
+  .layer .what{color:#374151}
+  .layer .from{font-size:12px;color:var(--muted)}
+  .L0{background:var(--l0)}.L1{background:var(--l1)}.L2{background:var(--l2)}.L3{background:var(--l3)}.L4{background:var(--l4)}.L5{background:var(--l5)}.OPS{background:var(--ops)}
+  .star{color:var(--accent);font-weight:700}
+  .flow{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .pipe{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .pipe h3{margin:0 0 10px;font-size:14px}
+  .steps{display:flex;flex-direction:column;gap:6px}
+  .step{border-radius:6px;padding:8px 10px;border:1px dashed var(--line);background:#fafaf8}
+  .step.bad{border-color:#f0b4b4;background:#fff5f5}
+  .step.good{border-color:#a7d7b4;background:#f3fbf5}
+  .step small{display:block;color:var(--muted)}
+  table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{background:#f1efe9;font-weight:600;font-size:13px}
+  td{font-size:13px}
+  .road{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+  .ph{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+  .ph b{display:block;color:var(--accent)}
+  .ph small{color:var(--muted)}
+  .note{font-size:12px;color:var(--muted);margin-top:8px}
+  @media (max-width:900px){.planes,.flow,.road{grid-template-columns:1fr}.layer{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>记忆基础架构重构 · 示意</h1>
+  <div class="sub">配套 <code>memory-foundation-rearchitecture-plan.md</code>。三个平面、六层数据、一条从"页面像什么"到"用户此刻需要什么"的检索链。</div>
+</header>
+<main>
+
+<section>
+  <h2>1 · 三个平面（LLM 只出现在写入批与睡眠期）</h2>
+  <div class="grid planes">
+    <div class="plane">
+      <h3>写平面 <span class="tag zero">同步零 LLM</span> <span class="tag cheap">异步批 cheap</span></h3>
+      <ol>
+        <li>/ingest：episode 落地 + claim 归属 + 入队，&lt;20ms，永不阻塞</li>
+        <li>三触发门（≥512 tok / 30 min / 会话结束）→ 单飞锁</li>
+        <li>上下文装配：本批 + 前 6 条 + top-10 已有 units + peer card</li>
+        <li><b>1 次结构化抽取</b>：units / edges / properties / profile / 触发问句</li>
+        <li>零 LLM 去重：精确或 cos≥0.92 → <b>加固</b>（times_derived++）</li>
+        <li>矛盾 → supersede（valid_to / expired_at），不删除</li>
+        <li>索引：多视图 FTS（中文分词+trigram）+ 单份 int8 向量</li>
+      </ol>
+    </div>
+    <div class="plane">
+      <h3>睡眠平面 <span class="tag cheap">cheap 为主</span> <span class="tag smart">smart 兜底</span></h3>
+      <ol>
+        <li>三重门：≥50 新 units ∧ ≥8h ∧ 空闲 60min（新消息即取消）</li>
+        <li>A 生命周期算术：R=e^(−t/S)，FSRS-lite 强化，冷却+滞回</li>
+        <li>B 热度晋升：heat = N_visit + L_interaction + e^(−Δh/24) ≥ 5</li>
+        <li>C 去重合并 + 触发问句补齐（Batch −50%）</li>
+        <li>D GA 反思（Σpoignancy≥150）与<b>有证据的</b> anticipation</li>
+        <li>E 图维护、GC、投影渲染（.md 不再入索引）</li>
+      </ol>
+    </div>
+    <div class="plane">
+      <h3>读平面 <span class="tag zero">在线零 LLM</span></h3>
+      <ol>
+        <li>InformationNeedPlanner：scene → needSlots（what）</li>
+        <li>多视图召回：正文向量 / <b>触发问句向量</b> / 分词 FTS / trigram / PPR / 时间 / 规则</li>
+        <li>加权 RRF(k=60) → minmax 归一</li>
+        <li>score = 权威 × 生命周期 × kind × [.55 rel + .25 R + .20 sal]</li>
+        <li>可选 CPU cross-encoder（按 surface）</li>
+        <li>自适应阈值 → Autopilot 门控（沿用）→ context_pack</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2 · 六层数据（per-user SQLite 真源，Markdown 只是投影）</h2>
+  <div class="layers">
+    <div class="layer L5"><b>L5 生命周期 & 反馈</b><span class="what">unit_lifecycle(S, D, R, sal, heat, tier) · feedback / outcome events · learned ranker 权重</span><span class="from">A_memorix 半衰期 · zenBrain FSRS · GA</span></div>
+    <div class="layer L4"><b>L4 派生视图</b><span class="what">reflections · dreams · keystone / anticipation / day briefs —— 同时投影为 unit(kind=insight|brief, authority=derived)</span><span class="from">ReMe digest · Letta sleep-time</span></div>
+    <div class="layer L3"><b>L3 用户模型</b><span class="what">profile_slots(topic/sub_topic, version, times_derived, history) · peer_card ≤40 · writing style · affinity</span><span class="from">Honcho deriver · memobase slots</span></div>
+    <div class="layer L2"><b>L2 实体与边</b><span class="what">entities(+aliases) · <b>edges{fact, valid_at, invalid_at, expired_at}</b>（三张边表合一）· entity_properties 经 TruthMaintainer 唯一写入</span><span class="from">Graphiti 边即事实 · HippoRAG 2 PPR</span></div>
+    <div class="layer L1"><b>L1 记忆单元 <span class="star">★</span></b><span class="what">memory_units（原子、归属、双时态、来源链、times_derived、superseded_by）· unit_views(body / trigger_question / keywords) · units_fts · units_vec(int8, partition)</span><span class="from">Mem0 v3 · MemOS item · Honcho document</span></div>
+    <div class="layer L0"><b>L0 证据</b><span class="what">episodes(messages_raw) · source-memory 内容 · calendar · claims 归属 · ingest_queue</span><span class="from">Graphiti episode · MemOS fast 模式</span></div>
+    <div class="layer OPS"><b>Ops / Shared / Archive</b><span class="what">ops.db：workers · notifications · agent tasks · runs（TTL）｜shared.db：rc_directory · pricing｜archive-YYYY.db：18 个月以上 episodes（只读 ATTACH）</span><span class="from">存储三分 · 年份归档</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>3 · 被动 Lens 检索链：现状 vs 重构</h2>
+  <div class="flow">
+    <div class="pipe">
+      <h3>现状（为什么"有关联但不是此刻要的"）</h3>
+      <div class="steps">
+        <div class="step bad">被动检索开关默认关 → 短路到 keystone-only<small>CONTEXT_RECALL_PASSIVE_SEARCH_ENABLED 未设</small></div>
+        <div class="step bad">query = title + primaryText 截断 600 字<small>没有"用户此刻需要什么"的建模</small></div>
+        <div class="step bad">召回原文 400-tok chunk；LLM 摘要多数不在索引<small>派生 .md 与原始证据同池竞争</small></div>
+        <div class="step bad">英文 MiniLM + porter unicode61<small>中文整句 = 1 个 token</small></div>
+        <div class="step bad">融合 = 取最高分 + 每多一通道 +0.05<small>无 RRF，无 reranker</small></div>
+        <div class="step bad">十几个手调常数决定 p1/p2/hidden<small>0.35 / 0.55 / 0.32 绝对阈值</small></div>
+        <div class="step bad">recall_training_cases 写后无人读<small>反馈闭环未接通</small></div>
+      </div>
+    </div>
+    <div class="pipe">
+      <h3>重构（RetrievalPlan）</h3>
+      <div class="steps">
+        <div class="step good">admission gate + Scene Autopilot 判 <b>when</b>（沿用）</div>
+        <div class="step good">planner 按 sceneType 出 needSlots 判 <b>what</b><small>jira_issue_reading → caliber / decision / blocker / owner</small></div>
+        <div class="step good">needSlot.question 打 <b>触发问句向量</b>通道<small>写入侧预生成"什么问题会需要我"，零在线延迟</small></div>
+        <div class="step good">units 多视图召回 + 多语言 e5 + 分词 FTS + trigram + PPR</div>
+        <div class="step good">加权 RRF → 权威 × 生命周期 × kind 加权 → MMR</div>
+        <div class="step good">相对阈值（0.4·top1 / p75−1.5σ）+ 规则条目 sticky/cooldown</div>
+        <div class="step good">展示 → 反馈 → 夜间逻辑回归覆盖权重</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4 · LLM 分层路由</h2>
+  <table>
+    <thead><tr><th>tier</th><th>任务</th><th>频次</th><th>手段</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag zero">none</span></td><td>所有在线检索、去重加固、生命周期算术、context_pack 组装、宿主 hooks</td><td>每请求</td><td>确定性 + 本地 embedding</td></tr>
+      <tr><td><span class="tag cheap">cheap / local</span></td><td>结构化抽取、灰区合并判定、slot 合并、触发问句、Keystone 本地化、日总结投影</td><td>每批 1 次 / 夜间 Batch</td><td>strict JSON · 前缀缓存 ≥1024 tok · Batch −50%</td></tr>
+      <tr><td><span class="tag">standard</span></td><td>高影响矛盾复核、brief 组合、画像 deduction / induction / card、/ask 与 Compose 生成</td><td>少量 / 按需</td><td>级联升级（FrugalGPT）</td></tr>
+      <tr><td><span class="tag smart">smart</span></td><td>GA 反思、dreaming</td><td>夜间 ≤2 / 周 ≤5</td><td>Batch · 日预算硬顶</td></tr>
+    </tbody>
+  </table>
+  <div class="note">每个 budget_key 有 tokens 与 USD 日预算，超预算降 tier 或跳过并写回执；usage_events 增 tier / task 列。</div>
+</section>
+
+<section>
+  <h2>5 · 存储：天花板与升级路径（本机实测系数，384 维）</h2>
+  <table>
+    <thead><tr><th>每用户向量数</th><th>方案</th><th>依据</th></tr></thead>
+    <tbody>
+      <tr><td>≤ 25 万 float32（int8 ≤ 75 万）</td><td>留在 SQLite + sqlite-vec：单份向量、int8、partition、三库分离、GC、VACUUM</td><td>float32 ≈ 0.2 ms/千向量；&lt;50 ms 天花板</td></tr>
+      <tr><td>25–200 万 或 p95 &gt; 100 ms</td><td>SQLite 仍为真源 + 每用户 usearch HNSW sidecar；观察 sqlite-vec 0.1.10 rescore 转稳定后原地替换</td><td>usearch view() mmap 零加载</td></tr>
+      <tr><td>&gt; 200 万 / 跨用户分析</td><td>LanceDB 每用户一目录；Postgres+pgvector 仅在需要集中运维时</td><td>IVF_HNSW_SQ + ICU FTS</td></tr>
+    </tbody>
+  </table>
+  <div class="note">1.4 GB 先按 plan §10.1 脚本实测构成；开发快照里向量影子表 23%、通讯录 13%、碎片 35% 都是可立即回收的部分。</div>
+</section>
+
+<section>
+  <h2>6 · 路线（每阶段可停、可回滚）</h2>
+  <div class="road">
+    <div class="ph"><b>P0 止血 · 1 周</b>三开关默认开 · 向量 GC · 换多语言 embedding · 中文分词 · 通讯录迁出 · VACUUM · RRF<small>门：被动 Lens 有真实候选；体积 −30%</small></div>
+    <div class="ph"><b>P1 单元 + 写入 v2 · 3–4 周</b>units/views/edges/slots 建表 · 抽取批处理 · TruthMaintainer 收口 · tier 路由<small>门：memory-abilities 不回退；units_new&gt;0</small></div>
+    <div class="ph"><b>P2 检索 v2 · 3 周</b>RetrievalPlan · 触发问句通道 · 权威加权 · 自适应阈值 · reranker 灰度 · 反馈学习<small>门：useful@1 +30%；p95&lt;500ms</small></div>
+    <div class="ph"><b>P3 巩固 + 存储 · 3 周</b>睡眠期阶段 A–E · 有证据 anticipation · ops.db · archive · .md 停止入索引<small>门：夜间成本达标；月增速可预测</small></div>
+    <div class="ph"><b>P4 分发 · 2 周</b>adapter-core · OpenClaw 插件 · Claude Code 插件 · MCP 收敛<small>门：宿主 0 次模型调用</small></div>
+    <div class="ph"><b>P5 清理</b>删旧表/死代码 · 更新 docs/memory_system.md<small>门：全量 eval 绿</small></div>
+  </div>
+</section>
+
+</main>
+</body>
+</html>
