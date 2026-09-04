@@ -42,7 +42,8 @@
 | **L1 推送通道** | Bot（SM AI）**或** AsMe（RingCentral 凭据，本人身份） | 中 | Glip 私发 / 群组通知目标；两条通道相互独立，配任一即部分解锁 |
 | **L2 云端 lane** | Google Sheet + App Script + Jira Automation | 高（需 Google 授权 + Jira 项目 admin） | ☁️ `jira_sheet` 调度器、Timeline 里程碑触发、Drive 附件、AsMe 邮件 |
 
-- **存量用户**：检测到 `scheduledMessagesConfig` 即自动判定 L2 已激活，原 Sheet / Jira 规则**照常运行、无需迁移**；账本以只读镜像方式把存量任务纳入统一列表。
+- **存量用户**：探测本机 `chrome.storage.local.scheduledMessagesConfig.sheetId`（与定时消息页同一份缓存）即判定 L2 已激活，原 Sheet / Jira 规则**照常运行、无需迁移**。L2 的 Jira 执行规则 / Sheet AsMe **不必、也不该**复制进 memory-service 才能点亮抽屉——Google token 只在扩展手里。
+- **反向镜像尚未落地**：在定时消息页（L2）直接新建的任务目前**不会**自动出现在任务中心。设计上的方向是账本只读登记 `lane=jira_sheet` 的镜像行，且 `listDueAutoActions` **排除**该 lane，避免本地再跑一遍。从任务中心选 ☁️ 保存时，账本会先落库并返回 `mirrorRequired`，由扩展写 Sheet。
 - **L2 受阻**：受管 Google 账号的域策略可能禁止匿名 Web App 部署（见 [scheduled_messages_manager.md § App Script 自动更新](scheduled_messages_manager.md#11-app-script-自动更新)）。向导明示逃生舱（个人 Google 账号部署）并标注数据治理风险，不作为推荐路径。
 - UI 上未解锁的能力一律**置灰 + 说明 + 直达配置入口**，不隐藏——用户要能看见"还有这个能力，缺什么才能用"。
 

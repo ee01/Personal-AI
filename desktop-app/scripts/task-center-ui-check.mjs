@@ -67,11 +67,11 @@ async function launch() {
   });
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 20000 });
-  return { context, extensionId: new URL(worker.url()).host };
+  return { context, extensionId: new URL(worker.url()).host, worker };
 }
 
 async function main() {
-  const { context, extensionId } = await launch();
+  const { context, extensionId, worker } = await launch();
   const createdPayloads = [];
 
   try {
@@ -194,6 +194,41 @@ async function main() {
     assert.equal(createdPayloads[0].taskKind, 'dev');
     assert.equal(createdPayloads[0].lane, 'memory_cron', '开发委派固定本地 lane');
     console.log('✓ 保存走统一入口，lane 由服务端裁决');
+
+    // 8. An already-initialized L2 cache (sheetId, not spreadsheetId) must light
+    //    up the drawer instead of sending the user through one-click setup.
+    await worker.evaluate(() =>
+      chrome.storage.local.set({
+        scheduledMessagesConfig: {
+          sheetId: '1ExistingL2SheetIdXXXX',
+          webAppUrl: 'https://script.google.com/macros/s/existing/exec',
+          botAutomation: {
+            executorRule: {
+              ruleId: '2154',
+              ruleName: 'executor',
+              webhookUrl: 'https://script.example/exec',
+              projectKey: 'MTR',
+              jiraUrl: 'https://jira.example.com',
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+          },
+        },
+      }),
+    );
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(
+      () => document.body.innerText.includes('任务中心'),
+      { timeout: 15000 },
+    );
+    await page.click('.level-bar');
+    await page.waitForSelector('.setup-step', { timeout: 5000 });
+    const existingL2Text = await page.evaluate(
+      () => document.querySelector('.tc-dialog')?.textContent ?? '',
+    );
+    assert.ok(existingL2Text.includes('已从本机缓存探测'), '存量 L2 应显示探测结果');
+    assert.ok(existingL2Text.includes('打开定时消息页'), '存量 L2 应打开已有配置页，而不是初始化');
+    assert.equal(existingL2Text.includes('去一键初始化'), false, '存量 L2 不应再引导一键初始化');
+    console.log('✓ 本机已有 L2 缓存时抽屉探测为已启用，不再走初始化');
 
     console.log('\n全部通过：任务中心 UI 端到端可用');
   } finally {

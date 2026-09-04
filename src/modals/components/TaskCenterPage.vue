@@ -45,14 +45,39 @@
           <p class="setup-unlocks"><span>解锁</span>{{ level.unlocks }}</p>
           <div v-if="level.key === 'l1'" class="setup-channels">
             <div class="setup-channel" :class="{ on: botConfigured }">
-              <strong>🤖 Bot（SM AI）</strong>
+              <strong>🤖 Bot（SM AI · 🏠 私发）</strong>
               <span>{{ botConfigured ? '已配置' : '未配置' }}</span>
               <button v-if="!botConfigured" class="tc-btn sm" @click="openScheduledMessages()">去配置 Bot</button>
             </div>
             <div class="setup-channel" :class="{ on: asmeConfigured }">
-              <strong>👤 AsMe（本人身份）</strong>
+              <strong>👤 AsMe（本人身份 · 🏠）</strong>
               <span>{{ asmeConfigured ? '已配置' : '未配置' }}</span>
               <button v-if="!asmeConfigured" class="tc-btn sm" @click="openOptionsOutreach()">去配置 AsMe</button>
+            </div>
+            <p v-if="cloudBotConfigured && !botConfigured" class="setup-channel-note">
+              本机已有 ☁️ Jira 执行规则，那是云端推送用的，不等于 🏠 Glip 私发。
+            </p>
+          </div>
+          <div v-else-if="level.key === 'l2'" class="setup-channels">
+            <div class="setup-channel" :class="{ on: cloudLaneAvailable }">
+              <strong>Sheet</strong>
+              <span>{{ cloudLaneAvailable ? probedSheetLabel : '未探测到本机缓存' }}</span>
+            </div>
+            <div class="setup-channel" :class="{ on: cloudBotConfigured }">
+              <strong>☁️ Jira 执行规则</strong>
+              <span>{{ cloudBotConfigured ? '已探测' : '未写入本机缓存' }}</span>
+            </div>
+            <div class="setup-channel" :class="{ on: cloudTimelineConfigured }">
+              <strong>☁️ Timeline Sync</strong>
+              <span>{{ cloudTimelineConfigured ? '已探测' : '未写入本机缓存' }}</span>
+            </div>
+            <div class="setup-channel" :class="{ on: cloudAsmeConfigured }">
+              <strong>☁️ AsMe（Sheet）</strong>
+              <span>{{ cloudAsmeConfigured ? '已探测' : '未写入本机缓存' }}</span>
+            </div>
+            <div v-if="level.action" class="setup-actions">
+              <button class="tc-btn primary" @click="level.action.run()">{{ level.action.label }}</button>
+              <small>{{ level.action.hint }}</small>
             </div>
           </div>
           <div v-else-if="level.action" class="setup-actions">
@@ -399,6 +424,7 @@ import {
   type TaskKind,
   type TaskLane,
 } from '../../services/MemoryServiceClient';
+import { probeTaskCenterLevels } from '../taskCenterLevels';
 
 const client = getMemoryServiceClient();
 
@@ -421,6 +447,15 @@ const laneSelectableKinds = ref<TaskKind[]>(['push', 'agent']);
 const cloudLaneAvailable = ref(false);
 const botConfigured = ref(false);
 const asmeConfigured = ref(false);
+const cloudBotConfigured = ref(false);
+const cloudTimelineConfigured = ref(false);
+const cloudAsmeConfigured = ref(false);
+const probedSheetId = ref('');
+const probedSheetLabel = computed(() => {
+  const id = probedSheetId.value;
+  if (!id) return '已探测';
+  return id.length <= 18 ? id : `${id.slice(0, 8)}…${id.slice(-6)}`;
+});
 
 const draft = ref({
   taskKind: 'push' as TaskKind,
@@ -512,14 +547,18 @@ const levels = computed(() => [
     label: 'L2 云端 lane（☁️ jira_sheet）',
     active: cloudLaneAvailable.value,
     detail: cloudLaneAvailable.value
-      ? 'Google Sheet + Apps Script + Jira Automation 已就绪。'
+      ? `已从本机缓存探测到维护表${probedSheetId.value ? `（${probedSheetLabel.value}）` : ''}。原 Sheet / Jira 规则照常运行。`
       : '未配置。需要 Google 授权和 Jira 项目 admin 权限。',
     unlocks: '☁️ 调度器（memory-service 离线也照跑）、Timeline 里程碑触发、Drive 附件',
     action: cloudLaneAvailable.value
-      ? null
+      ? {
+          label: '打开定时消息页',
+          hint: '查看已接入的 Sheet、Jira 规则和 Bot 配置，不会再走一遍初始化',
+          run: () => openScheduledMessages(),
+        }
       : {
           label: '去一键初始化',
-          hint: '定时消息页 → 一键初始化，会创建 Sheet、部署脚本、装 Jira 规则',
+          hint: '定时消息页 → 一键初始化，会创建 Sheet、部署脚本、装 Jira 规则。已有维护表请改用手动绑定。',
           run: () => openScheduledMessages(),
         },
   },
@@ -866,16 +905,24 @@ async function detectLevels() {
       chrome.storage.local.get(['scheduledMessagesConfig', 'botConfig']),
       client.getRuntimeConfig().catch(() => null),
     ]);
-    const config = stored?.scheduledMessagesConfig;
-    // Level 2 means the whole cloud chain exists: a Sheet to mirror into and a
-    // deployed script for Jira Automation to reach.
-    cloudLaneAvailable.value = Boolean(config?.spreadsheetId && config?.webAppUrl);
-    botConfigured.value = Boolean(stored?.botConfig?.botId || config?.botId);
-    asmeConfigured.value = Boolean(
-      runtime?.ringCentralJwtConfigured && runtime?.ringCentralClientId,
-    );
+    const probed = probeTaskCenterLevels({
+      scheduledMessagesConfig: stored?.scheduledMessagesConfig,
+      botConfig: stored?.botConfig,
+      runtime,
+    });
+    cloudLaneAvailable.value = probed.cloudLaneAvailable;
+    cloudBotConfigured.value = probed.cloudBotConfigured;
+    cloudTimelineConfigured.value = probed.cloudTimelineConfigured;
+    cloudAsmeConfigured.value = probed.cloudAsmeConfigured;
+    probedSheetId.value = probed.sheetId;
+    botConfigured.value = probed.botConfigured;
+    asmeConfigured.value = probed.asmeConfigured;
   } catch {
     cloudLaneAvailable.value = false;
+    cloudBotConfigured.value = false;
+    cloudTimelineConfigured.value = false;
+    cloudAsmeConfigured.value = false;
+    probedSheetId.value = '';
     botConfigured.value = false;
     asmeConfigured.value = false;
   }
@@ -974,6 +1021,7 @@ onUnmounted(() => {
 .setup-channel { display: flex; align-items: center; gap: 0.5rem; font-size: 0.74rem; color: var(--tc-muted); }
 .setup-channel.on { color: var(--tc-green); }
 .setup-channel strong { font-size: 0.74rem; }
+.setup-channel-note { font-size: 0.68rem !important; color: var(--tc-amber) !important; margin: 0.15rem 0 0 !important; }
 .tc-btn.sm { padding: 0.2rem 0.65rem; font-size: 0.68rem; }
 .ck { display: flex; align-items: center; gap: 0.45rem; font-size: 0.76rem; color: #cbd5e1; cursor: pointer; font-weight: 400 !important; }
 .tc-inline { display: flex; gap: 0.6rem; }
