@@ -164,6 +164,7 @@ export function buildAgentResultSystemPrompt(
     '- metadata.entityKey：别人能搜到的 ID（如 NOVA-17023、URL、文件路径）。',
     '- metadata.verification：你怎么确认的（rest_api_readback、jql_requery、get_issue、page_url、git_status 等）。',
     '- 读任务：metadata.observedFields；写任务：metadata.operation + metadata.changedFields。',
+    '- 分组/汇总读任务（按 Team 统计 INIT 等）：每个分组一张收据，metadata.entityKey 可用 team:<名称> 或 filter:<id>；metadata.initKeys 列出该组实际扫到的 issue key；metadata.entityUrl 放可复跑的 JQL 链接；metadata.verification=jql_requery。',
     '- content：短证据，例如 Committed=Yes after update。',
     '- 不能回读确认就不要 success。缺工具用 capability_missing；缺权限用 auth_error；需人选择用 need_human_decision，并带 payload.question / payload.options。',
     '- 查询/扫描类任务正确地查到 0 个符合条件的对象，是合法的 success，不是失败：交一张 kind="query_result" 的收据（不需要 entityKey），metadata.sourceSystem + metadata.query（实际查询语句，如 JQL）+ metadata.verification（如 jql_requery）+ metadata.matchCount=0，content 里说明检查过哪些候选、为什么都不满足条件。',

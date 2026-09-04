@@ -84,6 +84,44 @@ export function hasMetadataObservedFields(
   return keys.some((key) => normalizeObservedFieldLabels(metadata[key]).length > 0);
 }
 
+function hasListedEntityKeys(metadata: Record<string, unknown>): boolean {
+  for (const key of ['initKeys', 'issueKeys', 'entityKeys', 'ticketKeys']) {
+    const value = metadata[key];
+    if (
+      Array.isArray(value) &&
+      value.some((item) => typeof item === 'string' && item.trim().length > 0)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Read/write receipts can prove themselves through observed/changed fields,
+ * operations, timestamps, or grouped Jira reads that list the keys they scanned.
+ */
+export function hasMetadataProofFields(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  if (!metadata) return false;
+  if (hasMetadataObservedFields(metadata)) return true;
+  if (Boolean(getMetadataString(metadata, ['operation', 'operationType', 'action']))) {
+    return true;
+  }
+  if (Boolean(getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']))) {
+    return true;
+  }
+  if (hasListedEntityKeys(metadata)) return true;
+  const count = metadata.initCount ?? metadata.matchCount;
+  if (typeof count === 'number' && Number.isFinite(count) && count >= 0) {
+    return Boolean(
+      getMetadataString(metadata, ['query', 'jql', 'queryText', 'entityUrl', 'url']),
+    );
+  }
+  return false;
+}
+
 /**
  * A task can legitimately touch zero entities — a conditional sync that finds no
  * qualifying record, a scan that comes back clean. That is a verified negative
@@ -171,13 +209,7 @@ function hasVerifiableEntityArtifact(
   const verification =
     metadata?.verified === true ||
     Boolean(getMetadataString(metadata, ['verification', 'verificationMethod']));
-  const hasObservedFields = hasMetadataObservedFields(metadata);
-  const hasOperation = Boolean(
-    getMetadataString(metadata, ['operation', 'operationType', 'action']),
-  );
-  const hasObservedAt = Boolean(
-    getMetadataString(metadata, ['observedAt', 'verifiedAt', 'updatedAt']),
-  );
+  const hasProofFields = hasMetadataProofFields(metadata);
   const hasBody =
     (typeof artifact.content === 'string' && artifact.content.trim().length > 0) ||
     (typeof artifact.title === 'string' && artifact.title.trim().length > 0);
@@ -187,7 +219,7 @@ function hasVerifiableEntityArtifact(
       entityId &&
       verification &&
       hasBody &&
-      (hasObservedFields || hasOperation || hasObservedAt),
+      hasProofFields,
   );
 }
 

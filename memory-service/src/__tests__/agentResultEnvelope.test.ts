@@ -190,6 +190,38 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.summary).not.toContain('缺少可验证 artifact');
   });
 
+  it('accepts grouped Jira read receipts that list initKeys per team bucket', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary:
+          '成功读取 filter=153978 (Nova INITs 26Q3) 中 75 个活跃 INIT，按 39 个 Team 分组展示',
+        artifacts: [
+          {
+            kind: 'note',
+            title: 'Team: UX AIR Pro / NOVA (27 INITs)',
+            content:
+              '共 27 个活跃 INIT 关联到此 Team\nJQL 链接: https://jira.ringcentral.com/issues/?jql=filter%3D153978',
+            metadata: {
+              sourceSystem: 'jira',
+              entityKey: 'team:UX AIR Pro / NOVA',
+              entityUrl:
+                'https://jira.ringcentral.com/issues/?jql=filter%3D153978%20AND%20status%20not%20in%20%28Closed%29',
+              verification: 'jql_requery',
+              team: 'UX AIR Pro / NOVA',
+              initCount: 27,
+              initKeys: ['INIT-22901', 'INIT-23362', 'INIT-26132'],
+            },
+          },
+        ],
+      }),
+      { mode: 'read', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
+  });
+
   it('still rejects success with only a bare note and no query proof', () => {
     const parsed = parseAgentResultEnvelope(
       JSON.stringify({

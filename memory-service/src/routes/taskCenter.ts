@@ -98,7 +98,7 @@ interface CreateTaskBody {
   requiresApproval?: boolean;
   priority?: number;
   scheduledAt?: number;
-  recurrenceSpec?: Record<string, unknown>;
+  recurrenceSpec?: Record<string, unknown> | null;
   dependsOn?: string[];
   parentActionId?: string;
   idempotencyKey?: string;
@@ -205,6 +205,42 @@ function serializeTask(action: QueuedActionRecord) {
   };
 }
 
+function composeTaskParams(input: {
+  title: string;
+  description?: string;
+  taskKind: TaskKind;
+  payload: Record<string, unknown>;
+  laneReason: string;
+}): Record<string, unknown> {
+  const payload = input.payload;
+  const notifyVia = payload.notifyVia ?? payload.channel;
+  const notifyTarget = payload.notifyTarget;
+  return {
+    ...payload,
+    title: payload.title ?? input.title,
+    body: payload.body ?? input.description,
+    task:
+      typeof payload.task === 'string' && payload.task.trim()
+        ? payload.task
+        : input.description ?? input.title,
+    taskKind: input.taskKind,
+    laneReason: input.laneReason,
+    metadata: {
+      ...(payload.metadata && typeof payload.metadata === 'object'
+        ? (payload.metadata as Record<string, unknown>)
+        : {}),
+      notifyVia,
+      notifyTarget,
+      successReceipt: payload.successReceipt !== false,
+      notifyTemplate: payload.notifyTemplate,
+      notifyWhenEmpty:
+        payload.notifyWhenEmpty === undefined
+          ? undefined
+          : payload.notifyWhenEmpty !== false,
+    },
+  };
+}
+
 export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
   /** The ledger list, grouped the way the Task Center UI reads it. */
   app.get<{
@@ -305,49 +341,27 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
     });
 
     const payload = body.payload ?? {};
-    const notifyVia = payload.notifyVia ?? payload.channel;
-    const notifyTarget = payload.notifyTarget;
     const actionType = nonEmpty(body.actionType) ?? defaultActionType(taskKind, payload);
+    const params = composeTaskParams({
+      title,
+      description: nonEmpty(body.description),
+      taskKind,
+      payload,
+      laneReason: laneDecision.reason,
+    });
 
     const action = repo.create({
       actionType,
       title,
       description: nonEmpty(body.description),
-      params: {
-        ...payload,
-        title: payload.title ?? title,
-        body: payload.body ?? nonEmpty(body.description),
-        task:
-          typeof payload.task === 'string' && payload.task.trim()
-            ? payload.task
-            : nonEmpty(body.description) ?? title,
-        taskKind,
-        laneReason: laneDecision.reason,
-        metadata: {
-          ...(payload.metadata && typeof payload.metadata === 'object'
-            ? (payload.metadata as Record<string, unknown>)
-            : {}),
-          notifyVia,
-          notifyTarget,
-          successReceipt: payload.successReceipt !== false,
-          notifyTemplate: payload.notifyTemplate,
-          // Left undefined when the task never chose, so the delivery layer
-          // applies the shared default (stay quiet for both read and write).
-          notifyWhenEmpty:
-            payload.notifyWhenEmpty === undefined
-              ? undefined
-              : payload.notifyWhenEmpty !== false,
-        },
-      },
-      // Dev delegations and write-mode agent work stop for a human before they
-      // run; everything else drains automatically.
+      params,
       requiresApproval: body.requiresApproval === true,
       executionMode: body.executionMode ?? 'auto',
       priority: body.priority,
       scheduledAt: body.scheduledAt ?? now(),
       dependsOn,
       parentActionId: nonEmpty(body.parentActionId),
-      recurrenceSpec: body.recurrenceSpec,
+      recurrenceSpec: body.recurrenceSpec ?? undefined,
       lane: laneDecision.lane,
       taskKind,
       mirrorRef: body.mirrorRef,
@@ -367,15 +381,15 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Reschedule, pause or resume a task.
+   * Edit or reschedule a task.
    *
-   * Re-snoozing an existing reminder needs this: the entry point looks the task
-   * up by its idempotency key and moves its due time instead of stacking a
-   * second reminder for the same message.
+   * The Task Center editor POSTs the same shape as create (payload, recurrence,
+   * lane). Snooze still sends only scheduledAt + title and must not wipe the
+   * rest of the row.
    */
   app.patch<{
     Params: { id: string };
-    Body: { scheduledAt?: number; queueStatus?: 'queued' | 'cancelled'; title?: string };
+    Body: CreateTaskBody & { queueStatus?: 'queued' | 'cancelled' };
   }>('/task-center/tasks/:id', async (request, reply) => {
     const { db } = request.userContext;
     const repo = new ActionRepository(db);
@@ -387,14 +401,65 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
     const body = request.body ?? {};
     if (body.queueStatus === 'cancelled') {
       repo.cancel(request.params.id, 'Cancelled from Task Center');
-    } else if (typeof body.scheduledAt === 'number' && Number.isFinite(body.scheduledAt)) {
-      // Reschedule also re-opens a task that already finished or was cancelled,
-      // which is what "remind me again, later" means.
-      repo.rescheduleTask(request.params.id, body.scheduledAt, nonEmpty(body.title));
+      const cancelled = repo.getById(request.params.id);
+      return reply.status(200).send({ task: cancelled ? serializeTask(cancelled) : null });
     }
 
-    const updated = repo.getById(request.params.id);
-    return reply.status(200).send({ task: updated ? serializeTask(updated) : null });
+    const isFullEdit =
+      body.payload !== undefined ||
+      body.recurrenceSpec !== undefined ||
+      body.lane !== undefined ||
+      body.description !== undefined ||
+      body.cloudLaneAvailable !== undefined ||
+      body.taskKind !== undefined;
+
+    if (!isFullEdit) {
+      if (typeof body.scheduledAt === 'number' && Number.isFinite(body.scheduledAt)) {
+        repo.rescheduleTask(request.params.id, body.scheduledAt, nonEmpty(body.title));
+      }
+      const updated = repo.getById(request.params.id);
+      return reply.status(200).send({ task: updated ? serializeTask(updated) : null });
+    }
+
+    const taskKind = normalizeTaskKind(body.taskKind) ?? existing.taskKind ?? 'push';
+    const title = nonEmpty(body.title) ?? existing.title;
+    const description = body.description === undefined
+      ? existing.description
+      : nonEmpty(body.description);
+    const payload = body.payload ?? (existing.params as Record<string, unknown>) ?? {};
+    const laneDecision = resolveLane({
+      taskKind,
+      requestedLane: normalizeTaskLane(body.lane) ?? existing.lane,
+      cloudLaneAvailable: body.cloudLaneAvailable === true,
+    });
+    const params = composeTaskParams({
+      title,
+      description,
+      taskKind,
+      payload,
+      laneReason: laneDecision.reason,
+    });
+
+    const updated = repo.updateTask(request.params.id, {
+      title,
+      description: description ?? null,
+      params,
+      recurrenceSpec: body.recurrenceSpec === undefined
+        ? existing.recurrenceSpec ?? null
+        : body.recurrenceSpec ?? null,
+      lane: laneDecision.lane,
+      taskKind,
+      scheduledAt: typeof body.scheduledAt === 'number' ? body.scheduledAt : existing.scheduledAt,
+      requiresApproval: body.requiresApproval === true,
+      actionType: nonEmpty(body.actionType) ?? defaultActionType(taskKind, payload),
+      requeue: existing.queueStatus !== 'running',
+    });
+
+    return reply.status(200).send({
+      task: updated ? serializeTask(updated) : null,
+      lane: laneDecision,
+      mirrorRequired: laneDecision.lane === 'jira_sheet',
+    });
   });
 
   /** Manual sweep, so the UI can roll a series forward without waiting a tick. */
