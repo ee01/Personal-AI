@@ -93,13 +93,22 @@ export function extractAgentResultJson(
   const fenced = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)(?:```|$)/gi)];
   for (let index = fenced.length - 1; index >= 0; index -= 1) {
     const parsed = parseJsonObjectOrRepair(fenced[index][1]);
-    if (looksLikeAgentResultEnvelope(parsed)) return parsed;
+    if (looksLikeAgentResultEnvelope(parsed) && !envelopeLooksTruncated(parsed, fenced[index][1])) {
+      return parsed;
+    }
   }
 
   const direct = parseJsonObjectOrRepair(text);
-  if (looksLikeAgentResultEnvelope(direct)) return direct;
+  if (looksLikeAgentResultEnvelope(direct) && !envelopeLooksTruncated(direct, text)) {
+    return direct;
+  }
 
-  return findEnvelopeObject(text);
+  const located = findEnvelopeObject(text);
+  if (located && !envelopeLooksTruncated(located, text)) {
+    return located;
+  }
+
+  return recoverLooseAgentResultEnvelope(text);
 }
 
 /**
@@ -416,21 +425,122 @@ function repairJsonCandidate(raw: string): string | undefined {
 
 function findEnvelopeObject(text: string): Record<string, unknown> | null {
   let last: Record<string, unknown> | null = null;
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] !== '{') continue;
-    const slice = text.slice(index);
-    const parsed = tryParsePrefixObject(slice);
+  const statusPattern = /\{\s*"status"\s*:/gi;
+  let match: RegExpExecArray | null;
+  while ((match = statusPattern.exec(text))) {
+    const slice = text.slice(match.index);
+    const parsed = tryParsePrefixObject(slice) ?? parseJsonObjectOrRepair(slice);
     if (looksLikeAgentResultEnvelope(parsed)) {
       last = parsed;
     }
   }
-  if (last) return last;
-  const start = text.search(/\{\s*"status"\s*:/i);
-  if (start >= 0) {
-    const repaired = parseJsonObjectOrRepair(text.slice(start));
-    if (looksLikeAgentResultEnvelope(repaired)) return repaired;
+  return last;
+}
+
+/**
+ * Models often emit almost-valid JSON with unescaped `"` inside summary/content.
+ * When strict parsing stops early but an outcome block is still present, recover
+ * the closed outcome object and use the prose above the JSON as summary.
+ */
+function recoverLooseAgentResultEnvelope(text: string): Record<string, unknown> | null {
+  const statusMatch = text.match(/\{\s*"status"\s*:\s*"(success|succeeded|ok)"/i);
+  if (!statusMatch) return null;
+
+  const outcomeMatch = text.match(/"outcome"\s*:\s*(\{[^{}]*\})/);
+  if (!outcomeMatch) return null;
+  const outcome = parseJsonObject(outcomeMatch[1]);
+  if (!readAgentTaskOutcome(outcome)) return null;
+
+  const summary = summaryFromProseBeforeEnvelope(text);
+  const artifacts = recoverLooseArtifacts(text);
+
+  return {
+    status: statusMatch[1],
+    summary,
+    outcome,
+    artifacts,
+    payload: { recoveredFrom: 'loose_envelope_parse' },
+  };
+}
+
+function envelopeLooksTruncated(
+  parsed: Record<string, unknown> | null,
+  source: string,
+): boolean {
+  if (!parsed) return false;
+  if (readAgentTaskOutcome(parsed.outcome)) return false;
+  return /"outcome"\s*:\s*\{/.test(source);
+}
+
+function summaryFromProseBeforeEnvelope(text: string): string {
+  const envelopeStart = text.search(/\{\s*"status"\s*:/i);
+  const before = envelopeStart > 0 ? text.slice(0, envelopeStart).trim() : '';
+  if (!before) return '';
+  const lines = before
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^JSON 信封/.test(line));
+  return lines[lines.length - 1] || before;
+}
+
+function recoverLooseArtifacts(text: string): AgentResultArtifact[] {
+  const start = text.search(/"artifacts"\s*:\s*\[/i);
+  if (start < 0) return [];
+  const slice = text.slice(start).replace(/^"artifacts"\s*:\s*/i, '');
+  const arrayStart = slice.indexOf('[');
+  if (arrayStart < 0) return [];
+  const arrayText = extractBalancedJsonSlice(slice, arrayStart, '[', ']');
+  if (!arrayText) return [];
+  const parsed = safeJsonParseArray(arrayText);
+  return Array.isArray(parsed)
+    ? parsed.filter((item) => item && typeof item === 'object') as AgentResultArtifact[]
+    : [];
+}
+
+function extractBalancedJsonSlice(
+  text: string,
+  startIndex: number,
+  openChar: string,
+  closeChar: string,
+): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === openChar) depth += 1;
+    if (char === closeChar) {
+      depth -= 1;
+      if (depth === 0) return text.slice(startIndex, index + 1);
+    }
   }
   return null;
+}
+
+function safeJsonParseArray(raw: string): unknown[] | null {
+  const repaired = repairJsonCandidate(raw) ?? closeOpenJsonStructures(raw);
+  try {
+    const parsed = JSON.parse(repaired) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function tryParsePrefixObject(slice: string): Record<string, unknown> | null {

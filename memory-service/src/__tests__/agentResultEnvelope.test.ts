@@ -350,6 +350,25 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.summary).not.toContain('缺少可验证 artifact');
   });
 
+  it('recovers a closed outcome when summary JSON contains unescaped quotes', () => {
+    const parsed = parseAgentResultEnvelope(
+      [
+        '确认完毕：所有 8 个候选 Epic 的 parent INIT 均含多个 Team，操作为 noop（0 更新）。',
+        '',
+        'JSON 信封如下：',
+        '',
+        '{"status":"success","summary":"扫描到 8 个无 Team 的候选 Epic，逐一反查 parent INIT 的 Team 字段（cf[17553]）：无一满足"只有一个 Team"条件，故未写入任何 Epic。","outcome":{"mode":"write","verdict":"noop","sourceSystem":"jira","method":"rest_api_readback","subject":"issueFunction in portfolioChildrenOf(\'filter=153978\') and issuetype = Epic and project=NOVA and cf[17553] is EMPTY","count":0},"artifacts":[{"kind":"note","title":"检查明细","content":"NOVA-17657 skipped","metadata":{"sourceSystem":"jira","verification":"rest_api_readback"}}]}',
+      ].join('\n'),
+      { mode: 'write', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.outcome?.verdict).toBe('noop');
+    expect(parsed.summary).toContain('noop（0 更新）');
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
+    expect(parsed.payload?.recoveredFrom).toBe('loose_envelope_parse');
+  });
+
   it('still rejects success with only a bare note and no query proof', () => {
     const parsed = parseAgentResultEnvelope(
       JSON.stringify({

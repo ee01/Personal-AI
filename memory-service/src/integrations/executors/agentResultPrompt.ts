@@ -165,7 +165,7 @@ export function buildAgentResultSystemPrompt(
     '- verdict：读用 observed（查到了，count>=0）或 empty（确认 0 条，count=0）；写用 mutated（改了 count>0 个对象）或 noop（确认无需改，count=0）。',
     '- sourceSystem / method：外部系统和你怎么确认的（jql_requery、rest_api_readback、page_url、git_status…）。',
     '- subject：可复跑的查询、URL 或对象 ID，不是散文摘要。',
-    '- count：数字，允许 0。',
+    '- summary / content 里的引号必须用 `\\"` 转义，或改用「」/中文引号；不要在中文字符串里直接写 ASCII `"`，否则 JSON 会截断、outcome 丢失。',
     '',
     'artifacts 是给人看的明细（按 Team 分组的 note 放这里），默认不是成功条件。',
     '例外：写任务 verdict=mutated 时，每个改过的对象还要一张对象收据，点名改了谁。',
