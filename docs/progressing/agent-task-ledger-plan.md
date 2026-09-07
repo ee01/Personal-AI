@@ -504,3 +504,204 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 - [ ] **下发后的部署提示**：尝试重新部署 Jira 规则；失败时给出明确回执（区分「MS 侧已生效」与「☁️ lane 仍是旧凭据」），复用 `AppScriptDomainPolicyAccessError` 的错误分类
 - [ ] UI：凭据配置处标注「此凭据同时用于：追问、AsMe 推送（🏠 lane 即时生效；☁️ lane 需重新部署 Jira 规则）」
 - [ ] 冲突可见化：若检测到 Sheet Config 与 MS 两侧凭据不一致，在能力条 / 引导抽屉里提示，而不是任其分叉
+
+---
+
+## 十二、宿主选型实测：OpenClaw vs Hermes（2026-09-01，全部一手证据）
+
+### 三个实测点的结论
+
+**① memory plugin 能否整体替换后端 → ✅ 能，两家都能**
+- OpenClaw：官方文档明确 "Both tools (memory_search/memory_get) are provided by the **active memory plugin** (default: `memory-core`)"，且有官方替换先例 memory-lancedb；active plugin "owns recall, promotion, and dreaming"（`node_modules/openclaw/docs/concepts/memory.md`）。写一个 memory-service backed 插件是一等路径。
+- Hermes：更成熟——`plugins/memory/` 下已有 **8 个官方 memory-provider**（honcho/mem0/supermemory/byterover/hindsight/holographic/openviking/retaindb），AGENTS.md 明文 ABC+orchestrator 设计哲学。
+
+**② 主动发消息 → ✅ 存在且实测通过（差最后一步真发）**
+- `openclaw message send --channel <ch> --target <t> --message` 是核心 CLI（10+ 渠道）；本机 dry-run 实测：`[dry-run] would run send via imessage` ✅。
+- 意外发现 A：核心自带 `--presentation` JSON（text/context/divider/**buttons/select**，按渠道能力降级渲染）+ `poll`——出站结构化交互的抽象已内置。
+- 意外发现 B：**BlueBubbles server（127.0.0.1:1234）实际未监听**——channels status 显示 connected 是陈旧状态，iMessage 通道当前是坏的，需重启 BlueBubbles server。
+- 真发验证卡在：iMessage server down；RC dmPolicy=disabled 只能发白名单群（群里可能有他人，未擅自发）。恢复 BlueBubbles 后一条命令即可完成验证。
+
+**③ 按钮/快捷回复 → ✅ 比预期好**
+- 自研 openclaw-ringcentral 插件**已实现 Adaptive Card**（actions-adapter：create/get/update/delete-adaptive-card）——Glip 真按钮就绪。
+- iMessage 无按钮（渠道天限），走文本回复协议降级。
+- OpenClaw presentation 抽象天然承担"富渠道按钮、穷渠道降级"。
+
+### "让 OpenClaw 不写自己的 MD、改写 memory-service"可行吗？
+
+可行但要分层理解，OpenClaw 记忆有两层：
+- **检索层**（memory_search/memory_get）：由 active memory plugin 提供 → 整体替换指向 memory-service /recall，干净。
+- **注入层**（MEMORY.md + memory/YYYY-MM-DD.md，bootstrap 注入 + session-memory hook 写入）：这是 workspace 文件约定 + agent 行为习惯，**不能也不必完全禁掉**——务实做法是让 MD 层降级为"会话工作缓存"，蒸馏动作改为调 memory-service ingest（memory_save 走 salience/probation 管线）。
+
+**Side effects（按严重度）**：
+1. **双梦冲突（最重要）**：OpenClaw memory-core 有自己的 promotion/dreaming，memory-service 有反思/巩固/做梦——两套生命周期同时跑会演绎出两个分叉的"记忆人格"。**治理必须单归 memory-service**，替换插件时禁用 OpenClaw 侧 dreaming。
+2. 在线依赖：memory-service 宕机 = OpenClaw 失忆（本地 memory-core 永远在线）。缓解：插件带本地只读缓存降级。
+3. 多 agent scope：十一/小黑/小张三个 agent 各有 workspace，统一后端需定 agentId→scope 映射，防止代码 agent 的工作笔记污染主记忆。
+4. 写入安全：OpenClaw 侧 auto-approve 的 agent 能写记忆 → 全部走 probation + 注入闸门（两者 memory-service 已有）。
+5. 轻微延迟：本地 sqlite ~ms → HTTP ~几十 ms，可忽略。
+
+### OpenClaw vs Hermes
+
+| 维度 | OpenClaw 2026.7.1（在用） | Hermes（NousResearch，239k★，日更） |
+|---|---|---|
+| 语言 | TypeScript/Node | Python (uv) |
+| 你的渠道 | ✅ BlueBubbles 在用 + 自研 RC 插件（Adaptive Card） | ✅ BlueBubbles 内置；❌ **RingCentral 没有**，你的 TS 插件得用 Python 重写 |
+| memory 插件位 | ✅ active plugin 槽位 | ✅✅ provider ABC，8 个官方先例 |
+| 学习闭环 | memory-core + dreaming + heartbeat | **自主 skill 创建 + skill 使用中自改进** + Honcho 用户建模 + FTS5 跨会话搜索（差异化最强点） |
+| 部署 | 本机 gateway | 7 种 backend，含 Modal/Daytona **serverless 常驻**（不绑 Mac，空闲≈零成本） |
+| 模型/token | BYO：你已配免费内网 OneAPI + model-router cheap/hard 分流——已是省钱型 | 同样 BYO + `hermes model` 切换；**token 成本两者无差**（由模型选择决定），Hermes 省的是基础设施费 |
+| 与 memory-service 既有集成 | ✅ 四条：gateway executor / skill sync / 设备配对 / A2A | ❌ 零，全部重建（官方有 `hermes claw migrate` 但迁不了 TS 插件） |
+
+**裁决**：就意图收集箱这个目标，**留在 OpenClaw**——渠道就绪（RC 插件是你的 TS 资产）、四条集成现成、memory 插件可行性两家等同（不构成换的理由）。Hermes 值得持续观察的两样：skill 自改进闭环、serverless 常驻（恰好回应 memory-service 单点顾虑）。（勘误：社区体量不是 Hermes 优势——GitHub API 实测 openclaw/openclaw ★388k > hermes-agent ★239k，两者都日更。）**保险策略已内置**：坚持"瘦管道厚服务"——车道判定/聚类/合成全在 memory-service，宿主侧只是转发+渲染；Hermes 有 a2a platform 插件、memory-service 有 A2A 路由，未来切换或双跑的成本被压到一个插件的厚度。
+
+其他同类（训练知识，非本轮实测）：Letta 偏开发者框架无聊天渠道矩阵；khoj 偏个人知识检索；大厂托管（ChatGPT Pulse/Tasks）不可插自有记忆。"自托管+多渠道+可插记忆"交集里 OpenClaw 与 Hermes 即两强。
+
+**token 性价比落点**：意图收集箱新增成本 = 每碎片一次车道判定（小模型）+ 夜间合成（中模型）。设计上直接把判定/聚类路由到你的免费内网 OneAPI（gpt-5.5/5.4 成本为 0），合成用 cheap 档——新功能的边际 token 成本可以压到近零，与宿主选择无关。
+
+---
+
+## 十三、宿主之外的方案、"替换整个记忆层"的真实风险、memory-service 的胜任度（2026-09-02）
+
+### 1. 除了 OpenClaw / Hermes 还有什么（GitHub API 实测体量）
+
+| 家族 | 产品 | 体量 | 与本方案的关系 |
+|---|---|---|---|
+| 自托管个人 agent 网关 | **openclaw/openclaw**（在用） | ★388k · TS · 日更 | 渠道就绪（BlueBubbles + 自研 RC），四条既有集成 |
+| | NousResearch/hermes-agent | ★239k · Py · 日更 | 8 个 memory-provider，无 RC 渠道 |
+| | HKUDS/nanobot | ★47.6k · Py · 日更 | 超轻量、MCP/cron/Dream 记忆、Telegram/Discord/Slack/微信/飞书/Teams/Email；**无 iMessage、无 RC** |
+| | agent0ai/agent-zero | ★19k · Py | 通用 agent 框架，渠道网关不是重心 |
+| 非网关（不适合当宿主） | khoj-ai/khoj ★36.9k | 第二大脑问答型 | 没有对话渠道矩阵 |
+| | letta-ai/letta ★24.5k | 有状态 agent 平台（API 优先） | 是"记忆优先 agent 框架"，不是聊天宿主 |
+| **外挂记忆层品类**（memory-service 的同类） | mem0ai/mem0 ★64.5k | "Drop-in memory infrastructure for AI agents"，README 列 LangGraph/CrewAI 集成，且**提供面向 OpenClaw 的 skill** | 证明"给 agent 外挂记忆服务"是有商业公司的成熟品类 |
+| | getzep/graphiti ★30.5k、plastic-labs/honcho ★7k、supermemory | 同上 | Hermes 的 8 个 provider 里有 honcho/mem0/supermemory |
+| **不用第三方宿主** | memory-service 自建专用小回路 | — | 意图收集箱只需"分类→存→回卡→确认"，不需要通用 agent 的浏览器/代码能力；OutreachEngine 已有"外呼+收回复分类"先例、BotSender 出站现成；**零真源冲突**。代价：这条线里没有"十一"的人格与工具生态，且 iMessage 仍依赖 BlueBubbles server |
+
+结论：宿主选型是"两条腿"——**通用对话面**（留 OpenClaw）与**意图收集专线**（可以是 OpenClaw 插件，也可以是 memory-service 直连 bot）。取舍点只有一个：你想不想让"记一笔"和"跟十一聊天"是同一个对话线程。
+
+### 2. "替换整个记忆存储层"是伪命题——OpenClaw 提供三档接入深度（本地 SDK 文档一手证据）
+
+| 档位 | 接口 | 替换了什么 | 工作量 | 主要 side effect |
+|---|---|---|---|---|
+| **L1 附加式** | `registerMemoryCorpusSupplement({ search(query,maxResults), get(lookup,fromLine,lineCount) })` + `registerMemoryPromptSupplement/Section` | **什么都不替换**：memory-service 成为第二检索语料，并可注入一段 context brief；memory-core 照旧 | 两个方法，约一天 | 两个语料可能返回重复/矛盾条目 → 结果打来源标签；每次检索 +1 次 HTTP |
+| **L2 旁路捕获** | 事件钩子 `agent_end`（最终消息）/ `llm_input`（完整 prompt+history）/ `before_prompt_build`（注入动态上下文） | 不替换，只**镜像**对话流进 memory-service | 一个 hook 插件 | 同一句话进两套记忆（OpenClaw session-memory hook 也在写每日 md）→ 明确 memory-service 为超集归档，靠其 merge/probation 去重 |
+| **L3 独占替换** | manifest `kind: "memory"` + `registerMemoryCapability` + `plugins.slots.memory` | **整个记忆层**：recall / promotion / dreaming 全归你 | 最重 | 双梦冲突（必须关一边）；bootstrap MEMORY.md 要由 memory-service 渲染；离线即失忆；三 agent scope 映射 |
+
+官方 memory-lancedb 就是 L3 的先例（`openclaw plugins install` 自动切 `plugins.slots.memory`，"only one plugin owns the active memory slot at a time"）；它的 autoCapture 就是 L2 的先例（`agent_end` 事件 + 触发短语 `remember/记住/覚えて` + 每轮最多 3 条 + 拒绝注入载荷/信封元数据）；OpenClaw 自带的 active-memory 插件（"a blocking memory recall sub-agent before the main reply"）则证明**环境式召回在 OpenClaw 里已是原生机制**，L1 的 supplement 会被它一并检索到。
+
+**业内是否有人这么做**：是常规操作——Hermes 用户换 memory provider 是配置项；mem0 整个公司的定位就是给任意 agent 换/加记忆层；OpenClaw 官方自己发布替换插件。做法本身不冒险，冒险的是**一步到 L3**。
+
+### 3. memory-service 能否胜任 OpenClaw 的记忆服务——分三个角色回答
+
+| 角色 | 结论 | 证据 |
+|---|---|---|
+| 检索后端（memory_search/get） | **今天略逊，差一项** | 两边同代：都是关键词+向量 hybrid + MMR（RecallEngine `MMR_LAMBDA=0.7`、多通道合并）。差距：OpenClaw 有**查询时**时间衰减（dated 日记衰减、MEMORY.md 常青）；memory-service 的 recency 只在 SalienceScorer（写入显著性，`RECENCY_LAMBDA=0.01`）用，RecallEngine 排序没有时间维度。补上查询时衰减后持平。**（勘误：此前把这条差距说成"你在需求 C 里抱怨过"是错的——需求 C 是 journey demo 里我虚构的示例场景，不是用户反馈。差距本身经 grep 核实为真，但没有用户抱怨作为证据。）** |
+| 长期记忆系统 | **远超** | probation / forgetting / consolidation / TruthMaintainer 双时态 / lineage / 注入筛查 / 多来源摄入（网页、Glip、会议）/ 反思→行动。OpenClaw memory-core 只是 agent 自己的笔记本 |
+| bootstrap MD 供给方（仅 L3 需要） | **目前不胜任，但原因不是管线坏了** | 见 §13.5 的更正诊断：渲染代码健康，是数据源枯竭（本地库 `user_profile_items` 仅 3 行）+ "Current Focus" 要求 last_seen 在 7 天内 → 输出 "(no recent focus items)"。L3 前必须先让画像抽取跑起来 |
+
+### 4. 落地路径（按风险递增，每步可停）
+
+1. **L1 先上**：supplement 两个方法接 `/recall` + `memory_context_brief` 注入 → "十一"立刻能查到 memory-service 的记忆，零替换、零冲突。
+2. **L2 加旁路**：`agent_end` hook 镜像对话进 memory-service（意图收集箱的写路径），显式触发短语走同步车道判定。
+3. **A/B 召回质量**：同一批真实查询对比 memory-core vs memory-service 结果；同时补 RecallEngine 查询时时间衰减（需求 C）。
+4. **再议 L3**：只有当 A/B 显示 memory-service 检索不差、且 MD 渲染管线复活后，才考虑接管 slot 并关掉 OpenClaw 侧 dreaming。
+
+双梦冲突、离线失忆、bootstrap 供给——这三个最重的 side effect **只在 L3 出现**；前三步一个都碰不到。
+
+---
+
+## 十三补充（2026-09-02 复核）
+
+### 13.5 数据来源勘误 + USER_CORE 的真实病因
+
+**勘误：本仓库 `memory-service/data/` 是开发快照，不是线上生产库。**证据：`users/esone.qiu/memory.db` 里 chunks 最新 2026-04-10、proposed_actions 最新 2026-04-08、reflection_threads 最新 2026-04-08；`analytics/usage.db` 仅有 `user_id='test'` 的 87 条事件。而用户 8 月 27-28 日真实跑过的 AgentTask（Run `cae4731e…`/`51c8acab…`）在此库中不存在 → **线上实例在别处**（另一台机器或另一个 DATA_DIR）。
+
+影响范围：
+- 第七章的 **37 条定时任务是真实的**（直接从线上 Google Sheet 全量导出，不受影响）。
+- 第七章的 **"205 条 queued 反思候选 / 去重 83 主题"是 4 月的开发快照**，不代表当前线上积压。结论方向（反思候选会重复堆积、上账本前必须聚类去重）仍然成立，但**数量级需要在线上库重新测量**。
+
+**USER_CORE 的真实病因（推翻"渲染管线名存实亡"）**：渲染代码是健康的——`ConsolidationEngine` 有完整的 USER_CORE 重建逻辑（`:692-815`，写盘 + reindex），`HeartbeatLoop:214` 有 `checkProfileDirty()` 按需触发。真实原因是两层：
+
+1. **数据源枯竭**：本地库 `user_profile_items` 全表**仅 3 行**（fact×2 最新 2026-03-17、preference×1 最新 2026-03-16）——画像抽取几乎从未积累。
+2. **7 天窗口过滤**：`## Current Focus` 只收 `last_seen >= sevenDaysAgo` 的条目（`ConsolidationEngine:732`），3 条老数据全部落窗外 → 输出 `- (no recent focus items)`。
+
+### 13.6 新增修复项：P0-4 复活用户画像供给（L3 的前置门槛）
+
+**目标**：让 `USER_CORE.md` / `CORE_MEMORY.md` 有真实内容，从而具备给 OpenClaw 做 bootstrap 注入的资格。
+
+1. **先在线上库测量**，不要基于开发快照下结论：`SELECT item_type, COUNT(*), MAX(last_seen) FROM user_profile_items GROUP BY 1` + `SELECT COUNT(*) FROM chunks WHERE created_at > <30天前>`。判断是"抽取没跑"还是"抽取跑了但不写画像"。
+2. **按测量结果二选一**：
+   - 若摄入本身停了（chunks 无新增）→ 属于摄入链路问题，先修摄入，画像自然恢复。
+   - 若摄入正常但画像仍空 → 查 `IngestionPipeline`→`user_profile_items` 的写入条件（阈值过严 / 抽取 prompt 失效 / ProfileManager 未被调用）。
+3. **放宽 Current Focus 的时间窗**：7 天对低频个人用户过窄。改为"优先 7 天内；不足 5 条则按 salience 回填 30/90 天内的条目，并标注 `(stale, last seen YYYY-MM-DD)`"——避免整节空白，也不假装是新鲜关注点。
+4. **验收**：`USER_CORE.md` 体积 > 1KB 且 Current Focus 至少 3 条真实条目；`openclaw` 侧 L1 注入后能在会话里自然引用其中至少 1 条。
+
+排期：**L3 的硬前置**；与 L1/L2 无依赖关系，可并行推进。
+
+### 13.7 L1 / L2 / L3 的关系与改动形态（回答"是否替换性、要不要插件"）
+
+**关系：L1 与 L2 是叠加的（正交、可共存）；L3 只替换 memory-core，不替换 L1/L2。**
+
+| | 干什么 | 与其他档的关系 |
+|---|---|---|
+| L1 | 加一路检索语料 + 注入一段 brief（读路径） | 与 L2 正交；L3 之后仍可保留（但若 L3 已接管 recall，L1 就冗余了） |
+| L2 | 镜像对话流进 memory-service（写路径） | 与 L1 正交；**L3 之后依然需要**——L3 换的是 recall/promotion，L2 是"把原始对话喂给意图收集箱"，职责不同 |
+| L3 | 接管 `plugins.slots.memory`，memory-core 被禁用 | 只与 memory-core 互斥（"only one plugin owns the active memory slot"）。**不影响 L1/L2 的代码**，但会让 L1 变得多余 |
+
+所以正确的心智模型不是"L1→L2→L3 逐步升级替换"，而是：**L2 是意图收集箱的必需项（写），L1 是低风险的读增强，L3 是可选的深度整合**。走完 L1+L2 就能完整支撑 journey demo，L3 只解决"让 OpenClaw 的原生记忆也统一到 memory-service"这个额外目标。
+
+**都需要写插件，改配置不够。** `registerMemoryCorpusSupplement` / `registerMemoryPromptSupplement` / 事件钩子 / `registerMemoryCapability` 全部是插件 SDK 的 `api.register*` 调用（`docs/plugins/sdk-overview.md:178-179, 434-437`），必须打包成一个 OpenClaw 插件（manifest + JS）。纯配置能做的只有三件事：
+- 在**已安装**的插件之间切槽位（`plugins.slots.memory`）；
+- 切到 QMD 本地 sidecar（`memory: { backend: "qmd" }`）——但 QMD 索引的是**磁盘文件**，不是 HTTP 服务，指不到 memory-service；
+- 配置嵌入 provider（你已经在用内网 `ringcentral-qwen3-embedding`）。
+
+**唯一的"零插件"取巧路径**：memory-service 定期把摘要导出成 MD 写进 `~/.openclaw/workspace/memory/`，让 memory-core/QMD 自然索引到（即早期 memory-share 文档里的"架构 B 共享 MD 文件夹"）。代价：单向只读、有同步延迟、无法回写、无结构化回卡——只能当过渡验证，撑不起 journey demo。
+
+**好消息**：你已经有插件开发资产——`~/git/openclaw-ringcentral` 是自研插件（含 Adaptive Card 全套），`plugins.load.paths` 已配置本地插件加载目录，所以"再加一个本地插件"是走通过的路，不是新流程。
+
+### 13.8 外挂记忆层产品（mem0 / zep / honcho）能否移植使用
+
+**结论：不移植、不采用，但值得抄两个设计。**
+
+不采用的三个理由：
+1. **定位重叠 95%**：mem0/zep/honcho 解决的正是 memory-service 已经解决的问题（存储、召回、去重、画像）。而 memory-service 多出来的部分恰恰是你的核心资产：TruthMaintainer 双时态、probation/forgetting 生命周期、注入防御闸门、反思→行动闭环、多来源摄入（网页/Glip/会议）、与任务账本同库同事务。引入它们等于用一个更弱的子集替换一个更强的超集。
+2. **数据主权与部署**：mem0/supermemory 主推托管云（OSS 版功能滞后），把个人记忆搬出自托管边界与本项目"自托管个人记忆系统"的定位冲突。zep/graphiti 需要 Neo4j，honcho 需要独立服务——都是给单人维护再加一个运维目标。
+3. **迁移成本无收益**：你的记忆已经在 sqlite-vec + FTS5 里，935 chunks（开发库）在线上更多，schema 有 60+ 迁移。搬库换不来任何新能力。
+
+**值得抄的两个设计**：
+- **mem0 的"drop-in adapter"分发方式**：它给 OpenClaw/Claude Code/Cursor 都提供了现成的接入 skill（`npx skills add … --skill mem0-integrate`）。这正是我们缺的东西——把"memory-service 接入 X 宿主"做成可分发的适配器（一个 OpenClaw 插件 + 一个 MCP server 已经在手），而不是每次手工接线。
+- **honcho 的 dialectic user modeling**（Hermes 已内置采用）：它专门解决"从对话流里持续推断用户模型"——正是 §13.6 里 `user_profile_items` 枯竭要解决的同一个问题。可以参考它的抽取策略，但用自己的实现。
+
+**唯一可能真正引入的场景**：如果将来想让 memory-service 支持"多种记忆后端"（像 Hermes 那样 8 个 provider），那时 mem0 可以作为**其中一个可选 provider** 存在。但那是 memory-service 长成平台以后的事，不是现在。
+
+### 13.9 自建专线如何对接 RingCentral / 微信（回答"是否也要自建、有必要吗"）
+
+先看你已有什么：
+- **RingCentral 出站**：memory-service 已有 `BotSender`（Bot API 私发/群发）+ `RingCentralClient`（AsMe 身份发送）→ **零新建**。
+- **RingCentral 入站**：`OutreachEngine` 已实现"主动外呼 + 收回复 + LLM 分类"的完整闭环 → 入站回复处理**有现成先例**，但需要接 webhook/订阅。
+- **Adaptive Card**：`openclaw-ringcentral` 插件里有全套 create/update/delete → 但那是**在 OpenClaw 侧**，memory-service 自建专线要用得重新实现一遍 RC card API 调用（工作量小，RC API 是公开的）。
+- **微信**：memory-service 侧**完全没有**。自建要处理个微协议（不稳定、有封号风险）或企业微信（需企业应用审批）。
+
+所以答案是：
+- **对接 RingCentral：不需要"自建"，只需要补入站 webhook**（出站/身份/分类全都现成）。这是自建专线里成本最低的一环。
+- **对接微信：需要真自建，且不建议**。微信生态的对接成本和风险（个微封号 / 企微审批）远高于收益，而 OpenClaw/nanobot 已经把这块封装好了——如果微信是必需渠道，那答案就是"用宿主"而不是"自建"。
+- **有必要自建吗**：只有当你希望"记一笔"与"跟十一聊天"是**两个独立入口**时才有必要。如果希望同一个对话线程既能闲聊又能记账，自建专线就是在重复造 OpenClaw 已有的对话面。
+
+### 13.10 三家族综合评分与最终建议
+
+评分维度（1-5，越高越好），针对"支撑 journey demo 的意图收集箱"这一具体目标：
+
+| 维度 | ① OpenClaw 插件（L1+L2） | ② 换宿主（Hermes/nanobot） | ③ memory-service 自建专线 |
+|---|---|---|---|
+| 渠道就绪（iMessage+RC） | **5**（BlueBubbles + 自研 RC 插件在跑） | 2（Hermes 无 RC；nanobot 无 iMessage 无 RC） | 2（RC 出站现成、入站要补；微信要重造） |
+| 落地工作量 | **4**（一个本地插件，已有插件开发资产） | 1（重写 RC 插件 + 重建四条集成） | 3（专线小回路，但入站/卡片要补） |
+| 真源冲突风险 | 3（L1/L2 低；L3 才有双梦冲突） | 3（同 OpenClaw，且要重新验证） | **5**（零冲突） |
+| 复用既有资产 | **5**（gateway executor / skill sync / 设备配对 / A2A 四条） | 1（全部归零） | 4（BotSender / OutreachEngine / LLMClient） |
+| 对话体验（人格+工具生态） | **5**（十一/小黑/小张 + 全套 skill） | 4（Hermes 学习闭环更强，但要重建） | 2（只有一个记账 bot，无人格无工具） |
+| 长期演进（不锁死） | 4（瘦管道设计使宿主可换） | 3 | **5**（不依赖任何宿主） |
+| 单人维护负担 | **4**（插件薄，逻辑在服务端） | 2（跨语言重写 + 双栈维护） | 3（多一条入站链路要维护） |
+| **加权总分** | **30/35** | 16/35 | 24/35 |
+
+**建议：① OpenClaw 插件（L1 + L2），并保留 ③ 作为退路。**
+
+理由：② 换宿主在当前目标下纯亏——Hermes 的两个真优势（skill 自改进、serverless 常驻）都不是意图收集箱需要的，代价却是渠道资产归零。③ 自建的唯一强项是零冲突，但 L1/L2 本身也不引入真源冲突（冲突只在 L3），所以这个优势被抵消，剩下的是"没有人格和工具生态"的体验损失。① 在渠道、工作量、资产复用三个关键维度上全面领先。
+
+**并且方案里已内置了"选错的保险"**：坚持第十一章的"瘦管道厚服务"——车道判定、聚类、合成全在 memory-service，OpenClaw 插件只做转发和渲染。真要换宿主或转自建，重写的只是那层薄插件。

@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>记忆分镜 · Personal AI 集成 Demo</title>
+  <!--
+    我的假设与设计推理：
+    1. 记忆分镜是底层记忆原语，首版不新增 dashboard；Demo 把它嵌进长期群聊的 Memory Lens。
+    2. 用户首先要知道“这是不是同一件事”，其次才是看证据，因此事件名、时间窗和边界理由先于摘要。
+    3. 三个顶部选项是交互状态探索：正确切开、证据不足时暂不切、切错后可恢复；不是生产导航。
+    4. Demo 数据是基于线上来源分布和真实工作形态制作的脱敏组合，不代表线上 Jira / 群聊当前真值。
+    5. 所有交互只改变本页演示状态；不联网、不改原始记忆、不写输入框、不发送消息。
+
+    设计系统：
+    - 复用仓库 Personal AI 图标和 #e83f57 品牌红，宿主聊天保持中性白灰和克制蓝色。
+    - 使用 editorial serif 做“事件分镜”标签，正文使用 Aptos / PingFang SC；无渐变、无装饰性统计卡。
+    - 桌面端 inline ledger；窄屏变成贴底面板，正文 16px、交互目标至少 44px。
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #dfe1dd;
+      --paper: #fffefa;
+      --soft: #f5f3ed;
+      --soft-blue: #eef4f8;
+      --soft-red: #fff0f2;
+      --soft-amber: #f8f0dd;
+      --ink: #202624;
+      --ink-soft: #505956;
+      --muted: #767d7a;
+      --line: #d9dad4;
+      --line-strong: #b7bbb7;
+      --brand: #e83f57;
+      --brand-dark: #b92c41;
+      --blue: #0a6fae;
+      --green: #2c6655;
+      --amber: #8a5d17;
+      --rail: #252b2d;
+      --shadow: 0 24px 70px rgb(33 40 37 / 16%), 0 2px 10px rgb(33 40 37 / 8%);
+      --body: Aptos, "PingFang SC", "Microsoft YaHei", sans-serif;
+      --display: "Iowan Old Style", "Songti SC", STSong, serif;
+      --mono: "IBM Plex Mono", SFMono-Regular, Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 15px/1.62 var(--body);
+      text-rendering: optimizeLegibility;
+    }
+    button, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, textarea:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--blue) 30%, transparent);
+      outline-offset: 2px;
+    }
+    [hidden] { display: none !important; }
+
+    .demo-bar {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 10px 20px;
+      border-bottom: 1px solid #b9bcb7;
+      background: #f0eee8;
+    }
+    .demo-title {
+      min-width: 250px;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+    }
+    .demo-title img { width: 34px; height: 34px; object-fit: contain; }
+    .demo-title strong { display: block; font: 700 19px/1.2 var(--display); }
+    .demo-title span { display: block; color: var(--muted); font-size: 12px; }
+    .demo-controls { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+    .control-label { color: var(--muted); font-size: 12px; }
+    .segmented {
+      display: inline-flex;
+      gap: 3px;
+      padding: 3px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--paper);
+    }
+    .mode-button {
+      min-height: 44px;
+      padding: 8px 14px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .mode-button:hover { background: var(--soft); }
+    .mode-button[aria-pressed="true"] { background: var(--ink); color: white; font-weight: 700; }
+    .reset-button {
+      width: 44px;
+      min-width: 44px;
+      height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: var(--paper);
+      cursor: pointer;
+    }
+    .reset-button:hover { background: var(--soft); }
+
+    .stage { padding: 20px; }
+    .host {
+      width: min(1440px, 100%);
+      height: min(870px, calc(100vh - 108px));
+      min-height: 690px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 72px 248px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid #afb3ae;
+      border-radius: 12px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    .rail {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 13px 8px;
+      background: var(--rail);
+      color: white;
+    }
+    .host-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 5px;
+      border-bottom: 1px solid #4c5354;
+      color: #252b2d;
+      font-weight: 900;
+    }
+    .host-mark span { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px; background: #f2b341; }
+    .rail-button {
+      width: 44px;
+      height: 44px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #d4d7d7;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .rail-button.active { background: #4c5455; color: white; }
+    .rail-spacer { flex: 1; }
+
+    .channels { min-width: 0; min-height: 0; background: #f5f6f5; border-right: 1px solid var(--line); }
+    .channels-head { height: 64px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--line); }
+    .channels-head strong { font-size: 17px; }
+    .channel-search { margin: 13px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: white; color: var(--muted); font-size: 13px; }
+    .channel-label { padding: 8px 17px 5px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .channel {
+      width: calc(100% - 20px);
+      min-height: 54px;
+      display: grid;
+      grid-template-columns: 35px minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
+      margin: 2px 10px;
+      padding: 7px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .channel.active { background: #e2e9eb; }
+    .channel-avatar { width: 35px; height: 35px; display: grid; place-items: center; border-radius: 50%; background: #c7ddd6; color: #234b40; font-size: 11px; font-weight: 800; }
+    .channel-avatar.alt { background: #e5d0ae; color: #57452c; }
+    .channel-copy { min-width: 0; }
+    .channel-copy strong, .channel-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .channel-copy strong { font-size: 14px; }
+    .channel-copy small { color: var(--muted); font-size: 12px; }
+
+    .surface { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: white; }
+    .surface-head {
+      height: 64px;
+      flex: 0 0 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .surface-name { min-width: 0; }
+    .surface-name strong, .surface-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .surface-name strong { font-size: 17px; }
+    .surface-name small { color: var(--muted); font-size: 12px; }
+    .head-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .privacy-tag { padding: 4px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); }
+
+    .conversation { min-height: 0; flex: 1; overflow-y: auto; padding: 16px 22px 8px; scroll-behavior: smooth; }
+    .date-rule { display: flex; align-items: center; gap: 12px; margin: 2px 0 17px; color: var(--muted); font-size: 12px; }
+    .date-rule::before, .date-rule::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+    .message { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; margin-bottom: 16px; }
+    .avatar { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; background: #d4e4e0; color: #315248; font-size: 11px; font-weight: 800; }
+    .avatar.gold { background: #ead9bc; color: #5b482d; }
+    .avatar.blue { background: #d6e2ea; color: #315367; }
+    .message-meta { display: flex; align-items: baseline; gap: 8px; }
+    .message-meta strong { font-size: 14px; }
+    .message-meta time { color: var(--muted); font-size: 12px; }
+    .message p { max-width: 780px; margin: 2px 0 0; text-wrap: pretty; }
+    .message a { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
+    .evidence-message { position: relative; }
+    .evidence-message::after {
+      content: "分镜证据";
+      align-self: start;
+      justify-self: start;
+      margin-top: 6px;
+      padding: 2px 6px;
+      border: 1px solid #a9c4ba;
+      border-radius: 4px;
+      color: var(--green);
+      font-size: 11px;
+    }
+
+    .boundary {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      margin: 2px 0 17px 49px;
+      color: var(--brand-dark);
+      font-size: 12px;
+    }
+    .boundary::before, .boundary::after { content: ""; height: 1px; background: #e6aab3; }
+    .boundary-copy { display: flex; align-items: center; gap: 7px; }
+    .boundary-copy i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+    body[data-mode="hold"] .boundary { color: var(--amber); }
+    body[data-mode="hold"] .boundary::before, body[data-mode="hold"] .boundary::after { background: #dbc896; border-top: 1px dashed white; }
+    body[data-mode="hold"] .boundary-copy i { background: transparent; border: 1px solid var(--amber); }
+
+    .topic-b { transition: opacity .18s ease, filter .18s ease; }
+    body[data-mode="split"] .topic-b, body[data-mode="recover"] .topic-b { opacity: .5; }
+    body[data-mode="hold"] .topic-b { opacity: 1; }
+
+    .compose-wrap { flex: 0 0 auto; padding: 0 18px 16px; background: white; }
+    .scene-ribbon {
+      position: relative;
+      display: grid;
+      grid-template-columns: 31px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 58px;
+      padding: 7px 9px 7px 11px;
+      border: 1px solid #efb5be;
+      border-bottom: 0;
+      border-radius: 10px 10px 0 0;
+      background: var(--soft-red);
+    }
+    body[data-mode="hold"] .scene-ribbon { border-color: #dfcfaa; background: var(--soft-amber); }
+    .scene-ribbon img { width: 31px; height: 31px; object-fit: contain; }
+    .ribbon-copy { min-width: 0; }
+    .ribbon-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+    .ribbon-copy span { display: block; color: var(--ink-soft); font-size: 12px; }
+    .ribbon-actions { display: flex; align-items: center; gap: 6px; }
+    .status-tag { padding: 3px 7px; border: 1px solid #e4a5ae; border-radius: 5px; color: var(--brand-dark); font-size: 11px; font-weight: 700; white-space: nowrap; }
+    body[data-mode="hold"] .status-tag { border-color: #d1bc84; color: var(--amber); }
+    .details-button {
+      min-width: 44px;
+      min-height: 44px;
+      padding: 8px 11px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--blue);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .details-button:hover { background: rgb(255 255 255 / 70%); }
+
+    .composer {
+      position: relative;
+      border: 1px solid var(--line-strong);
+      border-radius: 0 0 10px 10px;
+      background: white;
+    }
+    .composer textarea {
+      width: 100%;
+      min-height: 77px;
+      display: block;
+      resize: none;
+      padding: 12px 14px 36px;
+      border: 0;
+      border-radius: inherit;
+      color: var(--ink);
+      background: transparent;
+    }
+    .composer textarea::placeholder { color: #929895; }
+    .composer-foot { position: absolute; right: 8px; bottom: 7px; display: flex; align-items: center; gap: 7px; }
+    .no-effect { color: var(--muted); font-size: 11px; }
+    .send-button { min-width: 65px; min-height: 44px; border: 0; border-radius: 6px; background: var(--blue); color: white; font-weight: 700; cursor: pointer; opacity: .55; }
+
+    .ledger {
+      position: absolute;
+      z-index: 5;
+      left: 18px;
+      right: 18px;
+      bottom: 124px;
+      max-height: min(510px, calc(100% - 110px));
+      overflow-y: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      background: var(--paper);
+      box-shadow: 0 18px 48px rgb(31 38 35 / 20%);
+    }
+    .ledger-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: start;
+      padding: 15px 17px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .eyebrow { color: var(--brand-dark); font: 700 11px/1.3 var(--mono); letter-spacing: .07em; text-transform: uppercase; }
+    body[data-mode="hold"] .eyebrow { color: var(--amber); }
+    .ledger-head h2 { margin: 3px 0 1px; font: 700 23px/1.25 var(--display); text-wrap: balance; }
+    .ledger-head p { margin: 0; color: var(--muted); font-size: 12px; }
+    .close-button { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 50%; background: white; cursor: pointer; font-size: 18px; }
+    .ledger-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); }
+    .evidence-list { padding: 14px 17px 18px; border-right: 1px solid var(--line); }
+    .section-title { margin-bottom: 9px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .evidence-row {
+      display: grid;
+      grid-template-columns: 52px 70px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .evidence-row:last-child { border-bottom: 0; }
+    .evidence-time { color: var(--muted); font: 12px/1.5 var(--mono); }
+    .source-pill { justify-self: start; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 4px; background: white; color: var(--ink-soft); font-size: 11px; }
+    .evidence-copy strong { display: block; font-size: 13px; }
+    .evidence-copy span { display: block; margin-top: 1px; color: var(--ink-soft); font-size: 12px; }
+    .boundary-panel { padding: 14px 17px 18px; background: var(--soft); }
+    .decision-line { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; margin: 0 0 11px; }
+    .decision-mark { width: 9px; height: 9px; margin-top: 6px; border-radius: 50%; background: var(--brand); }
+    body[data-mode="hold"] .decision-mark { background: transparent; border: 1px solid var(--amber); }
+    .decision-line strong { display: block; font-size: 13px; }
+    .decision-line span { display: block; color: var(--ink-soft); font-size: 12px; }
+    .boundary-note { margin: 12px 0; padding: 10px 0; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); color: var(--ink-soft); font-size: 12px; }
+    .boundary-note strong { color: var(--ink); }
+    .panel-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+    .secondary-button, .primary-button, .text-button {
+      min-height: 44px;
+      padding: 8px 11px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .secondary-button { border: 1px solid var(--line-strong); background: white; }
+    .secondary-button:hover { background: #f9f9f6; }
+    .primary-button { border: 1px solid var(--brand-dark); background: var(--brand-dark); color: white; }
+    .text-button { border: 0; background: transparent; color: var(--blue); }
+    .authority-copy { margin-top: 10px; color: var(--muted); font-size: 11px; }
+
+    .repair-menu { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-strong); }
+    .repair-menu strong { display: block; margin-bottom: 7px; font-size: 13px; }
+    .repair-options { display: grid; gap: 6px; }
+    .repair-option {
+      min-height: 48px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: white;
+      text-align: left;
+      cursor: pointer;
+    }
+    .repair-option:hover { border-color: var(--brand); }
+    .repair-option small { display: block; color: var(--muted); font-weight: 400; }
+    .repair-option b { color: var(--blue); font-size: 12px; }
+
+    .receipt {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      margin-top: 12px;
+      padding: 10px 11px;
+      border: 1px solid #a9c4ba;
+      border-radius: 7px;
+      background: #edf5f1;
+      color: var(--green);
+      font-size: 12px;
+    }
+    .receipt strong { display: block; color: #224b3f; }
+    .undo-button { min-width: 58px; min-height: 44px; border: 1px solid #8eaea2; border-radius: 7px; background: white; color: var(--green); cursor: pointer; font-weight: 700; }
+
+    .screen-reader-note { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+    @media (max-width: 900px) {
+      body { font-size: 16px; }
+      .demo-bar { align-items: flex-start; flex-direction: column; gap: 8px; padding: 10px 12px; }
+      .demo-title { min-width: 0; }
+      .demo-controls { width: 100%; margin-left: 0; align-items: stretch; overflow-x: auto; }
+      .control-label { display: none; }
+      .segmented { flex: 1; }
+      .mode-button { flex: 1; padding-inline: 9px; }
+      .stage { padding: 0; }
+      .host { width: 100%; height: calc(100vh - 126px); min-height: 650px; grid-template-columns: minmax(0, 1fr); border: 0; border-radius: 0; box-shadow: none; }
+      .rail, .channels { display: none; }
+      .surface-head { padding-inline: 14px; }
+      .head-meta { display: none; }
+      .conversation { padding: 14px 14px 8px; }
+      .boundary { margin-left: 49px; grid-template-columns: minmax(0, 1fr); }
+      .boundary::before, .boundary::after { display: none; }
+      .compose-wrap { padding: 0 10px 10px; }
+      .scene-ribbon { grid-template-columns: 31px minmax(0, 1fr) auto; }
+      .status-tag { display: none; }
+      .ribbon-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ledger { position: fixed; left: 0; right: 0; bottom: 0; max-height: 78vh; border-radius: 12px 12px 0 0; }
+      .ledger-grid { grid-template-columns: minmax(0, 1fr); }
+      .evidence-list { border-right: 0; border-bottom: 1px solid var(--line); }
+      .evidence-row { grid-template-columns: 48px 60px minmax(0, 1fr); gap: 7px; }
+      .no-effect { display: none; }
+    }
+
+    @media (max-width: 480px) {
+      .demo-title span { display: none; }
+      .demo-title strong { font-size: 17px; }
+      .mode-button { font-size: 13px; }
+      .reset-button { display: none; }
+      .surface-head { height: 58px; flex-basis: 58px; }
+      .message { grid-template-columns: 34px minmax(0, 1fr); gap: 8px; }
+      .avatar { width: 34px; height: 34px; }
+      .message p { font-size: 14px; }
+      .boundary { margin-left: 42px; }
+      .scene-ribbon { gap: 7px; padding-left: 8px; }
+      .ribbon-copy strong { font-size: 13px; }
+      .ribbon-copy span { font-size: 11px; }
+      .details-button { padding-inline: 7px; }
+      .ledger-head { padding: 12px 13px; }
+      .ledger-head h2 { font-size: 21px; }
+      .evidence-list, .boundary-panel { padding: 12px 13px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body data-mode="split">
+  <header class="demo-bar">
+    <div class="demo-title">
+      <img src="../../static/icons/icon128.png" alt="Personal AI">
+      <div>
+        <strong>记忆分镜 · 集成体验</strong>
+        <span>脱敏组合数据 · 本页不联网、不写入、不发送</span>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <span class="control-label">查看状态</span>
+      <div class="segmented" role="group" aria-label="分镜状态">
+        <button class="mode-button" type="button" data-mode="split" aria-pressed="true">正确切开</button>
+        <button class="mode-button" type="button" data-mode="hold" aria-pressed="false">暂不切</button>
+        <button class="mode-button" type="button" data-mode="recover" aria-pressed="false">切错可恢复</button>
+      </div>
+      <button class="reset-button" type="button" id="resetDemo" aria-label="重置演示" title="重置演示">↺</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="host" aria-label="模拟的团队群聊页面">
+      <nav class="rail" aria-label="宿主应用导航">
+        <div class="host-mark" aria-hidden="true"><span>R</span></div>
+        <button class="rail-button active" type="button">消息</button>
+        <button class="rail-button" type="button">会议</button>
+        <button class="rail-button" type="button">任务</button>
+        <div class="rail-spacer"></div>
+        <button class="rail-button" type="button">设置</button>
+      </nav>
+
+      <aside class="channels" aria-label="群聊列表">
+        <div class="channels-head"><strong>团队消息</strong></div>
+        <div class="channel-search">搜索会话</div>
+        <div class="channel-label">置顶</div>
+        <button class="channel active" type="button">
+          <span class="channel-avatar">PP</span>
+          <span class="channel-copy"><strong>Platform Planning</strong><small>两个话题，最近 09:51</small></span>
+        </button>
+        <button class="channel" type="button">
+          <span class="channel-avatar alt">AI</span>
+          <span class="channel-copy"><strong>AI Enablement</strong><small>工具与培训</small></span>
+        </button>
+        <div class="channel-label">最近</div>
+        <button class="channel" type="button">
+          <span class="channel-avatar">RD</span>
+          <span class="channel-copy"><strong>Release Daily</strong><small>昨天</small></span>
+        </button>
+      </aside>
+
+      <section class="surface">
+        <header class="surface-head">
+          <div class="surface-name">
+            <strong>Platform Planning</strong>
+            <small>长期项目群 · 同一个群不等于同一件事</small>
+          </div>
+          <div class="head-meta"><span class="privacy-tag">工作范围</span><span>12 人</span></div>
+        </header>
+
+        <div class="conversation" id="conversation">
+          <div class="date-rule">今天 · 脱敏组合场景</div>
+
+          <article class="message evidence-message">
+            <div class="avatar">EQ</div>
+            <div>
+              <div class="message-meta"><strong>Esone</strong><time>09:12</time></div>
+              <p>这张 Jira 的估算口径继续按人天吗？我准备补到评审说明里。</p>
+            </div>
+          </article>
+          <article class="message evidence-message">
+            <div class="avatar gold">NW</div>
+            <div>
+              <div class="message-meta"><strong>Nova</strong><time>09:18</time></div>
+              <p>是，先沿用上次口径。数值还没锁定，等数据核对完再更新。</p>
+            </div>
+          </article>
+          <article class="message evidence-message">
+            <div class="avatar blue">DL</div>
+            <div>
+              <div class="message-meta"><strong>Dylan</strong><time>09:36</time></div>
+              <p><a href="#" aria-label="演示 Jira 链接，不会导航">MTR-148•••</a> 已补说明；评审里再确认一次 owner。</p>
+            </div>
+          </article>
+
+          <div class="boundary" id="boundaryMarker">
+            <span></span>
+            <span class="boundary-copy"><i aria-hidden="true"></i><b id="boundaryLabel">09:43 · 新事件：AI 工具许可</b></span>
+            <span></span>
+          </div>
+
+          <div class="topic-b">
+            <article class="message">
+              <div class="avatar gold">NW</div>
+              <div>
+                <div class="message-meta"><strong>Nova</strong><time>09:43</time></div>
+                <p>换个问题：AI 工具的团队许可下周要确认 owner，先收一下使用名单。</p>
+              </div>
+            </article>
+            <article class="message">
+              <div class="avatar">EQ</div>
+              <div>
+                <div class="message-meta"><strong>Esone</strong><time>09:51</time></div>
+                <p>收到，我下午整理当前账号和培训需求。</p>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="compose-wrap">
+          <div class="scene-ribbon" aria-live="polite">
+            <img src="../../static/icons/icon128.png" alt="">
+            <div class="ribbon-copy">
+              <strong id="ribbonTitle">这次估算 · 5 条证据</strong>
+              <span id="ribbonSubtitle">09:12–09:41 · 群聊 / Jira / 网页 / 会议 · 已排除相邻话题</span>
+            </div>
+            <div class="ribbon-actions">
+              <span class="status-tag" id="statusTag">已定位</span>
+              <button class="details-button" type="button" id="openLedger" aria-expanded="false" aria-controls="sceneLedger">查看</button>
+            </div>
+          </div>
+          <div class="composer">
+            <textarea aria-label="消息输入框" placeholder="回复 Platform Planning…"></textarea>
+            <div class="composer-foot"><span class="no-effect">Personal AI 不会自动写入或发送</span><button class="send-button" type="button">发送</button></div>
+          </div>
+        </div>
+
+        <section class="ledger" id="sceneLedger" aria-label="记忆分镜证据" hidden>
+          <header class="ledger-head">
+            <div>
+              <div class="eyebrow" id="ledgerEyebrow">SEALED EPISODE · 只读</div>
+              <h2 id="ledgerTitle">这次估算校准</h2>
+              <p id="ledgerMeta">09:12–09:41 · 5 条证据 · 4 个来源 · Personal AI 整理</p>
+            </div>
+            <button class="close-button" type="button" id="closeLedger" aria-label="关闭分镜详情">×</button>
+          </header>
+
+          <div class="ledger-grid">
+            <div class="evidence-list">
+              <div class="section-title">这一段里的原始证据</div>
+              <div id="evidenceRows">
+                <div class="evidence-row">
+                  <time class="evidence-time">09:12</time><span class="source-pill">群聊</span>
+                  <div class="evidence-copy"><strong>询问估算口径</strong><span>明确提到 Jira 与“按人天”</span></div>
+                </div>
+                <div class="evidence-row">
+                  <time class="evidence-time">09:18</time><span class="source-pill">群聊</span>
+                  <div class="evidence-copy"><strong>沿用上次口径，数值未锁定</strong><span>与当前问题直接连续</span></div>
+                </div>
+                <div class="evidence-row">
+                  <time class="evidence-time">09:29</time><span class="source-pill">网页</span>
+                  <div class="evidence-copy"><strong>打开估算口径说明</strong><span>同一 Jira key 的安全 canonical URL</span></div>
+                </div>
+                <div class="evidence-row">
+                  <time class="evidence-time">09:36</time><span class="source-pill">Jira</span>
+                  <div class="evidence-copy"><strong>MTR-148••• 补充说明</strong><span>exact issue anchor；来源切换不切段</span></div>
+                </div>
+                <div class="evidence-row">
+                  <time class="evidence-time">09:41</time><span class="source-pill">会议</span>
+                  <div class="evidence-copy"><strong>评审前检查完成</strong><span>同一工单引用，作为 supporting evidence</span></div>
+                </div>
+              </div>
+            </div>
+
+            <aside class="boundary-panel">
+              <div class="section-title">为什么是一段</div>
+              <div id="decisionLines">
+                <div class="decision-line"><span class="decision-mark"></span><div><strong>确切对象连续</strong><span>Jira key 和口径字段一致，跨来源仍归在一起。</span></div></div>
+                <div class="decision-line"><span class="decision-mark"></span><div><strong>09:43 出现强边界</strong><span>明确说“换个问题”，之后不再引用该工单。</span></div></div>
+                <div class="decision-line"><span class="decision-mark"></span><div><strong>相邻话题被排除</strong><span>许可话题虽有 owner / 下周等相似词，也不用于这次召回。</span></div></div>
+              </div>
+              <div class="boundary-note" id="boundaryNote"><strong>召回影响：</strong>已从本次提示排除 2 条相邻事件记忆；原始消息仍保留。</div>
+              <div class="panel-actions">
+                <button class="secondary-button" type="button" id="openRepair">边界不对</button>
+                <button class="text-button" type="button" id="sourceInfo">来源与范围</button>
+              </div>
+              <p class="authority-copy" id="authorityCopy">这是只读召回层。打开证据、修正分镜都不会写输入框、发送消息或修改 Jira。</p>
+
+              <div class="repair-menu" id="repairMenu" hidden>
+                <strong>修正只改变 Personal AI 的派生分镜</strong>
+                <div class="repair-options">
+                  <button class="repair-option" type="button" data-action="merge"><span>与上一段合并<small>适合系统把同一件事切成两段</small></span><b>应用</b></button>
+                  <button class="repair-option" type="button" data-action="split"><span>从 09:43 拆开<small>适合后半段已经换了任务</small></span><b>应用</b></button>
+                  <button class="repair-option" type="button" data-action="move"><span>只移动 09:41 这条<small>保留两段，只调整一条证据</small></span><b>应用</b></button>
+                </div>
+              </div>
+
+              <div class="receipt" id="repairReceipt" role="status" hidden>
+                <div><strong id="receiptTitle">已调整分镜</strong><span id="receiptCopy">原始消息未修改；只影响 Personal AI 的未来召回。</span></div>
+                <button class="undo-button" type="button" id="undoRepair">撤销</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <div class="screen-reader-note" id="liveStatus" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const body = document.body;
+      const modeButtons = [...document.querySelectorAll('.mode-button')];
+      const ledger = document.getElementById('sceneLedger');
+      const openLedger = document.getElementById('openLedger');
+      const closeLedger = document.getElementById('closeLedger');
+      const resetDemo = document.getElementById('resetDemo');
+      const openRepair = document.getElementById('openRepair');
+      const repairMenu = document.getElementById('repairMenu');
+      const repairReceipt = document.getElementById('repairReceipt');
+      const undoRepair = document.getElementById('undoRepair');
+      const ribbonTitle = document.getElementById('ribbonTitle');
+      const ribbonSubtitle = document.getElementById('ribbonSubtitle');
+      const statusTag = document.getElementById('statusTag');
+      const ledgerEyebrow = document.getElementById('ledgerEyebrow');
+      const ledgerTitle = document.getElementById('ledgerTitle');
+      const ledgerMeta = document.getElementById('ledgerMeta');
+      const boundaryLabel = document.getElementById('boundaryLabel');
+      const decisionLines = document.getElementById('decisionLines');
+      const boundaryNote = document.getElementById('boundaryNote');
+      const authorityCopy = document.getElementById('authorityCopy');
+      const receiptTitle = document.getElementById('receiptTitle');
+      const receiptCopy = document.getElementById('receiptCopy');
+      const liveStatus = document.getElementById('liveStatus');
+      let currentMode = 'split';
+      let repaired = false;
+
+      const states = {
+        split: {
+          ribbonTitle: '这次估算 · 5 条证据',
+          ribbonSubtitle: '09:12–09:41 · 群聊 / Jira / 网页 / 会议 · 已排除相邻话题',
+          status: '已定位',
+          eyebrow: 'SEALED EPISODE · 只读',
+          title: '这次估算校准',
+          meta: '09:12–09:41 · 5 条证据 · 4 个来源 · Personal AI 整理',
+          boundary: '09:43 · 新事件：AI 工具许可',
+          decisions: [
+            ['确切对象连续', 'Jira key 和口径字段一致，跨来源仍归在一起。'],
+            ['09:43 出现强边界', '明确说“换个问题”，之后不再引用该工单。'],
+            ['相邻话题被排除', '许可话题虽有 owner / 下周等相似词，也不用于这次召回。']
+          ],
+          note: '<strong>召回影响：</strong>已从本次提示排除 2 条相邻事件记忆；原始消息仍保留。'
+        },
+        hold: {
+          ribbonTitle: '仍在判断 · 未使用分镜',
+          ribbonSubtitle: '只有来源切换与短暂停顿，不足以证明换了事件',
+          status: '暂不切',
+          eyebrow: 'PROVISIONAL · 未进入生成上下文',
+          title: '可能仍是同一件事',
+          meta: '09:12–09:51 · 证据不足 · 等待后续强锚点',
+          boundary: '09:43 · 候选边界，暂不切分',
+          decisions: [
+            ['来源切换不是边界', '群聊转到 Jira 或网页，可能只是继续处理同一件事。'],
+            ['短暂停顿证据很弱', '7 分钟空档不足以单独创建新事件。'],
+            ['等待强锚点', '出现新的 issue key、明确话题重置或后续连续证据后再决定。']
+          ],
+          note: '<strong>召回影响：</strong>当前不使用 provisional 分镜缩小候选；Memory Lens 保持低打扰。'
+        },
+        recover: {
+          ribbonTitle: '边界可能不对 · 可修复',
+          ribbonSubtitle: '系统把 09:41 的会议证据单独切开；原始证据没有改变',
+          status: '需复核',
+          eyebrow: 'PROVISIONAL EPISODE · 可恢复',
+          title: '估算校准（可能误切）',
+          meta: '09:12–09:36 · 4 条证据 · 09:41 另成一段',
+          boundary: '09:41 · 系统候选边界（低置信）',
+          decisions: [
+            ['时间间隔被高估', '系统暂时把 5 分钟空档当作边界。'],
+            ['exact Jira key 仍一致', '这条强连续信号说明 09:41 更可能属于上一段。'],
+            ['建议合并，不自动永久改', '用户可以修正；睡眠期巩固也会重新检查。']
+          ],
+          note: '<strong>召回影响：</strong>09:41 的会议证据暂未进入本次提示；可合并后立即恢复。'
+        }
+      };
+
+      function renderDecisionLines(items) {
+        decisionLines.replaceChildren(...items.map(([title, copy]) => {
+          const line = document.createElement('div');
+          line.className = 'decision-line';
+          const mark = document.createElement('span');
+          mark.className = 'decision-mark';
+          const text = document.createElement('div');
+          const strong = document.createElement('strong');
+          strong.textContent = title;
+          const span = document.createElement('span');
+          span.textContent = copy;
+          text.append(strong, span);
+          line.append(mark, text);
+          return line;
+        }));
+      }
+
+      function applyMode(mode, options = {}) {
+        currentMode = mode;
+        repaired = false;
+        body.dataset.mode = mode;
+        modeButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
+        const state = states[mode];
+        ribbonTitle.textContent = state.ribbonTitle;
+        ribbonSubtitle.textContent = state.ribbonSubtitle;
+        statusTag.textContent = state.status;
+        ledgerEyebrow.textContent = state.eyebrow;
+        ledgerTitle.textContent = state.title;
+        ledgerMeta.textContent = state.meta;
+        boundaryLabel.textContent = state.boundary;
+        renderDecisionLines(state.decisions);
+        boundaryNote.innerHTML = state.note;
+        authorityCopy.textContent = mode === 'hold'
+          ? '不确定时不会把候选分镜放进生成上下文；当前页面也不会发起任何外部动作。'
+          : '这是只读召回层。打开证据、修正分镜都不会写输入框、发送消息或修改 Jira。';
+        repairMenu.hidden = true;
+        repairReceipt.hidden = true;
+        openRepair.textContent = mode === 'hold' ? '查看候选修正' : '边界不对';
+        if (options.open) showLedger();
+        liveStatus.textContent = `已切换到${modeButtons.find(button => button.dataset.mode === mode).textContent}状态`;
+      }
+
+      function showLedger() {
+        ledger.hidden = false;
+        openLedger.setAttribute('aria-expanded', 'true');
+        closeLedger.focus({ preventScroll: true });
+      }
+
+      function hideLedger() {
+        ledger.hidden = true;
+        openLedger.setAttribute('aria-expanded', 'false');
+        openLedger.focus({ preventScroll: true });
+      }
+
+      modeButtons.forEach(button => button.addEventListener('click', () => applyMode(button.dataset.mode, { open: true })));
+      openLedger.addEventListener('click', () => ledger.hidden ? showLedger() : hideLedger());
+      closeLedger.addEventListener('click', hideLedger);
+
+      openRepair.addEventListener('click', () => {
+        repairMenu.hidden = !repairMenu.hidden;
+        repairReceipt.hidden = true;
+        if (!repairMenu.hidden) repairMenu.querySelector('button').focus();
+      });
+
+      document.querySelectorAll('.repair-option').forEach(button => button.addEventListener('click', () => {
+        repaired = true;
+        repairMenu.hidden = true;
+        repairReceipt.hidden = false;
+        const action = button.dataset.action;
+        const labels = {
+          merge: ['已与上一段合并', '09:41 的会议证据已回到“估算校准”；原始消息未修改。'],
+          split: ['已从 09:43 拆开', '后半段不再用于这次估算召回；原始消息未修改。'],
+          move: ['已移动 1 条证据', '只调整 09:41 的派生归属；其他边界和原始消息未修改。']
+        };
+        const [title, copy] = labels[action];
+        receiptTitle.textContent = title;
+        receiptCopy.textContent = `${copy} 只影响 Personal AI 的未来召回。`;
+        if (action === 'merge') {
+          ribbonTitle.textContent = '这次估算 · 5 条证据';
+          ribbonSubtitle.textContent = '已采用你的边界修正 · 可撤销';
+          statusTag.textContent = '已修正';
+          ledgerEyebrow.textContent = 'USER PATCH · 可撤销';
+          ledgerTitle.textContent = '这次估算校准';
+          ledgerMeta.textContent = '09:12–09:41 · 5 条证据 · 用户修正派生分镜';
+          boundaryNote.innerHTML = '<strong>召回影响：</strong>09:41 的会议证据已重新进入本次提示；原始证据和外部系统无变化。';
+        }
+        liveStatus.textContent = title;
+        undoRepair.focus();
+      }));
+
+      undoRepair.addEventListener('click', () => {
+        if (!repaired) return;
+        applyMode(currentMode, { open: true });
+        liveStatus.textContent = '已撤销分镜修正，原始证据始终未改变';
+        openRepair.focus();
+      });
+
+      document.getElementById('sourceInfo').addEventListener('click', () => {
+        authorityCopy.textContent = '范围：仅当前用户的工作记忆；私聊正文、敏感 URL 参数和被屏蔽页面不会因为相似度进入本群聊提示。';
+        liveStatus.textContent = '已显示来源与范围说明';
+      });
+
+      resetDemo.addEventListener('click', () => {
+        applyMode('split');
+        ledger.hidden = true;
+        openLedger.setAttribute('aria-expanded', 'false');
+        liveStatus.textContent = '演示已重置';
+      });
+
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !ledger.hidden) hideLedger();
+      });
+    })();
+  </script>
+</body>
+</html>

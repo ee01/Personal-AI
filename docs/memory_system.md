@@ -1,6 +1,6 @@
 # Memory Service — 类人记忆系统架构
 
-_最后更新: 2026-08-03（补充 Options 语言存储、请求 header、画像投影与 Keystone Composer 的同步边界；其余系统能力沿用本文既有章节）_
+_最后更新: 2026-09-03（补充 Options 运行时配置以 Memory Service `GET /config` 为准，避免多设备 envConfig 缓存覆盖服务端开关）_
 
 ## 系统概述
 
@@ -886,7 +886,7 @@ Reflection Worker 在 LLM/fallback reflection、Evidence Resolution 和动作规
 
 - 缺失信息确实来自外部人或群组
 - 系统已经知道具体应该问谁
-- 用户允许使用主动询问引擎，并且 RingCentral 已正确配置
+- 用户允许使用主动询问引擎，并且 RingCentral 已正确配置。引擎开关读 memory-service `GET /config` 的 `outreachEnabled`，不是本机 `envConfig.OUTREACH_ENABLED`；Options 打开时会先加载服务端值，避免多设备缓存把服务端开关盖掉
 
 典型例子：
 
@@ -1394,7 +1394,8 @@ data/
 - 写保护在身份上下文创建前执行：缺失或空白 `X-User-Id` 的写请求会先被 `writeGuard` 拦截，不会为了随后要拒绝的请求提前创建、迁移或打开 `data/users/default/`。
 - 浏览器客户端会区分“已解析 / 显式配置的用户身份”和“本地还没拿到 `userinfo.username` 的 default 占位”。未解析时不会主动发送 `X-User-Id: default`，只读请求会让服务端返回 `fallbackToDefault=true` 回执，写请求会被 write guard 拦截；只有用户身份已解析，或调用方显式配置 `userId: 'default'`，才会把 `default` 当成可见的显式用户空间。
 - UserContextManager 按需加载、30 分钟空闲回收
-- 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略等运行时配置
+- 每个用户都有独立的 `config.json`，包括自我反思频率、是否启用自我反思、梦境报表推送策略、主动询问引擎等运行时配置
+- Options 打开时会先 `GET /config` 再展示这些开关。本机 `chrome.storage.local.envConfig` 只是镜像缓存，不是真源。加载完成前不会把本机缓存画成已确认状态，保存也不会 `PUT /config`，避免另一台设备改过的服务端值被旧缓存盖掉。加载成功后会把服务端值写回本机缓存，供 OpenClaw 等仍读 `envConfig` 的扩展页面使用
 - 自我反思是**按用户开关**的；梦境重放是**全用户持续运行**的，只有报表推送是按用户控制的
 - 实时事件流 `/events` 兼容浏览器 `EventSource`：客户端会在本地配置和 `userinfo.username` 解析完成后再用 `?userId=` 建立连接；如果身份仍未解析，则不附带 query userId，让服务端按 default fallback 回执处理。服务端优先校验 query userId 并按用户过滤事件；非法 userId 会直接拒绝，避免事件流误连到 `default` 用户。连接成功的 `connected` 事件会带 `user` 回执，说明身份来自 query、header 还是 default fallback，并列出 per-user storage key 与“只接收同用户或全局事件”的过滤边界。
 - `/stats` 会返回当前请求的 `user` 隔离摘要，包括 `id`、`identitySource`、`storageKey`、是否因为缺少 `X-User-Id` 回退到 `default`，以及 `writeBoundary` 机器可读契约。`writeBoundary` 明确当前空间是 `explicit_read_write` 还是 `default_read_only_fallback`，写入是否允许、哪些操作会被拦截，以及恢复动作是重新解析 `userinfo.username` / 配置 userId 还是无需处理。Memory Exploring 侧栏默认只显示当前记忆用户和状态灯；storage key 放在用户名 hover 里，不占菜单高度。身份异常（`default` fallback 或写入被拦截）时才补一行短提示，并保留紧凑的「备份」「设置」。备份只向当前用户空间请求 backup zip；若正在 default 只读回退则禁用，避免把 default 空间误存成本人备份。设置只打开 Options 恢复登录 / `userinfo.username` / userId 配置。二者都不会恢复、删除、替换、迁移记忆或切换用户空间。Today Pilot 首屏仍把顶部统计和 mission 读取绑定到同一个身份快照，显示“当前统计来自哪个用户空间”和对应 storage key。
