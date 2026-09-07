@@ -35,6 +35,28 @@ test('does not treat a missing Sheet as Level 2 even if spreadsheetId was expect
   assert.equal(probed.cloudLaneAvailable, false);
 });
 
+test('does not treat L2-only botId cache as home-lane Bot configured', () => {
+  const probed = probeTaskCenterLevels({
+    scheduledMessagesConfig: {
+      sheetId: '1abcSheet',
+      botId: 'cloud-only@bot.glip.net',
+      botAutomation: {
+        executorRule: {
+          ruleId: '2154',
+          ruleName: 'executor',
+          webhookUrl: 'https://script.example/exec',
+          projectKey: 'MTR',
+          jiraUrl: 'https://jira.example.com',
+          createdAt: '2026-05-08T00:00:00.000Z',
+        },
+      },
+    },
+    runtime: { botTokenConfigured: false, botId: '' },
+  });
+  assert.equal(probed.cloudBotConfigured, true);
+  assert.equal(probed.botConfigured, false);
+});
+
 test('unlocks home-lane Bot from memory-service runtime, not Jira executor rules', () => {
   const probed = probeTaskCenterLevels({
     scheduledMessagesConfig: {

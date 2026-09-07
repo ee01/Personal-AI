@@ -462,10 +462,75 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  const CONTROL_ACTIONS = ['pause', 'resume', 'retry', 'run_now', 'complete'] as const;
+  type ControlAction = (typeof CONTROL_ACTIONS)[number];
+
+  /**
+   * Lifecycle controls that Scheduled Messages exposes on each row:
+   * pause/resume, retry a failure, run now, or mark done.
+   */
+  app.post<{
+    Params: { id: string };
+    Body: { action?: string };
+  }>('/task-center/tasks/:id/control', async (request, reply) => {
+    const action = request.body?.action as ControlAction | undefined;
+    if (!action || !CONTROL_ACTIONS.includes(action)) {
+      return reply.status(400).send({
+        error: 'invalid_control_action',
+        detail: `action must be one of: ${CONTROL_ACTIONS.join(', ')}`,
+      });
+    }
+    const repo = new ActionRepository(request.userContext.db);
+    const existing = repo.getById(request.params.id);
+    if (!existing) {
+      return reply.status(404).send({ error: 'task_not_found' });
+    }
+
+    let updated = existing;
+    if (action === 'pause') {
+      if (['succeeded', 'cancelled'].includes(existing.queueStatus)) {
+        return reply.status(409).send({ error: 'cannot_pause', detail: '已结束的任务不能暂停' });
+      }
+      updated = repo.pause(request.params.id) ?? existing;
+    } else if (action === 'resume') {
+      if (existing.queueStatus !== 'paused') {
+        return reply.status(409).send({ error: 'cannot_resume', detail: '只有已暂停的任务可以恢复' });
+      }
+      updated = repo.resume(request.params.id) ?? existing;
+    } else if (action === 'retry') {
+      updated = repo.retry(request.params.id) ?? existing;
+    } else if (action === 'run_now') {
+      updated = repo.retry(request.params.id, now()) ?? existing;
+    } else if (action === 'complete') {
+      updated = repo.markCompleted(request.params.id, { completedBy: 'task_center' }) ?? existing;
+    }
+
+    return reply.status(200).send({ task: serializeTask(updated) });
+  });
+
+  app.delete<{ Params: { id: string } }>(
+    '/task-center/tasks/:id',
+    async (request, reply) => {
+      const repo = new ActionRepository(request.userContext.db);
+      const existing = repo.getById(request.params.id);
+      if (!existing) {
+        return reply.status(404).send({ error: 'task_not_found' });
+      }
+      repo.deleteTask(request.params.id);
+      return reply.status(200).send({ ok: true, id: request.params.id });
+    },
+  );
+
   /** Manual sweep, so the UI can roll a series forward without waiting a tick. */
   app.post('/task-center/sweep', async (request, reply) => {
     const { db } = request.userContext;
     const result = new TaskCenterMaintenanceService(db).sweep();
+    return reply.status(200).send(result);
+  });
+
+  /** Same job as Scheduled Messages' "清理已完成". */
+  app.post('/task-center/cleanup-completed', async (request, reply) => {
+    const result = new ActionRepository(request.userContext.db).deleteCompletedTasks();
     return reply.status(200).send(result);
   });
 }

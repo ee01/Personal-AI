@@ -10,6 +10,7 @@ export type ActionQueueStatus =
   | 'succeeded'
   | 'failed'
   | 'cancelled'
+  | 'paused'
   | 'dead_letter'
   | 'input_required';
 
@@ -876,6 +877,88 @@ export class ActionRepository {
     return this.getById(id);
   }
 
+  pause(id: string): QueuedActionRecord | null {
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'paused'
+         WHERE id = ?
+           AND queue_status NOT IN ('succeeded', 'cancelled')`,
+      )
+      .run(id);
+    return this.getById(id);
+  }
+
+  /**
+   * Unpause without rewriting scheduled_at. Retry / run-now still go through
+   * retry() and may bump the clock; resume must keep the original slot, the
+   * same way Scheduled Messages keeps Schedule_Date when toggling Active.
+   */
+  resume(id: string): QueuedActionRecord | null {
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'queued',
+             state = 'pending'
+         WHERE id = ?
+           AND queue_status = 'paused'`,
+      )
+      .run(id);
+    return this.getById(id);
+  }
+
+  markCompleted(id: string, result?: Record<string, unknown>): QueuedActionRecord | null {
+    const currentTime = now();
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'succeeded',
+             state = 'executed',
+             executed_at = ?,
+             finished_at = ?,
+             result_json = COALESCE(?, result_json),
+             last_error = NULL
+         WHERE id = ?`,
+      )
+      .run(currentTime, currentTime, result ? JSON.stringify(result) : null, id);
+    return this.getById(id);
+  }
+
+  deleteTask(id: string): boolean {
+    const existing = this.getById(id);
+    if (!existing) return false;
+    const cleanup = [
+      `UPDATE outreach_sessions SET action_id = NULL WHERE action_id = ?`,
+      `DELETE FROM action_results WHERE action_id = ?`,
+      `DELETE FROM proposed_action_attempts WHERE action_id = ?`,
+      `DELETE FROM action_readiness_links
+       WHERE source_kind = 'proposed_action' AND source_ref_id = ?`,
+    ];
+    for (const sql of cleanup) {
+      try {
+        this.db.prepare(sql).run(id);
+      } catch {
+        // Related tables appear in later migrations; skip if this DB is older.
+      }
+    }
+    const result = this.db.prepare(`DELETE FROM proposed_actions WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  deleteCompletedTasks(): { deleted: number; ids: string[] } {
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM proposed_actions
+         WHERE queue_status IN ('succeeded', 'cancelled')`,
+      )
+      .all() as Array<{ id: string }>;
+    const ids: string[] = [];
+    for (const row of rows) {
+      if (this.deleteTask(row.id)) ids.push(row.id);
+    }
+    return { deleted: ids.length, ids };
+  }
+
   private selectStaleRunningRows(
     options: RecoverStaleRunningActionsOptions,
   ): ActionRow[] {
@@ -1070,6 +1153,77 @@ export class ActionRepository {
          WHERE id = ?`,
       )
       .run(scheduledAt, title ?? null, id);
+    return this.getById(id);
+  }
+
+  /**
+   * Replace the editable fields of a Task Center row.
+   *
+   * Used by the same dialog as create: title, schedule, recurrence, notify
+   * payload and lane can all change without minting a second task.
+   */
+  updateTask(
+    id: string,
+    input: {
+      title?: string;
+      description?: string | null;
+      params?: Record<string, unknown>;
+      recurrenceSpec?: Record<string, unknown> | null;
+      lane?: TaskLane | null;
+      taskKind?: TaskKind | null;
+      scheduledAt?: number;
+      requiresApproval?: boolean;
+      actionType?: string;
+      requeue?: boolean;
+    },
+  ): QueuedActionRecord | null {
+    const existing = this.getById(id);
+    if (!existing) return null;
+    const requeue = input.requeue !== false && existing.queueStatus !== 'running';
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET title = COALESCE(?, title),
+             description = COALESCE(?, description),
+             params_json = COALESCE(?, params_json),
+             recurrence_spec = ?,
+             lane = COALESCE(?, lane),
+             task_kind = COALESCE(?, task_kind),
+             scheduled_at = COALESCE(?, scheduled_at),
+             requires_approval = COALESCE(?, requires_approval),
+             action_type = COALESCE(?, action_type),
+             type = COALESCE(?, type),
+             queue_status = CASE WHEN ? = 1 THEN 'queued' ELSE queue_status END,
+             state = CASE WHEN ? = 1 THEN 'pending' ELSE state END,
+             started_at = CASE WHEN ? = 1 THEN NULL ELSE started_at END,
+             finished_at = CASE WHEN ? = 1 THEN NULL ELSE finished_at END,
+             last_error = CASE WHEN ? = 1 THEN NULL ELSE last_error END
+         WHERE id = ?`,
+      )
+      .run(
+        input.title ?? null,
+        input.description === undefined ? null : input.description,
+        input.params ? JSON.stringify(input.params) : null,
+        input.recurrenceSpec === undefined
+          ? existing.recurrenceSpec
+            ? JSON.stringify(existing.recurrenceSpec)
+            : null
+          : input.recurrenceSpec
+            ? JSON.stringify(input.recurrenceSpec)
+            : null,
+        input.lane ?? null,
+        input.taskKind ?? null,
+        input.scheduledAt ?? null,
+        input.requiresApproval === undefined ? null : input.requiresApproval ? 1 : 0,
+        input.actionType ?? null,
+        input.actionType ?? null,
+        requeue ? 1 : 0,
+        requeue ? 1 : 0,
+        requeue ? 1 : 0,
+        requeue ? 1 : 0,
+        requeue ? 1 : 0,
+        id,
+      );
     return this.getById(id);
   }
 

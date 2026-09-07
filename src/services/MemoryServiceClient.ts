@@ -2964,6 +2964,7 @@ export interface RuntimeAction {
     | 'succeeded'
     | 'failed'
     | 'cancelled'
+    | 'paused'
     | 'dead_letter';
   utilityScore?: number;
   urgencyScore?: number;
@@ -6939,7 +6940,7 @@ export class MemoryServiceClient {
     requiresApproval?: boolean;
     priority?: number;
     scheduledAt?: number;
-    recurrenceSpec?: Record<string, unknown>;
+    recurrenceSpec?: Record<string, unknown> | null;
     dependsOn?: string[];
     parentActionId?: string;
     idempotencyKey?: string;
@@ -6962,9 +6963,37 @@ export class MemoryServiceClient {
 
   async updateTaskCenterTask(
     id: string,
-    body: { scheduledAt?: number; queueStatus?: 'queued' | 'cancelled'; title?: string },
-  ): Promise<{ task: TaskCenterTask | null }> {
+    body: {
+      taskKind?: TaskKind;
+      title?: string;
+      description?: string;
+      payload?: Record<string, unknown>;
+      lane?: TaskLane;
+      cloudLaneAvailable?: boolean;
+      executionMode?: 'manual' | 'auto';
+      requiresApproval?: boolean;
+      priority?: number;
+      scheduledAt?: number;
+      recurrenceSpec?: Record<string, unknown> | null;
+      queueStatus?: 'queued' | 'cancelled';
+    },
+  ): Promise<{
+    task: TaskCenterTask | null;
+    lane?: { lane: TaskLane; reason: string; honoredRequest: boolean };
+    mirrorRequired?: boolean;
+  }> {
     return this.request('PATCH', `/task-center/tasks/${encodeURIComponent(id)}`, body);
+  }
+
+  async controlTaskCenterTask(
+    id: string,
+    action: 'pause' | 'resume' | 'retry' | 'run_now' | 'complete',
+  ): Promise<{ task: TaskCenterTask }> {
+    return this.request('POST', `/task-center/tasks/${encodeURIComponent(id)}/control`, { action });
+  }
+
+  async deleteTaskCenterTask(id: string): Promise<{ ok: boolean; id: string }> {
+    return this.request('DELETE', `/task-center/tasks/${encodeURIComponent(id)}`);
   }
 
   async sweepTaskCenter(): Promise<{
@@ -6973,6 +7002,10 @@ export class MemoryServiceClient {
     parentsCompleted: number;
   }> {
     return this.request('POST', '/task-center/sweep');
+  }
+
+  async cleanupCompletedTaskCenterTasks(): Promise<{ deleted: number; ids: string[] }> {
+    return this.request('POST', '/task-center/cleanup-completed');
   }
 
   async upsertAgentTaskNotifyConfig(body: {

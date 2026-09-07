@@ -52,6 +52,18 @@ const TASKS = [
     retryCount: 0,
     createdAt: Math.floor(Date.now() / 1000),
   },
+  {
+    id: 'task-done-1',
+    title: '已经做完的日报',
+    taskKind: 'push',
+    lane: 'memory_cron',
+    queueStatus: 'succeeded',
+    scheduledAt: Math.floor(Date.now() / 1000) - 86400,
+    priority: 5,
+    dependsOn: [],
+    retryCount: 0,
+    createdAt: Math.floor(Date.now() / 1000) - 86400,
+  },
 ];
 
 async function launch() {
@@ -73,10 +85,16 @@ async function launch() {
 async function main() {
   const { context, extensionId, worker } = await launch();
   const createdPayloads = [];
+  const patchedPayloads = [];
+  const controlPayloads = [];
+  const deletedIds = [];
+  const liveTasks = TASKS.map((task) => ({ ...task }));
+  let cleanedCompleted = false;
 
   try {
     await context.route('**/api/v1/**', async (route) => {
       const url = route.request().url();
+      const method = route.request().method();
       const json = (body) =>
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
@@ -88,7 +106,33 @@ async function main() {
           cloudLaneDetection: 'client_reported',
         });
       }
-      if (url.includes('/task-center/tasks') && route.request().method() === 'POST') {
+      if (url.includes('/task-center/cleanup-completed') && method === 'POST') {
+        cleanedCompleted = true;
+        const removed = liveTasks.filter((task) => ['succeeded', 'cancelled'].includes(task.queueStatus));
+        for (const task of removed) {
+          const index = liveTasks.findIndex((item) => item.id === task.id);
+          if (index >= 0) liveTasks.splice(index, 1);
+        }
+        return json({ deleted: removed.length, ids: removed.map((task) => task.id) });
+      }
+      if (url.includes('/task-center/tasks/') && url.includes('/control') && method === 'POST') {
+        const id = url.match(/\/task-center\/tasks\/([^/]+)\/control/)?.[1];
+        const action = JSON.parse(route.request().postData() || '{}').action;
+        controlPayloads.push({ id, action });
+        const task = liveTasks.find((item) => item.id === id);
+        if (task && action === 'pause') task.queueStatus = 'paused';
+        if (task && action === 'resume') task.queueStatus = 'queued';
+        if (task && action === 'complete') task.queueStatus = 'succeeded';
+        return json({ task: task || liveTasks[0] });
+      }
+      if (url.includes('/task-center/tasks/') && method === 'DELETE') {
+        const id = url.match(/\/task-center\/tasks\/([^/?]+)/)?.[1];
+        deletedIds.push(id);
+        const index = liveTasks.findIndex((item) => item.id === id);
+        if (index >= 0) liveTasks.splice(index, 1);
+        return json({ ok: true, id });
+      }
+      if (url.includes('/task-center/tasks') && method === 'POST') {
         createdPayloads.push(JSON.parse(route.request().postData() || '{}'));
         return route.fulfill({
           status: 201,
@@ -100,7 +144,21 @@ async function main() {
           }),
         });
       }
-      if (url.includes('/task-center/tasks')) return json({ items: TASKS, total: TASKS.length });
+      if (url.includes('/task-center/tasks/') && method === 'PATCH') {
+        const patched = JSON.parse(route.request().postData() || '{}');
+        patchedPayloads.push(patched);
+        const id = url.match(/\/task-center\/tasks\/([^/?]+)/)?.[1];
+        const task = liveTasks.find((item) => item.id === id) || liveTasks[0];
+        Object.assign(task, patched, { id: task.id, title: patched.title || task.title });
+        return json({
+          task,
+          lane: { lane: 'memory_cron', reason: 'memory-service 到期队列调度', honoredRequest: true },
+          mirrorRequired: false,
+        });
+      }
+      if (url.includes('/task-center/tasks')) {
+        return json({ items: liveTasks, total: liveTasks.length });
+      }
       if (url.includes('/config')) {
         return json({ ringCentralJwtConfigured: false, ringCentralClientId: '' });
       }
@@ -138,8 +196,8 @@ async function main() {
     const setupText = await page.evaluate(
       () => document.querySelector('.tc-dialog')?.textContent ?? '',
     );
-    assert.ok(setupText.includes('去配置 Bot'), 'L1 未启用时应给出配置入口');
-    assert.ok(setupText.includes('去配置 AsMe'), 'L1 应同时列出 AsMe 配置入口');
+    assert.ok(setupText.includes('在此配置 Bot'), 'L1 未启用时应在此页配置 Bot');
+    assert.ok(setupText.includes('在此配置 AsMe'), 'L1 应在此页配置 AsMe');
     assert.ok(setupText.includes('去一键初始化'), 'L2 未启用时应给出初始化入口');
     assert.ok(setupText.includes('解锁'), '每层应说明解锁什么');
     await page.click('.tc-dialog-foot .tc-btn');
@@ -158,6 +216,52 @@ async function main() {
     assert.ok(filteredRows[0].includes('回复 Kenny'), '保留的应是提醒任务');
     console.log('✓ 类型筛选生效');
 
+    // 4b. Edit reuses the create dialog and PATCHes the same task.
+    await page.click('button.chip:has-text("全部")');
+    await page.click('.tc-row:has-text("每天检查")');
+    await page.click('.tc-detail-actions .tc-btn.primary:has-text("编辑")');
+    await page.waitForSelector('.tc-dialog', { timeout: 5000 });
+    const editTitle = await page.evaluate(
+      () => document.querySelector('.tc-dialog-head strong')?.textContent ?? '',
+    );
+    assert.equal(editTitle, '编辑任务', '应复用新建弹窗作为编辑');
+    const titleValue = await page.inputValue('.tc-dialog input[type=text]');
+    assert.ok(titleValue.length > 0, '编辑弹窗应回填标题');
+    await page.fill('.tc-dialog input[type=text]', '每天检查无 Assignee 的新 bug（已改）');
+    await page.click('.tc-dialog-foot .tc-btn.primary');
+    await page.waitForFunction(() => document.body.innerText.includes('已保存'), { timeout: 8000 });
+    assert.equal(patchedPayloads.length, 1, '编辑应走 PATCH 而不是再 POST 一条');
+    assert.equal(patchedPayloads[0].title, '每天检查无 Assignee 的新 bug（已改）');
+    console.log('✓ 编辑复用新建弹窗并 PATCH 原任务');
+
+    // 4c. Lifecycle actions match Scheduled Messages: pause, delete, cleanup done.
+    await page.click('.tc-detail-actions .tc-btn:has-text("暂停")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-detail-head .tc-status')?.textContent === '已暂停',
+      { timeout: 8000 },
+    );
+    assert.equal(controlPayloads.some((item) => item.action === 'pause'), true, '暂停应走 /control');
+    await page.click('.tc-detail-actions .tc-btn:has-text("恢复")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-detail-head .tc-status')?.textContent === '待执行',
+      { timeout: 8000 },
+    );
+    await page.click('.tc-detail-actions .tc-btn.danger:has-text("删除")');
+    await page.click('.tc-confirm .tc-btn.danger:has-text("确认删除")');
+    await page.waitForFunction(
+      () => document.body.innerText.includes('已删除'),
+      { timeout: 8000 },
+    );
+    assert.equal(deletedIds.includes('task-push-1'), true, '删除应走 DELETE /task-center/tasks/:id');
+    await page.click('button.tc-btn:has-text("清理已完成")');
+    await page.click('.tc-confirm-page .tc-btn.danger:has-text("确认清理")');
+    await page.waitForFunction(
+      () => document.body.innerText.includes('已清理'),
+      { timeout: 8000 },
+    );
+    assert.equal(cleanedCompleted, true, '清理已完成应走 /cleanup-completed');
+    console.log('✓ 暂停 / 恢复 / 删除 / 清理已完成');
+
     // 5. The lane picker greys the cloud lane when Level 2 is absent — this is
     //    the layered-activation contract the whole design rests on.
     await page.click('button.chip:has-text("全部")');
@@ -173,7 +277,23 @@ async function main() {
       () => document.querySelector('.tc-dialog')?.textContent ?? '',
     );
     assert.ok(dialogText.includes('Level 2'), '应说明缺什么才能用 ☁️');
-    console.log('✓ 未启用 L2 时 ☁️ 调度器置灰并说明原因');
+    assert.ok(dialogText.includes('执行时间'), '应有执行日期/时间，与定时消息页对齐');
+    assert.ok(dialogText.includes('是否重复推送'), '应有重复开关');
+    await page.click('.tc-dialog label.ck:has-text("是否重复推送")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('每周几'),
+      { timeout: 3000 },
+    );
+    const repeatingText = await page.evaluate(
+      () => document.querySelector('.tc-dialog')?.textContent ?? '',
+    );
+    assert.ok(repeatingText.includes('每周几'), '按周循环应能选星期');
+    await page.click('.tc-dialog .tc-repeat .tc-opt:has-text("月")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('每月几号'),
+      { timeout: 3000 },
+    );
+    console.log('✓ 未启用 L2 时 ☁️ 调度器置灰；重复规则可配每周几 / 每月几号');
 
     // 6. Dev delegation requires acceptance criteria before it can be saved.
     await page.click('.tc-dialog .tc-opt:has-text("开发委派")');

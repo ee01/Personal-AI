@@ -43,14 +43,11 @@ function nonEmpty(value: unknown): string {
  */
 export function probeTaskCenterLevels(input: {
   scheduledMessagesConfig?: unknown;
-  botConfig?: unknown;
   runtime?: TaskCenterRuntimeProbe | null;
 }): TaskCenterLevelProbe {
   const config = asRecord(input.scheduledMessagesConfig) as Partial<SheetConfig> & {
     spreadsheetId?: string;
-    botId?: string;
   };
-  const localBot = asRecord(input.botConfig);
   const runtime = input.runtime ?? {};
 
   const sheetId = nonEmpty(config.sheetId) || nonEmpty(config.spreadsheetId);
@@ -63,11 +60,7 @@ export function probeTaskCenterLevels(input: {
     cloudBotConfigured: hasExecutorRule(config),
     cloudTimelineConfigured: hasTimelineSyncRule(config),
     cloudAsmeConfigured: hasRingCentralSenderCredentials(config),
-    botConfigured: Boolean(
-      (runtime.botTokenConfigured && nonEmpty(runtime.botId)) ||
-        nonEmpty(localBot.botId) ||
-        nonEmpty(config.botId),
-    ),
+    botConfigured: Boolean(runtime.botTokenConfigured && nonEmpty(runtime.botId)),
     asmeConfigured: Boolean(
       runtime.ringCentralJwtConfigured && nonEmpty(runtime.ringCentralClientId),
     ),

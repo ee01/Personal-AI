@@ -355,4 +355,123 @@ describe('Task Center task updates', () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it('full editor save updates payload, target and recurrence without minting a second row', async () => {
+    const created = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: {
+        taskKind: 'push',
+        title: '每晚 inbox',
+        payload: { pushMethod: 'message', content: '清 inbox', notifyVia: 'plugin' },
+        scheduledAt: 1000,
+      },
+    });
+    const id = created.json().task.id as string;
+    const res = await app2.inject({
+      method: 'PATCH',
+      url: `/api/v1/task-center/tasks/${id}`,
+      payload: {
+        taskKind: 'push',
+        title: '工作日 inbox',
+        description: '清 inbox 并 @ Esone',
+        scheduledAt: 2000,
+        recurrenceSpec: {
+          repeatEvery: 1,
+          repeatUnit: 'Week',
+          repeatDays: '1,2,3,4,5',
+          scheduleDate: '2026-09-07',
+          scheduleTime: '09:00',
+        },
+        payload: {
+          pushMethod: 'message',
+          content: '清 inbox 并 @ Esone',
+          notifyVia: 'bot',
+          notifyTarget: { type: 'private', targetUserId: 'esone.qiu', glipUserName: 'esone.qiu' },
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const stored = new ActionRepository(db2).getById(id);
+    expect(stored?.title).toBe('工作日 inbox');
+    expect(stored?.scheduledAt).toBe(2000);
+    expect(stored?.recurrenceSpec).toMatchObject({ repeatUnit: 'Week', repeatDays: '1,2,3,4,5' });
+    expect(stored?.params?.notifyVia).toBe('bot');
+    expect((stored?.params?.metadata as Record<string, unknown>)?.notifyTarget).toMatchObject({
+      type: 'private',
+      targetUserId: 'esone.qiu',
+    });
+    const listed = await app2.inject({ method: 'GET', url: '/api/v1/task-center/tasks' });
+    expect(listed.json().total).toBe(1);
+  });
+
+  it('pauses, resumes, runs now, completes and deletes a task', async () => {
+    const created = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: { taskKind: 'push', title: '可暂停的推送', scheduledAt: 9_999_999 },
+    });
+    const id = created.json().task.id as string;
+
+    const resumeBeforePause = await app2.inject({
+      method: 'POST',
+      url: `/api/v1/task-center/tasks/${id}/control`,
+      payload: { action: 'resume' },
+    });
+    expect(resumeBeforePause.statusCode).toBe(409);
+
+    const paused = await app2.inject({
+      method: 'POST',
+      url: `/api/v1/task-center/tasks/${id}/control`,
+      payload: { action: 'pause' },
+    });
+    expect(paused.statusCode).toBe(200);
+    expect(paused.json().task.queueStatus).toBe('paused');
+    expect(paused.json().task.scheduledAt).toBe(9_999_999);
+    expect(new ActionRepository(db2).listDueAutoActions(10, 9_999_999).map((row) => row.id)).not.toContain(id);
+
+    const resumed = await app2.inject({
+      method: 'POST',
+      url: `/api/v1/task-center/tasks/${id}/control`,
+      payload: { action: 'resume' },
+    });
+    expect(resumed.json().task.queueStatus).toBe('queued');
+    expect(resumed.json().task.scheduledAt).toBe(9_999_999);
+
+    const runNow = await app2.inject({
+      method: 'POST',
+      url: `/api/v1/task-center/tasks/${id}/control`,
+      payload: { action: 'run_now' },
+    });
+    expect(runNow.json().task.queueStatus).toBe('queued');
+    expect(runNow.json().task.scheduledAt).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 2);
+
+    const completed = await app2.inject({
+      method: 'POST',
+      url: `/api/v1/task-center/tasks/${id}/control`,
+      payload: { action: 'complete' },
+    });
+    expect(completed.json().task.queueStatus).toBe('succeeded');
+
+    const cleaned = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/cleanup-completed',
+    });
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json().deleted).toBe(1);
+    expect(new ActionRepository(db2).getById(id)).toBeNull();
+
+    const createdAgain = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: { taskKind: 'remind', title: '可删除的提醒', scheduledAt: 9_999_999 },
+    });
+    const deleteId = createdAgain.json().task.id as string;
+    const deleted = await app2.inject({
+      method: 'DELETE',
+      url: `/api/v1/task-center/tasks/${deleteId}`,
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(new ActionRepository(db2).getById(deleteId)).toBeNull();
+  });
 });
