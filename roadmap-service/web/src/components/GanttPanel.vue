@@ -1297,8 +1297,9 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- v-if: ResourceView 有多个根节点（主视图 + 延长 Epic 弹窗），v-show 无法落到根上 -->
     <ResourceView
-      v-show="state.view.value === 'resource'"
+      v-if="state.view.value === 'resource'"
       :tl="tl"
       @defer-committed="onDeferCommitted"
     />
