@@ -318,6 +318,38 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.status).toBe('succeeded');
   });
 
+  it('accepts write/noop even when the task boundary was configured as read', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary:
+          '查到 9 个 Team 为空的 Nova Epic，所有 INIT 的 Team 数均 >1，因此 0 个 Epic 被更新。',
+        outcome: {
+          mode: 'write',
+          verdict: 'noop',
+          count: 0,
+          sourceSystem: 'jira',
+          method: 'jql_requery',
+          subject:
+            "issueFunction in portfolioChildrenOf('filter=153978') and issuetype = Epic and status not in (Cancelled) and project=NOVA and cf[17553] is EMPTY",
+        },
+        artifacts: [
+          {
+            kind: 'note',
+            title: 'Epic → INIT Team 检查明细（9 个均未更新）',
+            content: 'NOVA-17895 → INIT-28290 (2 teams)',
+            metadata: { sourceSystem: 'jira', verification: 'rest_api_readback' },
+          },
+        ],
+      }),
+      { mode: 'read', targetSystem: 'jira' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.outcome?.verdict).toBe('noop');
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
+  });
+
   it('still rejects success with only a bare note and no query proof', () => {
     const parsed = parseAgentResultEnvelope(
       JSON.stringify({

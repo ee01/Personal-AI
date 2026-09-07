@@ -160,8 +160,10 @@ export function readAgentTaskOutcome(value: unknown): AgentTaskOutcome | undefin
 
 /**
  * The executor judged the run; this checks that the judgment is internally
- * consistent and, for a write that claims mutations, that it named the
- * objects it changed. Presentation notes (team buckets, etc.) are not proof.
+ * consistent. `outcome.mode` is informational — a read-configured task that
+ * evaluated a write condition and returned noop is still a verified success.
+ * A mutated claim must name the objects it changed. Presentation notes are
+ * not proof.
  */
 export function isVerifiedOutcome(
   outcome: AgentTaskOutcome | undefined,
@@ -169,14 +171,10 @@ export function isVerifiedOutcome(
   options: VerifiableProofOptions = {},
 ): boolean {
   if (!outcome) return false;
-  if (options.mode && outcome.mode !== options.mode) return false;
+  void options.mode;
 
-  if (outcome.mode === 'read') {
-    if (outcome.verdict === 'empty') return outcome.count === 0;
-    return outcome.verdict === 'observed';
-  }
-
-  if (outcome.verdict === 'noop' || outcome.verdict === 'empty') {
+  if (outcome.verdict === 'observed') return true;
+  if (outcome.verdict === 'empty' || outcome.verdict === 'noop') {
     return outcome.count === 0;
   }
   if (outcome.verdict !== 'mutated' || outcome.count <= 0) return false;

@@ -171,8 +171,10 @@ export function parseAgentResultEnvelope(
         status: 'error',
         summary: `${summary}（缺少可验证 artifact）`,
         artifacts,
+        outcome,
         payload: {
           ...payload,
+          ...(outcome ? { outcome } : {}),
           artifactValidation: 'missing_verifiable_artifact',
         },
       };

@@ -161,7 +161,7 @@ export function buildAgentResultSystemPrompt(
     '先自己判断这次读/写有没有做成，再用封闭的 outcome 回报判断。status=success 不够。Personal AI 只认 outcome 或下面三种收据，不认业务分组字段或对象列表字段名。',
     '',
     'outcome（status=success 时填写）：',
-    '- mode：与任务边界一致（read 或 write）。',
+    '- mode：任务边界的标注（read 或 write）。与任务 Mode 不一致也可以：例如任务标成 read，但你评估了写入条件后确认无需改，verdict=noop 仍算成功。Personal AI 看 verdict，不要求 mode 字面相等。',
     '- verdict：读用 observed（查到了，count>=0）或 empty（确认 0 条，count=0）；写用 mutated（改了 count>0 个对象）或 noop（确认无需改，count=0）。',
     '- sourceSystem / method：外部系统和你怎么确认的（jql_requery、rest_api_readback、page_url、git_status…）。',
     '- subject：可复跑的查询、URL 或对象 ID，不是散文摘要。',
