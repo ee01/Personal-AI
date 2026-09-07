@@ -57,6 +57,7 @@ type Props = {
   openClawApiKeyConfigured: boolean;
   minOpenClawTimeoutSeconds: number;
   highlighted?: boolean;
+  runtimeHydrating?: boolean;
   sectionRef?: React.Ref<HTMLDivElement>;
   onChange: (next: {
     executors: AgentExecutorDraft[];
@@ -133,6 +134,7 @@ export function AgentExecutorsSettings({
   openClawApiKeyConfigured,
   minOpenClawTimeoutSeconds,
   highlighted = false,
+  runtimeHydrating = false,
   sectionRef,
   onChange,
 }: Props) {
@@ -330,6 +332,15 @@ export function AgentExecutorsSettings({
       }
     >
       <h2>Agent 执行器</h2>
+      {runtimeHydrating ? (
+        <small style={{ color: '#084298', display: 'block', marginBottom: 12 }}>
+          正在从 Memory Service 加载执行器列表和外部委派开关，加载完成前不会用本机缓存覆盖服务端。
+        </small>
+      ) : null}
+      <fieldset
+        disabled={runtimeHydrating}
+        style={{ border: 0, margin: 0, padding: 0, minInlineSize: 0 }}
+      >
       <small style={{ color: '#666', display: 'block', marginBottom: '15px' }}>
         列表里的执行器添加后即可选用。Agent Task 有独立默认执行器；下方「外部委派」开关只影响反思查证
         / 联动操作，不影响 Agent Task。Codex / Claude Code 可跑在 Memory Service 本机，或经
@@ -785,6 +796,7 @@ export function AgentExecutorsSettings({
           </div>
         ) : null}
       </div>
+      </fieldset>
     </div>
   );
 }

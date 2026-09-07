@@ -31,6 +31,16 @@ import {
 } from './deviceApiKey';
 import { agentCoordinator } from './agentWorkflow';
 import {
+  applyRuntimeConfigToEnvConfig,
+  canSaveWithRuntimeConfig,
+  diffServerBackedEnvConfig,
+  displayServerBackedDefaultOn,
+  displayServerBackedToggle,
+  formatRuntimeHydrationReceipt,
+  shouldWriteRuntimeConfig,
+  type RuntimeHydrationStatus,
+} from './optionsRuntimeConfig';
+import {
   AGENT_WORKFLOW_SAVED_SCENARIO_LIMIT,
   AGENT_WORKFLOW_TEST_SCENARIOS,
   buildAgentWorkflowScenarioSourceReceipt,
@@ -2185,6 +2195,17 @@ const Options = () => {
   const [weeklyReportMinMessages, setWeeklyReportMinMessages] =
     useState<number>(20);
   const [weeklyReportSaving, setWeeklyReportSaving] = useState(false);
+  const [localConfigLoaded, setLocalConfigLoaded] = useState(false);
+  const [runtimeHydration, setRuntimeHydration] =
+    useState<RuntimeHydrationStatus>('pending');
+  const [runtimeHydrationReceipt, setRuntimeHydrationReceipt] = useState('');
+  const [hydrateEpoch, setHydrateEpoch] = useState(0);
+  const configRef = useRef(config);
+  const hydrateGenerationRef = useRef(0);
+  configRef.current = config;
+  const runtimeFieldsLocked =
+    runtimeHydration === 'pending' || runtimeHydration === 'error';
+  const saveBlockedByHydration = runtimeHydration === 'pending';
 
   const resolvePushTargetValue = (
     target: string | undefined,
@@ -2494,39 +2515,78 @@ const Options = () => {
     return null;
   };
 
-  // Load weekly report settings from backend
-  const loadWeeklyReportSettingsFromBackend = async (
+  const persistRuntimeConfigMirror = async (nextConfig: EnvConfigType) => {
+    const persistedConfig = sanitizeLocalEnvConfig(nextConfig);
+    await chrome.storage.local.set({ envConfig: persistedConfig });
+    await chrome.runtime.sendMessage({
+      type: 'UPDATE_ENV_CONFIG',
+      config: persistedConfig,
+    });
+  };
+
+  const hydrateRuntimeConfig = async (
     targetConfig: EnvConfigType,
+    options?: { persistMirror?: boolean; announceDrift?: boolean },
   ) => {
+    const persistMirror = options?.persistMirror !== false;
+    const announceDrift = options?.announceDrift !== false;
+    if (!targetConfig.MEMORY_SERVICE_BASE_URL) {
+      setRuntimeHydration('skipped');
+      setRuntimeHydrationReceipt(
+        '未配置 Memory Service 地址，主动询问等运行时开关先留在本机，保存时不会写入服务端。',
+      );
+      return;
+    }
+
+    const generation = ++hydrateGenerationRef.current;
+    setRuntimeHydration('pending');
     try {
-      const data = await getRuntimeConfigFromBackend(targetConfig);
-      if (!data) return;
-      if (data.weeklyReportCron) {
-        setWeeklyReportCron(data.weeklyReportCron);
+      const serverConfig = await getRuntimeConfigFromBackend(targetConfig);
+      if (generation !== hydrateGenerationRef.current) {
+        return;
       }
-      if (data.weeklyReportMinMessages !== undefined) {
-        setWeeklyReportMinMessages(Number(data.weeklyReportMinMessages));
+      if (!serverConfig) {
+        setRuntimeHydration('error');
+        setRuntimeHydrationReceipt(
+          '无法读取 Memory Service 运行时配置。保存本机扩展项时不会覆盖主动询问、自我反思等服务端开关。',
+        );
+        return;
       }
-      setConfig((prev) => ({
-        ...prev,
-        WEEKLY_REPORT_CRON: data.weeklyReportCron || prev.WEEKLY_REPORT_CRON,
-        WEEKLY_REPORT_MIN_MESSAGES:
-          data.weeklyReportMinMessages !== undefined
-            ? Number(data.weeklyReportMinMessages)
-            : prev.WEEKLY_REPORT_MIN_MESSAGES,
-        WEEKLY_REPORT_PUSH_TARGET: resolvePushTargetValue(
-          data.weeklyReportPushTarget,
-          prev.WEEKLY_REPORT_PUSH_TARGET || 'me',
-          true,
-          data.weeklyReportEnabled,
-        ),
-        WEEKLY_REPORT_PUSH_GROUP_ID:
-          data.weeklyReportPushGroupId ||
-          prev.WEEKLY_REPORT_PUSH_GROUP_ID ||
-          '',
-      }));
-    } catch (err) {
-      console.warn('Failed to load weekly report settings from backend:', err);
+
+      const latestLocal = configRef.current;
+      const hydrated = applyRuntimeConfigToEnvConfig(latestLocal, serverConfig, {
+        minOpenClawTimeoutMs: MIN_OPENCLAW_TIMEOUT_SECONDS * 1000,
+      });
+      const diffs = diffServerBackedEnvConfig(latestLocal, hydrated);
+      setConfig(hydrated);
+      setWeeklyReportCron(hydrated.WEEKLY_REPORT_CRON || '0 18 * * 5');
+      setWeeklyReportMinMessages(
+        Number(hydrated.WEEKLY_REPORT_MIN_MESSAGES) || 20,
+      );
+      if (persistMirror) {
+        await persistRuntimeConfigMirror(hydrated);
+      }
+      if (generation !== hydrateGenerationRef.current) {
+        return;
+      }
+      setRuntimeHydration('ready');
+      setRuntimeHydrationReceipt(
+        announceDrift
+          ? formatRuntimeHydrationReceipt(diffs)
+          : '已从 Memory Service 核对运行时配置。',
+      );
+      await loadOutreachDirectoryStatusFromBackend(hydrated);
+    } catch (error) {
+      if (generation !== hydrateGenerationRef.current) {
+        return;
+      }
+      console.warn('加载 Memory Service 运行时配置失败:', error);
+      setRuntimeHydration('error');
+      setRuntimeHydrationReceipt(
+        `无法读取 Memory Service 运行时配置：${
+          error instanceof Error ? error.message : String(error)
+        }。保存本机扩展项时不会覆盖服务端开关。`,
+      );
     }
   };
 
@@ -2559,6 +2619,23 @@ const Options = () => {
     }
     setWeeklyReportSaving(true);
     try {
+      if (!canSaveWithRuntimeConfig(runtimeHydration)) {
+        setStatus({
+          message:
+            '正在从 Memory Service 加载运行时配置，请稍后再保存周报，以免用本机缓存覆盖服务端。',
+          type: 'error',
+        });
+        return;
+      }
+      if (!shouldWriteRuntimeConfig(runtimeHydration)) {
+        setStatus({
+          message:
+            '尚未读到 Memory Service 运行时配置，未把周报开关写到服务端。',
+          type: 'error',
+        });
+        return;
+      }
+
       const persistedConfig = sanitizeLocalEnvConfig(config);
       await chrome.storage.local.set({ envConfig: persistedConfig });
       await chrome.runtime.sendMessage({
@@ -2637,8 +2714,7 @@ const Options = () => {
         setWeeklyReportMinMessages(
           Number(merged.WEEKLY_REPORT_MIN_MESSAGES) || 20,
         );
-        loadDreamDigestSettingsFromBackend(merged);
-        loadOutreachDirectoryStatusFromBackend(merged);
+        setLocalConfigLoaded(true);
         refreshOutlookCalendarStatus();
       } else {
         // 如果没有保存过配置，则尝试从 .env 加载
@@ -2649,12 +2725,15 @@ const Options = () => {
     );
   }, []);
 
-  // Load weekly report settings from backend when config is ready
   useEffect(() => {
-    if (config.MEMORY_SERVICE_BASE_URL) {
-      loadWeeklyReportSettingsFromBackend(config);
+    if (!localConfigLoaded) {
+      return;
     }
-  }, [config.MEMORY_SERVICE_BASE_URL, config.MEMORY_SERVICE_API_KEY]);
+    void hydrateRuntimeConfig(config, {
+      persistMirror: true,
+      announceDrift: true,
+    });
+  }, [localConfigLoaded, hydrateEpoch, config.MEMORY_SERVICE_BASE_URL, config.MEMORY_SERVICE_API_KEY]);
 
   useEffect(() => {
     const scrollToHashSection = () => {
@@ -2696,8 +2775,8 @@ const Options = () => {
       setWeeklyReportMinMessages(
         Number(config.WEEKLY_REPORT_MIN_MESSAGES) || 20,
       );
-      await loadDreamDigestSettingsFromBackend(config);
-      await loadOutreachDirectoryStatusFromBackend(config);
+      setLocalConfigLoaded(true);
+      setHydrateEpoch((epoch) => epoch + 1);
       setStatus({
         message: '已从.env文件加载默认配置',
         type: 'success',
@@ -2923,175 +3002,10 @@ const Options = () => {
   const loadDreamDigestSettingsFromBackend = async (
     targetConfig: EnvConfigType,
   ) => {
-    if (!targetConfig.MEMORY_SERVICE_BASE_URL) return;
-    try {
-      const serverConfig = await getRuntimeConfigFromBackend(targetConfig);
-      if (!serverConfig) return;
-      const scheduleType = String(serverConfig?.dreamDigestScheduleType || '');
-      const intervalDays =
-        Number(serverConfig?.dreamDigestIntervalDays) ||
-        (Number(serverConfig?.dreamDigestIntervalWeeks) || 0) * 7;
-      const resolvedScheduleType =
-        scheduleType === 'every_x_weeks' ? 'every_x_days' : scheduleType;
-      setConfig((prev) => ({
-        ...prev,
-        DREAM_DIGEST_SCHEDULE_TYPE:
-          resolvedScheduleType === 'every_x_days' ||
-          resolvedScheduleType === 'monthly'
-            ? resolvedScheduleType
-            : prev.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days',
-        DREAM_DIGEST_INTERVAL_DAYS: Number.isFinite(intervalDays)
-          ? Math.max(1, Math.floor(intervalDays))
-          : prev.DREAM_DIGEST_INTERVAL_DAYS || 1,
-        DREAM_INSIGHT_PUSH_TARGET: resolvePushTargetValue(
-          serverConfig?.dreamDigestPushTarget,
-          prev.DREAM_INSIGHT_PUSH_TARGET || 'me',
-          true,
-          serverConfig?.dreamDigestEnabled,
-        ),
-        DREAM_INSIGHT_PUSH_GROUP_ID:
-          serverConfig?.dreamDigestPushGroupId ||
-          prev.DREAM_INSIGHT_PUSH_GROUP_ID ||
-          '',
-        SELF_REFLECTION_ENABLED:
-          serverConfig?.reflectionEnabled !== undefined
-            ? Boolean(serverConfig.reflectionEnabled)
-            : prev.SELF_REFLECTION_ENABLED,
-        SELF_REFLECTION_HEARTBEAT_MINUTES: Number.isFinite(
-          Number(serverConfig?.reflectionHeartbeatMinutes),
-        )
-          ? Math.max(
-              1,
-              Math.floor(Number(serverConfig.reflectionHeartbeatMinutes)),
-            )
-          : prev.SELF_REFLECTION_HEARTBEAT_MINUTES || 15,
-        DECISION_CENTER_PUSH_TARGET: resolvePushTargetValue(
-          serverConfig?.decisionCenterPushTarget,
-          prev.DECISION_CENTER_PUSH_TARGET || 'me',
-          false,
-        ),
-        DECISION_CENTER_PUSH_GROUP_ID:
-          serverConfig?.decisionCenterPushGroupId ||
-          prev.DECISION_CENTER_PUSH_GROUP_ID ||
-          '',
-        OPENCLAW_ENABLED:
-          serverConfig?.openClawEnabled !== undefined
-            ? Boolean(serverConfig.openClawEnabled)
-            : prev.OPENCLAW_ENABLED !== false,
-        OPENCLAW_BASE_URL:
-          typeof serverConfig?.openClawBaseUrl === 'string'
-            ? serverConfig.openClawBaseUrl
-            : prev.OPENCLAW_BASE_URL,
-        OPENCLAW_TIMEOUT_MS: Number.isFinite(
-          Number(serverConfig?.openClawTimeoutMs),
-        )
-          ? Math.max(
-              MIN_OPENCLAW_TIMEOUT_SECONDS * 1000,
-              Math.floor(Number(serverConfig.openClawTimeoutMs)),
-            )
-          : prev.OPENCLAW_TIMEOUT_MS || 600000,
-        OPENCLAW_API_KEY_CONFIGURED: Boolean(
-          serverConfig?.openClawApiKeyConfigured,
-        ),
-        AGENT_EXECUTORS: Array.isArray(serverConfig?.agentExecutors)
-          ? serverConfig.agentExecutors.map((item) => {
-              const type =
-                item.type === 'openclaw-gateway' ||
-                item.type === 'acp-codex' ||
-                item.type === 'acp-claude-code' ||
-                item.type === 'acp-cursor'
-                  ? item.type
-                  : 'openclaw-responses';
-              const isAcp =
-                type === 'acp-codex' ||
-                type === 'acp-claude-code' ||
-                type === 'acp-cursor';
-              return {
-                id: String(item.id || ''),
-                label: String(item.label || item.id || ''),
-                type,
-                baseUrl: item.baseUrl || '',
-                apiKey: '',
-                cwd: item.cwd || '',
-                runtime:
-                  item.runtime === 'remote'
-                    ? 'remote'
-                    : isAcp
-                      ? 'local'
-                      : undefined,
-                workerId: item.workerId || '',
-                enabled: true,
-                apiKeyConfigured: Boolean(item.apiKeyConfigured),
-                clearApiKey: false,
-              };
-            })
-          : prev.AGENT_EXECUTORS || [],
-        EXECUTOR_DEFAULTS: {
-          agent_task: serverConfig?.executorDefaults?.agent_task || '',
-          reflection_research:
-            serverConfig?.executorDefaults?.reflection_research || '',
-        },
-        OUTREACH_ENABLED:
-          serverConfig?.outreachEnabled !== undefined
-            ? Boolean(serverConfig.outreachEnabled)
-            : prev.OUTREACH_ENABLED,
-        OUTREACH_INTERVAL_MS: Number.isFinite(
-          Number(serverConfig?.outreachIntervalMs),
-        )
-          ? Math.max(1000, Math.floor(Number(serverConfig.outreachIntervalMs)))
-          : prev.OUTREACH_INTERVAL_MS || 60000,
-        OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION:
-          serverConfig?.outreachRequireApprovalForReflection !== undefined
-            ? Boolean(serverConfig.outreachRequireApprovalForReflection)
-            : prev.OUTREACH_REQUIRE_APPROVAL_FOR_REFLECTION,
-        OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL:
-          serverConfig?.outreachRequireApprovalForManual !== undefined
-            ? Boolean(serverConfig.outreachRequireApprovalForManual)
-            : prev.OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL,
-        OUTREACH_RESULT_PUSH_TARGET: resolvePushTargetValue(
-          serverConfig?.outreachResultPushTarget,
-          prev.OUTREACH_RESULT_PUSH_TARGET || 'me',
-          false,
-        ),
-        OUTREACH_RESULT_PUSH_GROUP_ID:
-          serverConfig?.outreachResultPushGroupId ||
-          prev.OUTREACH_RESULT_PUSH_GROUP_ID ||
-          '',
-        RINGCENTRAL_SERVER_URL:
-          typeof serverConfig?.ringCentralServerUrl === 'string'
-            ? serverConfig.ringCentralServerUrl
-            : prev.RINGCENTRAL_SERVER_URL,
-        RINGCENTRAL_CLIENT_ID:
-          typeof serverConfig?.ringCentralClientId === 'string'
-            ? serverConfig.ringCentralClientId
-            : prev.RINGCENTRAL_CLIENT_ID,
-        RINGCENTRAL_CLIENT_SECRET_CONFIGURED: Boolean(
-          serverConfig?.ringCentralClientSecretConfigured,
-        ),
-        RINGCENTRAL_JWT_CONFIGURED: Boolean(
-          serverConfig?.ringCentralJwtConfigured,
-        ),
-        BOT_API_BASE_URL:
-          typeof serverConfig?.botApiBaseUrl === 'string'
-            ? serverConfig.botApiBaseUrl.trim() || prev.BOT_API_BASE_URL
-            : prev.BOT_API_BASE_URL,
-        BOT_ID:
-          typeof serverConfig?.botId === 'string'
-            ? serverConfig.botId.trim() || prev.BOT_ID
-            : prev.BOT_ID,
-        BOT_TYPE:
-          serverConfig?.botType === 'team' || serverConfig?.botType === 'user'
-            ? serverConfig.botType
-            : prev.BOT_TYPE,
-        TEAM_ID:
-          typeof serverConfig?.botTeamId === 'string'
-            ? serverConfig.botTeamId
-            : prev.TEAM_ID,
-        BOT_TOKEN_CONFIGURED: Boolean(serverConfig?.botTokenConfigured),
-      }));
-    } catch (error) {
-      console.warn('加载梦境重放报表配置失败:', error);
-    }
+    await hydrateRuntimeConfig(targetConfig, {
+      persistMirror: true,
+      announceDrift: false,
+    });
   };
 
   const loadOutreachDirectoryStatusFromBackend = async (
@@ -3360,6 +3274,15 @@ const Options = () => {
         return;
       }
 
+      if (!canSaveWithRuntimeConfig(runtimeHydration)) {
+        setStatus({
+          message:
+            '正在从 Memory Service 加载运行时配置，请稍后再保存，以免用本机缓存覆盖服务端的主动询问等开关。',
+          type: 'error',
+        });
+        return;
+      }
+
       const persistedConfig = sanitizeLocalEnvConfig(config);
       await chrome.storage.local.set({ envConfig: persistedConfig });
       // 通知background脚本更新配置
@@ -3521,10 +3444,12 @@ const Options = () => {
       if (botToken.length > 0) {
         payload.botToken = botToken;
       }
-      const client = await createMemoryServiceClient(config);
-      await client.updateRuntimeConfig(payload);
-      await loadDreamDigestSettingsFromBackend(config);
-      await loadOutreachDirectoryStatusFromBackend(config);
+      const wroteRuntimeConfig = shouldWriteRuntimeConfig(runtimeHydration);
+      if (wroteRuntimeConfig) {
+        const client = await createMemoryServiceClient(config);
+        await client.updateRuntimeConfig(payload);
+        await loadDreamDigestSettingsFromBackend(config);
+      }
       setConfig((prev) => ({
         ...prev,
         OPENCLAW_API_KEY: '',
@@ -3553,8 +3478,10 @@ const Options = () => {
       }));
 
       setStatus({
-        message: '配置已保存',
-        type: 'success',
+        message: wroteRuntimeConfig
+          ? '配置已保存'
+          : '本机扩展配置已保存，但未写入 Memory Service 运行时配置，主动询问等开关未被覆盖。',
+        type: wroteRuntimeConfig ? 'success' : 'error',
       });
       // 3秒后清除状态消息
       setTimeout(() => {
@@ -3895,6 +3822,7 @@ const Options = () => {
     groupKey: PushGroupField,
     allowNone = false,
     description?: string,
+    disabled = false,
   ) => {
     const targetValue = resolvePushTargetValue(
       String(config[targetKey] || ''),
@@ -3911,6 +3839,7 @@ const Options = () => {
             name={targetKey}
             value={targetValue}
             onChange={handleInputChange}
+            disabled={disabled}
           >
             {allowNone && <option value="none">不推送</option>}
             <option value="me">推送给 Me（user）</option>
@@ -3934,6 +3863,7 @@ const Options = () => {
               value={String(config[groupKey] || '')}
               onChange={handleInputChange}
               placeholder="输入 RingCentral 群组 ID"
+              disabled={disabled}
             />
             <small
               style={{ color: '#666', display: 'block', marginTop: '5px' }}
@@ -4383,6 +4313,27 @@ const Options = () => {
 
       <div className="form-section">
         <h2>{t('options.sections.memoryService')}</h2>
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            marginBottom: 14,
+            padding: '10px 12px',
+            borderRadius: 8,
+            border:
+              runtimeHydration === 'error'
+                ? '1px solid #f5c2c7'
+                : '1px solid #cfe2ff',
+            background: runtimeHydration === 'error' ? '#f8d7da' : '#e7f1ff',
+            color: runtimeHydration === 'error' ? '#842029' : '#084298',
+            fontSize: 13,
+          }}
+        >
+          {runtimeHydration === 'pending'
+            ? '正在从 Memory Service 加载主动询问、自我反思、执行器等运行时配置。加载完成前这些开关不会显示本机缓存，保存也不会用本机缓存覆盖服务端。'
+            : runtimeHydrationReceipt ||
+              '主动询问、自我反思、执行器和外发凭据以 Memory Service 为准，本机 envConfig 只是镜像缓存。'}
+        </div>
         <div className="form-group">
           <label htmlFor="MEMORY_SERVICE_BASE_URL">记忆服务 API 地址</label>
           <input
@@ -4598,10 +4549,14 @@ const Options = () => {
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
           name="SELF_REFLECTION_ENABLED"
-          checked={config.SELF_REFLECTION_ENABLED === true}
+          checked={displayServerBackedToggle(
+            runtimeHydration,
+            config.SELF_REFLECTION_ENABLED === true,
+          )}
           onChange={handleInputChange}
+          disabled={runtimeFieldsLocked}
           label="启用自我反思（场景预演生产总开关）"
-          description="默认关闭，按下方频率持续对活跃线程调用 LLM；每个开启的账号大约 $12–50/月（视活跃反思线程数量而定），闲置一段时间会自动暂停研究调用以省钱。关闭后不会自动推进 Reflection，也不会从 Reflection 生成新的场景预演候选；已存在的场景预演和梦境重放不受影响。"
+          description="默认关闭，按下方频率持续对活跃线程调用 LLM；每个开启的账号大约 $12–50/月（视活跃反思线程数量而定），闲置一段时间会自动暂停研究调用以省钱。关闭后不会自动推进 Reflection，也不会从 Reflection 生成新的场景预演候选；已存在的场景预演和梦境重放不受影响。此开关保存在 Memory Service，打开 Options 时以服务端为准。"
         />
         <div className="form-group">
           <label htmlFor="SELF_REFLECTION_HEARTBEAT_MINUTES">
@@ -4615,7 +4570,9 @@ const Options = () => {
             onChange={handleInputChange}
             min="1"
             step="1"
-            disabled={config.SELF_REFLECTION_ENABLED === false}
+            disabled={
+              runtimeFieldsLocked || config.SELF_REFLECTION_ENABLED === false
+            }
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             保存后会同步到 memory-service，按用户分别生效。
@@ -4632,6 +4589,7 @@ const Options = () => {
           'DECISION_CENTER_PUSH_GROUP_ID',
           false,
           '用于冲突/待确认类的决策中心提醒。默认推送给 Me。',
+          runtimeFieldsLocked,
         )}
         {renderPushTargetFields(
           '梦境重放报表推送',
@@ -4639,6 +4597,7 @@ const Options = () => {
           'DREAM_INSIGHT_PUSH_GROUP_ID',
           true,
           '梦境重放会持续运行；这里仅控制报表推送到 Me、自定义群组，或完全不推送。',
+          runtimeFieldsLocked,
         )}
         <div className="form-group">
           <label htmlFor="DREAM_DIGEST_SCHEDULE_TYPE">
@@ -4657,6 +4616,7 @@ const Options = () => {
               name="DREAM_DIGEST_SCHEDULE_TYPE"
               value={config.DREAM_DIGEST_SCHEDULE_TYPE || 'every_x_days'}
               onChange={handleInputChange}
+              disabled={runtimeFieldsLocked}
             >
               <option value="every_x_days">每天 / 每隔 X 天</option>
               <option value="weekly">每周</option>
@@ -4673,6 +4633,7 @@ const Options = () => {
                   onChange={handleInputChange}
                   min="1"
                   style={{ width: '80px' }}
+                  disabled={runtimeFieldsLocked}
                 />
                 <span>天</span>
               </>
@@ -5131,13 +5092,17 @@ const Options = () => {
           style={{ color: '#666', display: 'block', marginBottom: '15px' }}
         >
           Scheduled Messages 的 Outreach 模板和反思动作 `ask_external_user`
-          都由主动询问引擎推进。
+          都由主动询问引擎推进。此开关以 Memory Service 为准；打开本页时会先加载服务端值，不会先展示本机缓存。
         </small>
         <ToggleField
           id="OUTREACH_ENABLED"
           name="OUTREACH_ENABLED"
-          checked={config.OUTREACH_ENABLED === true}
+          checked={displayServerBackedToggle(
+            runtimeHydration,
+            config.OUTREACH_ENABLED === true,
+          )}
           onChange={handleInputChange}
+          disabled={runtimeFieldsLocked}
           label="启用主动询问引擎"
           description="开启后，模板派发、等待回复、追问和升级才会真正运行。"
         />
@@ -5151,7 +5116,7 @@ const Options = () => {
             onChange={handleInputChange}
             min="1000"
             step="1000"
-            disabled={config.OUTREACH_ENABLED !== true}
+            disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             决定模板派发和回复轮询频率。开发调试时可临时调小，例如 5000。
@@ -5164,7 +5129,7 @@ const Options = () => {
           onChange={handleInputChange}
           label="反思发起的主动询问默认先审批"
           description="开启后，反思生成的外联会先进入待审批，不会直接发出。"
-          disabled={config.OUTREACH_ENABLED !== true}
+          disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
         />
         <ToggleField
           id="OUTREACH_REQUIRE_APPROVAL_FOR_MANUAL"
@@ -5173,7 +5138,7 @@ const Options = () => {
           onChange={handleInputChange}
           label="手动/定时模板发起的主动询问默认先审批"
           description="开启后，Scheduled Messages 里的手动模板也会进入待审批。"
-          disabled={config.OUTREACH_ENABLED !== true}
+          disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
         />
         {renderPushTargetFields(
           '主动询问结果推送',
@@ -5181,6 +5146,7 @@ const Options = () => {
           'OUTREACH_RESULT_PUSH_GROUP_ID',
           false,
           '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。',
+          runtimeFieldsLocked || config.OUTREACH_ENABLED !== true,
         )}
         <div className="form-group">
           <label htmlFor="RINGCENTRAL_SERVER_URL">RingCentral Server URL</label>
@@ -5191,7 +5157,7 @@ const Options = () => {
             value={config.RINGCENTRAL_SERVER_URL || ''}
             onChange={handleInputChange}
             placeholder="https://platform.ringcentral.com"
-            disabled={config.OUTREACH_ENABLED !== true}
+            disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             还没有 RingCentral app？可前往{' '}
@@ -5214,7 +5180,7 @@ const Options = () => {
             value={config.RINGCENTRAL_CLIENT_ID || ''}
             onChange={handleInputChange}
             placeholder="输入 RingCentral app client id"
-            disabled={config.OUTREACH_ENABLED !== true}
+            disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
           />
         </div>
         <div className="form-group">
@@ -5233,7 +5199,7 @@ const Options = () => {
                 : '输入新的 client secret'
             }
             autoComplete="new-password"
-            disabled={config.OUTREACH_ENABLED !== true}
+            disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             当前状态：
@@ -5259,7 +5225,7 @@ const Options = () => {
             }
             autoComplete="new-password"
             rows={4}
-            disabled={config.OUTREACH_ENABLED !== true}
+            disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             当前状态：
@@ -5276,7 +5242,7 @@ const Options = () => {
               name="RINGCENTRAL_CLEAR_CLIENT_SECRET"
               checked={config.RINGCENTRAL_CLEAR_CLIENT_SECRET === true}
               onChange={handleInputChange}
-              disabled={config.OUTREACH_ENABLED !== true}
+              disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
             />
             清除后端已保存的 RingCentral Client Secret（仅当上方 secret
             输入为空时生效）
@@ -5289,7 +5255,7 @@ const Options = () => {
               name="RINGCENTRAL_CLEAR_JWT"
               checked={config.RINGCENTRAL_CLEAR_JWT === true}
               onChange={handleInputChange}
-              disabled={config.OUTREACH_ENABLED !== true}
+              disabled={runtimeFieldsLocked || config.OUTREACH_ENABLED !== true}
             />
             清除后端已保存的 RingCentral JWT（仅当上方 JWT 输入为空时生效）
           </label>
@@ -5317,7 +5283,9 @@ const Options = () => {
               className="secondary-button"
               onClick={handleRefreshOutreachDirectory}
               disabled={
-                config.OUTREACH_ENABLED !== true || outreachDirectoryRefreshing
+                runtimeFieldsLocked ||
+                config.OUTREACH_ENABLED !== true ||
+                outreachDirectoryRefreshing
               }
             >
               {outreachDirectoryRefreshing
@@ -5348,6 +5316,7 @@ const Options = () => {
           'WEEKLY_REPORT_PUSH_GROUP_ID',
           true,
           '选择「不推送」时，保存到后端会自动按禁用处理。',
+          runtimeFieldsLocked,
         )}
         <div className="form-group">
           <label htmlFor="WEEKLY_REPORT_CRON">Cron 表达式</label>
@@ -5363,6 +5332,7 @@ const Options = () => {
               }));
             }}
             placeholder="0 18 * * 5"
+            disabled={runtimeFieldsLocked}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             默认: 每周五 18:00 (0 18 * * 5)。格式: 分 时 日 月 周几
@@ -5384,6 +5354,7 @@ const Options = () => {
             }}
             min={0}
             placeholder="20"
+            disabled={runtimeFieldsLocked}
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
             本周消息数低于此阈值时不生成周报。默认 20
@@ -5391,7 +5362,7 @@ const Options = () => {
         </div>
         <button
           onClick={saveWeeklyReportSettings}
-          disabled={weeklyReportSaving}
+          disabled={weeklyReportSaving || runtimeFieldsLocked}
           style={{
             backgroundColor: '#2ecc71',
             color: 'white',
@@ -5619,10 +5590,14 @@ const Options = () => {
             reflection_research: '',
           }
         }
-        externalDelegationEnabled={config.OPENCLAW_ENABLED !== false}
+        externalDelegationEnabled={displayServerBackedDefaultOn(
+          runtimeHydration,
+          config.OPENCLAW_ENABLED,
+        )}
         openClawTimeoutMs={Number(config.OPENCLAW_TIMEOUT_MS) || 600000}
         openClawApiKeyConfigured={config.OPENCLAW_API_KEY_CONFIGURED === true}
         minOpenClawTimeoutSeconds={MIN_OPENCLAW_TIMEOUT_SECONDS}
+        runtimeHydrating={runtimeFieldsLocked}
         onChange={({
           executors,
           defaults,
@@ -5817,8 +5792,12 @@ const Options = () => {
       <div className="buttons">
         <button onClick={resetConfig}>重置为默认值</button>
         <button onClick={loadEnvDefaults}>从.env文件加载</button>
-        <button className="save-button" onClick={saveConfig}>
-          保存配置
+        <button
+          className="save-button"
+          onClick={saveConfig}
+          disabled={saveBlockedByHydration}
+        >
+          {saveBlockedByHydration ? '正在加载运行时配置…' : '保存配置'}
         </button>
       </div>
     </div>
