@@ -11,6 +11,7 @@ venv
 .eval-runs/
 chroma-data/
 chroma-backup/
+backups/
 static/manifest.json
 dist/
 personal-ai.zip
