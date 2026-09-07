@@ -1,5 +1,7 @@
 # 新能力：AI Context Passport / 跨 AI 上下文护照
 
+> 状态：产品概念输入，不是 memory foundation 的实现真源。2026-09-07 起，本文的数据模型/API/MCP 名称、按目标模型改写和权限默认值必须先对齐 [memory-foundation-rearchitecture-plan.md §10、§11.9](./memory-foundation-rearchitecture-plan.md)；未经统一 RetrievalPlan、ACL/egress gate 和外发 receipt，不得直接实施。
+
 _生成时间：2026-05-10_
 
 ## 结论
@@ -588,4 +590,3 @@ HTML demo 路径：
 ## 是否来自 Reminder
 
 不是。Reminders 的 `Personal AI` 清单中没有未完成的全新功能 idea；现有条目均已完成，且属于反馈/问题排查，不适合作为这次新能力选题。因此没有标记新的 Reminder item done，也没有改写某条 item 备注。
-

@@ -41,8 +41,8 @@
   .step.bad{border-color:#f0b4b4;background:#fff5f5}
   .step.good{border-color:#a7d7b4;background:#f3fbf5}
   .step small{display:block;color:var(--muted)}
-  table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  table{border-collapse:collapse;width:100%;table-layout:fixed;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;overflow-wrap:anywhere}
   th{background:#f1efe9;font-weight:600;font-size:13px}
   td{font-size:13px}
   .road{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
@@ -51,50 +51,51 @@
   .ph small{color:var(--muted)}
   .note{font-size:12px;color:var(--muted);margin-top:8px}
   @media (max-width:900px){.planes,.flow,.road{grid-template-columns:1fr}.layer{grid-template-columns:1fr}}
+  @media (max-width:600px){header{padding:22px 16px 6px}main{padding:8px 16px 36px}th,td{padding:6px 5px;font-size:11.5px}}
 </style>
 </head>
 <body>
 <header>
   <h1>记忆基础架构重构 · 示意</h1>
-  <div class="sub">配套 <code>memory-foundation-rearchitecture-plan.md</code>。三个平面、六层数据、一条从"页面像什么"到"用户此刻需要什么"的检索链。</div>
+  <div class="sub">配套 canonical v3 <code>memory-foundation-rearchitecture-plan.md</code>。三个平面、六层数据、先安全治理再相关性检索。</div>
 </header>
 <main>
 
 <section>
-  <h2>1 · 三个平面（LLM 只出现在写入批与睡眠期）</h2>
+  <h2>1 · 三个平面（memory recall core 在线零 LLM）</h2>
   <div class="grid planes">
     <div class="plane">
       <h3>写平面 <span class="tag zero">同步零 LLM</span> <span class="tag cheap">异步批 cheap</span></h3>
       <ol>
         <li>/ingest：episode 落地 + claim 归属 + 入队，&lt;20ms，永不阻塞</li>
-        <li>三触发门（≥512 tok / 30 min / 会话结束）→ 单飞锁</li>
-        <li>上下文装配：本批 + 前 6 条 + top-10 已有 units + peer card</li>
-        <li><b>1 次结构化抽取</b>：units / edges / properties / profile / 触发问句</li>
-        <li>零 LLM 去重：精确或 cos≥0.92 → <b>加固</b>（times_derived++）</li>
-        <li>矛盾 → supersede（valid_to / expired_at），不删除</li>
-        <li>索引：多视图 FTS（中文分词+trigram）+ 单份 int8 向量</li>
+        <li>scope / origin / sensitivity / injection / secret 确定性筛查</li>
+        <li>显式“记住”同步落 exact-span note + 回执；语义拆分可后台 0..N</li>
+        <li><b>0..N 结构化抽取</b>：零事实是成功，失败不伪造原文首句 fact</li>
+        <li>仅独立 evidence key / provenance family 可加固；重放不加分</li>
+        <li>矛盾按 predicate policy → disputed / superseded / confirm</li>
+        <li>投影：多视图 FTS + vector；模型与量化由 P0.5 标定</li>
       </ol>
     </div>
     <div class="plane">
       <h3>睡眠平面 <span class="tag cheap">cheap 为主</span> <span class="tag smart">smart 兜底</span></h3>
       <ol>
-        <li>三重门：≥50 新 units ∧ ≥8h ∧ 空闲 60min（新消息即取消）</li>
-        <li>A 生命周期算术：R=e^(−t/S)，FSRS-lite 强化，冷却+滞回</li>
-        <li>B 热度晋升：heat = N_visit + L_interaction + e^(−Δh/24) ≥ 5</li>
-        <li>C 去重合并 + 触发问句补齐（Batch −50%）</li>
-        <li>D GA 反思（Σpoignancy≥150）与<b>有证据的</b> anticipation</li>
+        <li>调度门：有新证据 + 预算 + 空闲；未提交的昂贵工作可取消</li>
+        <li>A 生命周期算术：展示只记 exposure，不自动强化 stability</li>
+        <li>B evidence-key 去重与独立来源加固（零 LLM）</li>
+        <li>C 视图/周聚合可 Batch；当夜要用的 brief 走同步异步 job</li>
+        <li>D 有来源的 insight；durable profile 等高责任项待确认</li>
         <li>E 图维护、GC、投影渲染（.md 不再入索引）</li>
       </ol>
     </div>
     <div class="plane">
-      <h3>读平面 <span class="tag zero">在线零 LLM</span></h3>
+      <h3>读平面 <span class="tag zero">召回零 LLM</span></h3>
       <ol>
-        <li>InformationNeedPlanner：scene → needSlots（what）</li>
-        <li>多视图召回：正文向量 / <b>触发问句向量</b> / 分词 FTS / trigram / PPR / 时间 / 规则</li>
-        <li>加权 RRF(k=60) → minmax 归一</li>
-        <li>score = 权威 × 生命周期 × kind × [.55 rel + .25 R + .20 sal]</li>
-        <li>可选 CPU cross-encoder（按 surface）</li>
-        <li>自适应阈值 → Autopilot 门控（沿用）→ context_pack</li>
+        <li>tenant → scope → status → sensitivity → egress → injection gate</li>
+        <li>InformationNeedPlanner：scene → needSlots；每个 slot 可无证据</li>
+        <li>Vector / lexical / PPR / temporal / exact-rule 多通道召回</li>
+        <li>同通道按 unit 去重 → 配置化 RRF → temporal/evidence/MMR</li>
+        <li>经标注集校准的绝对 evidence gate；无证据返回 no_result</li>
+        <li>Autopilot/Novelty 门控（沿用）→ destination-aware context_pack；Ask 可在其后合成</li>
       </ol>
     </div>
   </div>
@@ -103,13 +104,13 @@
 <section>
   <h2>2 · 六层数据（per-user SQLite 真源，Markdown 只是投影）</h2>
   <div class="layers">
-    <div class="layer L5"><b>L5 生命周期 & 反馈</b><span class="what">unit_lifecycle(S, D, R, sal, heat, tier) · feedback / outcome events · learned ranker 权重</span><span class="from">A_memorix 半衰期 · zenBrain FSRS · GA</span></div>
-    <div class="layer L4"><b>L4 派生视图</b><span class="what">reflections · dreams · keystone / anticipation / day briefs —— 同时投影为 unit(kind=insight|brief, authority=derived)</span><span class="from">ReMe digest · Letta sleep-time</span></div>
-    <div class="layer L3"><b>L3 用户模型</b><span class="what">profile_slots(topic/sub_topic, version, times_derived, history) · peer_card ≤40 · writing style · affinity</span><span class="from">Honcho deriver · memobase slots</span></div>
-    <div class="layer L2"><b>L2 实体与边</b><span class="what">entities(+aliases) · <b>edges{fact, valid_at, invalid_at, expired_at}</b>（三张边表合一）· entity_properties 经 TruthMaintainer 唯一写入</span><span class="from">Graphiti 边即事实 · HippoRAG 2 PPR</span></div>
-    <div class="layer L1"><b>L1 记忆单元 <span class="star">★</span></b><span class="what">memory_units（原子、归属、双时态、来源链、times_derived、superseded_by）· unit_views(body / trigger_question / keywords) · units_fts · units_vec(int8, partition)</span><span class="from">Mem0 v3 · MemOS item · Honcho document</span></div>
-    <div class="layer L0"><b>L0 证据</b><span class="what">episodes(messages_raw) · source-memory 内容 · calendar · claims 归属 · ingest_queue</span><span class="from">Graphiti episode · MemOS fast 模式</span></div>
-    <div class="layer OPS"><b>Ops / Shared / Archive</b><span class="what">ops.db：workers · notifications · agent tasks · runs（TTL）｜shared.db：rc_directory · pricing｜archive-YYYY.db：18 个月以上 episodes（只读 ATTACH）</span><span class="from">存储三分 · 年份归档</span></div>
+    <div class="layer L5"><b>L5 生命周期 & Ops</b><span class="what">unit_lifecycle · exposures（只观察）· outcomes（明确结果）· jobs / DLQ / audit</span><span class="from">FSRS 仅借衰减曲线 · unbiased LTR</span></div>
+    <div class="layer L4"><b>L4 可重建投影</b><span class="what">body / summary / keywords / trigger-question views · FTS segment / trigram · versioned vectors</span><span class="from">多视图在通道内按 unit 去重</span></div>
+    <div class="layer L3"><b>L3 用户模型</b><span class="what">profile_slots + normalized sources + revisions · durable identity/profile 高责任确认</span><span class="from">Honcho deriver · memobase slots</span></div>
+    <div class="layer L2"><b>L2 实体与边</b><span class="what">entities · memory_edges + edge_sources + edge_revisions · association 先 shadow</span><span class="from">Graphiti 边即事实 · HippoRAG 2 PPR</span></div>
+    <div class="layer L1"><b>L1 记忆单元 <span class="star">★</span></b><span class="what">memory_units + normalized sources + revisions · form/kind/status/evidence/sensitivity 正交轴</span><span class="from">Mem0 · Cognee · LangMem</span></div>
+    <div class="layer L0"><b>L0 证据</b><span class="what">episodes(messages_raw) · immutable source content · origin / scope / sensitivity / extraction state</span><span class="from">Graphiti episode · origin-bound authority</span></div>
+    <div class="layer OPS"><b>物理存储裁决</b><span class="what">P0–P3 保持 per-user SQLite；先清事故噪声和验证容量，ops/shared/archive 拆分需独立 ADR</span><span class="from">逻辑层不等于物理分库</span></div>
   </div>
 </section>
 
@@ -133,11 +134,11 @@
       <div class="steps">
         <div class="step good">admission gate + Scene Autopilot 判 <b>when</b>（沿用）</div>
         <div class="step good">planner 按 sceneType 出 needSlots 判 <b>what</b><small>jira_issue_reading → caliber / decision / blocker / owner</small></div>
-        <div class="step good">needSlot.question 打 <b>触发问句向量</b>通道<small>写入侧预生成"什么问题会需要我"，零在线延迟</small></div>
-        <div class="step good">units 多视图召回 + 多语言 e5 + 分词 FTS + trigram + PPR</div>
-        <div class="step good">加权 RRF → 权威 × 生命周期 × kind 加权 → MMR</div>
-        <div class="step good">相对阈值（0.4·top1 / p75−1.5σ）+ 规则条目 sticky/cooldown</div>
-        <div class="step good">展示 → 反馈 → 夜间逻辑回归覆盖权重</div>
+        <div class="step good">trigger question 是 unit view<small>与正文同属 vector 通道，先按 unit 去重，不重复加分</small></div>
+        <div class="step good">模型与量化经 P0.5 消融后裁决 + 分词 FTS + trigram + PPR</div>
+        <div class="step good">配置化 RRF → source/time/evidence 加权 → MMR</div>
+        <div class="step good">绝对 evidence gate + 合法 no_result + 规则 sticky/cooldown</div>
+        <div class="step good">exposure 与 outcome 分开；反事实评估后才学排序</div>
       </div>
     </div>
   </div>
@@ -149,36 +150,36 @@
     <thead><tr><th>tier</th><th>任务</th><th>频次</th><th>手段</th></tr></thead>
     <tbody>
       <tr><td><span class="tag zero">none</span></td><td>所有在线检索、去重加固、生命周期算术、context_pack 组装、宿主 hooks</td><td>每请求</td><td>确定性 + 本地 embedding</td></tr>
-      <tr><td><span class="tag cheap">cheap / local</span></td><td>结构化抽取、灰区合并判定、slot 合并、触发问句、Keystone 本地化、日总结投影</td><td>每批 1 次 / 夜间 Batch</td><td>strict JSON · 前缀缓存 ≥1024 tok · Batch −50%</td></tr>
+      <tr><td><span class="tag cheap">cheap / local</span></td><td>0..N 结构化抽取、候选合并、slot proposal、trigger views、日总结投影</td><td>后台 job</td><td>strict JSON · 零事实状态 · retry / DLQ</td></tr>
       <tr><td><span class="tag">standard</span></td><td>高影响矛盾复核、brief 组合、画像 deduction / induction / card、/ask 与 Compose 生成</td><td>少量 / 按需</td><td>级联升级（FrugalGPT）</td></tr>
-      <tr><td><span class="tag smart">smart</span></td><td>GA 反思、dreaming</td><td>夜间 ≤2 / 周 ≤5</td><td>Batch · 日预算硬顶</td></tr>
+      <tr><td><span class="tag smart">smart</span></td><td>复杂冲突、反思、anticipation/brief</td><td>少量 / 有预算</td><td>可延迟 &gt;24h 才 Batch；次日要用则同步 API job</td></tr>
     </tbody>
   </table>
   <div class="note">每个 budget_key 有 tokens 与 USD 日预算，超预算降 tier 或跳过并写回执；usage_events 增 tier / task 列。</div>
 </section>
 
 <section>
-  <h2>5 · 存储：天花板与升级路径（本机实测系数，384 维）</h2>
+  <h2>5 · 存储：先测量，再做独立 ADR</h2>
   <table>
     <thead><tr><th>每用户向量数</th><th>方案</th><th>依据</th></tr></thead>
     <tbody>
-      <tr><td>≤ 25 万 float32（int8 ≤ 75 万）</td><td>留在 SQLite + sqlite-vec：单份向量、int8、partition、三库分离、GC、VACUUM</td><td>float32 ≈ 0.2 ms/千向量；&lt;50 ms 天花板</td></tr>
-      <tr><td>25–200 万 或 p95 &gt; 100 ms</td><td>SQLite 仍为真源 + 每用户 usearch HNSW sidecar；观察 sqlite-vec 0.1.10 rescore 转稳定后原地替换</td><td>usearch view() mmap 零加载</td></tr>
-      <tr><td>&gt; 200 万 / 跨用户分析</td><td>LanceDB 每用户一目录；Postgres+pgvector 仅在需要集中运维时</td><td>IVF_HNSW_SQ + ICU FTS</td></tr>
+      <tr><td>P0–P3</td><td>保持 per-user SQLite + pinned sqlite-vec；projection 可重建</td><td>事故噪声清理后重测真实容量</td></tr>
+      <tr><td>索引质量不足</td><td>P0.5 比较模型/float32/int8；不同版本隔离</td><td>质量、延迟、体积和 recall loss 一起裁决</td></tr>
+      <tr><td>清理后仍有写竞争/备份/启动瓶颈</td><td>另立 storage ADR，评估 ops sidecar 或索引 sidecar</td><td>禁止按表数或旧噪声体积直接拆库</td></tr>
     </tbody>
   </table>
-  <div class="note">1.4 GB 先按 plan §10.1 脚本实测构成；开发快照里向量影子表 23%、通讯录 13%、碎片 35% 都是可立即回收的部分。</div>
+  <div class="note">2026-09-03 的 1.3 GB/195 万 activation 等都是观测快照；执行前生成 evidence manifest，清理后再决定容量路线。</div>
 </section>
 
 <section>
   <h2>6 · 路线（每阶段可停、可回滚）</h2>
   <div class="road">
-    <div class="ph"><b>P0 止血 · 1 周</b>三开关默认开 · 向量 GC · 换多语言 embedding · 中文分词 · 通讯录迁出 · VACUUM · RRF<small>门：被动 Lens 有真实候选；体积 −30%</small></div>
-    <div class="ph"><b>P1 单元 + 写入 v2 · 3–4 周</b>units/views/edges/slots 建表 · 抽取批处理 · TruthMaintainer 收口 · tier 路由<small>门：memory-abilities 不回退；units_new&gt;0</small></div>
-    <div class="ph"><b>P2 检索 v2 · 3 周</b>RetrievalPlan · 触发问句通道 · 权威加权 · 自适应阈值 · reranker 灰度 · 反馈学习<small>门：useful@1 +30%；p95&lt;500ms</small></div>
-    <div class="ph"><b>P3 巩固 + 存储 · 3 周</b>睡眠期阶段 A–E · 有证据 anticipation · ops.db · archive · .md 停止入索引<small>门：夜间成本达标；月增速可预测</small></div>
-    <div class="ph"><b>P4 分发 · 2 周</b>adapter-core · OpenClaw 插件 · Claude Code 插件 · MCP 收敛<small>门：宿主 0 次模型调用</small></div>
-    <div class="ph"><b>P5 清理</b>删旧表/死代码 · 更新 docs/memory_system.md<small>门：全量 eval 绿</small></div>
+    <div class="ph"><b>R0 / P0a</b>证据账本 · 供给解耦 · rehearsal 防抖 · 1→5→25<small>门：抽取关闭仍有 chunk+FTS；无跨用户结果</small></div>
+    <div class="ph"><b>P0b / P0c</b>预算/readiness/DLQ · 备份恢复 · FTS 回填 · old-stack baseline<small>门：恢复演练、FTS integrity、旧体验非劣</small></div>
+    <div class="ph"><b>P0.5</b>原始 episode gold set · need/model/quantization 消融<small>门：分 surface CI，能否决无增益机制</small></div>
+    <div class="ph"><b>P1</b>v3 schema · normalized lineage · strict extraction · dual-write<small>门：source completeness 100%；silent failure 0</small></div>
+    <div class="ph"><b>P2 / P3</b>dual-read shadow · 逐 surface 切换 · consolidation/profile/feedback shadow<small>门：安全零回归；on-policy/misevolution 通过</small></div>
+    <div class="ph"><b>P4 / P5</b>ACL/egress adapter · 30 天稳定 · rollback drill · 最后清旧表<small>门：全通道负向测试、外发 receipt、可恢复</small></div>
   </div>
 </section>
 

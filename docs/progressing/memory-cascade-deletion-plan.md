@@ -1,8 +1,9 @@
 # 信任升级：级联删除与可删除性 / Cascade Deletion & True Deletability
 
 > 生成时间：2026-06-11 CST
+> Canonical 对齐：2026-09-07；本文只用于修复旧 schema 的删除完整性。v3 的 correction/retraction/accessibility_forget/privacy_delete、normalized lineage、`privacy_delete_jobs` 与备份完成语义以 [memory-foundation-rearchitecture-plan.md §8.5](./memory-foundation-rearchitecture-plan.md) 为准。
 > 来源：盘点 B 确认的孤儿引用缺口 + Agentic Unlearning 再污染（arXiv:2602.17692）+ GDPR 删除权对 AI 记忆的适用 + 「真正可删除的记忆」差异化定位
-> 优先级：P2（正确性债 + 信任卖点）
+> 优先级：foundation P0b 修旧 schema 完整性；v3 normalized deletion 在 P1/P3 建链、P5 前完成物理清理演练
 > 预估规模：4-5 天（lineage 工具 + 级联修复 + 重算钩子 + 对账脚本）
 
 ## 结论
@@ -39,17 +40,19 @@ reflections/2026-06-01.md   仍写着「…私人对话中提到 X 决定离职�
 
 ```
 DELETE /memories {source: "ringcentral:private-x", scope: "personal"}
-→ { deleted: { messages: 41, chunks: 38 },
+→ { status: "deletion_pending", liveReadBlocked: true,
+    accepted: { messages: 41, chunks: 38 },
     cascade: { vecRows: 38, ftsRows: 38, entityProperties: 3,
                evidenceTrims: { relationships: 5, profileItems: 2 },
                orphansArchived: { entities: 1 },
                recomputeQueued: { reflections: 2, dreams: 1 } } }
 ```
 
-- 心跳异步消费 recomputeQueue：`reflections/2026-06-01.md` 中该句替换为 `[已删除的来源]`，frontmatter 标 `evidence_redacted: true`；其中一篇反思全部证据被删 → 整篇 retracted，不再被 Reindex 索引。
+- 心跳异步消费 recomputeQueue：受影响的 reflection/dream 只允许从剩余来源完整重建；无法证明重建正文不残留被删信息时，整篇 retracted 并移出索引，不能靠替换一个句子假设上下文已清干净。
 - 一条 profile item 证据数从 3 掉到 1（低于晋升阈值）→ 状态回退 candidate。
 - 再问 /ask「最近有什么人事变动」→ 「相关来源已被你删除，没有可引用的记忆。」（abstention，体检 plan 的拒答 case 同源）
 - 周频 `tools/memory-integrity-check.ts` 报告：孤儿 entity_properties 0（上线前首跑清掉了历史存量 17 条）。
+- 备份到期/重建或 crypto-shred 完成后，另生成 body-free `completed` receipt；在此之前不显示“永久删除完成”。
 
 **红线再确认**：以上级联只由你的显式删除触发；ForgettingEngine 的自动衰减永远只降级、不物理删。
 
@@ -88,7 +91,7 @@ resolveImpact(messageIds[]) → {
 - recomputeQueue 异步消费（heartbeat 新任务 `processDeletionRecompute`）：
   - reflection_artifacts / dream md：含被删引用的，文内替换为 `[已删除的来源]` 并在 frontmatter 标 `evidence_redacted: true`；若其**全部**证据被删 → 整篇标 retracted（不再被 Reindex 索引）。
   - 受影响的 profile_items：evidence 数掉到晋升阈值以下 → status 回退 candidate（复用 writing-style 阈值语义）。
-- 删除回执：响应扩展 `cascade: {chunks: n, properties: n, evidenceTrims: n, recomputeQueued: n}`——与 ingest decision 回执同风格，可审计。
+- 删除回执：响应扩展 `cascade: {chunks: n, properties: n, evidenceTrims: n, recomputeQueued: n}`，并返回 `deletion_pending`。只有 live/projection/archive 清理、派生物重建/撤回以及备份到期或 crypto-shred 全部完成后，`privacy_delete_jobs` 才能给出不含正文的 `completed` receipt。
 
 ### 3. 单条删除端点 + 对账
 
@@ -99,16 +102,16 @@ resolveImpact(messageIds[]) → {
 
 | 切片 | 内容 | 验收 |
 | --- | --- | --- |
-| P0 | lineage 解析器 + DELETE /memories 补级联 + 删除回执 + 对账脚本（报告模式） | 对账零新增孤儿；回执计数与实删一致 |
-| P1 | recompute 异步队列 + reflection/dream 标注 + profile 回退 | 删除后 /ask 不再引用已删信息（红队 case） |
-| P2 | 单条删除端点 + 存量清理执行档 + memory-exploring 删除入口接单条 | E2E：删一条消息 → 全链路无残影 |
+| D0 | lineage 解析器 + DELETE /memories 补级联 + 删除回执 + 对账脚本（报告模式） | 对账零新增孤儿；回执计数与实删一致 |
+| D1 | recompute 异步队列 + reflection/dream 重建或撤回 + profile 回退 | 删除后 /ask 不再引用已删信息（红队 case） |
+| D2 | 单条删除端点 + 存量清理执行档 + memory-exploring 删除入口接单条 | E2E：删一条消息 → 全链路无残影 |
 
 ## 验证
 
 - 红队主案（再污染防护）：注入事实 X → 跑巩固生成反思 → 删除 X 的来源消息 → `/ask 问 X` 必须拒答或明示来源已删（这是 Agentic Unlearning 场景的直接复现测试）。
 - 单测：lineage 影响图（多对多 evidence、共享实体）、孤儿判定边界、事务回滚。
 - 对账：CI 外周频跑 integrity-check，趋势必须收敛到 0。
-- 回归：DELETE /memories 既有契约（响应兼容，新增字段不破坏）；删除性能：千条消息级联 < 5s。
+- 回归：DELETE /memories 既有调用兼容，但状态语义升级为 accepted/deletion_pending/completed；性能门只要求千条消息的 tombstone + live read block + cascade enqueue < 5s，不能要求备份生命周期在同步请求内完成。
 
 ## 与既有 plan 的关系
 
@@ -118,6 +121,6 @@ resolveImpact(messageIds[]) → {
 
 ## 风险与边界
 
-- markdown 派生物（daily/dreams）是文件不是行——重算用"文内标注 + frontmatter 标记"而非重写全文，保持文件可读历史；用户要求彻底抹除时提供 `--hard` 档重新生成该日文件。
+- markdown 派生物（daily/dreams）是文件不是行——privacy delete 必须从剩余证据完整重建或整篇撤回；“文内标注”只适用于 accessibility_forget，不能满足物理删除。任何 `--hard` 执行都走独立高责任确认与备份生命周期追踪。
 - 性能：lineage 查询全部走已有索引列；evidence JSON 数组剔除是逐行 UPDATE，批删大 source 时分批事务。
 - 语义红线：级联只由**用户显式删除**触发；遗忘引擎的自动降级永不触发级联物理删除（自动遗忘 ≠ 用户意志）。

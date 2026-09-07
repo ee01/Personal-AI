@@ -1,5 +1,7 @@
 # 接口升级：Memory MCP Server / 跨 AI 平台记忆接口
 
+> 状态：历史产品草案，**不可直接实施**。2026-09-07 起，adapter/MCP 的 schema、身份、工具语义、ACL/egress、外发 receipt 和阶段顺序以 [memory-foundation-rearchitecture-plan.md §10、§11.9](./memory-foundation-rearchitecture-plan.md) 为唯一真源。本文保留场景价值；下文“薄封装旧 HTTP”“`--user-id`”“默认 work”“5 个 tool”等均不是当前授权或实现 contract。
+>
 > 生成时间：2026-06-11 CST
 > 来源：2026 行业事实标准（mem0 OpenMemory / redis / basic-memory / 官方 MCP memory server 均已提供）+ 本项目「用户去其他 AI 平台继续对话时提供关联提示」愿景（memory_system.md:11）
 > 优先级：P2（战略层；实现成本低于多数 P1）
