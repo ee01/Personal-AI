@@ -68,6 +68,9 @@ interface CaseResult {
 const args = parseArgs();
 const ENDPOINT = String(args.endpoint || 'http://10.32.56.212:3210/api/v1/ask');
 const USER = String(args.user || 'esone.qiu');
+// Servers with API_KEY auth reject anonymous X-User-Id requests; pass the
+// key via --api-key, MEMORY_EVAL_API_KEY, or API_KEY (in that order).
+const API_KEY = String(args.apiKey || process.env.MEMORY_EVAL_API_KEY || process.env.API_KEY || '');
 const CASES = String(args.cases || 'evals/cases/memory-abilities/cases.jsonl');
 const OUT = String(args.out || '.eval-runs/memory-abilities');
 const BASELINE = String(args.baseline || 'evals/.baseline/memory-abilities.json');
@@ -122,7 +125,11 @@ async function ask(c: AbilityCase): Promise<AskResponse> {
   try {
     const res = await fetch(ENDPOINT, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-user-id': USER },
+      headers: {
+        'content-type': 'application/json',
+        'x-user-id': USER,
+        ...(API_KEY ? { authorization: `Bearer ${API_KEY}` } : {}),
+      },
       body: JSON.stringify({
         query: c.question,
         context: c.context,
