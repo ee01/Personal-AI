@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
 import { runWithUsageContext } from '../analytics/usageContext.js';
+import { readAgentTaskOutcome } from '../integrations/executors/agentResultContract.js';
 import {
   extractAgentResultJson,
   extractSummaryFromMixedText,
@@ -791,7 +792,11 @@ function isTemplatePlaceholderLine(line: string): boolean {
 function looksLikeListContent(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed || trimmed.startsWith('{')) return false;
-  return /^\*\s+\S+/m.test(trimmed) || /^[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed);
+  return (
+    /^\*\s+\S+/m.test(trimmed) ||
+    /^[-•]\s+[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed) ||
+    /^[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed)
+  );
 }
 
 function normalizeEvidenceLine(line: string): string {
@@ -934,6 +939,15 @@ export function isEmptyResultOutcome(result?: Record<string, unknown>): boolean 
   if (!result) return true;
 
   const payload = asRecord(result.payload);
+  const declared = readAgentTaskOutcome(payload.outcome);
+  if (declared) {
+    if (declared.verdict === 'observed' || declared.verdict === 'mutated') return false;
+    // Executor already judged the write boundary: scanned candidates but nothing
+    // to change is still worth announcing, unlike a bare 0-match read scan.
+    if (declared.verdict === 'noop') return false;
+    if (declared.verdict === 'empty') return declared.count === 0;
+  }
+
   const outcome = readCountSignal(payload, OUTCOME_COUNT_KEY);
   if (outcome.positive) return false;
   if (outcome.zero) return true;

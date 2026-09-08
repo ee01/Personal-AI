@@ -428,4 +428,32 @@ describe('isEmptyResultOutcome', () => {
     expect(isEmptyResultOutcome({ status: 'success', summary: '没有命中' })).toBe(true);
     expect(isEmptyResultOutcome(undefined)).toBe(true);
   });
+
+  it('does not treat a closed write/noop outcome as an empty scan', () => {
+    expect(
+      isEmptyResultOutcome({
+        status: 'success',
+        summary: '找到 8 个无 Team 的 Epic，所有 INIT 均有多团队，无需更新。',
+        artifacts: [
+          {
+            kind: 'note',
+            title: '无 Team 的 NOVA Epic 明细',
+            content:
+              '共查得 8 个满足条件的 Epic：\n- NOVA-17657 ← INIT-28290 (2 teams)\n- NOVA-17391 ← INIT-28986 (3 teams)',
+            metadata: { sourceSystem: 'jira', count: 8 },
+          },
+        ],
+        payload: {
+          outcome: {
+            mode: 'write',
+            verdict: 'noop',
+            count: 0,
+            sourceSystem: 'jira',
+            method: 'jql_requery',
+            subject: 'project = NOVA',
+          },
+        },
+      }),
+    ).toBe(false);
+  });
 });
