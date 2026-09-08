@@ -512,6 +512,29 @@ export class AnalyticsStore {
 
   // ---- Ingestion --------------------------------------------------------
 
+  /**
+   * P0b BudgetGuard support: sum est_cost_usd of today's backend events
+   * grouped by capability (errors included — they reflect provider charges
+   * only when they actually hit the provider; budget rejections are recorded
+   * with 0 cost anyway).
+   */
+  sumBackendCostByCapabilitySince(
+    sinceTsMs: number,
+  ): Array<{ capability: string | null; estCostUsd: number }> {
+    try {
+      return this.db
+        .prepare(
+          `SELECT capability, SUM(est_cost_usd) AS est_cost_usd
+           FROM usage_events
+           WHERE side = 'backend' AND ts >= ?
+           GROUP BY capability`,
+        )
+        .all(sinceTsMs) as Array<{ capability: string | null; estCostUsd: number }>;
+    } catch {
+      return [];
+    }
+  }
+
   recordUsageEvent(event: UsageEventInput): void {
     const ts = normalizeTs(event.ts);
     const capability = normalizeCapability(event.capability);

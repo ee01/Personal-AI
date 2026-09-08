@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import type { HealthResponse } from '../types/index.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import { getLLMClient } from '../llm/LLMClient.js';
+import { budgetSnapshot } from '../analytics/BudgetGuard.js';
 
 const require = createRequire(import.meta.url);
 
@@ -90,6 +91,9 @@ export async function healthRoutes(
         },
       },
       llm: getLLMClient().getTargetHealthSnapshot(),
+      // P0b: daily budget hard-cap state (visible so operators can see why
+      // paid calls start failing instead of guessing).
+      llmBudget: budgetSnapshot(),
     };
 
     return reply.status(200).send(body);

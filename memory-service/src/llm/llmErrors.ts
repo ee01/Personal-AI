@@ -5,6 +5,7 @@ export type LLMErrorKind =
   | 'network'
   | 'server'
   | 'bad_request'
+  | 'budget'
   | 'unknown';
 
 export interface LLMTargetFailure {
@@ -25,6 +26,31 @@ export class LLMAllTargetsFailedError extends Error {
     );
     this.name = 'LLMAllTargetsFailedError';
     this.failures = failures;
+  }
+}
+
+/**
+ * P0b daily-budget hard cap (plan §6.5): thrown BEFORE any provider call so a
+ * rejected request never reaches (or charges) the provider and no target
+ * health damage is recorded.
+ */
+export class LLMBudgetExceededError extends Error {
+  readonly spentUsd: number;
+  readonly capUsd: number;
+  readonly scope: 'global' | 'capability';
+
+  constructor(args: {
+    spentUsd: number;
+    capUsd: number;
+    scope: 'global' | 'capability';
+  }) {
+    super(
+      `[LLMClient] Daily budget exceeded (${args.scope}): spent $${args.spentUsd.toFixed(4)} of cap $${args.capUsd.toFixed(4)}`,
+    );
+    this.name = 'LLMBudgetExceededError';
+    this.spentUsd = args.spentUsd;
+    this.capUsd = args.capUsd;
+    this.scope = args.scope;
   }
 }
 

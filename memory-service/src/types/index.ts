@@ -2549,6 +2549,13 @@ export interface HealthResponse {
     cooldownUntil: number | null;
     consecutiveFailures: number;
   }>;
+  /** P0b daily budget hard-cap state (§6.5). */
+  llmBudget?: {
+    configured: boolean;
+    globalCapUsd: number | null;
+    spentTodayUsd: number;
+    overBudget: boolean;
+  };
 }
 
 // ============ Multi-User / Fastify Extensions ============

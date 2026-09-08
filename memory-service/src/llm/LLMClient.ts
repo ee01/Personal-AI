@@ -25,6 +25,7 @@ import {
 import {
   classifyLLMError,
   LLMAllTargetsFailedError,
+  LLMBudgetExceededError,
   shouldRetrySameTarget,
   type LLMTargetFailure,
 } from './llmErrors.js';
@@ -35,6 +36,8 @@ import {
   type ResolvedLLMTarget,
 } from './LLMTarget.js';
 import { TargetHealthTracker } from './TargetHealthTracker.js';
+import { checkBudget } from '../analytics/BudgetGuard.js';
+import { getUsageContext } from '../analytics/usageContext.js';
 
 export { LLMAllTargetsFailedError } from './llmErrors.js';
 
@@ -225,6 +228,7 @@ export class LLMClient {
     options: LLMOptions | undefined,
     onDelta: LLMStreamDeltaHandler,
   ): Promise<LLMResponse> {
+    this.assertWithinBudget();
     const targets = this.getOrderedTargets();
     const failures: LLMTargetFailure[] = [];
     const hasFallback = this.config.llmFallbacks.length > 0;
@@ -269,6 +273,7 @@ export class LLMClient {
       return this.parseJSON<T>(response.content);
     }
 
+    this.assertWithinBudget();
     const targets = this.getOrderedTargets();
     const failures: LLMTargetFailure[] = [];
 
@@ -313,11 +318,42 @@ export class LLMClient {
     throw new LLMAllTargetsFailedError(failures);
   }
 
+  /**
+   * P0b daily-budget hard cap (plan §6.5). Throws before any provider call.
+   * The rejection is recorded as a visible `budget_rejected` usage event —
+   * never silently skipped.
+   */
+  private assertWithinBudget(): void {
+    const ctx = getUsageContext();
+    const result = checkBudget(ctx?.capability ?? null);
+    if (result.allowed) return;
+    recordLlmUsage({
+      side: 'backend',
+      model: null,
+      provider: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      status: 'error',
+      errorKind: 'budget_rejected',
+      meta: {
+        budgetScope: result.scope,
+        budgetSpentUsd: Number(result.spentUsd.toFixed(4)),
+        budgetCapUsd: result.capUsd,
+      },
+    });
+    throw new LLMBudgetExceededError({
+      spentUsd: result.spentUsd,
+      capUsd: result.capUsd ?? 0,
+      scope: result.scope === 'capability' ? 'capability' : 'global',
+    });
+  }
+
   private async runWithFallback(
     prompt: string,
     options: LLMOptions | undefined,
     invoke: (target: ResolvedLLMTarget) => Promise<LLMResponse>,
   ): Promise<LLMResponse> {
+    this.assertWithinBudget();
     const targets = this.getOrderedTargets();
     const failures: LLMTargetFailure[] = [];
     const hasFallback = this.config.llmFallbacks.length > 0;
