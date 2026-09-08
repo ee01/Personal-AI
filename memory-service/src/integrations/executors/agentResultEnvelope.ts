@@ -11,6 +11,7 @@ import {
 } from './agentResultPrompt.js';
 import {
   hasVerifiableArtifact,
+  normalizeAgentResultArtifacts,
   readAgentTaskOutcome,
   type AgentResultArtifact,
 } from './agentResultContract.js';
@@ -156,46 +157,34 @@ export function parseAgentResultEnvelope(
   const raw = String(text || '');
   const parsed = extractAgentResultJson(raw);
   if (parsed) {
-    const artifacts = Array.isArray(parsed.artifacts)
-      ? (parsed.artifacts as AgentResultArtifact[])
-      : [];
-    let status = mapAgentResultStatus(String(parsed.status || 'error'));
-    const summary =
-      typeof parsed.summary === 'string' && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : extractSummaryFromMixedText(raw);
-    const payload =
-      parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
-        ? (parsed.payload as Record<string, unknown>)
-        : { raw: parsed };
-    const outcome = readAgentTaskOutcome(parsed.outcome ?? payload.outcome);
+    const parts = resolveEnvelopeParts(raw, parsed);
     const proofOptions = {
       targetSystem: options.targetSystem,
       mode: options.mode,
-      outcome: outcome ?? parsed.outcome ?? payload.outcome,
+      outcome: parts.outcome,
     };
 
-    if (status === 'succeeded' && !hasVerifiableArtifact(artifacts, proofOptions)) {
+    if (parts.status === 'succeeded' && !hasVerifiableArtifact(parts.artifacts, proofOptions)) {
       return {
         status: 'error',
-        summary: `${summary}（缺少可验证 artifact）`,
-        artifacts,
-        outcome,
+        summary: `${parts.summary}（缺少可验证 artifact）`,
+        artifacts: parts.artifacts,
+        outcome: parts.outcome,
         payload: {
-          ...payload,
-          ...(outcome ? { outcome } : {}),
+          ...parts.payload,
+          ...(parts.outcome ? { outcome: parts.outcome } : {}),
           artifactValidation: 'missing_verifiable_artifact',
         },
       };
     }
 
     return {
-      status,
-      summary,
-      artifacts,
-      outcome,
+      status: parts.status,
+      summary: parts.summary,
+      artifacts: parts.artifacts,
+      outcome: parts.outcome,
       transcript: typeof parsed.transcript === 'string' ? parsed.transcript : undefined,
-      payload: outcome ? { ...payload, outcome } : payload,
+      payload: parts.outcome ? { ...parts.payload, outcome: parts.outcome } : parts.payload,
     };
   }
 
@@ -216,6 +205,73 @@ export function parseAgentResultEnvelope(
       fallback: 'plain_text_summary_without_verifiable_artifact',
     },
   };
+}
+
+function resolveEnvelopeParts(
+  sourceText: string,
+  parsed: Record<string, unknown>,
+): {
+  status: AgentRunStatus;
+  summary: string;
+  outcome?: ReturnType<typeof readAgentTaskOutcome>;
+  artifacts: AgentResultArtifact[];
+  payload: Record<string, unknown>;
+} {
+  const payload =
+    parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
+      ? (parsed.payload as Record<string, unknown>)
+      : { raw: parsed };
+  const rawRecord =
+    payload.raw && typeof payload.raw === 'object' && !Array.isArray(payload.raw)
+      ? (payload.raw as Record<string, unknown>)
+      : parsed;
+
+  let outcome = readAgentTaskOutcome(
+    parsed.outcome ?? payload.outcome ?? rawRecord.outcome,
+  );
+  let artifacts = collectArtifactList(parsed, rawRecord, payload);
+  let summary =
+    typeof parsed.summary === 'string' && parsed.summary.trim()
+      ? parsed.summary.trim()
+      : typeof rawRecord.summary === 'string' && rawRecord.summary.trim()
+        ? rawRecord.summary.trim()
+        : extractSummaryFromMixedText(sourceText);
+
+  if (!outcome || envelopeLooksTruncated(parsed, sourceText)) {
+    const loose = recoverLooseAgentResultEnvelope(sourceText);
+    if (loose) {
+      outcome = readAgentTaskOutcome(loose.outcome) ?? outcome;
+      if (!artifacts.length && Array.isArray(loose.artifacts)) {
+        artifacts = loose.artifacts as AgentResultArtifact[];
+      }
+      if (!summary && typeof loose.summary === 'string') summary = loose.summary;
+      payload.recoveredFrom = 'loose_envelope_parse';
+    }
+  }
+
+  artifacts = normalizeAgentResultArtifacts(artifacts);
+  const status = mapAgentResultStatus(String(parsed.status || rawRecord.status || 'error'));
+
+  return {
+    status,
+    summary,
+    outcome,
+    artifacts,
+    payload,
+  };
+}
+
+function collectArtifactList(
+  parsed: Record<string, unknown>,
+  rawRecord: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): AgentResultArtifact[] {
+  for (const candidate of [parsed.artifacts, rawRecord.artifacts, payload.artifacts]) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      return candidate as AgentResultArtifact[];
+    }
+  }
+  return [];
 }
 
 export function recoverMarkdownReceipt(

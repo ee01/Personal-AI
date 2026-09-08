@@ -168,7 +168,7 @@ export function buildAgentResultSystemPrompt(
     '- summary / content 里的引号必须用 `\\"` 转义，或改用「」/中文引号；不要在中文字符串里直接写 ASCII `"`，否则 JSON 会截断、outcome 丢失。',
     '',
     'artifacts 是给人看的明细（按 Team 分组的 note 放这里），默认不是成功条件。',
-    '例外：写任务 verdict=mutated 时，每个改过的对象还要一张对象收据，点名改了谁。',
+    '例外：写任务 verdict=mutated 时，outcome.count>0 即视为成功；逐条对象收据放进 artifacts 供通知展示，但不再作为第二道闸门。',
     '',
     '也可以不写 outcome，改用这三种封闭收据之一（旧格式兼容）：',
     '- 读扫描/列表/分组/0 匹配：kind=query_result，metadata.sourceSystem + query 或 url + verification + matchCount（含 0）。一张总收据即可，分组明细可另附 note。',

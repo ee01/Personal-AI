@@ -159,26 +159,68 @@ export function readAgentTaskOutcome(value: unknown): AgentTaskOutcome | undefin
 }
 
 /**
- * The executor judged the run; this checks that the judgment is internally
- * consistent. `outcome.mode` is informational — a read-configured task that
- * evaluated a write condition and returned noop is still a verified success.
- * A mutated claim must name the objects it changed. Presentation notes are
- * not proof.
+ * The executor judged the run. Personal AI trusts this closed shape as the
+ * success signal; artifacts are presentation detail for humans, not a second
+ * gate that re-decides success.
  */
 export function isVerifiedOutcome(
   outcome: AgentTaskOutcome | undefined,
-  artifacts: AgentResultArtifact[],
+  _artifacts: AgentResultArtifact[],
   options: VerifiableProofOptions = {},
 ): boolean {
   if (!outcome) return false;
   void options.mode;
+  void _artifacts;
 
   if (outcome.verdict === 'observed') return true;
   if (outcome.verdict === 'empty' || outcome.verdict === 'noop') {
     return outcome.count === 0;
   }
-  if (outcome.verdict !== 'mutated' || outcome.count <= 0) return false;
-  return artifacts.some((artifact) => hasVerifiableEntityArtifact(artifact, options));
+  return outcome.verdict === 'mutated' && outcome.count > 0;
+}
+
+/** Move legacy top-level receipt fields into metadata for downstream consumers. */
+export function normalizeAgentResultArtifact(
+  artifact: AgentResultArtifact,
+): AgentResultArtifact {
+  const record = artifact as AgentResultArtifact & Record<string, unknown>;
+  const metadata: Record<string, unknown> = {
+    ...(record.metadata && typeof record.metadata === 'object' ? record.metadata : {}),
+  };
+  for (const key of [
+    'sourceSystem',
+    'targetSystem',
+    'system',
+    'verification',
+    'verificationMethod',
+    'query',
+    'jql',
+    'queryText',
+    'url',
+    'entityUrl',
+    'matchCount',
+    'entityKey',
+    'entityId',
+    'operation',
+    'changedFields',
+    'observedFields',
+  ]) {
+    if (metadata[key] === undefined && record[key] !== undefined) {
+      metadata[key] = record[key];
+    }
+  }
+  return {
+    kind: typeof record.kind === 'string' ? record.kind : 'note',
+    title: typeof record.title === 'string' ? record.title : undefined,
+    content: typeof record.content === 'string' ? record.content : undefined,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  };
+}
+
+export function normalizeAgentResultArtifacts(
+  artifacts: AgentResultArtifact[],
+): AgentResultArtifact[] {
+  return artifacts.map((artifact) => normalizeAgentResultArtifact(artifact));
 }
 
 /**

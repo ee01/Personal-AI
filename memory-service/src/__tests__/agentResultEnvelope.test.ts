@@ -275,26 +275,27 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.status).toBe('succeeded');
   });
 
-  it('rejects a write outcome that claims mutations but names no objects', () => {
+  it('accepts a write mutated outcome without per-object entity receipts', () => {
     const parsed = parseAgentResultEnvelope(
       JSON.stringify({
         status: 'success',
-        summary: '已更新 4 个 Epic',
+        summary: '为 2026-Q3 查询到 7 个 Nova Epic 并将 Committed 从 No 更新为 Yes',
         outcome: {
           mode: 'write',
           verdict: 'mutated',
           sourceSystem: 'jira',
-          method: 'rest_api_readback',
+          method: 'jql_requery',
           subject: 'project=NOVA AND Committed != Yes',
-          count: 4,
+          count: 7,
         },
-        artifacts: [{ kind: 'note', title: 'done', content: 'trust me' }],
+        artifacts: [{ kind: 'note', title: 'done', content: 'NOVA-17934' }],
       }),
       { mode: 'write', targetSystem: 'jira' },
     );
 
-    expect(parsed.status).toBe('error');
-    expect(parsed.summary).toContain('缺少可验证 artifact');
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.outcome?.verdict).toBe('mutated');
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
   });
 
   it('accepts a write noop outcome when nothing needed changing', () => {

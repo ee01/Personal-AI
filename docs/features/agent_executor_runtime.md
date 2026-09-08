@@ -70,7 +70,7 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 
 成功（读）：信封带 `outcome`（`mode=read`，`verdict=observed|empty`，`sourceSystem`，`method`，可复跑的 `subject`，`count>=0`），或一张 `kind: query_result`（`sourceSystem` + `query`/`url` + `verification` + `matchCount`，0 合法），或单对象收据（`entityKey` + `observedFields`）。按 Team 分组的 note 是展示明细，不是成功条件。
 
-成功（写）：`outcome.verdict=mutated` 且 `count>0`，并且每个改过的对象有 `entityKey` + `operation` + `changedFields`；或 `verdict=noop`/`empty` 且 `count=0`（确认无需改）。`outcome.mode` 与任务 Mode 不必字面一致：任务标成 read、执行器评估写入后回报 noop，仍算成功。
+成功（写）：`outcome.verdict=mutated` 且 `count>0`（执行器自判已写入）；`noop`/`empty` 且 `count=0`（确认无需改）。`outcome` 成立即成功，artifacts 只服务展示，不再二次否决。`outcome.mode` 与任务 Mode 不必字面一致。
 
 失败：执行器报 `error` / `capability_missing` / `auth_error` / `need_human_decision`；或声称 success 但既没有合法 outcome 也没有上述收据 → 改判 `missing_verifiable_artifact`。
 
