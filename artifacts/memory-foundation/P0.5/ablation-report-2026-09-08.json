@@ -1,0 +1,3768 @@
+{
+  "generatedAt": "2026-09-08T04:16:55.357Z",
+  "goldFile": "/tmp/p05-gold-seed.jsonl",
+  "probeCount": 154,
+  "seedProvenance": "machine-seeded, human-annotation pass pending (plan §11.5)",
+  "judge": "deterministic gold-message-id hit; abstention = all top-10 RRF scores < 0.5",
+  "models": {
+    "control": "Xenova/all-MiniLM-L6-v2 (exact local revision pinned by config)",
+    "multilingualE5": "Xenova/multilingual-e5-small (quantized ONNX)",
+    "e5Coverage": {
+      "total": 15774,
+      "covered": 15774
+    },
+    "sqliteVecLoaded": true
+  },
+  "rrf": {
+    "topN": 50,
+    "k": 60,
+    "abstainThreshold": 0.5
+  },
+  "variants": {
+    "A": {
+      "probes": 154,
+      "hit1": 0.17532467532467533,
+      "hit5": 0.3116883116883117,
+      "mrr10": 0.2249948464234179,
+      "abstentionCorrect": 1
+    },
+    "A_TRI": {
+      "probes": 154,
+      "hit1": 0.17532467532467533,
+      "hit5": 0.36363636363636365,
+      "mrr10": 0.2621083281797568,
+      "abstentionCorrect": 1
+    },
+    "D": {
+      "probes": 154,
+      "hit1": 0.2532467532467532,
+      "hit5": 0.4805194805194805,
+      "mrr10": 0.34517109874252744,
+      "abstentionCorrect": 1
+    }
+  },
+  "bootstrap": [
+    {
+      "comparison": "A_TRI - A",
+      "metric": "hit@5",
+      "meanDiff": 0.0519,
+      "ci95": [
+        0.0195,
+        0.0909
+      ]
+    },
+    {
+      "comparison": "D - A",
+      "metric": "hit@5",
+      "meanDiff": 0.1688,
+      "ci95": [
+        0.1039,
+        0.2403
+      ]
+    }
+  ],
+  "perProbe": {
+    "A": [
+      {
+        "id": "p05-0001",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0002",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0003",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0004",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0005",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0006",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0007",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0008",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0009",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0010",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0011",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0012",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0013",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0014",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0015",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0016",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0017",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0018",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0019",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0020",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0021",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0022",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0023",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0024",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0025",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0026",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0027",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0028",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0029",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0030",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0031",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0032",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0033",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0034",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0035",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0036",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0037",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0038",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0039",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0040",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0041",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0042",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0043",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0044",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0045",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0046",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0047",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0048",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0049",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0050",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0051",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0052",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0053",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0054",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0055",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0056",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0057",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0058",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0059",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0060",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0061",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0062",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0063",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0064",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0065",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0066",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0067",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0068",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0069",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0070",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0071",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0072",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0073",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0074",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0075",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0076",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0077",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0078",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0079",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0080",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0081",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0082",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0083",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0084",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0085",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0086",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0087",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0088",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0089",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0090",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0091",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0092",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0093",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0094",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0095",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0096",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0097",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0098",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0099",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0100",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0101",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0102",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0103",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0104",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0105",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0106",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0107",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0108",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0109",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0110",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0111",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0112",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0113",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0114",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0115",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0116",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0117",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0118",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0119",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0120",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0121",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0122",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0123",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0124",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0125",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0126",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0127",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0128",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0129",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0130",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0131",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0132",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0133",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0134",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0135",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0136",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0137",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0138",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0139",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0140",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0141",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0142",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0143",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0144",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0145",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0146",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0147",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0148",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0149",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0150",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0151",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-nr-0001",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "zh",
+        "scene": "web_reading",
+        "goldKind": "no_result"
+      },
+      {
+        "id": "p05-nr-0002",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "no_result"
+      },
+      {
+        "id": "p05-nr-0003",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "no_result"
+      }
+    ],
+    "A_TRI": [
+      {
+        "id": "p05-0001",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0002",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0003",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0004",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0005",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0006",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0007",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0008",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0009",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0010",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0011",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0012",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0013",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0014",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0015",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0016",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0017",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0018",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0019",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0020",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0021",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0022",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0023",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0024",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0025",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0026",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0027",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0028",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0029",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0030",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0031",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0032",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0033",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0034",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0035",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0036",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0037",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0038",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0039",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0040",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0041",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0042",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0043",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0044",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0045",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0046",
+        "hitRank": 10,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0047",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0048",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0049",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0050",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0051",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0052",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0053",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0054",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0055",
+        "hitRank": 6,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0056",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0057",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0058",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0059",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0060",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0061",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0062",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0063",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0064",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0065",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0066",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0067",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0068",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0069",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0070",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0071",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0072",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0073",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0074",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0075",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0076",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0077",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0078",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0079",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0080",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0081",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0082",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0083",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0084",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0085",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0086",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0087",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0088",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0089",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0090",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0091",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0092",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0093",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0094",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0095",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0096",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0097",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0098",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0099",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0100",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0101",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0102",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0103",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0104",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0105",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0106",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0107",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0108",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0109",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0110",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0111",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0112",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0113",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0114",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0115",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0116",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0117",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0118",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0119",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0120",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0121",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0122",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0123",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0124",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0125",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0126",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0127",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0128",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0129",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0130",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0131",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0132",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0133",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0134",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0135",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0136",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0137",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0138",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0139",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0140",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0141",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0142",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0143",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0144",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0145",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0146",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0147",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0148",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0149",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0150",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0151",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-nr-0001",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "zh",
+        "scene": "web_reading",
+        "goldKind": "no_result"
+      },
+      {
+        "id": "p05-nr-0002",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "no_result"
+      },
+      {
+        "id": "p05-nr-0003",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "no_result"
+      }
+    ],
+    "D": [
+      {
+        "id": "p05-0001",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0002",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0003",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0004",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0005",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0006",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0007",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0008",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0009",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0010",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0011",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0012",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0013",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0014",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0015",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0016",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0017",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0018",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0019",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0020",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0021",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0022",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0023",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0024",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0025",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0026",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0027",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0028",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0029",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0030",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0031",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0032",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0033",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0034",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0035",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0036",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0037",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0038",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0039",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0040",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0041",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0042",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0043",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0044",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0045",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0046",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0047",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0048",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0049",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0050",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0051",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0052",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0053",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0054",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0055",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0056",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0057",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0058",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0059",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0060",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0061",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0062",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0063",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0064",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0065",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0066",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0067",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0068",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0069",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0070",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0071",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0072",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0073",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0074",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0075",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0076",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0077",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0078",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0079",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "jira_issue_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0080",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0081",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0082",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0083",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0084",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0085",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0086",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0087",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0088",
+        "hitRank": 6,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0089",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0090",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0091",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0092",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0093",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0094",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0095",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0096",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0097",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0098",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0099",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0100",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0101",
+        "hitRank": 8,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0102",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0103",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0104",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0105",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0106",
+        "hitRank": 6,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0107",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0108",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0109",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0110",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0111",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0112",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "zh",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0113",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0114",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0115",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0116",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0117",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0118",
+        "hitRank": 6,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0119",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0120",
+        "hitRank": 3,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0121",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0122",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0123",
+        "hitRank": 10,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0124",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0125",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0126",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0127",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0128",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0129",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0130",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0131",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0132",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0133",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0134",
+        "hitRank": 4,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0135",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0136",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0137",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0138",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0139",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0140",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "mixed",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0141",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0142",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0143",
+        "hitRank": 9,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0144",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0145",
+        "hitRank": 2,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0146",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0147",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0148",
+        "hitRank": 5,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0149",
+        "hitRank": null,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0150",
+        "hitRank": 1,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-0151",
+        "hitRank": 7,
+        "abstainCorrect": null,
+        "language": "en",
+        "scene": "meeting_prep",
+        "goldKind": "message"
+      },
+      {
+        "id": "p05-nr-0001",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "zh",
+        "scene": "web_reading",
+        "goldKind": "no_result"
+      },
+      {
+        "id": "p05-nr-0002",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "en",
+        "scene": "web_reading",
+        "goldKind": "no_result"
+      },
+      {
+        "id": "p05-nr-0003",
+        "hitRank": null,
+        "abstainCorrect": true,
+        "language": "mixed",
+        "scene": "ringcentral_group_chat",
+        "goldKind": "no_result"
+      }
+    ]
+  }
+}
