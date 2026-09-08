@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
   episode_id TEXT NOT NULL REFERENCES messages_raw(id),
   contract_version TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN
-    ('queued', 'claimed', 'extracted', 'integrated', 'needs_extraction',
+    ('queued', 'claimed', 'extracted', 'extracted_zero', 'integrated', 'needs_extraction',
      'dead_letter', 'failed_retryable')),
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER,

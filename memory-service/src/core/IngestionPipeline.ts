@@ -228,6 +228,7 @@ export class IngestionPipeline {
   private claimAttribution: MemoryClaimAttributionService;
   private claimRepository: MemoryClaimRepository;
   private userDataManager?: UserDataManager;
+  private v3UserId?: string;
 
   constructor(
     db: Database.Database,
@@ -236,6 +237,7 @@ export class IngestionPipeline {
   ) {
     this.db = db;
     this.userDataManager = userDataManager;
+    this.v3UserId = userId;
     this.scorer = new SalienceScorer(db);
     this.truthMaintainer = new TruthMaintainer(db, userId);
     this.contextExpansion = new RecallContextExpansionService(db);
@@ -460,6 +462,34 @@ export class IngestionPipeline {
           indexed: false,
         },
       };
+    }
+
+    // P1 shadow dual-write (plan §11.6): the episode is persisted — enqueue
+    // the v3 extraction job WITHOUT the flag controlling legacy behavior.
+    // The worker only runs when MEMORY_WRITE_V3_SHADOW is enabled; legacy
+    // chunk/FTS/entity supply is untouched by this path.
+    try {
+      const { ExtractionWorker } = await import('./v3/ExtractionWorker.js');
+      const worker = new ExtractionWorker(
+        this.db,
+        this.v3UserId ?? 'default',
+      );
+      const jobId = worker.enqueueEpisode(id);
+      if (jobId) {
+        // Fire-and-forget with visible failure states (job table carries
+        // retry/dead_letter; nothing is silently dropped).
+        void worker.processDueJobs(1).catch((err) => {
+          console.warn(
+            '[IngestionPipeline] v3 shadow extraction dispatch failed:',
+            (err as Error).message,
+          );
+        });
+      }
+    } catch (err) {
+      console.warn(
+        '[IngestionPipeline] v3 shadow enqueue skipped:',
+        (err as Error).message,
+      );
     }
 
     // Claim attribution is a mandatory fail-closed gate for every newly stored
