@@ -79,13 +79,12 @@ export function getTestDb(): BetterSqlite3.Database {
       // split a statement here either. Splitting on it would truncate the real
       // statement, and the catch below would swallow the syntax error, leaving
       // tests running against a schema production does not have.
-      const statements = sql
-        .split('\n')
-        .filter((line) => !line.trim().startsWith('--'))
-        .join('\n')
-        .split(';')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+      const statements = splitMigrationStatements(
+        sql
+          .split('\n')
+          .filter((line) => !line.trim().startsWith('--'))
+          .join('\n'),
+      );
 
       for (const stmt of statements) {
         try {
@@ -99,6 +98,49 @@ export function getTestDb(): BetterSqlite3.Database {
 
   _testDb = db;
   return db;
+}
+
+/**
+ * Split a migration script into executable statements without breaking
+ * multi-statement blocks such as `CREATE TRIGGER ... BEGIN ... END;`.
+ *
+ * Mirrors Database.splitStatements in production: naive `;` splitting turns
+ * every trigger body into a syntax error that the per-statement catch below
+ * silently swallows, leaving the test schema without FTS triggers — a schema
+ * production never runs with.
+ */
+function splitMigrationStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let inTrigger = false;
+
+  for (const line of sql.split('\n')) {
+    const trimmedLine = line.trim();
+
+    if (/CREATE\s+TRIGGER/i.test(trimmedLine)) {
+      inTrigger = true;
+    }
+
+    current += line + '\n';
+
+    if (inTrigger && /^END\s*;/i.test(trimmedLine)) {
+      inTrigger = false;
+      statements.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    if (!inTrigger && trimmedLine.endsWith(';')) {
+      statements.push(current.trim());
+      current = '';
+    }
+  }
+
+  if (current.trim()) {
+    statements.push(current.trim());
+  }
+
+  return statements.filter((s) => s.length > 0);
 }
 
 /**

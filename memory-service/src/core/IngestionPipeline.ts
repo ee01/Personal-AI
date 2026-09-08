@@ -136,6 +136,24 @@ function isIngestEmbeddingEnabled(): boolean {
   return isTestRuntime();
 }
 
+/**
+ * P0a-1 (memory-foundation plan §11.2): decouple the legacy lexical supply
+ * (chunk + FTS) from the LLM extraction / salience admission gate.
+ *
+ * When enabled, every policy-eligible episode with non-empty content is
+ * chunked and FTS-indexed regardless of extraction availability or salience
+ * score. Salience keeps influencing rank / tier / extraction priority only;
+ * it no longer decides whether a message exists in the lexical index at all.
+ *
+ * Default is OFF so the flag can be rolled back by simply unsetting it
+ * (rollback gate: "任一步关闭 flag 后回旧行为").
+ */
+function isSupplyDecoupled(): boolean {
+  const envValue = parseOptionalBooleanEnv('MEMORY_SUPPLY_DECOUPLED');
+  if (envValue !== null) return envValue;
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // IngestionPipeline
 // ---------------------------------------------------------------------------
@@ -299,9 +317,13 @@ export class IngestionPipeline {
     // ---- 3. Compute salience score ----
     const scoreSkippedArtifact =
       skip && payload.metadata?.indexExtractedArtifact === true;
+    const supplyDecoupled = isSupplyDecoupled();
+    const contentEligible = contentNormalized.trim().length > 0;
     let salienceScore: number | undefined;
     let salienceComponents: IngestSalienceComponents | undefined;
-    if (!skip || scoreSkippedArtifact) {
+    // With supply decoupled (P0a-1) salience is computed deterministically for
+    // every episode — it feeds ranking/tier only and never gates indexing.
+    if (!skip || scoreSkippedArtifact || supplyDecoupled) {
       salienceScore = 0.5;
       try {
         const salienceResult = await this.scorer.scoreMessage(
@@ -321,6 +343,9 @@ export class IngestionPipeline {
     }
     const shouldIndex =
       salienceScore !== undefined && salienceScore >= STORAGE_THRESHOLD;
+    // P0a-1: legacy lexical projection admission. Decoupled mode chunks every
+    // non-empty eligible episode; legacy mode keeps the old salience gate.
+    const shouldCreateChunks = supplyDecoupled ? contentEligible : shouldIndex;
 
     // ---- 4. Store in messages_raw ----
     try {
@@ -425,10 +450,15 @@ export class IngestionPipeline {
     }
 
     // ---- 6. High-salience processing: entities, relationships, chunks ----
+    // P0a-1: entity/relationship enrichment keeps the legacy `shouldIndex`
+    // admission; chunk + FTS supply follows `shouldCreateChunks` so extraction
+    // outages (INGEST_LLM_EXTRACTION_ENABLED=false) can no longer silently stop
+    // lexical indexing. With the flag off, shouldCreateChunks === shouldIndex
+    // and behavior is byte-identical to legacy.
     let indexed = false;
     let mergeOp: MergeDecision | undefined;
-    if (shouldIndex) {
-      if (extraction) {
+    if (shouldIndex || shouldCreateChunks) {
+      if (shouldIndex && extraction) {
         try {
           this.processEntities(extraction, id, ts, claims);
         } catch (err) {
@@ -441,21 +471,23 @@ export class IngestionPipeline {
 
       let chunksCreated = 0;
       let createdChunks: Array<{ chunkId: number; content: string }> = [];
-      try {
-        createdChunks = this.processChunks(
-          contentNormalized,
-          id,
-          scope,
-          source,
-          payload.sourceType,
-          ts,
-        );
-        chunksCreated = createdChunks.length;
-      } catch (err) {
-        console.warn(
-          '[IngestionPipeline] Chunk processing failed:',
-          (err as Error).message,
-        );
+      if (shouldCreateChunks) {
+        try {
+          createdChunks = this.processChunks(
+            contentNormalized,
+            id,
+            scope,
+            source,
+            payload.sourceType,
+            ts,
+          );
+          chunksCreated = createdChunks.length;
+        } catch (err) {
+          console.warn(
+            '[IngestionPipeline] Chunk processing failed:',
+            (err as Error).message,
+          );
+        }
       }
 
       let metadataUpdated = false;
@@ -667,6 +699,8 @@ export class IngestionPipeline {
         extractionStatus,
         shouldIndex,
         indexed,
+        supplyDecoupled,
+        contentEligible,
       }),
       trustClass,
       sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
@@ -697,11 +731,31 @@ export class IngestionPipeline {
     extractionStatus: 'extracted' | 'skipped' | 'unavailable';
     shouldIndex: boolean;
     indexed: boolean;
+    supplyDecoupled?: boolean;
+    contentEligible?: boolean;
   }): IngestDecision {
+    // P0a-1 typed skip receipt: decoupled mode never reports empty/policy-
+    // excluded content as indexed, even if rank metadata was written.
+    if (args.supplyDecoupled === true && args.contentEligible === false) {
+      return {
+        storage: 'stored_unindexed',
+        reason: 'skipped_empty_content',
+        salienceScore: args.salienceScore,
+        salienceComponents: args.salienceComponents,
+        extractionStatus: args.extractionStatus,
+        shouldIndex: args.shouldIndex,
+        indexed: false,
+      };
+    }
     if (args.indexed) {
+      // P0a-1: chunks/metadata written while the legacy salience gate would have
+      // excluded the message get their own typed receipt so supply metrics can
+      // distinguish decoupled-mode writes from classic salience indexing.
+      const decoupledWrite =
+        args.supplyDecoupled === true && !args.shouldIndex;
       return {
         storage: 'indexed',
-        reason: 'salience_indexed',
+        reason: decoupledWrite ? 'supply_decoupled_indexed' : 'salience_indexed',
         salienceScore: args.salienceScore,
         salienceComponents: args.salienceComponents,
         extractionStatus: args.extractionStatus,

@@ -904,7 +904,9 @@ export type IngestDecisionReason =
   | 'duplicate_post_id'
   | 'duplicate_content_source_sender'
   | 'indexing_failed'
-  | 'insert_failed';
+  | 'insert_failed'
+  | 'supply_decoupled_indexed'
+  | 'skipped_empty_content';
 
 export type IngestDedupeReason = 'post_id' | 'content_source_sender';
 export type IngestExtractionStatus = 'extracted' | 'skipped' | 'unavailable';

@@ -55,6 +55,8 @@ const INGEST_DECISION_REASONS = [
   'duplicate_content_source_sender',
   'indexing_failed',
   'insert_failed',
+  'supply_decoupled_indexed',
+  'skipped_empty_content',
 ] as const satisfies readonly IngestDecisionReason[];
 
 const INGEST_EXTRACTION_STATUSES = [
