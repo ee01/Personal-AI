@@ -328,7 +328,10 @@ function runTier3(db, opts) {
      )
      WHERE file_path LIKE 'messages/%'
        AND created_at < ?
-       AND related_entity_id IS NOT NULL`,
+       AND related_entity_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM messages_raw m WHERE m.id = chunks.related_entity_id
+       )`,
   );
   const chunksSynced = opts.apply ? syncChunkTs.run(EPOCH_FLOOR).changes : 0;
 
