@@ -2061,7 +2061,13 @@ export class ReflectionThreadService {
     lines.push('');
 
     this.userDataManager.writeFile(path, lines.join('\n'));
-    void this.markdownManager?.reindexFile(path);
+    // P0a-5 (plan §8.2 / §11.2 item 5): reflection thread documents (including
+    // their Runs logs and "- None" placeholders) are UI artifacts. They stay
+    // on disk for the detail view but are no longer re-fed into the lexical
+    // index wholesale — previously every sync re-chunked the whole document,
+    // amplifying filler like "- No runs yet." into evidence-competing chunks.
+    // Existing reflection chunks are left untouched; their cleanup belongs
+    // to the P0b/P0c data-repair jobs.
 
     if (path !== thread.latestMarkdownPath) {
       this.repo.upsertThread({

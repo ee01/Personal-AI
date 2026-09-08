@@ -101,6 +101,68 @@ const ENTITY_CATEGORY_MAP: Record<string, EntityType> = {
 /** Salience threshold — entities and chunks are only created above this value. */
 const STORAGE_THRESHOLD = 0.3;
 
+/**
+ * P0a-2 (memory-foundation plan §6.7 / §11.2 item 2): server-side versioned
+ * mapping from the browser's string `priority` labels to numeric importance.
+ * Clients must not define their own numeric mapping — bump this version when
+ * the mapping changes and note it in the ingest decision lineage.
+ */
+export const INGEST_PRIORITY_IMPORTANCE_MAP_VERSION = 1;
+export const PRIORITY_TO_IMPORTANCE: Readonly<Record<string, number>> = {
+  low: 0.3,
+  medium: 0.5,
+  high: 0.75,
+  critical: 0.9,
+};
+
+/**
+ * Normalize browser-supplied ingest metadata to the schema-v2 flat contract.
+ *
+ * Schema v2 (canonical): flat `metadata.sentiment` + `metadata.importance`.
+ * Legacy decoder: older browser builds sent a nested `metadata.metadata`
+ * envelope and/or a string `priority` label instead of numeric importance.
+ * The server tolerates both for a transition window; it never lets client
+ * values raise trust beyond their own field.
+ */
+export function normalizeIngestMetadata(
+  metadata: Record<string, any> | undefined,
+): { sentiment: string; importance: number } {
+  if (!metadata || typeof metadata !== 'object') {
+    return { sentiment: 'neutral', importance: 0.5 };
+  }
+
+  const legacy =
+    metadata.metadata && typeof metadata.metadata === 'object'
+      ? (metadata.metadata as Record<string, any>)
+      : undefined;
+
+  const sentimentRaw = metadata.sentiment ?? legacy?.sentiment;
+  const sentiment =
+    typeof sentimentRaw === 'string' && sentimentRaw.trim() !== ''
+      ? sentimentRaw.trim()
+      : 'neutral';
+
+  let importance: number | undefined;
+  if (typeof metadata.importance === 'number' && !Number.isNaN(metadata.importance)) {
+    importance = metadata.importance;
+  } else if (
+    typeof legacy?.importance === 'number' &&
+    !Number.isNaN(legacy.importance)
+  ) {
+    importance = legacy.importance;
+  } else {
+    const priorityRaw = metadata.priority ?? legacy?.priority;
+    if (typeof priorityRaw === 'string') {
+      importance = PRIORITY_TO_IMPORTANCE[priorityRaw.trim().toLowerCase()];
+    }
+  }
+  if (importance === undefined) importance = 0.5;
+  if (importance < 0) importance = 0;
+  if (importance > 1) importance = 1;
+
+  return { sentiment, importance };
+}
+
 const ALLOWED_PROFILE_ITEM_TYPES = new Set([
   'fact',
   'preference',
@@ -305,10 +367,12 @@ export class IngestionPipeline {
         ? 'extracted'
         : 'unavailable';
 
-    const importance =
-      extraction?.importance ?? payload.metadata?.importance ?? 0.5;
-    const sentiment =
-      extraction?.sentiment ?? payload.metadata?.sentiment ?? 'neutral';
+    // P0a-2: schema-v2 flat contract + legacy metadata.metadata decoder;
+    // string `priority` maps to numeric importance via the server-side
+    // versioned table, never via per-client numeric guesses.
+    const browserMeta = normalizeIngestMetadata(payload.metadata);
+    const importance = extraction?.importance ?? browserMeta.importance;
+    const sentiment = extraction?.sentiment ?? browserMeta.sentiment;
     const summary = extraction?.summary ?? payload.metadata?.summary ?? null;
 
     // Build entities array for the messages_raw JSON column

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
 import type { UserDataManager } from '../storage/UserDataManager.js';
@@ -73,6 +73,12 @@ interface ActivationRow {
   feedback_note: string | null;
   created_at: number;
   updated_at: number;
+  /** P0a-4 hour-bucket aggregation columns (legacy rows keep NULL window_start). */
+  window_start?: number | null;
+  repeat_count?: number;
+  first_seen_at?: number | null;
+  last_seen_at?: number | null;
+  scene_key_hash?: string | null;
 }
 
 export interface CreateRehearsalInput {
@@ -419,25 +425,83 @@ export class RehearsalService {
   }): RehearsalActivation {
     const timestamp = unixNow();
     const id = randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO rehearsal_activations
-          (id, rehearsal_id, surface, context_type, scene_key, score,
-           display_priority, matched_cues_json, outcome, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'matched', ?, ?)`,
-      )
-      .run(
+    // P0a-4 (plan §9.2): aggregate repeated hits on the same scene into one
+    // hour-bucket row instead of writing one row per page view.
+    //   window_start = floor(event_time / 3600) * 3600
+    //   repeat_count += 1; first_seen_at = min; last_seen_at = max
+    // scene_key_hash is a sha256 digest so the bucket key never depends on
+    // raw scene text; scene_key itself stays for the detail view.
+    const windowStart = Math.floor(timestamp / 3600) * 3600;
+    const sceneKeyHash = input.sceneKey
+      ? createHash('sha256').update(input.sceneKey, 'utf8').digest('hex')
+      : null;
+
+    const insertActivation = this.db.prepare(
+      `INSERT INTO rehearsal_activations
+        (id, rehearsal_id, surface, context_type, scene_key, scene_key_hash,
+         score, display_priority, matched_cues_json, outcome,
+         window_start, repeat_count, first_seen_at, last_seen_at,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'matched', ?, 1, ?, ?, ?, ?)`,
+    );
+    const bumpBucket = this.db.prepare(
+      `UPDATE rehearsal_activations
+       SET repeat_count = repeat_count + 1,
+           score = ?,
+           display_priority = ?,
+           matched_cues_json = ?,
+           first_seen_at = MIN(COALESCE(first_seen_at, created_at), ?),
+           last_seen_at = MAX(COALESCE(last_seen_at, created_at), ?),
+           updated_at = ?
+       WHERE id = ?`,
+    );
+    const findBucket = this.db.prepare(
+      `SELECT id FROM rehearsal_activations
+       WHERE rehearsal_id = ? AND scene_key_hash IS ? AND surface = ?
+         AND window_start = ?
+       LIMIT 1`,
+    );
+
+    const writeActivation = this.db.transaction(() => {
+      const existing = sceneKeyHash
+        ? (findBucket.get(
+            input.rehearsalId,
+            sceneKeyHash,
+            input.surface,
+            windowStart,
+          ) as { id: string } | undefined)
+        : undefined;
+      if (existing) {
+        bumpBucket.run(
+          clamp01(input.score),
+          input.displayPriority,
+          JSON.stringify(normalizeCues(input.matchedCues)),
+          timestamp,
+          timestamp,
+          timestamp,
+          existing.id,
+        );
+        return existing.id;
+      }
+      insertActivation.run(
         id,
         input.rehearsalId,
         input.surface,
         input.contextType ?? null,
         input.sceneKey ?? null,
+        sceneKeyHash,
         clamp01(input.score),
         input.displayPriority,
         JSON.stringify(normalizeCues(input.matchedCues)),
+        windowStart,
+        timestamp,
+        timestamp,
         timestamp,
         timestamp,
       );
+      return id;
+    });
+    const activationId = writeActivation();
     this.db
       .prepare(
         `UPDATE rehearsals
@@ -450,7 +514,7 @@ export class RehearsalService {
       .run(timestamp, AUTO_ACTIVE_CONFIDENCE, timestamp, input.rehearsalId);
     const row = this.db
       .prepare('SELECT * FROM rehearsal_activations WHERE id = ?')
-      .get(id) as ActivationRow;
+      .get(activationId) as ActivationRow;
     return mapActivationRow(row);
   }
 
@@ -628,6 +692,10 @@ function mapActivationRow(row: ActivationRow): RehearsalActivation {
     feedbackNote: row.feedback_note ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    windowStart: row.window_start ?? undefined,
+    repeatCount: row.repeat_count ?? 1,
+    firstSeenAt: row.first_seen_at ?? undefined,
+    lastSeenAt: row.last_seen_at ?? undefined,
   };
 }
 

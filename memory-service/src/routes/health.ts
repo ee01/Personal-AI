@@ -55,8 +55,9 @@ export async function healthRoutes(
     }
 
     const uptimeMs = Date.now() - startTime;
-    const embeddingLoaded = EmbeddingClient.isLoaded();
-    const embeddingModel = EmbeddingClient.getModelName();
+    const embeddingReadiness = EmbeddingClient.readiness();
+    const embeddingLoaded = embeddingReadiness.loaded;
+    const embeddingModel = embeddingReadiness.model;
 
     // When no user context is available (top-level /health without auth),
     // report 'degraded' instead of 'error' since the service is still running.
@@ -81,6 +82,12 @@ export async function healthRoutes(
       embedding: {
         loaded: embeddingLoaded,
         model: embeddingModel,
+        readiness: {
+          loading: embeddingReadiness.loading,
+          loadAttempts: embeddingReadiness.loadAttempts,
+          lastError: embeddingReadiness.lastError,
+          nextRetryInMs: embeddingReadiness.nextRetryInMs,
+        },
       },
       llm: getLLMClient().getTargetHealthSnapshot(),
     };

@@ -180,6 +180,11 @@ export interface RehearsalActivation {
   feedbackNote?: string;
   createdAt: number;
   updatedAt: number;
+  /** P0a-4 hour-bucket aggregation (legacy rows lack these). */
+  windowStart?: number;
+  repeatCount?: number;
+  firstSeenAt?: number;
+  lastSeenAt?: number;
 }
 
 export interface RehearsalListResponse {
@@ -2530,6 +2535,13 @@ export interface HealthResponse {
   embedding: {
     loaded: boolean;
     model: string;
+    /** P0a-3 readiness detail: retry schedule after a failed model load. */
+    readiness?: {
+      loading: boolean;
+      loadAttempts: number;
+      lastError: string | null;
+      nextRetryInMs: number;
+    };
   };
   llm?: Array<{
     id: string;

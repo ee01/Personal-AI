@@ -21,6 +21,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { getConfig } from './config.js';
+import { EmbeddingClient } from './llm/EmbeddingClient.js';
 import { UserContextManager } from './core/UserContextManager.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { writeGuardMiddleware } from './middleware/writeGuard.js';
@@ -411,6 +412,16 @@ export async function buildApp(
 async function main(): Promise<void> {
   const config = getConfig();
   const { app, userContextManager } = await buildApp();
+
+  // ---- P0a-3: bounded, retryable embedding warmup ----
+  // The vector channel stays degraded-but-recoverable if the model fails to
+  // load; readiness is exposed via /health and the backoff retry path keeps
+  // trying instead of caching the failure forever.
+  void EmbeddingClient.warmup().then(() => {
+    console.log(
+      `[server] Embedding warmup finished (ready=${EmbeddingClient.isLoaded()})`,
+    );
+  });
 
   // ---- Start Proactive Scheduler ----
   const scheduler = new ProactiveScheduler(userContextManager);

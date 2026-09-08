@@ -888,8 +888,12 @@ Brief current status
       return 0;
     }
 
-    // Find all markdown files modified today by scanning known directories
-    const directories = ['daily', 'projects', 'reflections', 'dreams'];
+    // P0a-5 (plan §8.2 / §11.2 item 5): reflections and dream replays are
+    // derived LLM artifacts, not evidence. They stay on disk as UI artifacts
+    // but must no longer be re-fed wholesale into the lexical index as
+    // chunks competing with real message evidence (this includes re-indexing
+    // filler like "- No runs yet" / "- None" runs logs).
+    const directories = ['daily', 'projects'];
     const modifiedFiles: string[] = [];
 
     for (const dir of directories) {
@@ -954,6 +958,22 @@ Brief current status
         `SELECT COUNT(*) as count FROM messages_raw WHERE timestamp BETWEEN ? AND ?`,
       )
       .get(startOfDay, startOfDay + 86400 - 1) as { count: number };
+
+    // P0a-5 (plan §8.2): no evidence — no reflection. When nothing new was
+    // ingested today, generating a "no activity today" reflection is filler
+    // that then gets indexed and competes with real evidence.
+    const dailySummaryExists = (() => {
+      const udm0 = this.userDataManager;
+      if (!udm0?.isInitialized) return false;
+      const content = udm0.readFile(`daily/${dateStr}.md`);
+      return !!content && content.trim().length > 0;
+    })();
+    if (messageCount.count === 0 && !dailySummaryExists) {
+      console.log(
+        '[ConsolidationEngine] phaseReflect skipped: no new messages today',
+      );
+      return 0;
+    }
 
     // Read the daily summary if it was generated
     const udm = this.userDataManager;

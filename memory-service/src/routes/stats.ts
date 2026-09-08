@@ -398,4 +398,119 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send(response);
     },
   );
+
+  // -------------------------------------------------------------------------
+  // P0a-6 (memory-foundation plan §11.2 item 6): supply diagnostics.
+  // Read-only telemetry that answers the incident question directly —
+  // "are new episodes still entering the lexical/vector projections, and
+  // which runtime gate is currently limiting supply?"
+  // -------------------------------------------------------------------------
+  app.get('/diagnostics/supply', async (request, reply) => {
+    const db = request.userContext?.db;
+    if (!db) {
+      return reply.status(503).send({ error: 'user context unavailable' });
+    }
+
+    const since24h = now() - 86400;
+    const count = (sql: string): number =>
+      (db.prepare(sql).get() as CountRow | undefined)?.count ?? 0;
+
+    const messagesTotal = count('SELECT COUNT(*) AS count FROM messages_raw');
+    const messagesLast24h = count(
+      `SELECT COUNT(*) AS count FROM messages_raw WHERE created_at >= ${since24h}`,
+    );
+    // Live gap: eligible (non-empty) messages without a legacy lexical chunk.
+    const eligibleMissingChunks = count(
+      `SELECT COUNT(*) AS count FROM messages_raw m
+       WHERE m.content IS NOT NULL AND TRIM(m.content) != ''
+         AND NOT EXISTS (
+           SELECT 1 FROM chunks c WHERE c.file_path = 'messages/' || m.id
+         )`,
+    );
+    const eligibleMissingLast24h = count(
+      `SELECT COUNT(*) AS count FROM messages_raw m
+       WHERE m.content IS NOT NULL AND TRIM(m.content) != ''
+         AND m.created_at >= ${since24h}
+         AND NOT EXISTS (
+           SELECT 1 FROM chunks c WHERE c.file_path = 'messages/' || m.id
+         )`,
+    );
+    const messageChunks = count(
+      `SELECT COUNT(*) AS count FROM chunks WHERE file_path LIKE 'messages/%'`,
+    );
+    const messageChunksLast24h = count(
+      `SELECT COUNT(*) AS count FROM chunks
+       WHERE file_path LIKE 'messages/%' AND created_at >= ${since24h}`,
+    );
+
+    let messageChunksMissingVec: number | null = null;
+    try {
+      messageChunksMissingVec = count(
+        `SELECT COUNT(*) AS count FROM chunks c
+         WHERE c.file_path LIKE 'messages/%'
+           AND NOT EXISTS (
+             SELECT 1 FROM chunks_vec v WHERE v.chunk_id = c.chunk_id
+           )`,
+      );
+    } catch {
+      // vec0 extension not loaded — report null instead of failing.
+    }
+
+    const rehearsalActivationsTotal = (() => {
+      try {
+        return count('SELECT COUNT(*) AS count FROM rehearsal_activations');
+      } catch {
+        return null;
+      }
+    })();
+    const rehearsalActivationsLast24h = (() => {
+      try {
+        return count(
+          `SELECT COUNT(*) AS count FROM rehearsal_activations WHERE created_at >= ${since24h}`,
+        );
+      } catch {
+        return null;
+      }
+    })();
+
+    // Runtime gate readout — the incident root cause was only visible by
+    // correlating these three flags with the missing-chunk gap.
+    const readBool = (name: string): boolean | null => {
+      const raw = process.env[name]?.trim().toLowerCase();
+      if (raw === undefined) return null;
+      if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+      if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+      return null;
+    };
+
+    return reply.status(200).send({
+      generatedAt: now(),
+      flags: {
+        memorySupplyDecoupled: readBool('MEMORY_SUPPLY_DECOUPLED') ?? false,
+        ingestLlmExtractionEnabled: readBool('INGEST_LLM_EXTRACTION_ENABLED'),
+        ingestEmbeddingEnabled: readBool('INGEST_EMBEDDING_ENABLED'),
+      },
+      supply: {
+        messages: {
+          total: messagesTotal,
+          last24h: messagesLast24h,
+        },
+        lexical: {
+          messageChunks,
+          messageChunksLast24h,
+          eligibleMissingChunks,
+          eligibleMissingLast24h,
+        },
+        vector: {
+          messageChunksMissingVec,
+        },
+      },
+      amplification: {
+        rehearsalActivations: {
+          total: rehearsalActivationsTotal,
+          last24h: rehearsalActivationsLast24h,
+        },
+      },
+    });
+  });
 }
