@@ -875,6 +875,7 @@ A:
 
 ## 最近更新
 
+- 2026-09-08：帮我做执行结果不再因信封格式不达标而改判失败。成功/失败只看阻断性条件（超时、空输出、执行器自报 error/缺工具/缺权限、正文明确说做不了）；格式好坏降为 `evidenceGrade`（verified / reported / unparsed），只出现在 owner 完成回执。裸文本会包成 `note` 交付物。群通知在结构化提取失败时用 Memory Service LLM 从原文补救填模板。`notifyWhenEmpty` 只对封闭 `empty` 生效，`noop`/`unparsed` 仍推。
 - 2026-09-02：AgentTask 成功通知拆成「执行 → 整理 → 投递」三段：执行器仍交 JSON 信封 + artifact，`notifyTemplate` 只抽证据字段提示（key / url / title / assignee），Jira 收据约定带实际实例 browse/self URL；模板格式化改走 Memory Service LLM（不委派 OpenClaw），失败回落本地填空；成功结果通知不再加 `任务完成: <Topic>` 前缀。OpenClaw Gateway `agent.wait` 超时后进入 30s/60s/120s 确认环，N 次对不上才 `dead_letter`。
 - 2026-08-28：AgentTask 结果通知配置由插件在保存时直接注册到 memory-service（`agent_task_notify_configs`），不再单靠 Apps Script 版本转发；`result` 类型投递不配模板或模板格式化失败时，兜底文案改成「标题 + 摘要」的纯公告，不再误发只给 owner 看的回执体（Run id / 触发来源 / Sheet 账本边界）；模板格式化失败会记录具体原因，不再静默；结果投递失败会写入 `channel_delivery_records` 并私发 owner 说明，`runtime-status` 一并暴露 `resultNotifyDelivery`；查询/扫描类任务查到 0 个匹配现在算合法 success（`query_result` 收据），不再被判成缺证据的 error。
 - 2026-08-21：已完成的单次任务改成仍有下次执行的重复任务时，会自动从 `Done` 恢复为 `Active` 并把 `Exec_Count` 归零；执行器只领取 Active 行，已完成行没有单独的“恢复”按钮。

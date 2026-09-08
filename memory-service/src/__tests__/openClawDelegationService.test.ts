@@ -276,7 +276,7 @@ describe('OpenClawDelegationService', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('downgrades success to error when the artifact is not verifiable', async () => {
+  it('keeps a thin receipt as success and grades it reported', async () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-delegation-'));
@@ -325,8 +325,9 @@ describe('OpenClawDelegationService', () => {
       targetSystem: 'jira',
     });
 
-    expect(outcome.status).toBe('error');
-    expect(outcome.summary).toContain('缺少可验证 artifact');
+    expect(outcome.status).toBe('success');
+    expect(outcome.summary).toBe('我已经检查过 Jira，标题已经正确。');
+    expect(outcome.payload?.evidenceGrade).toBe('reported');
     expect(outcome.payload?.artifactValidation).toBe('missing_verifiable_artifact');
 
     fs.rmSync(tempDir, { recursive: true, force: true });

@@ -10,9 +10,10 @@ import {
   isGenericTargetSystem,
 } from './agentResultPrompt.js';
 import {
-  hasVerifiableArtifact,
+  gradeAgentResultEvidence,
   normalizeAgentResultArtifacts,
   readAgentTaskOutcome,
+  type AgentEvidenceGrade,
   type AgentResultArtifact,
 } from './agentResultContract.js';
 
@@ -164,27 +165,24 @@ export function parseAgentResultEnvelope(
       outcome: parts.outcome,
     };
 
-    if (parts.status === 'succeeded' && !hasVerifiableArtifact(parts.artifacts, proofOptions)) {
-      return {
-        status: 'error',
-        summary: `${parts.summary}（缺少可验证 artifact）`,
-        artifacts: parts.artifacts,
-        outcome: parts.outcome,
-        payload: {
-          ...parts.payload,
-          ...(parts.outcome ? { outcome: parts.outcome } : {}),
-          artifactValidation: 'missing_verifiable_artifact',
-        },
-      };
-    }
+    const grade =
+      parts.status === 'succeeded'
+        ? gradeAgentResultEvidence(parts.artifacts, proofOptions)
+        : undefined;
 
     return {
       status: parts.status,
       summary: parts.summary,
       artifacts: parts.artifacts,
       outcome: parts.outcome,
+      evidenceGrade: grade,
       transcript: typeof parsed.transcript === 'string' ? parsed.transcript : undefined,
-      payload: parts.outcome ? { ...parts.payload, outcome: parts.outcome } : parts.payload,
+      payload: {
+        ...parts.payload,
+        ...(parts.outcome ? { outcome: parts.outcome } : {}),
+        ...(grade ? { evidenceGrade: grade } : {}),
+        ...(grade === 'reported' ? { artifactValidation: 'missing_verifiable_artifact' } : {}),
+      },
     };
   }
 
@@ -192,17 +190,54 @@ export function parseAgentResultEnvelope(
   if (recovered.status === 'succeeded') {
     return recovered;
   }
+  // Only a stated inability to do the work is a failure here. Everything else
+  // is a formatting miss, and the run still owes the user its output.
+  if (recovered.payload?.recoveredFrom === 'markdown_failure_claim') {
+    return recovered;
+  }
 
+  return buildUnparsedEnvelope(raw, options);
+}
+
+/**
+ * The executor produced text but no shape we recognize. Keep the text as the
+ * deliverable so evidence extraction, template filling and the explorer view
+ * all have something to work with, rather than burying it in payload.rawText.
+ */
+function buildUnparsedEnvelope(
+  raw: string,
+  options: ParseAgentResultOptions,
+): AgentResultEnvelope {
+  const text = raw.trim();
+  if (!text) {
+    return {
+      status: 'error',
+      summary: options.emptySummary || '执行器没有返回任何输出',
+      artifacts: [],
+      payload: { rawText: raw, fallback: 'empty_executor_output' },
+    };
+  }
+
+  const summary = extractSummaryFromMixedText(text).slice(0, 500) || text.slice(0, 500);
   return {
-    status: 'error',
-    summary:
-      raw.trim().slice(0, 500) ||
-      options.emptySummary ||
-      '未返回可解析的 JSON 信封或可验证收据',
-    artifacts: [],
+    status: 'succeeded',
+    summary,
+    artifacts: [
+      {
+        kind: 'note',
+        title: '执行器原始输出',
+        content: text.slice(0, 20_000),
+        metadata: {
+          ...(options.targetSystem ? { sourceSystem: options.targetSystem } : {}),
+          evidenceGrade: 'unparsed',
+        },
+      },
+    ],
+    evidenceGrade: 'unparsed',
     payload: {
-      rawText: raw,
-      fallback: 'plain_text_summary_without_verifiable_artifact',
+      rawText: text,
+      evidenceGrade: 'unparsed' satisfies AgentEvidenceGrade,
+      fallback: 'plain_text_deliverable',
     },
   };
 }
@@ -365,25 +400,17 @@ export function recoverMarkdownReceipt(
     },
   }));
 
-  if (!hasVerifiableArtifact(artifacts, options)) {
-    return {
-      status: 'error',
-      summary: `${summary}（缺少可验证 artifact）`,
-      artifacts,
-      payload: {
-        rawText: raw,
-        artifactValidation: 'missing_verifiable_artifact',
-      },
-    };
-  }
-
+  const grade = gradeAgentResultEvidence(artifacts, options);
   return {
     status: 'succeeded',
     summary,
     artifacts,
+    evidenceGrade: grade,
     payload: {
       rawText: raw,
       recoveredFrom: 'markdown_receipt',
+      evidenceGrade: grade,
+      ...(grade === 'reported' ? { artifactValidation: 'missing_verifiable_artifact' } : {}),
     },
   };
 }

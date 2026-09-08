@@ -117,13 +117,27 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.artifacts[0]?.metadata?.verification).toMatch(/jql|rest_api/i);
   });
 
-  it('still rejects a boast with no entity receipt', () => {
+  it('keeps a bare boast as a succeeded run graded unparsed', () => {
     const parsed = parseAgentResultEnvelope('任务已经做好了。', {
       mode: 'write',
       task: '随便做点事',
     });
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.evidenceGrade).toBe('unparsed');
+    expect(parsed.artifacts[0]?.content).toContain('任务已经做好了');
+  });
+
+  it('fails only when the executor says it could not do the work', () => {
+    const parsed = parseAgentResultEnvelope('没有权限访问该项目，无法完成。', {
+      mode: 'write',
+      task: '改点东西',
+    });
     expect(parsed.status).toBe('error');
-    expect(parsed.artifacts).toHaveLength(0);
+  });
+
+  it('keeps an empty executor response a failure', () => {
+    const parsed = parseAgentResultEnvelope('   ', { mode: 'read' });
+    expect(parsed.status).toBe('error');
   });
 
   it('accepts a JSON envelope inside markdown fences', () => {
@@ -246,8 +260,10 @@ describe('parseAgentResultEnvelope', () => {
       { mode: 'read', targetSystem: 'jira' },
     );
 
-    expect(parsed.status).toBe('error');
-    expect(parsed.summary).toContain('缺少可验证 artifact');
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.evidenceGrade).toBe('reported');
+    expect(parsed.payload?.artifactValidation).toBe('missing_verifiable_artifact');
+    expect(parsed.summary).not.toContain('缺少可验证 artifact');
   });
 
   it('accepts a query_result covering the whole scan without per-group proof', () => {
@@ -370,7 +386,7 @@ describe('parseAgentResultEnvelope', () => {
     expect(parsed.payload?.recoveredFrom).toBe('loose_envelope_parse');
   });
 
-  it('still rejects success with only a bare note and no query proof', () => {
+  it('delivers a bare note as succeeded but grades it reported', () => {
     const parsed = parseAgentResultEnvelope(
       JSON.stringify({
         status: 'success',
@@ -380,8 +396,31 @@ describe('parseAgentResultEnvelope', () => {
       { mode: 'write' },
     );
 
-    expect(parsed.status).toBe('error');
-    expect(parsed.summary).toContain('缺少可验证 artifact');
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.evidenceGrade).toBe('reported');
+    expect(parsed.summary).toBe('看了一下，应该没问题。');
+  });
+
+  it('grades a closed outcome as verified', () => {
+    const parsed = parseAgentResultEnvelope(
+      JSON.stringify({
+        status: 'success',
+        summary: '查询后无需更新',
+        outcome: {
+          mode: 'write',
+          verdict: 'noop',
+          count: 0,
+          sourceSystem: 'jira',
+          method: 'jql_requery',
+          subject: 'project = NOVA',
+        },
+      }),
+      { mode: 'write' },
+    );
+
+    expect(parsed.status).toBe('succeeded');
+    expect(parsed.evidenceGrade).toBe('verified');
+    expect(parsed.payload?.artifactValidation).toBeUndefined();
   });
 
   it('uses the JSON envelope summary when the model prefixes it with prose', () => {

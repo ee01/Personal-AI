@@ -648,16 +648,17 @@ export class OpenClawDelegationService {
             payload: recovered.payload,
           };
         }
+        // Reaching here means the text itself said the work could not be done.
         if (outputText.trim().length > 0) {
           return {
             status: 'error',
-            summary: 'OpenClaw 未返回结构化结果或可验证 artifact。',
-            artifacts: [],
+            summary: recovered.summary || 'OpenClaw 报告任务无法完成。',
+            artifacts: recovered.artifacts,
             rawResponse: parsed,
             outputText,
             transcriptPath,
             payload: {
-              fallback: 'plain_text_summary_without_verifiable_artifact',
+              ...(recovered.payload ?? {}),
               rawSummary: outputText.trim(),
             },
           };
@@ -683,24 +684,14 @@ export class OpenClawDelegationService {
             envelope.summary,
           )
         : coerceArtifacts(envelope.artifacts);
-      if (
-        normalizedStatus === 'success' &&
-        !isNotificationOnlyRequest(input) &&
-        !hasVerifiableArtifact(artifacts, input, proofOutcome)
-      ) {
-        return {
-          status: 'error',
-          summary: 'OpenClaw 返回了 success，但缺少可验证 artifact。',
-          artifacts,
-          rawResponse: parsed,
-          outputText,
-          transcriptPath,
-          payload: {
-            ...(envelope.payload ?? {}),
-            artifactValidation: 'missing_verifiable_artifact',
-          },
-        };
-      }
+      // A thin receipt is a reporting miss, not a failed run: grade it and keep
+      // going, so a completed task never becomes undeliverable over formatting.
+      const evidenceGrade =
+        normalizedStatus === 'success' && !isNotificationOnlyRequest(input)
+          ? hasVerifiableArtifact(artifacts, input, proofOutcome)
+            ? 'verified'
+            : 'reported'
+          : undefined;
       if (normalizedStatus === 'error' && hasPersonalAiArCandidateArtifact(input)) {
         const arArtifacts = enrichArtifactsWithDelegationContext(
           coerceArtifacts(envelope.artifacts),
@@ -733,7 +724,15 @@ export class OpenClawDelegationService {
         rawResponse: parsed,
         outputText,
         transcriptPath,
-        payload: envelope.payload,
+        payload: evidenceGrade
+          ? {
+              ...(envelope.payload ?? {}),
+              evidenceGrade,
+              ...(evidenceGrade === 'reported'
+                ? { artifactValidation: 'missing_verifiable_artifact' }
+                : {}),
+            }
+          : envelope.payload,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

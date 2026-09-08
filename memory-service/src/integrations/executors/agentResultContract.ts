@@ -325,3 +325,21 @@ export function hasVerifiableArtifact(
       isVerifiedFileArtifact(artifact),
   );
 }
+
+/**
+ * How much of the run we can stand behind, kept separate from whether the run
+ * happened at all. A malformed receipt is a reporting problem, so it downgrades
+ * the grade instead of turning a completed run into a failure.
+ *
+ * - `verified`: closed outcome, or one of the artifact receipts above.
+ * - `reported`: the executor claimed success and gave us something to show.
+ * - `unparsed`: no structure at all; the raw text is the deliverable.
+ */
+export type AgentEvidenceGrade = 'verified' | 'reported' | 'unparsed';
+
+export function gradeAgentResultEvidence(
+  artifacts: AgentResultArtifact[],
+  options: VerifiableProofOptions = {},
+): Exclude<AgentEvidenceGrade, 'unparsed'> {
+  return hasVerifiableArtifact(artifacts, options) ? 'verified' : 'reported';
+}

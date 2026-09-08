@@ -66,17 +66,19 @@ Handshake 对齐 OpenClaw 2026.7 `ConnectParams`：
 - 远程首次连接可能需在 OpenClaw 侧批准 pairing（`openclaw devices list` / approve）
 | `acp-codex` / `acp-claude-code` / `acp-cursor` | `AcpExecutor` | stdio 驱动官方 ACP adapter（Cursor 走仓库内 `cursor-acp` shim）；注入 Personal AI MCP |
 
-共享契约：`agentResultContract.ts` — 执行器自己判断读/写是否做成，但 `status=success` 不够。Personal AI 只认封闭结构，不把业务分组字段或对象列表字段名当成成功证据。
+共享契约：`agentResultContract.ts` — **任务有没有做成** 和 **回执格式好不好** 是两件事。阻断性失败（超时、无输出、执行器自报 error / capability_missing / auth_error / need_human_decision、正文明确说做不了）才把 run 判失败。格式问题只降级 `evidenceGrade`，run 仍是 succeeded，通知照发。
 
-成功（读）：信封带 `outcome`（`mode=read`，`verdict=observed|empty`，`sourceSystem`，`method`，可复跑的 `subject`，`count>=0`），或一张 `kind: query_result`（`sourceSystem` + `query`/`url` + `verification` + `matchCount`，0 合法），或单对象收据（`entityKey` + `observedFields`）。按 Team 分组的 note 是展示明细，不是成功条件。
+`evidenceGrade`：`verified`（封闭 `outcome` 或合法收据）/ `reported`（执行器自报成功，有摘要或 artifacts）/ `unparsed`（完全解析不出结构，原文整段作为 `note` 交付物）。等级写进账本，只出现在用户自己的「帮我做完成」回执，群推送不带。
 
-成功（写）：`outcome.verdict=mutated` 且 `count>0`（执行器自判已写入）；`noop`/`empty` 且 `count=0`（确认无需改）。`outcome` 成立即成功，artifacts 只服务展示，不再二次否决。`outcome.mode` 与任务 Mode 不必字面一致。
+成功（读，`verified`）：信封带 `outcome`（`mode=read`，`verdict=observed|empty`，`sourceSystem`，`method`，可复跑的 `subject`，`count>=0`），或一张 `kind: query_result`（`sourceSystem` + `query`/`url` + `verification` + `matchCount`，0 合法），或单对象收据（`entityKey` + `observedFields`）。按 Team 分组的 note 是展示明细。
 
-失败：执行器报 `error` / `capability_missing` / `auth_error` / `need_human_decision`；或声称 success 但既没有合法 outcome 也没有上述收据 → 改判 `missing_verifiable_artifact`。
+成功（写，`verified`）：`outcome.verdict=mutated` 且 `count>0`；`noop`/`empty` 且 `count=0`。`outcome` 成立即 `verified`，artifacts 只服务展示。`outcome.mode` 与任务 Mode 不必字面一致。
 
-`observedFields` 接受 **array 或 object**。系统提示词（`agentResultPrompt.ts`）把这套 outcome/收据教给执行器。
+失败：执行器报 `error` / `capability_missing` / `auth_error` / `need_human_decision`；网关 wait 失败 / 空输出 / 超时取消；或正文明确声称做不了且没有成功声明。**不再**因为缺少可验证 artifact 把 success 改写成 error。
 
-用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。若任务带了 `notifyTemplate`，prompt 只注入「通知还需要哪些字段」，不把模板当最终回复；Jira 收据约定带 browse/self URL。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回带实体 ID 和回读证据的 Markdown，会保守推导收据，而不是把业务成功记成 error。
+空结果静默（`notifyWhenEmpty`）：先看封闭 `outcome`（只有 `empty` + count 0 才算空；`noop`/`observed`/`mutated` 都要推）；`unparsed` 一律不静默。群推送解析不出列表时，Memory Service 用自身 LLM 从原文提取条目填模板，失败再回落本地兜底。
+
+用户 Task 只写要做什么。JSON 信封和 artifact 收据由共享 system prompt（`agentResultPrompt.ts`）规定，Gateway `extraSystemPrompt`、ACP 前置说明、legacy `/v1/responses` developer 消息共用。若任务带了 `notifyTemplate`，prompt 只注入「通知还需要哪些字段」，不把模板当最终回复；Jira 收据约定带 browse/self URL。解析器（`agentResultEnvelope.ts`）只把带已知 `status` 的对象当信封，避免把 `{"value":"Yes"}` 这类附带 JSON 误判为失败；若模型仍返回 Markdown 或裸文本，会尽量推导收据，推导不出则把原文包成 `note` 交付物并标 `evidenceGrade=unparsed`，而不是把业务成功记成 error。
 
 ### AgentTask 通知与执行分层
 
@@ -89,7 +91,7 @@ notifyTemplate + artifacts  →  Memory Service LLM 整理  →  Glip 正文（�
 ```
 
 - 执行：`agentResultPrompt.ts` + `agentResultEnvelope.ts`；`notifyTemplate` 正文不进 Task，只影响 system prompt 里的证据字段列表。
-- 整理：`agentTaskNotification.ts` 的 `formatSuccessNotificationWithTemplate`；用服务端 LLM key，失败回落 `applyNotifyTemplateLocally`。
+- 整理：`agentTaskNotification.ts` 的 `formatSuccessNotificationWithTemplate`；用服务端 LLM key。结构化提取拿到列表时直接填；提取为空但任务并非 `empty` 时，把执行器原文交给 LLM 补救；LLM 失败回落 `applyNotifyTemplateLocally`。
 - 投递：`deliverAgentTaskRunNotifications` → Bot / AsMe / plugin；`success_receipt` / `failure_receipt` 仍带 `帮我做完成` / `帮我做失败` 标题。
 
 ## OpenClaw Gateway（Block C）

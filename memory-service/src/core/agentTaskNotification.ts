@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
 import { runWithUsageContext } from '../analytics/usageContext.js';
-import { readAgentTaskOutcome } from '../integrations/executors/agentResultContract.js';
+import {
+  readAgentTaskOutcome,
+  type AgentEvidenceGrade,
+} from '../integrations/executors/agentResultContract.js';
 import {
   extractAgentResultJson,
   extractSummaryFromMixedText,
@@ -144,6 +147,22 @@ function compactText(value: unknown, maxLength = 1600): string {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1).trim()}...`;
 }
 
+const EVIDENCE_GRADE_LABEL: Record<AgentEvidenceGrade, string> = {
+  verified: '',
+  reported: '已完成，但执行器未给出可验证收据（仅自报结果）',
+  unparsed: '已完成，但执行器只回了自然语言，未按信封格式返回',
+};
+
+/** Receipt quality of a run, read from either the envelope or its payload. */
+export function readEvidenceGrade(
+  result?: Record<string, unknown>,
+): AgentEvidenceGrade | undefined {
+  const raw =
+    nonEmptyString(result?.evidenceGrade) ??
+    nonEmptyString(asRecord(result?.payload).evidenceGrade);
+  return raw === 'verified' || raw === 'reported' || raw === 'unparsed' ? raw : undefined;
+}
+
 export function buildDefaultNotificationBody(input: {
   title: string;
   taskId: string;
@@ -154,11 +173,16 @@ export function buildDefaultNotificationBody(input: {
   actionId: string;
   triggerSource: string;
   arBindingId?: string;
+  evidenceGrade?: AgentEvidenceGrade;
 }): string {
+  const gradeNote = input.evidenceGrade
+    ? EVIDENCE_GRADE_LABEL[input.evidenceGrade]
+    : '';
   const lines = [
     `任务: ${input.title}`,
     `状态: ${input.resultStatus || input.queueStatus}`,
     input.summary ? `结果: ${compactText(input.summary, 900)}` : '',
+    gradeNote ? `证据: ${gradeNote}` : '',
     input.error ? `错误: ${compactText(input.error, 900)}` : '',
     `Run: ${input.actionId}`,
     `触发: ${input.triggerSource}`,
@@ -458,11 +482,13 @@ export async function formatSuccessNotificationWithTemplate(input: {
     emptyOutcome ? { ...evidence, lines: [] } : evidence,
   );
 
-  // Nothing to list means the LLM would only rewrite prose, and it then tends to
-  // drop the separator and the closing cc line. Fill the template deterministically.
-  if (emptyOutcome || evidence.lines.length === 0) {
-    return structuredFallback;
-  }
+  if (emptyOutcome) return structuredFallback;
+
+  // No parsed rows is exactly when the LLM earns its keep: the run produced
+  // something, our extractor just could not shape it. Hand it the raw executor
+  // text instead of shipping an "empty" body for a task that did work.
+  const narrative = evidence.lines.length ? '' : readExecutorNarrative(input.result);
+  if (!evidence.lines.length && !narrative) return structuredFallback;
 
   let content: string;
   try {
@@ -490,6 +516,9 @@ export async function formatSuccessNotificationWithTemplate(input: {
                   '证据里已有 URL 时必须用证据 URL；证据没有完整 URL 时，按模板给出的链接格式补全可点击地址，不要照抄 xxx 占位符。',
                 ].join('')
               : '',
+            narrative
+              ? '结构化提取没能拿到列表项，请直接从下面的执行器原文里找出真实条目填进模板；原文里确实没有条目时，保留模板结构并在列表位置写一行说明，不要编造。'
+              : '',
             '只输出最终通知正文，不要 JSON、不要 markdown 代码围栏、不要解释。',
             '',
             `任务标题: ${input.title}`,
@@ -499,6 +528,7 @@ export async function formatSuccessNotificationWithTemplate(input: {
             evidence.lines.length
               ? `已整理的列表项:\n${evidence.lines.join('\n')}`
               : '没有可列出的条目。',
+            narrative ? `执行器原文:\n${narrative}` : '',
             evidence.urls.length
               ? `证据中的 URL:\n${evidence.urls.join('\n')}`
               : '证据中没有现成 URL。',
@@ -540,6 +570,35 @@ export interface NotificationEvidence {
   summary: string;
   lines: string[];
   urls: string[];
+}
+
+const NARRATIVE_CHAR_BUDGET = 8000;
+
+/**
+ * Everything the executor said, in the order a reader would want it, for the
+ * cases where structured extraction came up empty. JSON blobs are skipped —
+ * they are already covered by the structured path and only burn context.
+ */
+function readExecutorNarrative(result?: Record<string, unknown>): string {
+  if (!result) return '';
+  const payload = asRecord(result.payload);
+  const chunks: string[] = [];
+
+  const push = (value: unknown) => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text || text.startsWith('{') || text.startsWith('[')) return;
+    chunks.push(text);
+  };
+
+  push(result.summary);
+  for (const artifact of Array.isArray(result.artifacts) ? result.artifacts : []) {
+    const art = asRecord(artifact);
+    push(art.title);
+    push(art.content);
+  }
+  push(payload.rawText);
+
+  return uniqueNonEmpty(chunks).join('\n').slice(0, NARRATIVE_CHAR_BUDGET);
 }
 
 function pushHttpUrl(value: unknown, urls: string[]): void {
@@ -939,7 +998,7 @@ export function isEmptyResultOutcome(result?: Record<string, unknown>): boolean 
   if (!result) return true;
 
   const payload = asRecord(result.payload);
-  const declared = readAgentTaskOutcome(payload.outcome);
+  const declared = readAgentTaskOutcome(result.outcome ?? payload.outcome);
   if (declared) {
     if (declared.verdict === 'observed' || declared.verdict === 'mutated') return false;
     // Executor already judged the write boundary: scanned candidates but nothing
@@ -947,6 +1006,10 @@ export function isEmptyResultOutcome(result?: Record<string, unknown>): boolean 
     if (declared.verdict === 'noop') return false;
     if (declared.verdict === 'empty') return declared.count === 0;
   }
+
+  // An unparsed run declared nothing at all, so emptiness can only be guessed
+  // from the text. Guessing "empty" there would silence a completed task.
+  if (readEvidenceGrade(result) === 'unparsed') return false;
 
   const outcome = readCountSignal(payload, OUTCOME_COUNT_KEY);
   if (outcome.positive) return false;
@@ -969,6 +1032,10 @@ export function isEmptyResultOutcome(result?: Record<string, unknown>): boolean 
   const payloadScan = readCountSignal(payload, SCAN_COUNT_KEY);
   if (scan.positive || payloadScan.positive) return false;
   if (scan.zero || payloadScan.zero) return true;
+
+  // A reported run claimed success without a closed count. Guessing "empty"
+  // from missing list rows is what used to swallow completed tasks.
+  if (readEvidenceGrade(result) === 'reported') return false;
 
   return extractNotificationEvidence(result).lines.length === 0;
 }
@@ -1110,6 +1177,8 @@ export async function deliverAgentTaskRunNotifications(input: {
     actionId: input.action.id,
     triggerSource: config.triggerSource,
     arBindingId: nonEmptyString(metadata.arBindingId),
+    // Owner receipt only: the target group does not need our internal grading.
+    evidenceGrade: succeeded ? readEvidenceGrade(input.execution.result) : undefined,
   });
   const resultAnnouncementBody = buildAgentTaskResultAnnouncementBody({
     title,

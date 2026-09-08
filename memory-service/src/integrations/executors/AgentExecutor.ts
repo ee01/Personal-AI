@@ -3,7 +3,11 @@
  * Protocol details (Gateway WS / ACP stdio / legacy HTTP) stay inside implementations.
  */
 
-import type { AgentResultArtifact, AgentTaskOutcome } from './agentResultContract.js';
+import type {
+  AgentEvidenceGrade,
+  AgentResultArtifact,
+  AgentTaskOutcome,
+} from './agentResultContract.js';
 
 export type AgentRunStatus =
   | 'queued'
@@ -23,6 +27,8 @@ export interface AgentResultEnvelope {
   summary: string;
   artifacts: AgentResultArtifact[];
   outcome?: AgentTaskOutcome;
+  /** Receipt quality of a succeeded run; never decides success on its own. */
+  evidenceGrade?: AgentEvidenceGrade;
   transcript?: string;
   transcriptPath?: string;
   payload?: Record<string, unknown>;

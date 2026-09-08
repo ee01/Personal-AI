@@ -158,7 +158,7 @@ export function buildAgentResultSystemPrompt(
     'JSON 信封：',
     '{"status":"success|capability_missing|auth_error|need_human_decision|error","summary":"给人看的一两句结果","outcome":{"mode":"read|write","verdict":"observed|empty|mutated|noop","sourceSystem":"jira","method":"jql_requery","subject":"可复跑的查询或 URL","count":0},"artifacts":[{"kind":"note","title":"...","content":"...","metadata":{}}]}',
     '',
-    '先自己判断这次读/写有没有做成，再用封闭的 outcome 回报判断。status=success 不够。Personal AI 只认 outcome 或下面三种收据，不认业务分组字段或对象列表字段名。',
+    '先自己判断这次读/写有没有做成，再用封闭的 outcome 回报判断。Personal AI 优先认 outcome 或下面三种收据；没有封闭结构时仍会把这次 run 记为成功，但证据等级会降，群通知只能从自然语言里猜。',
     '',
     'outcome（status=success 时填写）：',
     '- mode：任务边界的标注（read 或 write）。与任务 Mode 不一致也可以：例如任务标成 read，但你评估了写入条件后确认无需改，verdict=noop 仍算成功。Personal AI 看 verdict，不要求 mode 字面相等。',

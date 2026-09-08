@@ -251,6 +251,47 @@ describe('formatSuccessNotificationWithTemplate', () => {
     expect(generateMock).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
+
+  it('salvages list rows from raw executor prose when extraction found none', async () => {
+    generateMock.mockResolvedValue({
+      content:
+        '-- Nova 缺少 Team 的 Epics --\n----\n\n* NOVA-17657 缺少 Team\n* NOVA-17391 缺少 Team\n\n以上 Epic 麻烦各位 leads 来看看添加上对应的 Team',
+    });
+    const log = { warn: vi.fn() };
+
+    const body = await formatSuccessNotificationWithTemplate({
+      ...baseInput,
+      result: {
+        status: 'success',
+        summary: '我查了一圈，有两个 Epic 还缺 Team。',
+        evidenceGrade: 'unparsed',
+        artifacts: [],
+        payload: {
+          evidenceGrade: 'unparsed',
+          rawText: '我查了一圈，NOVA-17657 和 NOVA-17391 这两个 Epic 还缺 Team，需要 leads 补上。',
+        },
+      },
+      log,
+    });
+
+    expect(generateMock).toHaveBeenCalled();
+    expect(String(generateMock.mock.calls[0][0])).toContain('执行器原文');
+    expect(body).toContain('* NOVA-17657 缺少 Team');
+    expect(body).toContain('以上 Epic 麻烦各位 leads');
+  });
+
+  it('does not call the LLM when there is neither a row nor any prose to salvage', async () => {
+    const log = { warn: vi.fn() };
+
+    const body = await formatSuccessNotificationWithTemplate({
+      ...baseInput,
+      result: { status: 'success', artifacts: [], payload: { epicsUpdated: 0 } },
+      log,
+    });
+
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(body).toContain('-- Nova 缺少 Team 的 Epics --');
+  });
 });
 
 describe('extractNotificationEvidence / applyNotifyTemplateLocally', () => {
@@ -427,6 +468,44 @@ describe('isEmptyResultOutcome', () => {
     ).toBe(false);
     expect(isEmptyResultOutcome({ status: 'success', summary: '没有命中' })).toBe(true);
     expect(isEmptyResultOutcome(undefined)).toBe(true);
+  });
+
+  it('never guesses emptiness for an unparsed run', () => {
+    expect(
+      isEmptyResultOutcome({
+        status: 'success',
+        summary: '我查了一圈，有几个 Epic 还缺 Team。',
+        evidenceGrade: 'unparsed',
+        artifacts: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('does not treat a reported note as empty just because it has no list rows', () => {
+    expect(
+      isEmptyResultOutcome({
+        status: 'success',
+        summary: '看了一下，应该没问题。',
+        evidenceGrade: 'reported',
+        artifacts: [{ kind: 'note', title: '检查结果', content: '看起来都对' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('reads a closed outcome from the envelope top level too', () => {
+    expect(
+      isEmptyResultOutcome({
+        status: 'success',
+        outcome: {
+          mode: 'read',
+          verdict: 'empty',
+          count: 0,
+          sourceSystem: 'jira',
+          method: 'jql_requery',
+          subject: 'project = NOVA',
+        },
+      }),
+    ).toBe(true);
   });
 
   it('does not treat a closed write/noop outcome as an empty scan', () => {
