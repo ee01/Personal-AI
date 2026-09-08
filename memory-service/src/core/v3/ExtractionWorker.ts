@@ -18,7 +18,10 @@
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { getLLMClient } from '../../llm/LLMClient.js';
+import { getLLMClient, LLMClient } from '../../llm/LLMClient.js';
+import { parseLLMFallbacks } from '../../llm/LLMTarget.js';
+import { getConfig } from '../../config.js';
+import { runWithUsageContext } from '../../analytics/usageContext.js';
 import { EpisodeRepository } from './EpisodeRepository.js';
 import { UnitTruthMaintainer, type UnitEvidenceClass } from './UnitTruthMaintainer.js';
 import {
@@ -42,6 +45,84 @@ export interface WorkerStats {
 export function isV3ShadowWriteEnabled(): boolean {
   const raw = process.env.MEMORY_WRITE_V3_SHADOW?.trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+/**
+ * Chea-tier routing (plan §6.5): extraction is a background, latency-
+ * tolerant workload. Configure a dedicated cheaper chain via
+ *   V3_EXTRACTION_LLM_FALLBACKS="provider/model,provider/model"
+ * The FIRST token becomes the extraction primary; the rest its fallbacks.
+ * Unset → the default LLMClient (single-chain, whatever the primary is).
+ */
+let extractionClient: LLMClient | undefined;
+
+export function getExtractionLLMClient(): LLMClient {
+  if (extractionClient !== undefined) return extractionClient;
+  const raw = process.env.V3_EXTRACTION_LLM_FALLBACKS?.trim();
+  if (!raw) {
+    extractionClient = getLLMClient();
+    return extractionClient;
+  }
+  const config = getConfig() as import('../../config.js').Config & {
+    llmProvider: string;
+    openaiModel: string;
+    claudeModel: string;
+    difyApiKey: string;
+  };
+  const first = raw.split(',')[0].trim();
+  const [providerRaw, modelRaw] = first.includes('/')
+    ? first.split('/')
+    : [first, ''];
+  const provider = providerRaw.trim().toLowerCase();
+  const base = { ...config } as typeof config;
+  const model =
+    modelRaw?.trim() ||
+    (provider === 'claude'
+      ? config.claudeModel
+      : provider === 'dify'
+        ? ''
+        : config.openaiModel);
+  const creds = {
+    openaiApiKey: config.openaiApiKey,
+    openaiApiBaseUrl: config.openaiApiBaseUrl,
+    openaiModel: config.openaiModel,
+    claudeApiKey: config.claudeApiKey,
+    claudeModel: config.claudeModel,
+    groqApiKey: config.groqApiKey,
+    ollamaBaseUrl: config.ollamaBaseUrl,
+    ollamaModel: config.ollamaModel,
+    difyApiKey: config.difyApiKey,
+    difyApiUrl: config.difyApiUrl,
+    difyAppMode: config.difyAppMode,
+  };
+  const primary = {
+    provider: provider as import('../../llm/LLMTarget.js').LLMProviderName,
+    model,
+  };
+  const chain = [
+    primary,
+    ...parseLLMFallbacks(raw, creds, primary, (m) =>
+      console.warn(`[V3Extraction] ignoring fallback: ${m}`),
+    ),
+  ];
+  // Chain semantics: LLMClient orders [primary, ...llmFallbacks]; build a
+  // config whose primary is the chain head and fallbacks are the rest.
+  const head = chain[0];
+  const rest = chain.slice(1);
+  extractionClient = new LLMClient({
+    ...base,
+    llmProvider: head.provider,
+    openaiModel: head.provider === 'openai' ? head.model : base.openaiModel,
+    claudeModel: head.provider === 'claude' ? head.model : base.claudeModel,
+    llmFallbacks: rest.map((t) => ({
+      provider: t.provider as import('../../llm/LLMTarget.js').LLMProviderName,
+      model: t.model,
+    })),
+  });
+  console.log(
+    `[V3Extraction] cheap-tier chain: ${chain.map((t) => `${t.provider}/${t.model}`).join(' → ')}`,
+  );
+  return extractionClient;
 }
 
 export class ExtractionWorker {
@@ -74,6 +155,22 @@ export class ExtractionWorker {
 
   /** Process up to `limit` due jobs. Returns visible counters (never silent). */
   async processDueJobs(limit = 5): Promise<WorkerStats> {
+    // Usage analytics attribution: extraction is a background LLM consumer
+    // and must be visible in the usage dashboard under its own feature, not
+    // folded into 'unknown'. Also enables per-capability budget caps
+    // (LLM_DAILY_BUDGET_MEMORY_SERVICE_USD) to bound its spend.
+    return runWithUsageContext(
+      {
+        userId: this.userId,
+        capability: 'memory_service',
+        feature: 'v3_extraction',
+        side: 'backend',
+      },
+      () => this.processDueJobsInner(limit),
+    );
+  }
+
+  private async processDueJobsInner(limit: number): Promise<WorkerStats> {
     const stats: WorkerStats = {
       claimed: 0, integrated: 0, zeroFact: 0, retryable: 0, deadLettered: 0,
     };
@@ -139,7 +236,7 @@ export class ExtractionWorker {
       batchRaw = JSON.parse(frozen.candidate_batch_json);
     } else {
       try {
-        const llm = getLLMClient();
+        const llm = getExtractionLLMClient();
         const response = await llm.generate(extractionPrompt({
           content: episode.content,
           sender: episode.sender,

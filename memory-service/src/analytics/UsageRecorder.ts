@@ -28,6 +28,7 @@ const BACKGROUND_FEATURES = new Set([
   'weekly_report',
   'meeting_prep',
   'keystone_composer',
+  'v3_extraction',
 ]);
 
 export interface RecordLlmUsageParams {
