@@ -50,7 +50,7 @@ export function isV3ShadowWriteEnabled(): boolean {
 /**
  * Chea-tier routing (plan §6.5): extraction is a background, latency-
  * tolerant workload. Configure a dedicated cheaper chain via
- *   V3_EXTRACTION_LLM_FALLBACKS="provider/model,provider/model"
+ *   MEMORY_EXTRACTION_LLM_FALLBACKS="provider/model,provider/model"
  * The FIRST token becomes the extraction primary; the rest its fallbacks.
  * Unset → the default LLMClient (single-chain, whatever the primary is).
  */
@@ -58,7 +58,7 @@ let extractionClient: LLMClient | undefined;
 
 export function getExtractionLLMClient(): LLMClient {
   if (extractionClient !== undefined) return extractionClient;
-  const raw = process.env.V3_EXTRACTION_LLM_FALLBACKS?.trim();
+  const raw = process.env.MEMORY_EXTRACTION_LLM_FALLBACKS?.trim();
   if (!raw) {
     extractionClient = getLLMClient();
     return extractionClient;
@@ -70,10 +70,13 @@ export function getExtractionLLMClient(): LLMClient {
     difyApiKey: string;
   };
   const first = raw.split(',')[0].trim();
-  const [providerRaw, modelRaw] = first.includes('/')
-    ? first.split('/')
-    : [first, ''];
-  const provider = providerRaw.trim().toLowerCase();
+  // Split on the FIRST slash only — model names may be compound gateway
+  // paths like `openai/z-ai/glm-5.3-flash` (same rule as parseLLMFallbacks).
+  const firstSlash = first.indexOf('/');
+  const providerRaw =
+    firstSlash === -1 ? first : first.slice(0, firstSlash).trim();
+  const modelRaw = firstSlash === -1 ? '' : first.slice(firstSlash + 1).trim();
+  const provider = providerRaw.toLowerCase();
   const base = { ...config } as typeof config;
   const model =
     modelRaw?.trim() ||
@@ -102,7 +105,7 @@ export function getExtractionLLMClient(): LLMClient {
   const chain = [
     primary,
     ...parseLLMFallbacks(raw, creds, primary, (m) =>
-      console.warn(`[V3Extraction] ignoring fallback: ${m}`),
+      console.warn(`[MemoryExtraction] ignoring fallback: ${m}`),
     ),
   ];
   // Chain semantics: LLMClient orders [primary, ...llmFallbacks]; build a
@@ -120,7 +123,7 @@ export function getExtractionLLMClient(): LLMClient {
     })),
   });
   console.log(
-    `[V3Extraction] cheap-tier chain: ${chain.map((t) => `${t.provider}/${t.model}`).join(' → ')}`,
+    `[MemoryExtraction] cheap-tier chain: ${chain.map((t) => `${t.provider}/${t.model}`).join(' → ')}`,
   );
   return extractionClient;
 }

@@ -61,6 +61,9 @@ describe('v3 ExtractionWorker (P1 shadow dual-write)', () => {
     }
     episodeId = seedEpisode();
     process.env.MEMORY_WRITE_V3_SHADOW = 'true';
+    // The local .env may configure a dedicated extraction chain; these tests
+    // exercise the default (mocked) chain.
+    delete process.env.MEMORY_EXTRACTION_LLM_FALLBACKS;
     generateMock.mockReset();
   });
 
@@ -261,12 +264,12 @@ describe('v3 ExtractionWorker — cheap-tier routing + usage attribution', () =>
     ).run(id);
     episodeId = id;
     process.env.MEMORY_WRITE_V3_SHADOW = 'true';
-    delete process.env.V3_EXTRACTION_LLM_FALLBACKS;
+    delete process.env.MEMORY_EXTRACTION_LLM_FALLBACKS;
     generateMock.mockReset();
   });
 
   afterEach(() => {
-    delete process.env.V3_EXTRACTION_LLM_FALLBACKS;
+    delete process.env.MEMORY_EXTRACTION_LLM_FALLBACKS;
   });
 
   it('LLM calls are attributed to the v3_extraction feature (usage analytics)', async () => {
@@ -285,13 +288,13 @@ describe('v3 ExtractionWorker — cheap-tier routing + usage attribution', () =>
     // the budget/capability path below exercises the context indirectly.
   });
 
-  it('V3_EXTRACTION_LLM_FALLBACKS builds a dedicated cheap-tier chain', async () => {
+  it('MEMORY_EXTRACTION_LLM_FALLBACKS builds a dedicated cheap-tier chain', async () => {
     const { getExtractionLLMClient } = await import('../core/v3/ExtractionWorker.js');
     // Unset → the shared default client.
     const shared = getExtractionLLMClient();
     expect(shared).toBeTruthy();
     // Set → a DEDICATED client instance, constructed once and cached.
-    process.env.V3_EXTRACTION_LLM_FALLBACKS = 'groq/llama-3.1-8b-instant,openai/gpt-4o-mini';
+    process.env.MEMORY_EXTRACTION_LLM_FALLBACKS = 'groq/llama-3.1-8b-instant,openai/gpt-4o-mini';
     vi.resetModules();
     const fresh = await import('../core/v3/ExtractionWorker.js');
     const dedicated = fresh.getExtractionLLMClient();
