@@ -146,6 +146,24 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (request, reply) => {
+      // Client-side-first policy (2026-08-25 decision; enforced since the
+      // memory_capture backend-key leak): with WEBPAGE_ANALYSIS_VIA_LOCAL_KEY
+      // (default true) this server-side LLM route is disabled — callers must
+      // use their own Options-configured key. Old extension builds receive a
+      // typed 403 and degrade the same way they degrade on any analysis
+      // failure (quiet skip). Setting it to false re-enables the route as an
+      // explicit fallback, still bounded by the per-user daily quota and the
+      // global daily LLM budget cap.
+      if (getConfig().webpageAnalysisViaLocalKey) {
+        return reply.status(403).send({
+          error: 'webpage_analysis_backend_disabled',
+          viaLocalKey: true,
+          reason: 'webpage_analysis_runs_client_side',
+          message:
+            'Passive webpage analysis runs client-side with the user-configured LLM key. Set WEBPAGE_ANALYSIS_VIA_LOCAL_KEY=false on the server to allow a server-side fallback (still quota- and budget-bounded).',
+        });
+      }
+
       // Per-user daily quota guard against a runaway loop / test script
       // repeating this route (a single POC account once produced $85/month
       // on its own — see docs/features/usage_analytics.md, 成本治理与 2026-08 事故复盘).

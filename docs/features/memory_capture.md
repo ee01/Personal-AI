@@ -47,7 +47,7 @@ Memory Capture 是 Personal AI 的低打扰资料入库层。它负责把用户�
 
 - **未配置 LLM 时功能直接不可用**：`background.ts` 在分析前用 `isMainLLMConfiguredForMeetingAnalysis()` 检查，未配置返回 `reason: 'llm_not_configured'`（与 `insufficient_page_content` 同级的"本次不分析"，不是错误）。Options 在消息分析和网页分析两个区块都渲染 `LlmConfigGuidance` 引导条，点击跳到 LLM 配置区块。
 - **提示词与结果收口**：`src/web-intelligence/passiveWebpageAnalysis.ts` 的 `buildPassiveWebpageAnalysisPrompt`（12k 字符截断、URL 规整、注入防护文案）+ `normalizePassiveWebpageAnalysisResult`（证据核验、字段裁剪、`skip` 强制清空）——与后端 `PassiveWebpageAnalysisService` 同源同构，prompt 版本同为 `passive-webpage-memory-v2`。打点归 `memory_capture` / feature `passive_webpage_memory_analysis`（前端侧）。
-- **后端 `POST /source-memory/webpage-analysis` 仍存在但扩展不调用**：保留供自托管者直连集成使用，带 `WEBPAGE_ANALYSIS_MODEL`（模型降档）与 `WEBPAGE_ANALYSIS_DAILY_LIMIT`（每用户每日配额，超限 429）护栏。报表上这条 route 的量应趋近 0，非零基本等于有人在直连。
+- **后端 `POST /source-memory/webpage-analysis` 默认已关闭（`WEBPAGE_ANALYSIS_VIA_LOCAL_KEY=true`）**：2026-08-25 决策最初只约定「扩展不调用」，但旧版本扩展仍在直连烧服务 key（实测单日 $11.4 / 570 次调用）。现在该路由默认返回带类型的 403（`webpage_analysis_backend_disabled`，附指引），不再产生服务端 LLM 费用。自托管者或需要给未配 key 的旧版客户端兜底时，可显式设 `WEBPAGE_ANALYSIS_VIA_LOCAL_KEY=false` 重开服务端兜底——仍受 `WEBPAGE_ANALYSIS_DAILY_LIMIT`（每用户每日配额，默认 300）、`WEBPAGE_ANALYSIS_MODEL`（模型降档）与全局 `LLM_DAILY_BUDGET_USD` 日预算帽约束。报表上这条 route 的量应趋近 0，非零即有人在显式使用兜底。
 - **为什么这样设计**：历史版本曾把这次 LLM 调用放在后端服务 key 上，结果它占了 memory-service 后端 LLM token 的 ~55%（多用户全量、Sonnet 档，run-rate ≈$120+/月），与"用户触发的内容分析用用户的 key，memory service 专注沉淀加工"的定位冲突；成本背景见 [usage_analytics.md](usage_analytics.md) 的「成本治理与 2026-08 事故复盘」。曾考虑过"未配 key 回退后端"的过渡态，最终否决——官方构建本身带默认 LLM 配置，回退路径只会留下一条难以察觉的服务 key 泄漏口。
 - e2e：`desktop-app/scripts/webpage-memory-detection-check.mjs` 的失败退避场景在 mock 的本机 LLM 端点（`/api/generate`）上模拟失败，不再依赖后端路由 mock。
 

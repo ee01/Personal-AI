@@ -50,6 +50,20 @@ export interface Config {
    * route), downgrading the model here is the cheap interim fix.
    */
   webpageAnalysisModel: string;
+  /**
+   * 2026-08-25 decision (docs/features/memory_capture.md): webpage analysis
+   * runs CLIENT-SIDE on the user's own Options-configured LLM key. The
+   * backend route is a self-hosted direct-integration escape hatch, NOT a
+   * default consumer — old extension builds kept burning the shared service
+   * key ($11.4/570 calls on one day, ~55% of backend tokens historically).
+   *
+   * true (default): backend route disabled — rejects with a typed 403 so
+   * callers degrade to their own local analysis.
+   * false: backend route enabled as an explicit fallback (self-hosters or
+   * keyless legacy clients), still bounded by the per-user daily quota and
+   * the global daily LLM budget.
+   */
+  webpageAnalysisViaLocalKey: boolean;
   /** Per-user daily cap on backend webpage-analysis LLM calls. 0 = no cap. */
   webpageAnalysisDailyLimit: number;
 
@@ -410,6 +424,12 @@ export function getConfig(): Readonly<Config> {
     ),
     llmFallbackOnJsonParse: process.env.LLM_FALLBACK_ON_JSON_PARSE === 'true',
     webpageAnalysisModel: (process.env.WEBPAGE_ANALYSIS_MODEL || '').trim(),
+    webpageAnalysisViaLocalKey: (() => {
+      const raw = (process.env.WEBPAGE_ANALYSIS_VIA_LOCAL_KEY ?? 'true')
+        .trim()
+        .toLowerCase();
+      return raw !== 'false' && raw !== '0' && raw !== 'off' && raw !== 'no';
+    })(),
     webpageAnalysisDailyLimit: parsePositiveInt(
       process.env.WEBPAGE_ANALYSIS_DAILY_LIMIT,
       300,
