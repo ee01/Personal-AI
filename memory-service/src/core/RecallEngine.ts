@@ -117,6 +117,20 @@ interface FtsRow {
   rank: number;
 }
 
+/**
+ * P0c §11.4 trigram shadow statistics (never affects ranking; I11 shadow
+ * invariant). Recorded on the fts channel diagnostic when
+ * MEMORY_FTS_TRI_SHADOW is enabled.
+ */
+export interface FtsTriShadowStats {
+  triCandidateCount: number;
+  porterCandidateCount: number;
+  /** Trigram candidates the porter index would NOT surface — the CJK/
+   * mixed-language recall gap this shadow measures. */
+  triOnlyCount: number;
+  unavailable?: boolean;
+}
+
 interface EntityRow {
   id: string;
   type: EntityType;
@@ -380,6 +394,47 @@ function sanitizeFtsQuery(query: string): string {
 
   // Join with OR so partial matches still surface results
   return tokens.map((t) => `"${t}"`).join(' OR ');
+}
+
+/**
+ * P0c §11.4: trigram shadow flag. When enabled, recall probes chunks_fts_tri
+ * alongside the porter-fts channel and records candidate stats on the fts
+ * diagnostic. Results are NEVER merged into ranking (shadow invariant I11);
+ * the data feeds the P0.5/P2 trigram ablation.
+ */
+function isFtsTriShadowEnabled(): boolean {
+  const raw = process.env.MEMORY_FTS_TRI_SHADOW?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+/** Build a trigram MATCH expression from arbitrary text (≥3 chars needed). */
+function buildTriQuery(queryText: string): string {
+  // Strip FTS5 special chars and quotes, keep CJK + word chars.
+  const cleaned = queryText.replace(/["'^\-:()\[\]{}*+]/g, ' ').trim();
+  if (!cleaned.length) return '';
+  // Trigram matches substrings. CJK text has no spaces, so a whole-clause
+  // "fragment" would only match verbatim occurrences; slide 4-char windows
+  // over long CJK runs (stride 2) and keep latin words whole.
+  const fragments: string[] = [];
+  const tokenRe = /[\u3400-\u9fff]{3,}|[a-zA-Z0-9][a-zA-Z0-9._:-]{2,}/gu;
+  for (const token of cleaned.match(tokenRe) ?? []) {
+    if (!/[\u3400-\u9fff]/.test(token)) {
+      fragments.push(token);
+      continue;
+    }
+    if (token.length <= 6) {
+      fragments.push(token);
+      continue;
+    }
+    for (let i = 0; i + 4 <= token.length && fragments.length < 10; i += 1) {
+      fragments.push(token.slice(i, i + 4));
+    }
+  }
+  if (fragments.length === 0) return '';
+  return fragments
+    .slice(0, 10)
+    .map((f) => JSON.stringify(f))
+    .join(' OR ');
 }
 
 function rawMessageLexicalTerms(query: string): string[] {
@@ -738,6 +793,20 @@ export class RecallEngine {
     }
 
     const channelResults = await Promise.all(channelPromises);
+
+    // P0c trigram shadow probe (plan §11.4): runs ONLY when
+    // MEMORY_FTS_TRI_SHADOW is enabled. Records trigram candidate stats on
+    // the fts diagnostic; never merges candidates into the result set.
+    if (isFtsTriShadowEnabled()) {
+      const ftsDiag = channelResults.find((r) => r.channel === 'fts');
+      if (ftsDiag) {
+        ftsDiag.diagnostic.shadow = this.ftsTriShadowProbe(
+          query.query,
+          fetchLimit,
+        );
+      }
+    }
+
     const channelDiagnostics = [
       ...skippedDiagnostics,
       ...channelResults.map((result) => result.diagnostic),
@@ -1053,6 +1122,73 @@ export class RecallEngine {
   // =========================================================================
   // Channel 2: FTS5 Full-Text Search
   // =========================================================================
+
+  /**
+   * P0c §11.4 trigram shadow probe: compare chunks_fts_tri candidates against
+   * the legacy porter chunks_fts for the same query. Best-effort — any error
+   * (missing table, tokenizer, etc.) degrades to `unavailable`.
+   */
+  private ftsTriShadowProbe(
+    queryText: string,
+    limit: number,
+  ): FtsTriShadowStats | undefined {
+    const triQuery = buildTriQuery(queryText);
+    if (!triQuery) return undefined;
+    try {
+      const triRows = this.db
+        .prepare(
+          `SELECT rowid FROM chunks_fts_tri
+           WHERE chunks_fts_tri MATCH ?
+           ORDER BY rank
+           LIMIT ?`,
+        )
+        .all(triQuery, limit) as Array<{ rowid: number }>;
+      const ftsQuery = sanitizeFtsQuery(queryText);
+      let ftsCount = 0;
+      if (ftsQuery) {
+        ftsCount = (
+          this.db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM chunks_fts
+               WHERE chunks_fts MATCH ?`,
+            )
+            .get(ftsQuery) as { c: number }
+        ).c;
+      }
+      const triIds = new Set(triRows.map((r) => r.rowid));
+      // How many trigram candidates the porter index would ALSO surface for
+      // the same tokens — approximated by checking the porter MATCH against
+      // the trigram hits only (cheap, bounded by limit).
+      let triAlsoInFts = 0;
+      if (triIds.size > 0 && ftsQuery) {
+        const ph = [...triIds].map(() => '?').join(', ');
+        triAlsoInFts = (
+          this.db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM chunks_fts
+               WHERE chunks_fts MATCH ? AND rowid IN (${ph})`,
+            )
+            .get(ftsQuery, ...triIds) as { c: number }
+        ).c;
+      }
+      return {
+        triCandidateCount: triRows.length,
+        porterCandidateCount: ftsCount,
+        triOnlyCount: triRows.length - triAlsoInFts,
+      };
+    } catch (err) {
+      console.warn(
+        '[RecallEngine] fts_tri shadow probe skipped:',
+        (err as Error).message,
+      );
+      return {
+        triCandidateCount: 0,
+        porterCandidateCount: 0,
+        triOnlyCount: 0,
+        unavailable: true,
+      };
+    }
+  }
 
   private async ftsSearch(
     queryText: string,

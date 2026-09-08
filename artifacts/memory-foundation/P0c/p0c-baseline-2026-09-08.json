@@ -1,0 +1,82 @@
+{
+  "generatedAt": "2026-09-08T03:46:57.999Z",
+  "dbPath": "/app/data/users/esone.qiu/memory.db",
+  "model": "Xenova/all-MiniLM-L6-v2",
+  "vectorCoverage": {
+    "messageChunks": 15771,
+    "messageChunksWithVec": 15771,
+    "coverageRatio": 1
+  },
+  "queries": [
+    {
+      "id": "cross-lang-cursor-policy",
+      "query": "目前 Cursor 的许可/使用政策是怎样的？不活跃用户会被怎么处理？",
+      "expect": "2026-03 Cursor billing policy messages",
+      "porterFtsCandidates": 323,
+      "trigramCandidates": 353,
+      "denseCandidates": 30
+    },
+    {
+      "id": "cross-lang-meeting-room",
+      "query": "会议室申请独占后系统会怎么处理？",
+      "expect": "Chinese meeting-room request messages",
+      "porterFtsCandidates": 0,
+      "trigramCandidates": 1,
+      "denseCandidates": 30
+    },
+    {
+      "id": "cross-lang-nova-mention",
+      "query": "NOVA epic 没有 assignee 的时候 mention 机制",
+      "expect": "August 2026 NOVA-164 mention discussion",
+      "porterFtsCandidates": 8268,
+      "trigramCandidates": 8531,
+      "denseCandidates": 30
+    },
+    {
+      "id": "en-cursor-billing",
+      "query": "Cursor billing changed request-based quota token credit usage",
+      "expect": "2026-03-03 billing change message",
+      "porterFtsCandidates": 4245,
+      "trigramCandidates": 2719,
+      "denseCandidates": 30
+    },
+    {
+      "id": "en-codex-trial",
+      "query": "Codex Enterprise 30-day free trial no usage limits",
+      "expect": "2026-03-11 OpenAI partnership message",
+      "porterFtsCandidates": 5506,
+      "trigramCandidates": 2320,
+      "denseCandidates": 30
+    },
+    {
+      "id": "zh-ai-review",
+      "query": "AI review 是代码合并的前置条件吗",
+      "expect": "AI review Cursor messages",
+      "porterFtsCandidates": 4581,
+      "trigramCandidates": 1481,
+      "denseCandidates": 30
+    },
+    {
+      "id": "zh-estimate",
+      "query": "Jira Original Estimate 人天口径",
+      "expect": "estimate cue discussion",
+      "porterFtsCandidates": 4527,
+      "trigramCandidates": 4731,
+      "denseCandidates": 30
+    },
+    {
+      "id": "mixed-openrouter",
+      "query": "Stripe OpenRouter 收购 pitch deck",
+      "expect": "August 2026 OpenRouter discussion",
+      "porterFtsCandidates": 142,
+      "trigramCandidates": 155,
+      "denseCandidates": 30
+    }
+  ],
+  "aggregates": {
+    "noResultPorter": 1,
+    "noResultTrigram": 0,
+    "trigramOnlyWins": 1,
+    "denseOnlyWins": 1
+  }
+}

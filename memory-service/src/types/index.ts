@@ -1,4 +1,5 @@
 import type { WeaveStats } from '../core/weaveStats.js';
+import type { FtsTriShadowStats } from '../core/RecallEngine.js';
 
 // ============ Core Domain Types ============
 
@@ -1060,6 +1061,8 @@ export interface RecallChannelDiagnostic {
   status: RecallChannelStatus;
   candidateCount: number;
   reason?: string;
+  /** P0c trigram shadow stats (shadow-only; never affects ranking). */
+  shadow?: FtsTriShadowStats;
 }
 
 export interface RecallOptions {
