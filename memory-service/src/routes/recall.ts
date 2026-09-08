@@ -162,6 +162,18 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
         const result: RecallResult = await service.recall(normalized.query, {
           runtimePolicy: normalized.runtimePolicy,
         });
+
+        // P0c §11.4: safe-mode shadow — measure what the full-channel
+        // policy WOULD return without changing any user-visible result
+        // (I11). Shadow runs are fire-and-forget structured logs so the
+        // safe path never waits on the slow channels.
+        if (normalized.runtimePolicy === 'safe_fts' && isSafeModeShadowEnabled()) {
+          void runSafeModeShadow(db, request.body, result)
+            .catch((err) =>
+              request.log.warn({ err }, 'safe-mode shadow failed'),
+            );
+        }
+
         return reply.status(200).send(result);
       } catch (err) {
         request.log.error(err, 'Recall failed');
@@ -227,6 +239,54 @@ function getRecallSafeTopK(): number {
 
 function getRecallSafeMaxTopK(): number {
   return parsePositiveIntEnv('RECALL_SAFE_MAX_TOP_K') ?? DEFAULT_SAFE_MAX_TOP_K;
+}
+
+/**
+ * P0c §11.4 safe-mode shadow: run the full-channel policy after the safe
+ * result has been returned and log the diff (candidate counts, channel hits,
+ * how many items the full policy would add that safe mode dropped).
+ * Shadow only — never merged, never displayed (I11).
+ */
+function isSafeModeShadowEnabled(): boolean {
+  const raw = process.env.RECALL_SAFE_MODE_SHADOW?.trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+  return true;
+}
+
+async function runSafeModeShadow(
+  db: import('better-sqlite3').Database,
+  originalQuery: RecallQuery,
+  safeResult: RecallResult,
+): Promise<void> {
+  const { RecallEngine } = await import('../core/RecallEngine.js');
+  const engine = new RecallEngine(db);
+  const started = Date.now();
+  const shadow = await engine.recall(
+    {
+      ...originalQuery,
+      channels: undefined, // engine defaults — the full-channel policy
+      topK: Math.max(originalQuery.topK ?? 10, safeResult.items.length),
+    },
+    // I11 shadow invariants: no access reinforcement, no exposure effects.
+    { reinforceAccess: false },
+  );
+  const safeIds = new Set(safeResult.items.map((i) => String(i.id)));
+  const additions = shadow.items.filter((i) => !safeIds.has(String(i.id)));
+  console.log(
+    '[safe-mode-shadow]',
+    JSON.stringify({
+      query: String(originalQuery.query ?? '').slice(0, 120),
+      safeChannels: safeResult.channels,
+      safeCount: safeResult.items.length,
+      shadowChannels: shadow.channels,
+      shadowCount: shadow.items.length,
+      shadowOnlyCount: additions.length,
+      shadowOnlyTop: additions
+        .slice(0, 5)
+        .map((i) => ({ type: i.type, score: i.score, source: i.source })),
+      shadowQueryTimeMs: Date.now() - started,
+    }),
+  );
 }
 
 function parsePositiveIntEnv(name: string): number | undefined {
