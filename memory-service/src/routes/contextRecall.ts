@@ -554,6 +554,43 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
       let routeReturned = false;
       activeContextRecallRequests += 1;
       const servicePromise = service.recall(request.body);
+
+      // P2 §11.7 dual-read shadow for Passive surfaces (fire-and-forget, I11).
+      {
+        const { UnitRecallReader, shadowRequestId } = await import(
+          '../core/v3/UnitRecallReader.js'
+        );
+        const reader = new UnitRecallReader(db);
+        const startedV3 = Date.now();
+        void reader
+          .recallAsync(
+            String(request.body.title ?? request.body.currentContext?.title ?? ''),
+            10,
+          )
+          .then((v3) => {
+            console.log(
+              '[v3-read-shadow:passive]',
+              JSON.stringify({
+                requestId: shadowRequestId(
+                  String(request.body.title ?? ''),
+                ),
+                surface: request.body.surface,
+                legacyCount: 0, // passive response doesn't carry the full candidate set
+                v3Count: v3.candidates.length,
+                v3Channels: v3.channelStats,
+                v3QueryTimeMs: v3.queryTimeMs,
+                shadowTotalMs: Date.now() - startedV3,
+              }),
+            );
+          })
+          .catch((err) =>
+            console.warn(
+              '[v3-read-shadow:passive] failed:',
+              (err as Error).message,
+            ),
+          );
+      }
+
       servicePromise.catch((err) => {
         if (routeReturned) {
           request.log.warn({ err }, 'context-recall failed after route returned');

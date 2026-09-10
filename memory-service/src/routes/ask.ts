@@ -1545,6 +1545,51 @@ async function recallForAsk(
     { skipAnalysis: true },
   );
 
+  // P2 §11.7 dual-read shadow for the Ask surface (fire-and-forget, I11:
+  // no reinforcement, no exposure records, nothing user-visible).
+  {
+    const { UnitRecallReader } = await import('../core/v3/UnitRecallReader.js');
+    const { shadowRequestId } = await import('../core/v3/UnitRecallReader.js');
+    const reader = new UnitRecallReader(db);
+    const startedV3 = Date.now();
+    void reader
+      .recallAsync(recallQueryText, askTopK)
+      .then((v3) => {
+        const legacyIds = new Set(
+          recallResult.items.map((i) => String(i.id)),
+        );
+        let overlap = 0;
+        const onlyV3: string[] = [];
+        for (const c of v3.candidates) {
+          const src = db
+            .prepare(`SELECT episode_id FROM memory_unit_sources WHERE unit_id = ? LIMIT 1`)
+            .get(c.unitId) as { episode_id: string } | undefined;
+          if (src && legacyIds.has(src.episode_id)) overlap += 1;
+          else onlyV3.push(c.unitId.slice(0, 8));
+        }
+        console.log(
+          '[v3-read-shadow:ask]',
+          JSON.stringify({
+            requestId: shadowRequestId(recallQueryText),
+            query: recallQueryText.slice(0, 120),
+            legacyCount: recallResult.items.length,
+            legacyChannels: recallResult.channels,
+            v3Count: v3.candidates.length,
+            v3Channels: v3.channelStats,
+            overlapByEpisode: overlap,
+            v3OnlyCount: onlyV3.length,
+            v3OnlyUnits: onlyV3.slice(0, 5),
+            v3QueryTimeMs: v3.queryTimeMs,
+            shadowTotalMs: Date.now() - startedV3,
+          }),
+        );
+      })
+      .catch((err) =>
+        console.warn('[v3-read-shadow:ask] failed:', (err as Error).message),
+      );
+  }
+
+
   const contextAnchorItems = loadAskContextAnchorItems(
     db,
     expansion,

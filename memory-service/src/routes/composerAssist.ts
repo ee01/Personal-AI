@@ -291,6 +291,42 @@ export async function composerAssistRoutes(
       activeComposerAssistRequests += 1;
       let routeReturned = false;
       const servicePromise = service.assist(request.body);
+
+      // P2 §11.7 dual-read shadow for the Compose surface (fire-and-forget, I11).
+      {
+        const { UnitRecallReader, shadowRequestId } = await import(
+          '../core/v3/UnitRecallReader.js'
+        );
+        const reader = new UnitRecallReader(db);
+        const startedV3 = Date.now();
+        void reader
+          .recallAsync(
+            String(request.body.draftText ?? request.body.title ?? ''),
+            10,
+          )
+          .then((v3) => {
+            console.log(
+              '[v3-read-shadow:compose]',
+              JSON.stringify({
+                requestId: shadowRequestId(
+                  String(request.body.draftText ?? ''),
+                ),
+                legacyCount: 0, // compose response format differs; shadow measures v3 side
+                v3Count: v3.candidates.length,
+                v3Channels: v3.channelStats,
+                v3QueryTimeMs: v3.queryTimeMs,
+                shadowTotalMs: Date.now() - startedV3,
+              }),
+            );
+          })
+          .catch((err) =>
+            console.warn(
+              '[v3-read-shadow:compose] failed:',
+              (err as Error).message,
+            ),
+          );
+      }
+
       servicePromise
         .catch((err) => {
           if (routeReturned) {
