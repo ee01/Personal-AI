@@ -55,6 +55,14 @@ describe('Extractor API', () => {
     db.prepare('DELETE FROM memory_metadata').run();
     db.prepare('DELETE FROM chunks').run();
     db.prepare('DELETE FROM messages_vec').run();
+    // v3 FK children must go before episodes (P1 schema).
+    for (const t of [
+      'projection_outbox', 'memory_unit_views', 'memory_unit_revisions',
+      'memory_unit_sources', 'memory_units', 'truth_integrations',
+      'ingest_extraction_results', 'ingest_jobs',
+    ]) {
+      db.prepare(`DELETE FROM ${t}`).run();
+    }
     db.prepare('DELETE FROM messages_raw').run();
   });
 

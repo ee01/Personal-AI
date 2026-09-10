@@ -161,6 +161,9 @@ function normalizeDigestPushTarget(
 /** Max v3 shadow extraction jobs drained per heartbeat cycle per user. */
 const HEARTBEAT_EXTRACTION_DRAIN = 5;
 
+/** Max v3 vector-projection outbox tasks per heartbeat cycle per user. */
+const HEARTBEAT_VECTOR_DRAIN = 20;
+
 export class HeartbeatLoop {
   private db: Database.Database;
   private policy: ProactivityPolicy;
@@ -240,6 +243,28 @@ export class HeartbeatLoop {
       } catch (err) {
         console.warn(
           '[HeartbeatLoop] v3 extraction sweep failed:',
+          (err as Error).message,
+        );
+      }
+
+      // 1d. v3 unit-embedding outbox sweep (P2 slice 2): fills the e5 vector
+      // projection. No-op unless MEMORY_READ_V3_VECTOR=e5.
+      try {
+        const { UnitEmbeddingWorker, getUnitVectorChannel } = await import(
+          './v3/UnitEmbeddingWorker.js'
+        );
+        if (getUnitVectorChannel() === 'e5') {
+          const embWorker = new UnitEmbeddingWorker(this.db);
+          const embStats = await embWorker.processDueOutbox(HEARTBEAT_VECTOR_DRAIN);
+          if (embStats.done + embStats.failed > 0) {
+            actions.push(
+              `v3 vector projection: ${embStats.done} embedded, ${embStats.failed} failed/stale`,
+            );
+          }
+        }
+      } catch (err) {
+        console.warn(
+          '[HeartbeatLoop] v3 vector sweep failed:',
           (err as Error).message,
         );
       }

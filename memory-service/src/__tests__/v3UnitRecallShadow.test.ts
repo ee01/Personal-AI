@@ -192,3 +192,101 @@ describe('v3 UnitRecallReader (P2 dual-read)', () => {
     await result.app.close();
   });
 });
+describe('v3 e5 vector channel (P2 slice 2)', () => {
+  let db: BetterSqlite3.Database;
+
+  beforeEach(() => {
+    db = getTestDb();
+    for (const t of [
+      'projection_outbox', 'memory_unit_views', 'memory_unit_revisions',
+      'memory_unit_sources', 'memory_units', 'truth_integrations',
+      'ingest_extraction_results', 'ingest_jobs',
+    ]) {
+      db.prepare(`DELETE FROM ${t}`).run();
+    }
+    db.prepare(`DELETE FROM messages_raw WHERE id LIKE 'ep-%'`).run();
+    delete process.env.MEMORY_READ_V3_VECTOR;
+  });
+
+  afterEach(() => {
+    delete process.env.MEMORY_READ_V3_VECTOR;
+    vi.resetModules();
+  });
+
+  it('outbox embedding worker is flag-gated and writes vector rows', async () => {
+    const { UnitEmbeddingWorker, getUnitVectorChannel } = await import(
+      '../core/v3/UnitEmbeddingWorker.js'
+    );
+    expect(getUnitVectorChannel()).toBe(''); // default off
+
+    // Seed one unit via the truth maintainer so an outbox entry exists.
+    const { UnitTruthMaintainer } = await import('../core/v3/UnitTruthMaintainer.js');
+    const { EpisodeRepository } = await import('../core/v3/EpisodeRepository.js');
+    const truth = new UnitTruthMaintainer(db, new EpisodeRepository(db));
+    const epId = `ep-${Math.random().toString(36).slice(2)}`;
+    db.prepare(
+      `INSERT INTO messages_raw (id, content, source_type, sender, scope, timestamp, trust_class, claim_attribution_status, claim_attribution_version, created_at)
+       VALUES (?, 'note SPAN ok', 'glip', 'c', 'work', 1780000000, 'internal', 'pending', 1, 1780000000)`,
+    ).run(epId);
+    truth.propose(
+      { memoryForm: 'semantic', kind: 'fact', subjectKey: 'vec-test', predicateKey: 'is', text: 'vector channel test unit', language: 'en', observedAt: 1780000000 },
+      [{ episodeId: epId, spanStart: 5, spanEnd: 9, sourceRole: 'primary', evidenceKey: 'ev-v1', provenanceFamily: epId, evidenceClass: 'self_statement' }],
+      { actorType: 'system', actorId: 't', userId: 'test-user' },
+      'wuk-vec-1',
+    );
+
+    const worker = new UnitEmbeddingWorker(db);
+    // Flag off → no-op.
+    expect((await worker.processDueOutbox(5)).done).toBe(0);
+
+    process.env.MEMORY_READ_V3_VECTOR = 'e5';
+    vi.resetModules();
+    const fresh = await import('../core/v3/UnitEmbeddingWorker.js');
+    fresh.setE5PipelineForTesting(async () => ({
+      tolist: () => [new Array(384).fill(0.01)],
+    }));
+    const worker2 = new fresh.UnitEmbeddingWorker(db);
+    const stats = await worker2.processDueOutbox(5);
+    expect(stats.done).toBe(1);
+    const vec = db.prepare('SELECT COUNT(*) c FROM unit_views_vec_e5').get() as { c: number };
+    expect(vec.c).toBe(1);
+    const outbox = db.prepare(`SELECT status FROM projection_outbox`).all() as any[];
+    expect(outbox.every((o) => o.status === 'done')).toBe(true);
+  });
+
+  it('reader picks up the vector channel when enabled (mocked embedding)', async () => {
+    process.env.MEMORY_READ_V3_VECTOR = 'e5';
+    vi.resetModules();
+    const mod = await import('../core/v3/UnitEmbeddingWorker.js');
+    // Inject a deterministic 384-dim pipeline so no download happens.
+    mod.setE5PipelineForTesting(async () => ({
+      tolist: () => [new Array(384).fill(0.01)],
+    }));
+
+    const { UnitTruthMaintainer } = await import('../core/v3/UnitTruthMaintainer.js');
+    const { EpisodeRepository } = await import('../core/v3/EpisodeRepository.js');
+    const truth = new UnitTruthMaintainer(db, new EpisodeRepository(db));
+    const epId = `ep-${Math.random().toString(36).slice(2)}`;
+    db.prepare(
+      `INSERT INTO messages_raw (id, content, source_type, sender, scope, timestamp, trust_class, claim_attribution_status, claim_attribution_version, created_at)
+       VALUES (?, 'note SPAN ok', 'glip', 'c', 'work', 1780000000, 'internal', 'pending', 1, 1780000000)`,
+    ).run(epId);
+    const result = truth.propose(
+      { memoryForm: 'semantic', kind: 'fact', subjectKey: 'vec-read', predicateKey: 'is', text: 'vector reader test unit', language: 'en', observedAt: 1780000000 },
+      [{ episodeId: epId, spanStart: 5, spanEnd: 9, sourceRole: 'primary', evidenceKey: 'ev-v2', provenanceFamily: epId, evidenceClass: 'self_statement' }],
+      { actorType: 'system', actorId: 't', userId: 'test-user' },
+      'wuk-vec-2',
+    );
+
+    // Manually write a vector row for the unit body view (384 dims of 0.01).
+    const view = db.prepare(`SELECT view_id FROM memory_unit_views WHERE unit_id = ? AND view_kind = 'body'`).get(result.unitId) as { view_id: number };
+    const dims = new Array(384).fill(0.01);
+    db.prepare(`INSERT INTO unit_views_vec_e5 (view_id, embedding) VALUES (CAST(? AS INTEGER), ?)`).run(view.view_id, JSON.stringify(dims));
+
+    const { UnitRecallReader } = await import('../core/v3/UnitRecallReader.js');
+    const reader = new UnitRecallReader(db);
+    const v3 = await reader.recallAsync('vector reader test', 10);
+    expect(v3.candidates.some((c) => c.unitId === result.unitId)).toBe(true);
+    expect(v3.channelStats.some((c) => c.channel === 'vector_e5')).toBe(true);
+  });
+});

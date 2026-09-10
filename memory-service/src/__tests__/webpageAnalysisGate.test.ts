@@ -39,6 +39,9 @@ describe('WEBPAGE_ANALYSIS_VIA_LOCAL_KEY gate', () => {
   beforeEach(async () => {
     db = getTestDb();
     delete process.env.WEBPAGE_ANALYSIS_VIA_LOCAL_KEY;
+    // The synced production .env sets WEBPAGE_ANALYSIS_MODEL — clear it so
+    // resolveWebpageAnalysisLlmClient returns the mocked default client.
+    process.env.WEBPAGE_ANALYSIS_MODEL = '';
     resetConfigForTests();
     const result = await buildApp({ db });
     app = result.app;

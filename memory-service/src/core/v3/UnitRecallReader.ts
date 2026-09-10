@@ -44,7 +44,50 @@ const RECALLABLE_STATUSES = "('provisional', 'active', 'disputed')";
 export class UnitRecallReader {
   constructor(private readonly db: Database.Database) {}
 
-  recall(queryText: string, limit = 20): UnitRecallResult {
+  /**
+   * Async read: lexical channels + the e5 vector channel when enabled.
+   * Same fusion/dedup/status rules as recall().
+   */
+  async recallAsync(queryText: string, limit = 20): Promise<UnitRecallResult> {
+    const { getUnitVectorChannel, embedWithE5 } = await import(
+      './UnitEmbeddingWorker.js'
+    );
+    if (getUnitVectorChannel() === 'e5') {
+      try {
+        const started = Date.now();
+        const embedding = await embedWithE5(queryText, 'query:');
+        const rows = this.db
+          .prepare(
+            `SELECT v.view_id, v.unit_id
+             FROM unit_views_vec_e5 vec
+             JOIN memory_unit_views v ON v.view_id = vec.view_id
+             JOIN memory_units u ON u.id = v.unit_id
+             WHERE u.status IN ${RECALLABLE_STATUSES}
+             ORDER BY vec_distance_cosine(vec.embedding, ?)
+             LIMIT 50`,
+          )
+          .all(JSON.stringify(embedding)) as Array<{ view_id: number; unit_id: string }>;
+        const map = new Map<string, number>();
+        rows.forEach((r, idx) => {
+          if (!map.has(r.unit_id)) map.set(r.unit_id, idx);
+        });
+        if (map.size > 0) {
+          const precomputed = new Map<string, Map<string, number>>([
+            ['vector_e5', map],
+          ]);
+          return this.recall(queryText, limit, precomputed);
+        }
+      } catch (err) {
+        console.warn(
+          '[UnitRecallReader] vector_e5 channel failed (degrading to lexical-only):',
+          (err as Error).message,
+        );
+      }
+    }
+    return this.recall(queryText, limit);
+  }
+
+  recall(queryText: string, limit = 20, precomputedChannels?: Map<string, Map<string, number>>): UnitRecallResult {
     const started = Date.now();
     const perChannel = new Map<string, Map<string, number>>(); // channel → unitId → rank
 
@@ -60,6 +103,14 @@ export class UnitRecallReader {
       buildTriFtsQuery(queryText),
       perChannel,
     );
+    // e5 vector channel (P2 slice 2): prefetched by recallAsync (async embed),
+    // passed in as unit-id → rank. I6 status gate was applied in SQL there
+    // and is re-applied at hydration below.
+    if (precomputedChannels) {
+      for (const [channel, map] of precomputedChannels) {
+        if (map.size > 0) perChannel.set(channel, map);
+      }
+    }
 
     // RRF across channels; per-unit dedup is inherent (unit-keyed).
     const rrfK = 60;

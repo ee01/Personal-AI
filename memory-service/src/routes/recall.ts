@@ -319,7 +319,10 @@ async function runV3RecallShadow(
   );
   const reader = new UnitRecallReader(db);
   const started = Date.now();
-  const v3 = reader.recall(String(originalQuery.query ?? ''), originalQuery.topK ?? 10);
+  const v3 = await reader.recallAsync(
+    String(originalQuery.query ?? ''),
+    originalQuery.topK ?? 10,
+  );
   // Overlap by provenance: a legacy message-chunk hit overlaps a unit when
   // the unit has a source row pointing at that legacy item's episode.
   const legacyMessageIds = new Set(
