@@ -40,14 +40,14 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // cost vs Console bill closed within 2.8% at this rate). Re-verify with the
   // update-model-pricing skill if the deployed model or its price changes.
   'claude-sonnet-4-6': { inputPer1M: 3, outputPer1M: 15 },
-  // Placeholder 2026-09-08: dedicated v3-extraction cheap-tier model
-  // (MEMORY_EXTRACTION_LLM_FALLBACKS=openai/z-ai/glm-5.3-flash). Deliberately
-  // seeded as a conservative OVER-estimate so the LLM_DAILY_BUDGET_USD cap
-  // errs on refusing early rather than blind (un-priced = $0 = invisible to
-  // the budget gate). Correct with PUT /api/v1/usage/pricing once the real
-  // gateway rate is confirmed.
-  'z-ai/glm-5.3-flash': { inputPer1M: 2, outputPer1M: 8 },
-  'glm-5.3-flash': { inputPer1M: 2, outputPer1M: 8 },
+  // Priced 2026-09-08 from the OpenRouter public models API (exact id match,
+  // verified live): https://openrouter.ai/api/v1/models — dedicated
+  // v3-extraction cheap-tier model
+  // (MEMORY_EXTRACTION_LLM_FALLBACKS=openai/z-ai/glm-5.3-flash).
+  'z-ai/glm-5.3-flash': { inputPer1M: 0.075, outputPer1M: 0.25 },
+  'glm-5.3-flash': { inputPer1M: 0.075, outputPer1M: 0.25 },
+  // Primary fallback chain model (OpenRouter, priced 2026-09-08).
+  'moonshotai/kimi-k3': { inputPer1M: 3, outputPer1M: 15 },
 };
 
 export interface CostEstimate {
