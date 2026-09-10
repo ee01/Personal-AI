@@ -1,0 +1,181 @@
+/**
+ * v3 UnitRecallReader (memory-foundation plan §7/§11.7, P2 slice 1):
+ * reads the v3 truth plane (memory_units + projections) for dual-read
+ * shadow comparison against the legacy chunk/message recall.
+ *
+ * Hard invariants encoded here (plan §4.2/§7.2/§7.5):
+ *   I6  retracted/quarantined/deletion_pending/archived units never return
+ *       (status gate via JOIN — a projection row alone is not enough).
+ *   I8  results are unit-deduplicated by construction (one row per unit).
+ *   I11 reader is SHADOW-only: no access reinforcement, no exposure records.
+ *
+ * Channels (P0.5 adjudicated):
+ *   - lexical-segment (porter, unit_views_fts_seg over segmented text)
+ *   - lexical-trigram (unit_views_fts_tri, CJK substring recall; +5.2pp CI)
+ *   - vector deferred: units corpus is still small (P1 shadow); e5-small is
+ *     the adjudicated candidate (§11.5) and joins as a channel when
+ *     unit_views_vec lands.
+ */
+
+import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
+
+export interface UnitRecallCandidate {
+  unitId: string;
+  kind: string;
+  text: string;
+  language: string | null;
+  observedAt: number | null;
+  status: string;
+  /** Channels that surfaced this unit (per-unit best rank per channel). */
+  channels: string[];
+  score: number;
+}
+
+export interface UnitRecallResult {
+  candidates: UnitRecallCandidate[];
+  channelStats: { channel: string; candidateCount: number }[];
+  queryTimeMs: number;
+}
+
+/** Statuses that may participate in recall (§4.3). */
+const RECALLABLE_STATUSES = "('provisional', 'active', 'disputed')";
+
+export class UnitRecallReader {
+  constructor(private readonly db: Database.Database) {}
+
+  recall(queryText: string, limit = 20): UnitRecallResult {
+    const started = Date.now();
+    const perChannel = new Map<string, Map<string, number>>(); // channel → unitId → rank
+
+    this.lexicalChannel(
+      'lexical_seg',
+      'unit_views_fts_seg',
+      sanitizeSegQuery(queryText),
+      perChannel,
+    );
+    this.lexicalChannel(
+      'lexical_tri',
+      'unit_views_fts_tri',
+      buildTriFtsQuery(queryText),
+      perChannel,
+    );
+
+    // RRF across channels; per-unit dedup is inherent (unit-keyed).
+    const rrfK = 60;
+    const fused = new Map<string, { channels: string[]; score: number }>();
+    for (const [channel, units] of perChannel) {
+      for (const [unitId, rank] of units) {
+        const entry = fused.get(unitId) ?? { channels: [], score: 0 };
+        entry.channels.push(channel);
+        entry.score += 1 / (rrfK + rank + 1);
+        fused.set(unitId, entry);
+      }
+    }
+
+    const top = [...fused.entries()]
+      .sort((a, b) => b[1].score - a[1].score)
+      .slice(0, limit);
+
+    const metaStmt = this.db.prepare(
+      `SELECT kind, text, language, observed_at, status
+       FROM memory_units WHERE id = ?`,
+    );
+    const candidates: UnitRecallCandidate[] = [];
+    for (const [unitId, entry] of top) {
+      // Re-verify status at read time (I6: projection can lag truth).
+      const row = metaStmt.get(unitId) as
+        | { kind: string; text: string; language: string | null; observed_at: number | null; status: string }
+        | undefined;
+      if (!row) continue;
+      if (!['provisional', 'active', 'disputed'].includes(row.status)) continue;
+      candidates.push({
+        unitId,
+        kind: row.kind,
+        text: row.text,
+        language: row.language,
+        observedAt: row.observed_at,
+        status: row.status,
+        channels: entry.channels,
+        score: Number(entry.score.toFixed(6)),
+      });
+    }
+
+    return {
+      candidates,
+      channelStats: [...perChannel.entries()].map(([channel, units]) => ({
+        channel,
+        candidateCount: units.size,
+      })),
+      queryTimeMs: Date.now() - started,
+    };
+  }
+
+  /**
+   * Lexical channel over a unit-views FTS table. External content joins back
+   * through memory_unit_views → memory_units; the status gate happens in SQL
+   * (§5.4: FTS joins to the truth table for status filtering) and again at
+   * hydration time.
+   */
+  private lexicalChannel(
+    channel: string,
+    table: string,
+    ftsQuery: string,
+    perChannel: Map<string, Map<string, number>>,
+  ): void {
+    if (!ftsQuery) return;
+    let rows: Array<{ unit_id: string }> = [];
+    try {
+      rows = this.db
+        .prepare(
+          `SELECT v.unit_id
+           FROM ${table} f
+           JOIN memory_unit_views v ON v.view_id = f.rowid
+           JOIN memory_units u ON u.id = v.unit_id
+           WHERE ${table} MATCH ?
+             AND u.status IN ${RECALLABLE_STATUSES}
+           ORDER BY rank
+           LIMIT 50`,
+        )
+        .all(ftsQuery) as Array<{ unit_id: string }>;
+    } catch (err) {
+      // Missing table/tokenizer must degrade, never break the shadow probe.
+      console.warn(`[UnitRecallReader] ${channel} failed:`, (err as Error).message);
+      return;
+    }
+    const map = perChannel.get(channel) ?? new Map<string, number>();
+    rows.forEach((row, idx) => {
+      if (!map.has(row.unit_id)) map.set(row.unit_id, idx);
+    });
+    perChannel.set(channel, map);
+  }
+}
+
+function sanitizeSegQuery(query: string): string {
+  const cleaned = query.replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
+  if (!cleaned) return '';
+  return cleaned.split(/\s+/).map((t) => `"${t}"`).join(' OR ');
+}
+
+/** CJK 4-gram sliding windows + latin fragments, OR-joined (same as shadow). */
+function buildTriFtsQuery(queryText: string): string {
+  const cleaned = queryText.replace(/["'^\-:()\[\]{}*+]/g, ' ').trim();
+  if (!cleaned.length) return '';
+  const fragments: string[] = [];
+  for (const token of cleaned.match(/[\u3400-\u9fff]{3,}|[a-zA-Z0-9][a-zA-Z0-9._:-]{2,}/gu) ?? []) {
+    if (!/[\u3400-\u9fff]/.test(token) || token.length <= 6) {
+      fragments.push(token);
+      continue;
+    }
+    for (let i = 0; i + 4 <= token.length && fragments.length < 10; i += 1) {
+      fragments.push(token.slice(i, i + 4));
+    }
+  }
+  if (fragments.length === 0) return '';
+  return fragments.slice(0, 10).map((f) => JSON.stringify(f)).join(' OR ');
+}
+
+/** Deterministic request id for shadow diff correlation. */
+export function shadowRequestId(query: string, ts = Date.now()): string {
+  return createHash('sha256').update(`${ts}:${query}`).digest('hex').slice(0, 16);
+}

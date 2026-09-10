@@ -174,6 +174,17 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
             );
         }
 
+        // P2 §11.7 dual-read shadow (slice 1): run the v3 unit-plane reader
+        // alongside legacy recall and log the diff. I11: no reinforcement, no
+        // exposure records, nothing user-visible. MEMORY_READ_V3_RECALL_SHADOW
+        // gates it (default off).
+        if (isV3RecallShadowEnabled()) {
+          void runV3RecallShadow(db, request.body, result)
+            .catch((err) =>
+              request.log.warn({ err }, 'v3 recall shadow failed'),
+            );
+        }
+
         return reply.status(200).send(result);
       } catch (err) {
         request.log.error(err, 'Recall failed');
@@ -285,6 +296,60 @@ async function runSafeModeShadow(
         .slice(0, 5)
         .map((i) => ({ type: i.type, score: i.score, source: i.source })),
       shadowQueryTimeMs: Date.now() - started,
+    }),
+  );
+}
+
+/**
+ * P2 §11.7 dual-read shadow: legacy vs v3 unit-plane candidates diff.
+ * Shadow-only (I11): logged, never displayed, never reinforcing.
+ */
+function isV3RecallShadowEnabled(): boolean {
+  const raw = process.env.MEMORY_READ_V3_RECALL_SHADOW?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+async function runV3RecallShadow(
+  db: import('better-sqlite3').Database,
+  originalQuery: RecallQuery,
+  legacyResult: RecallResult,
+): Promise<void> {
+  const { UnitRecallReader, shadowRequestId } = await import(
+    '../core/v3/UnitRecallReader.js'
+  );
+  const reader = new UnitRecallReader(db);
+  const started = Date.now();
+  const v3 = reader.recall(String(originalQuery.query ?? ''), originalQuery.topK ?? 10);
+  // Overlap by provenance: a legacy message-chunk hit overlaps a unit when
+  // the unit has a source row pointing at that legacy item's episode.
+  const legacyMessageIds = new Set(
+    legacyResult.items
+      .map((i) => (i as unknown as { related_entity_id?: string; relatedEntityId?: string }).related_entity_id ?? (i as unknown as { relatedEntityId?: string }).relatedEntityId)
+      .filter(Boolean),
+  );
+  let overlap = 0;
+  const onlyV3: string[] = [];
+  for (const candidate of v3.candidates) {
+    const src = db
+      .prepare(`SELECT episode_id FROM memory_unit_sources WHERE unit_id = ? LIMIT 1`)
+      .get(candidate.unitId) as { episode_id: string } | undefined;
+    if (src && legacyMessageIds.has(src.episode_id)) overlap += 1;
+    else onlyV3.push(candidate.unitId.slice(0, 8));
+  }
+  console.log(
+    '[v3-read-shadow]',
+    JSON.stringify({
+      requestId: shadowRequestId(String(originalQuery.query ?? '')),
+      query: String(originalQuery.query ?? '').slice(0, 120),
+      legacyCount: legacyResult.items.length,
+      legacyChannels: legacyResult.channels,
+      v3Count: v3.candidates.length,
+      v3Channels: v3.channelStats,
+      overlapByEpisode: overlap,
+      v3OnlyCount: onlyV3.length,
+      v3OnlyUnits: onlyV3.slice(0, 5),
+      v3QueryTimeMs: v3.queryTimeMs,
+      shadowTotalMs: Date.now() - started,
     }),
   );
 }
