@@ -6,7 +6,7 @@
 
 ## 主功能列表
 
-本表是全部主功能的总目录。下方小功能索引的 `所属能力` 列取值一律来自本表的 `English 术语`（一行涉及多个主功能时用 ` / ` 连接）。记忆平台本身（摄入、召回、演化、反思等）和跨功能基础设施（Agent 编排、任务调度、用量观测、LLM 基础设施）不是主功能，见文末「平台层能力」节。
+本表是全部主功能的总目录。下方小功能索引的 `所属能力` 列取值一律来自本表的 `English 术语`（一行涉及多个主功能时用 ` / ` 连接）。记忆平台本身（摄入、召回、演化、反思等）和跨功能基础设施（Agent 编排、后台作业、用量观测、LLM 基础设施）不是主功能，见文末「平台层能力」节。
 
 | English 术语 | 中文名 | 主文档 | 说明 / 专题文档 |
 |---|---|---|---|
@@ -42,7 +42,7 @@
 
 - 一行只放一个用户可感知的小功能点或可独立验证的子能力。
 - `所属能力` 只使用主功能列表中的 `English 术语`；出现新取值时先在主功能列表加行。
-- 记忆平台自身的能力（摄入、召回、演化、反思、平台管理界面等）和跨功能基础设施（Agent 编排、任务调度、用量观测、LLM 基础设施）不算主功能，放「平台层能力」节；记忆平台总览见 [memory_system.md](./memory_system.md)。
+- 记忆平台自身的能力（摄入、召回、演化、反思、平台管理界面等）和跨功能基础设施（Agent 编排、后台作业、用量观测、LLM 基础设施）不算主功能，放「平台层能力」节；记忆平台总览见 [memory_system.md](./memory_system.md)。
 - 证据对齐、证据守望、变化脉络、记忆主张归属这类跨功能专题文档不单独成主功能，`所属能力` 写它们的消费方主功能。
 - `所在文档` 指当前 source of truth；不再把历史兼容入口或过渡文档列入索引。
 - `.mdc` 文件只作为 agent / prompt / 运行规则，不作为产品主文档。
@@ -53,6 +53,7 @@
 
 | 小功能点 | 所属能力 | 所在文档 | 说明 |
 |---|---|---|---|
+| 记忆基础架构 | Memory Service 全平台 | [memory_foundation.md](./features/memory_foundation.md) | v1/v2/v3 三代数据模型并行；v3 真值体系（原子单元 + 血缘 + 修订 + 幂等回执）；供给管线（抽取→冻结→整合）+ 读取管线（三通道 RRF shadow）；预算硬顶 + 网页分析客户端优先 + ACL/egress 全矩阵 |
 | 记忆主张归属 | Ask / Memory Lens / Compose Assist / User Profile / Meeting Pilot | [memory_claim_attribution.md](./features/memory_claim_attribution.md) | raw-first 句内 owner/stance/verification 门禁；普通 Glip 零新增操作，混合证据只在既有消费详情显示 compact receipt，纠错不改原文或外部系统 |
 | InteractionScene 场景快照 | Memory Lens / Compose Assist | [memory_system.md](./memory_system.md) | 前端确定性场景信号供给 `/context-recall` 与 `/composer/assist`；语义决策仍在 Memory Service |
 | 场景记忆自动驾驶 | Memory Lens | [memory_system.md](./memory_system.md) / [memory_lens.md](./features/memory_lens.md) | `/context-recall` 展示前过滤，决定 silent / chip / card / context_pack；Lens 卡片显示展示前过滤回执 |
@@ -252,7 +253,7 @@
 
 ## 平台层能力
 
-本节收录两类不算主功能的能力：记忆平台（所有主功能共用的记忆底座，总览与架构见 [memory_system.md](./memory_system.md)）和跨功能基础设施（Agent 编排、任务调度、用量观测、LLM 基础设施）。本节能力不进主功能列表，`所属模块` 只在本节内使用。
+本节收录两类不算主功能的能力：记忆平台（所有主功能共用的记忆底座，总览与架构见 [memory_system.md](./memory_system.md)）和跨功能基础设施（Agent 编排、后台作业、用量观测、LLM 基础设施）。本节能力不进主功能列表，`所属模块` 只在本节内使用。
 
 | 能力点 | 所属模块 | 所在文档 | 说明 |
 |---|---|---|---|
@@ -284,7 +285,7 @@
 | Agent Thinking trace 可视化 | Agent 编排 | [agent_thinking.md](./features/agent_thinking.md) | Options 演示、Trace 复核路线、问题 span 步骤定位、步骤按钮 hover/读屏复核理由与复制反馈 |
 | Agent Executor Runtime | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | `delegate_agent` 队列、执行器 registry（OpenClaw Gateway/Responses、ACP Codex/Claude/Cursor local/remote）；probe 连通性；Worker pair/claim/lease；Desktop 内嵌与 headless 安装 |
 | Cursor ACP 执行器 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options 类型 `acp-cursor`；`cursor-acp` shim 把 ACP 译成 `cursor-agent` headless；HTTP MCP 写入 `.cursor/mcp.json` 并在任务结束恢复 |
-| Task Scheduler 后台任务调度 | 任务调度 | [task_scheduler_api.md](./features/task_scheduler_api.md) | 扩展后台 `scheduled_task_*` alarm 统一调度；任务启停、状态、折叠需处理预览、下一步提示边界、提交中、按钮边界、刷新确认和操作范围 |
+| Background Jobs 后台作业 | 后台作业 | [background_jobs.md](./features/background_jobs.md) | 扩展后台 `background_job_*` Chrome alarm 统一调度（兼容旧 `scheduled_task_*`）；作业启停、状态、折叠需处理预览、下一步提示边界、提交中、按钮边界、刷新确认和操作范围 |
 | 用量与 Token 分析报表 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 使用视角四视图（功能总览/用户活跃/偏好矩阵/次要面板）+ 中文功能名 + 30d；按 user × capability × model × side 归因 |
 | 前后端用量打点 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 前端 `UsageTracker` 缓冲 + `chrome.alarms` 批量上报 `POST /usage/telemetry`；后端 `AsyncLocalStorage` + `LLMClient`（含 stream）记录真实/估算 usage，onResponse 记接口频率 |
 | 用量成本估算与 rollup 缓存 | 用量观测 | [usage_analytics.md](./features/usage_analytics.md) | 本地 `MODEL_PRICING`（含 deepseek-v4-pro）估算成本、报表层重算、未知模型 flagged；每小时/每日 cron rollup |
