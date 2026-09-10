@@ -133,7 +133,7 @@ export function extractionPrompt(episode: {
   timestamp: number;
 }): string {
   const contentBounded = episode.content.slice(0, 6000);
-  return `Extract atomic memory candidates from the following message. Return STRICT JSON only:
+  return `Extract atomic memory candidates from the following message. Respond with ONLY a JSON object — no markdown, no code fences, no explanation, no thinking. Start the response with { and end with }.
 {"candidates": [{
   "memoryForm": "semantic|episodic|procedural",
   "kind": "note|fact|preference|decision|action_item|event|risk|open_question|opinion|procedure|insight|brief",

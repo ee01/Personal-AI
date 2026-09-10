@@ -383,12 +383,24 @@ export class ExtractionWorker {
   }
 
   private parseJsonLoose(content: string): unknown {
+    // GLM-class models sometimes wrap output in markdown fences or emit a
+    // reasoning block before the JSON — strip those before parsing.
+    let cleaned = String(content || '').trim();
+    // Strip ```json ... ``` / ``` ... ``` fences (keep the inner payload).
+    const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fence) cleaned = fence[1].trim();
+    // Strip a leading reasoning block: everything before the first top-level
+    // '{' that starts a line (reasoning rarely nests a full candidates obj).
+    const braceIdx = cleaned.indexOf('{');
+    if (braceIdx > 0) cleaned = cleaned.slice(braceIdx);
     try {
-      return JSON.parse(content);
+      return JSON.parse(cleaned);
     } catch {
-      const match = content.match(/\{[\s\S]*\}/);
+      const match = cleaned.match(/\{[\s\S]*\}/);
       if (match) return JSON.parse(match[0]);
-      throw new Error('no JSON object found in extraction output');
+      throw new Error(
+        `no JSON object in extraction output (head: ${cleaned.slice(0, 120).replace(/\s+/g, ' ')})`,
+      );
     }
   }
 }

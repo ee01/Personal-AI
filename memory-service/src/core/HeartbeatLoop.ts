@@ -158,6 +158,9 @@ function normalizeDigestPushTarget(
 // HeartbeatLoop
 // ---------------------------------------------------------------------------
 
+/** Max v3 shadow extraction jobs drained per heartbeat cycle per user. */
+const HEARTBEAT_EXTRACTION_DRAIN = 5;
+
 export class HeartbeatLoop {
   private db: Database.Database;
   private policy: ProactivityPolicy;
@@ -214,6 +217,31 @@ export class HeartbeatLoop {
       const profileRefreshed = await this.checkProfileDirty();
       if (profileRefreshed) {
         actions.push('refreshed USER_CORE.md (profile dirty)');
+      }
+
+      // 1c. v3 shadow extraction queue sweep (P1 polish): the ingest path only
+      // piggybacks ONE job per new message, so a burst of episodes leaves a
+      // backlog. The heartbeat drains due jobs on every cycle, bounded so a
+      // single heartbeat never burns a large LLM batch (plan §6.5 budget caps
+      // still apply per call).
+      try {
+        const { ExtractionWorker, isV3ShadowWriteEnabled } = await import(
+          './v3/ExtractionWorker.js'
+        );
+        if (isV3ShadowWriteEnabled()) {
+          const worker = new ExtractionWorker(this.db, this.userId ?? 'default');
+          const stats = await worker.processDueJobs(HEARTBEAT_EXTRACTION_DRAIN);
+          if (stats.claimed > 0) {
+            actions.push(
+              `v3 extraction drained ${stats.claimed} job(s): ${stats.integrated} integrated, ${stats.zeroFact} zero-fact, ${stats.retryable} retry, ${stats.deadLettered} dead-letter`,
+            );
+          }
+        }
+      } catch (err) {
+        console.warn(
+          '[HeartbeatLoop] v3 extraction sweep failed:',
+          (err as Error).message,
+        );
       }
 
       // 2. Check pending truth conflicts

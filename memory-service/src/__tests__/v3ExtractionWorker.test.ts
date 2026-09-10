@@ -303,3 +303,60 @@ describe('v3 ExtractionWorker — cheap-tier routing + usage attribution', () =>
     expect(fresh.getExtractionLLMClient()).toBe(dedicated); // cached, not rebuilt per call
   });
 });
+
+describe('v3 heartbeat-driven queue drain (P1 polish)', () => {
+  let db: BetterSqlite3.Database;
+
+  beforeEach(() => {
+    vi.resetModules(); // fresh module graph: no cached extraction client
+    db = getTestDb();
+    for (const t of [
+      'projection_outbox', 'memory_unit_views', 'memory_unit_revisions',
+      'memory_unit_sources', 'memory_units', 'truth_integrations',
+      'ingest_extraction_results', 'ingest_jobs',
+    ]) {
+      db.prepare(`DELETE FROM ${t}`).run();
+    }
+    db.prepare(`DELETE FROM messages_raw WHERE id LIKE 'ep-%'`).run();
+    process.env.MEMORY_WRITE_V3_SHADOW = 'true';
+    delete process.env.MEMORY_EXTRACTION_LLM_FALLBACKS;
+    generateMock.mockReset();
+  });
+
+  it('heartbeat loop drains queued jobs and reports the action', async () => {
+    // Dynamic imports re-run module initializers (dotenv re-loads .env after
+    // resetModules); clear the extraction-chain env AFTER imports so the
+    // worker resolves the default (mocked) LLM client.
+    const { HeartbeatLoop } = await import('../core/HeartbeatLoop.js');
+    const workerModule = await import('../core/v3/ExtractionWorker.js');
+    delete process.env.MEMORY_EXTRACTION_LLM_FALLBACKS;
+    const id = `ep-${Math.random().toString(36).slice(2)}`;
+    db.prepare(
+      `INSERT INTO messages_raw (id, content, source_type, sender, scope, timestamp, trust_class, claim_attribution_status, claim_attribution_version, created_at)
+       VALUES (?, 'decided CURSOR_POLICY_SPAN today', 'glip', 'colleague', 'work', 1780000000, 'internal', 'pending', 1, 1780000000)`,
+    ).run(id);
+    const worker = new workerModule.ExtractionWorker(db, 'test-user');
+    const jobId = worker.enqueueEpisode(id);
+    expect(jobId).toBeTruthy();
+    generateMock.mockResolvedValue({
+      content: JSON.stringify({ candidates: [], skipReason: 'none' }),
+    });
+
+    const loop = new HeartbeatLoop(db, undefined, 'test-user');
+    const result = await loop.run();
+    expect(result.actions.some((a) => a.includes('v3 extraction drained 1 job(s)'))).toBe(true);
+    const job = db.prepare('SELECT status FROM ingest_jobs WHERE job_id = ?').get(jobId!) as any;
+    expect(job.status).toBe('extracted_zero');
+  });
+
+  it('parseJsonLoose tolerates markdown fences and reasoning prefixes', async () => {
+    const worker = new (await import('../core/v3/ExtractionWorker.js')).ExtractionWorker(db, 'test-user');
+    const parse = (worker as unknown as { parseJsonLoose: (c: string) => unknown }).parseJsonLoose;
+    // fenced
+    expect(parse('```json\n{"candidates": []}\n```')).toEqual({ candidates: [] });
+    // reasoning prefix then JSON
+    expect(parse('分析一下… {"candidates": [], "skipReason": "x"}')).toEqual({ candidates: [], skipReason: 'x' });
+    // raw JSON still works
+    expect(parse('{"candidates": [1]}')).toEqual({ candidates: [1] });
+  });
+});
