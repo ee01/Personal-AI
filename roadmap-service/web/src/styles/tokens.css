@@ -418,6 +418,9 @@ body.no-select,body.no-select *{user-select:none!important}
 .bar.draft.c-cur{border-color:var(--cur-deep)}
 .bar.draft.c-fut{border-color:var(--fut-deep)}
 .bar.draft .sub-badge{background:rgba(32,36,42,.10)}
+.bar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25);box-shadow:none}
+.bar.done .sub-badge{background:rgba(31,91,60,.12)}
+.bar.done .dep-badge{background:rgba(31,91,60,.12)}
 .bar .draft-tag{position:absolute;right:-6px;top:-8px;background:var(--ink);color:#fff;
   font-size:8.5px;font-weight:700;letter-spacing:.06em;border-radius:4px;padding:1px 5px;
   pointer-events:none;z-index:6}

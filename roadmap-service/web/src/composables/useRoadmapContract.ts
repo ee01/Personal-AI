@@ -281,14 +281,14 @@ export function epicShort(item: Pick<RoadmapItem, 'alias' | 'title'>): string {
 
 /**
  * Jira workflow statuses treated as "done". Mirrored status can lag the local
- * schedule (a task dated in the future may already be Closed), so it's shown
- * with its own color rather than folded into the past/current/future palette,
- * and excluded from defer candidates — a finished task never needs deferring.
+ * schedule (an Epic or Task dated in the future may already be Closed), so it's
+ * shown with its own color rather than folded into the past/current/future
+ * palette. Finished Tasks are also excluded from defer candidates.
  */
 export const DONE_STATUSES = new Set(['Closed', 'Resolved', 'Done']);
 
-export function isDoneStatus(sub: Pick<RoadmapSub, 'status'>): boolean {
-  return Boolean(sub.status) && DONE_STATUSES.has(sub.status!);
+export function isDoneStatus(row: { status?: string | null }): boolean {
+  return Boolean(row.status) && DONE_STATUSES.has(row.status!);
 }
 
 export function formatEstimate(estimate: number | null | undefined): string {

@@ -201,6 +201,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
     version: row.version,
     createdAt: row.created_at,
     description: row.description || null,
+    status: row.status || null,
     subs: subs.map((sub) => ({
       id: sub.id,
       key: sub.jira_key,
@@ -2339,6 +2340,7 @@ function applyRefreshFromJira(
       const nextTStart =
         targetStart !== undefined ? targetStart : item.target_start;
       const nextTEnd = targetEnd !== undefined ? targetEnd : item.target_end;
+      const nextStatus = status !== undefined ? status : item.status;
       let nextStart = item.start_date;
       let nextDays = item.days;
       if (item.scheduled && (targetStart !== undefined || targetEnd !== undefined)) {
@@ -2357,13 +2359,14 @@ function applyRefreshFromJira(
         (nextTStart || null) === (item.target_start || null) &&
         (nextTEnd || null) === (item.target_end || null) &&
         (nextStart || null) === (item.start_date || null) &&
-        nextDays === item.days;
+        nextDays === item.days &&
+        (nextStatus || null) === (item.status || null);
       if (same) continue;
       const result = db
         .prepare(
           `UPDATE items SET
             title = ?, description = ?, target_start = ?, target_end = ?,
-            start_date = ?, days = ?, version = version + 1, updated_at = ?
+            start_date = ?, days = ?, status = ?, version = version + 1, updated_at = ?
            WHERE team_id = ? AND key = ? AND version = ?`,
         )
         .run(
@@ -2373,6 +2376,7 @@ function applyRefreshFromJira(
           nextTEnd,
           nextStart,
           nextDays,
+          nextStatus,
           ts,
           teamId,
           item.key,

@@ -315,7 +315,7 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有
 
 ## 数据库迁移
 
-`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除；`014_subs_original_estimate_days` 给 `subs` 加 `original_estimate_days`——Jira Original Estimate 向上取整折算的人天（1 人天 = 8 小时），导入 Task / 打开页 `refresh_from_jira` 写入，人员视图「其余延至下周」拿它当最小任务长度（空则默认 3 人天）。
+`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除；`014_subs_original_estimate_days` 给 `subs` 加 `original_estimate_days`——Jira Original Estimate 向上取整折算的人天（1 人天 = 8 小时），导入 Task / 打开页 `refresh_from_jira` 写入，人员视图「其余延至下周」拿它当最小任务长度（空则默认 3 人天）；`015_items_status` 给 `items` 加 `status`——同一套镜像，甘特主任务条（Epic）Closed/Resolved/Done 时用与子任务相同的浅绿 + ✓ 样式。
 
 **顺序约束**：`Database.ts` 是先 `db.exec(schema.sql)` 再跑迁移。所以 `schema.sql` 里**不能**出现引用新列的索引——已有部署还没 ALTER 过，启动时就会崩。`idx_items_jira_key` 因此由迁移 `003` 创建而不是写在 `schema.sql` 里。`schema.sql` 只负责让全新库一次到位，迁移负责把老库补齐。description 列写在 `schema.sql` 里但不建索引。
 
@@ -422,10 +422,10 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 ### 已完成任务的配色
 
-子任务镜像的 Jira **状态**（`subs.status`，由 `refresh_from_jira` 写入，见「数据库迁移」）为 `Closed`/`Resolved`/`Done`（`isDoneStatus()`，`useRoadmapContract.ts`）时，人员视图和甘特图都用独立的浅绿配色（`.res-bar.done` / `.sbar.done`）+ 标题前缀 `✓ ` 展示，不与过去/当前/未来的时间配色混淆——镜像状态可能滞后于本地排期日期，一条日期上看是「未来」的任务也可能其实已经关闭。已完成任务：
+主任务（Epic）和子任务镜像的 Jira **状态**（`items.status` / `subs.status`，由 `refresh_from_jira` 写入，见「数据库迁移」）为 `Closed`/`Resolved`/`Done`（`isDoneStatus()`，`useRoadmapContract.ts`）时，甘特主条 / 子条和人员视图都用独立的浅绿配色（`.bar.done` / `.sbar.done` / `.res-bar.done`）+ 标题前缀 `✓ ` 展示，不与过去/当前/未来的时间配色混淆——镜像状态可能滞后于本地排期日期，一条日期上看是「未来」的任务也可能其实已经关闭。已完成**子任务**：
 
 - **不计入**「待延至下周」的候选统计（`isDeferCandidate()` 排除），也不能被标记「正在做」（`onBarClick` 直接 return）——已经完成的任务不需要顺延，也不需要标进度
-- 只读展示，用户不能在页面上手动设置/清除 `status`，完全由 Jira 刷新单向镜像（`applyRefreshFromJira` 的 sub 分支）
+- 只读展示，用户不能在页面上手动设置/清除 `status`，完全由 Jira 刷新单向镜像（`applyRefreshFromJira` 的 item / sub 分支）
 
 ### 时间窗平移
 
@@ -493,7 +493,7 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 | **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重（含 `originalEstimateDays`） |
 | **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期（避免打开页静默刷新用旧 Target 把 bar 盖回去）；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast。成功后轻 toast |
 | **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；无扩展/未映射 toast「未回写 assignee」；置空先 confirm |
-| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务最多 50 key，再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。主/子任务按 Target 可能挪 bar；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新 |
+| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务最多 50 key，再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。主/子任务按 Target 可能挪 bar；主任务同步 `status`；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新 |
 
 注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。description ≠ alias：alias 永不回写 Jira。读方向（Jira→owner）未映射用实名入成员表；写方向（owner→Jira）必须有映射。空 assignee 刷新不清空 Roadmap Owner。
 
@@ -576,7 +576,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 sub `status` / `originalEstimateDays` 的镜像与幂等）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 item/sub `status` 与 sub `originalEstimateDays` 的镜像与幂等）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
 - Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）

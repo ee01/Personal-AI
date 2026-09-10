@@ -150,6 +150,9 @@ describe('display helpers', () => {
     expect(isDoneStatus(sub({ status: 'In Progress' }))).toBe(false);
     expect(isDoneStatus(sub({ status: null }))).toBe(false);
     expect(isDoneStatus(sub({}))).toBe(false);
+    expect(isDoneStatus(item({ status: 'Closed' }))).toBe(true);
+    expect(isDoneStatus(item({ status: 'In Progress' }))).toBe(false);
+    expect(isDoneStatus(item({}))).toBe(false);
   });
 
   it('prefers the alias over the title for the resource-view Epic prefix chip', () => {

@@ -166,6 +166,14 @@ const MIGRATIONS: Migration[] = [
       addColumn(database, 'subs', 'original_estimate_days', 'INTEGER');
     },
   },
+  {
+    id: '015_items_status',
+    up: (database) => {
+      // Mirrored Jira workflow status (e.g. Closed/Resolved); Gantt uses it to
+      // color completed Epics the same way as completed Tasks.
+      addColumn(database, 'items', 'status', 'TEXT');
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

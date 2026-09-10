@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-09-03*
+*最后更新: 2026-09-11*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -201,7 +201,8 @@
 | 重点项目消息观察（不通知） | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | focus project 注入消息分析，只入库不 Glip 提醒 |
 | Roadmap 漂移角标 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 个人层意图 vs 现实偏差；可更新/忽略/收敛消除 |
 | Roadmap Markers | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 阶段节点 / 外部依赖；缺 ETA 角标；依赖 Jira status/Target End 只读缓存 |
-| Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；含依赖 ticket 缓存；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
+| Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；含依赖 ticket 缓存；主任务/子任务都镜像 status；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
+| Roadmap 已完成 Jira 状态配色 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Epic 与 Task 镜像 Closed/Resolved/Done；甘特/人员视图浅绿 + ✓，不与过去/当前/未来时间配色混淆 |
 | Roadmap 草稿 description | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 可选录入不挡 Enter 秒建；hover 灰色小字；非 draft 只读镜像 |
 | Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展隐藏按钮 |
 | Roadmap 甘特缩放与人员视图 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 捏合/⌘+滚轮缩放；人员视图色条+聚焦顺延（Original Estimate 最短人天 / 缩短 / 延长 Epic）+ 近 2 周双指平移 |

@@ -112,6 +112,7 @@ function browseUrl(key: string | null | undefined) {
 
 const disp = computed(() => props.item.alias || props.item.title);
 const isDraft = computed(() => isDraftItem(props.item));
+const itemDone = computed(() => isDoneStatus(props.item));
 const dispKey = computed(() => itemDisplayKey(props.item));
 const wrapMode = computed(() => shouldWrapAlias(props.item.alias));
 const barW = computed(() => (props.item.days || 0) * DAY_W.value - 2);
@@ -839,20 +840,20 @@ watch(
       <div
         class="bar"
         :class="[
-          item.start && item.days ? colorCls(item.start, item.days) : '',
-          { 'free-h': wrapMode, enter: enter, draft: isDraft },
+          itemDone ? 'done' : item.start && item.days ? colorCls(item.start, item.days) : '',
+          { 'free-h': wrapMode, enter: enter, draft: isDraft && !itemDone },
         ]"
         :style="{ left: `${barLeft()}px`, width: `${barW}px` }"
-        :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}${barSprintTitle(item.start, item.days)}||${item.title}||${tooltipHintLine(item.description, itemOpsHint())}`"
+        :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}${barSprintTitle(item.start, item.days)}${itemDone ? ` · ${item.status}` : ''}||${item.title}||${tooltipHintLine(item.description, itemOpsHint())}`"
         :data-pai-item="item.key"
         :data-pai-team="teamId"
         :data-pai-target-start="item.targetStart || ''"
         :data-pai-target-end="item.targetEnd || ''"
         @pointerdown="barDragStart($event, null, $event.currentTarget as HTMLElement)"
       >
-        <div v-if="wrapMode" class="wrap-label">{{ esc(disp) }}</div>
-        <span v-else-if="labelIn" class="in-label">{{ esc(disp) }}</span>
-        <span v-else class="out-label">{{ disp }}</span>
+        <div v-if="wrapMode" class="wrap-label">{{ itemDone ? '✓ ' : '' }}{{ esc(disp) }}</div>
+        <span v-else-if="labelIn" class="in-label">{{ itemDone ? '✓ ' : '' }}{{ esc(disp) }}</span>
+        <span v-else class="out-label">{{ itemDone ? '✓ ' : '' }}{{ disp }}</span>
         <a
           v-if="item.jiraKey"
           class="bar-link"

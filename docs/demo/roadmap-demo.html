@@ -527,6 +527,9 @@ body.no-select,body.no-select *{user-select:none!important}
   border:1.5px dashed #96A0AD;color:#3D4754}
 /* 已完成（Jira Closed/Resolved）：与人员视图同一套配色，甘特上也要能一眼看出哪些已经结束 */
 .sbar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
+.bar.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25);box-shadow:none}
+.bar.done .sub-badge{background:rgba(31,91,60,.12)}
+.bar.done .dep-badge{background:rgba(31,91,60,.12)}
 .sbar .in-label{position:absolute;left:9px;right:9px;font-size:11px;font-weight:500;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .sbar .out-label{position:absolute;left:calc(100% + 7px);font-size:11px;font-weight:500;
@@ -1352,14 +1355,14 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li><b>打开 Jira</b>：主/子任务条 hover 左上角出现 <b>↗</b> 圆钮，点击新开对应 issue；<b>⌘/Ctrl+单击任务条</b>等效（草稿无 issue 不显示）</li>
     <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部），可添加成员、双击改名、移除空闲成员。任务条<b>左侧色条 + 前缀 chip 标识所属主任务</b>（备注名优先，条太窄只留色条），工具栏「主任务」图例是纯静态色板对照，不联动高亮</li>
     <li><b>聚焦当前任务（人员视图）</b>：<b>单击任务条</b>标记该成员「正在做」（<b>唯一</b>的高亮态：亮色描边 + ✓），可继续单击多选；点到<b>另一个成员</b>的任务会对那个人重新开始多选；<b>已完成</b>（Jira Closed/Resolved，见下条）的任务不参与选中。除了选中的任务，<b>其余全部压暗</b>（未选中的顺延候选 / 放不下最小人天的 stuck / 已完成 / 远任务，压暗程度一致）——顺延预告靠角标（→下周一 / →缩短 / ✕）单独传达。选中后成员名下出现操作点：<b>「其余延至下周 →」</b>把 TA 其余<b>开始日在下周一之前、尚未结束、未完成</b>的任务统一<b>延至下周一开始</b>。长度优先保持；空间不够时按 Jira <b>Original Estimate</b>（空则 3 人天）缩小。若下周一到 Epic Target End 连最小人天都摆不下，弹出确认框：延长 Epic 结束日到 mm-dd，或取消顺延。已开始未做完的同样延后；hover 按钮预览能放下的落点影子。延后非草稿任务自动回写 Jira <b>Target Start/End</b>；延完再按一次不会继续往后推（幂等）。Esc 或点空白处退出聚焦</li>
-    <li><b>已完成任务的配色（人员视图）</b>：子任务镜像的 Jira 状态为 <b>Closed / Resolved</b> 时，用独立的浅绿配色 + ✓ 前缀展示，与「过去/当前/未来」的时间配色区分开——镜像状态可能滞后于本地排期日期，一条日期上看是「未来」的任务也可能其实已经关闭。已完成任务<b>不计入</b>「待延至下周」的候选统计，也不能被标记「正在做」</li>
+    <li><b>已完成任务的配色（人员视图 / 甘特）</b>：主任务（Epic）和子任务镜像的 Jira 状态为 <b>Closed / Resolved / Done</b> 时，用独立的浅绿配色 + ✓ 前缀展示，与「过去/当前/未来」的时间配色区分开——镜像状态可能滞后于本地排期日期，一条日期上看是「未来」的任务也可能其实已经关闭。已完成子任务<b>不计入</b>「待延至下周」的候选统计，也不能被标记「正在做」。Demo 里上季度遗留 Epic「Legacy webhook migration…」预置为 Closed</li>
     <li><b>人员视图时间窗平移</b>：近 2 周模式下<b>触控板双指左右滑动</b>整窗平移（窗口长度 14 天不变），或点两端「◂ 更早 / 更晚 ▸」角标平移两周；平移后表头出现<b>「回到今天」</b>，点「近 2 周」按钮同样回到今天。配合聚焦功能：成员先领取了很后面的任务时，滑到时间后方把它标记「正在做」，再一键把眼前的任务延至下周</li>
     <li><b>人员视图任务条标题贴边</b>：任务开始时间被裁到可视范围左侧外（比如已经进行了很久的长任务）时，「主任务前缀 + 标题」这一组会贴在可视范围最左侧显示，不用滚很久才能看到是哪条任务；贴到任务条自己的结束位置后就不再继续贴，交给省略号收尾（保留标题开头，不会露出反直觉的标题尾巴）。不论是双指滑动过程中还是滑完之后都会跟着实时贴边</li>
     <li><b>创建 Jira 后草稿名保留为备注名</b>：回传 jira key 时自动把原草稿标题存为备注名，甘特上展示的名字不因创建（或 Agent 规范化 summary、后续 Jira 刷新）而改变，hover 才看正式 summary。编辑备注名时<b>清空后回车 = 恢复展示原 ticket 名</b></li>
     <li><b>清理过期</b>：过期 Epic 回退 Backlog（保留子任务记录，重拖回任务视图可还原），过期子任务从任务视图清理</li>
     <li>拖入排期：带 Target 日期的卡片<b>按 Target start/end 落位</b>，其余按松手位置 + 预估</li>
     <li><b>拖动 / 伸缩非草稿主/子任务后自动回写 Jira</b>：新的起止日期同步到该 issue 的 Target Start/End（扩展优先用你的 Jira 账号，未装扩展回落服务端凭据；连续拖动只同步最后一次），成功后有轻提示。<b>双击更换非草稿子任务的 Owner 同样回写 assignee</b>（需已映射 Jira 实名，且仅装扩展的浏览器回写）；备注名（缩写）只是本地显示，从不回写</li>
-    <li><b>打开页面自动刷新 Jira</b>（仅装扩展）：打开 Roadmap 时静默拉取非草稿任务的 summary / description / Target 日期 / assignee，以及依赖 ticket 的 status / Target End。主任务 Target 变化会挪 bar；<b>依赖 ETA 不会被自动改写</b>。映射后是同一人的 Owner 不动。Demo 里把顶栏「扩展未安装」切到「已安装」即可触发，被刷新的条目会闪一圈蓝光（仅演示用）</li>
+    <li><b>打开页面自动刷新 Jira</b>（仅装扩展）：打开 Roadmap 时静默拉取非草稿主任务 / 子任务的 summary / description / Target 日期 / assignee / status，以及依赖 ticket 的 status / Target End。主任务 Target 变化会挪 bar；Closed/Resolved/Done 的主任务条改浅绿 + ✓。<b>依赖 ETA 不会被自动改写</b>。映射后是同一人的 Owner 不动。Demo 里把顶栏「扩展未安装」切到「已安装」即可触发，被刷新的条目会闪一圈蓝光（仅演示用）</li>
     <li><b>导入 Task</b>（创建 Jira 左侧浅蓝按钮）：拉取甘特上各主任务名下的 Jira Task，按 Key 去重、已存在的不重复导入。<b>日期兜底</b>：Task 未填 Target Start/End 时与主任务同起止；只填其一时按两周落位，且不超出主任务范围</li>
     <li>顶栏 JQL 右侧 ✎ 可<b>编辑团队 JQL</b>（下次导入生效）</li>
     <li><b>发布时间表标尺</b>：✎ 弹窗内可为团队配置 Google Sheet 发布时间表（Release / Phase / Date 三列，悬停「查看示例」看格式）。填完地址<b>自动读取</b>，下方「标尺阶段」列出表中出现的阶段：<b>勾选 = 在标尺上展示</b>，<b>🏁 = 作为 release 结束分割节点</b>（有 FF 默认 FF，结束节点必定展示；列区间为半开 <code>[上一班同阶段, 本班同阶段)</code>）。未读取就直接保存也可以，保存时兜底读取并按默认（FF 结束分界 + 全部展示）。配置后表头换成<b>双轴</b>：Sprint 行为主轴（release 名替代月份、按结束分割节点切段、当前 Sprint 高亮橙色），月份降为细行副轴（quarter 标签移除）；正文竖线换成 Sprint 结束分界实线 + 阶段虚线；Pro 刻度直接标注日期；拖动任务时提示<b>可赶的最近 Sprint</b>。Nova Brandy 已预配置（演示只展示 FF / Stage / Pro 三个阶段），RCV Mobile 未配置可体验完整引导流程；清除配置即恢复月份标尺</li>
@@ -1798,6 +1801,7 @@ function buildBrandy(){
   /* 上季度遗留（演示「过去」配色） */
   const legacy = mkItem('NOVA-17988','EPIC','Legacy webhook migration cleanup and deprecation notices', prevQ(CURQ), 3);
   legacy.scheduled = true; legacy.start = addD(q0,-29); legacy.days = 20;
+  legacy.status = 'Closed';
   t.items.unshift(legacy);
   /* 预排期三个，演示三种状态；前两个带备注名（alias）演示换行/增高 */
   const a = get(18117); a.scheduled = true; a.start = addD(q0,-2); a.days = 22; a.alias = '统一会话时间线';
@@ -2426,10 +2430,11 @@ function rowEl(it){
   const lane = document.createElement('div'); lane.className='g-lane';
   const bar = document.createElement('div');
   const w = it.days*DAY_W - 2;
-  bar.className = 'bar ' + colorCls(it.start, it.days) + (isDraftItem(it) ? ' draft' : '')
+  bar.className = 'bar ' + (isDoneStatus(it) ? 'done' : (colorCls(it.start, it.days) + (isDraftItem(it) ? ' draft' : '')))
     + ((firstRender || it.key === enterKey) ? ' enter' : '');
   bar.style.left = X(it.start)+'px'; bar.style.width = w+'px';
   const disp = it.alias || it.title;
+  const donePrefix = isDoneStatus(it) ? '✓ ' : '';
   const wrapMode = !!it.alias;                 // 备注名不省略：换行 + 自动增高
   if (wrapMode) bar.classList.add('free-h');
   const labelIn = wrapMode || w >= 110;
@@ -2439,17 +2444,17 @@ function rowEl(it){
   const depsDrift = it.deps.some(d => d.jiraKey && d.jiraTargetEnd && d.eta && toISOInput(d.eta) !== toISOInput(d.jiraTargetEnd));
   const canAdopt = it.deps.some(d => d.jiraKey && !d.eta && d.jiraTargetEnd);
   bar.innerHTML = `
-    ${wrapMode ? `<div class="wrap-label">${esc(disp)}</div>` : (labelIn ? `<span class="in-label">${esc(disp)}</span>` : '')}
+    ${wrapMode ? `<div class="wrap-label">${donePrefix}${esc(disp)}</div>` : (labelIn ? `<span class="in-label">${donePrefix}${esc(disp)}</span>` : '')}
     ${(nDeps || nSubs) ? `<span class="badge-cluster">
       ${nDeps ? `<span class="dep-badge${depsMissing?' pending':(depsDrift?' drift':'')}" data-role="dep-badge">${ICON.link}${nDeps}</span>` : ''}
       ${nSubs ? `<span class="sub-badge"><svg class="chev ${it.expanded?'up':''}" width="8" height="8" viewBox="0 0 10 10"><path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>${nSubs}</span>` : ''}
     </span>` : ''}
     <div class="hdl l"></div><div class="hdl r"></div>`;
   if (!labelIn){
-    const ol = document.createElement('span'); ol.className='out-label'; ol.textContent = disp;
+    const ol = document.createElement('span'); ol.className='out-label'; ol.textContent = donePrefix + disp;
     bar.appendChild(ol);
   }
-  let barTipHead = `${itemDisplayKey(it)}${isDraftItem(it) ? ' · 草稿，未创建到 Jira' : ''} · ${fmtMD(it.start)} → ${fmtMD(addD(it.start,it.days-1))} · ${it.days}d`;
+  let barTipHead = `${itemDisplayKey(it)}${isDraftItem(it) ? ' · 草稿，未创建到 Jira' : ''}${isDoneStatus(it) ? ' · '+it.status : ''} · ${fmtMD(it.start)} → ${fmtMD(addD(it.start,it.days-1))} · ${it.days}d`;
   const relPBar = teamRelParsed();
   if (relPBar){
     const cr = catchRelease(addD(it.start, it.days - 1), relPBar);
@@ -4896,7 +4901,7 @@ $('#egRefresh').onclick = () => {
    真实实现：页面与扩展握手成功后，content script 分批读取当前 Gantt 上非 draft
    主任务、已导入子任务，以及依赖 ticket 的 issue 字段（summary / description /
    Target Start/End / assignee / status）。主/子任务有差异经 refresh_from_jira
-   落库；依赖只缓存 status 与 Target End，不改 ETA。无 toast、不进协作 ticker。
+   落库（含 Epic status，Closed/Resolved/Done 改浅绿 + ✓）；依赖只缓存 status 与 Target End，不改 ETA。无 toast、不进协作 ticker。
    assignee → Owner：经 Assignee 映射反查，映射后是同一人则不改 Owner。
    Demo：切到「扩展已安装」约 1.2s 后应用下面的模拟差异，被刷新的条目闪一圈蓝光
   （仅演示用的可视化，真实实现完全无提示）。 */
@@ -4904,7 +4909,8 @@ const JIRA_REFRESH_POOL = {
   'NOVA-18117': {
     summary: 'Unified conversation timeline with cross-channel threading and audit export',
     desc: 'Merge SMS / chat / voice transcripts into one ordered per-customer timeline. Scope includes the audit export API used by compliance; historical backfill is tracked separately.',
-    tEndShift: 4 },
+    tEndShift: 4,
+    status: 'Resolved' },
   'NOVA-18124': {
     desc: 'Daily & weekly conversation digests for supervisors: volume, containment, escalation reasons and representative snippets. Delivered as email + in-app card.' },
   'NOVA-18160': {
@@ -4928,6 +4934,7 @@ function silentJiraRefresh(){
       const tgt = sub || epic;
       if (patch.summary) tgt.title = patch.summary;             // 备注名（alias）保留不动
       if (patch.desc) tgt.desc = patch.desc;
+      if (patch.status) tgt.status = patch.status;
       if (!sub && patch.tEndShift && epic.scheduled){           // Jira 侧改了 Target End → bar 重落位
         epic.days = Math.max(2, epic.days + patch.tEndShift);
         epic.tEnd = addD(epic.start, epic.days - 1);

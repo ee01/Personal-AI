@@ -449,3 +449,100 @@ describe('refresh_from_jira sub status', () => {
     expect(refreshed.originalEstimateDays).toBe(5);
   });
 });
+
+describe('refresh_from_jira item status', () => {
+  it('mirrors Jira status onto the Epic and is idempotent', () => {
+    const snapshot = createTeam({
+      name: 'ItemStatusRefresh',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [{ key: 'NOVA-700', type: 'Epic', title: 'P', quarter: '2026-Q3' }],
+      }),
+    );
+    const before = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-700')!;
+    expect(before.status ?? null).toBeNull();
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-700',
+            fetchedAt: Date.now() + 1000,
+            fields: { status: 'Closed' },
+          },
+        ],
+      }),
+    );
+    const refreshed = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-700')!;
+    expect(refreshed.status).toBe('Closed');
+    const version = refreshed.version;
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-700',
+            fetchedAt: Date.now() + 2000,
+            fields: { status: 'Closed' },
+          },
+        ],
+      }),
+    );
+    const same = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-700')!;
+    expect(same.status).toBe('Closed');
+    expect(same.version).toBe(version);
+  });
+
+  it('writes status even when title and Target dates are unchanged', () => {
+    const snapshot = createTeam({
+      name: 'ItemStatusOnlyRefresh',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [
+          {
+            key: 'NOVA-701',
+            type: 'Epic',
+            title: 'Keep me',
+            quarter: '2026-Q3',
+            targetStart: '2026-08-01',
+            targetEnd: '2026-08-14',
+          },
+        ],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-701',
+            fetchedAt: Date.now() + 1000,
+            fields: {
+              summary: 'Keep me',
+              targetStart: '2026-08-01',
+              targetEnd: '2026-08-14',
+              status: 'Resolved',
+            },
+          },
+        ],
+      }),
+    );
+    const refreshed = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-701')!;
+    expect(refreshed.title).toBe('Keep me');
+    expect(refreshed.targetStart).toBe('2026-08-01');
+    expect(refreshed.targetEnd).toBe('2026-08-14');
+    expect(refreshed.status).toBe('Resolved');
+  });
+});

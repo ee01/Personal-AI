@@ -134,6 +134,8 @@ export interface ItemRow {
   jira_key: string | null;
   project_key: string | null;
   description: string | null;
+  /** Mirrored Jira workflow status (e.g. 'Closed', 'Resolved'); null until first Jira refresh. */
+  status: string | null;
   version: number;
   created_at: number;
   updated_at: number;
@@ -240,6 +242,8 @@ export interface TeamSnapshot {
     createdAt: number;
     /** Draft user text, or Jira description mirror for non-draft rows. */
     description?: string | null;
+    /** Mirrored Jira workflow status (e.g. 'Closed', 'Resolved'); null until first Jira refresh. */
+    status?: string | null;
     subs: Array<{
       id: string;
       key?: string | null;

@@ -37,6 +37,7 @@ describe('a database created from schema.sql', () => {
       '012_marker_jira_cache',
       '013_subs_status',
       '014_subs_original_estimate_days',
+      '015_items_status',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
@@ -47,7 +48,7 @@ describe('a database created from schema.sql', () => {
       (db.pragma('table_info(items)') as Array<{ name: string }>).map(
         (row) => row.name,
       ),
-    ).toEqual(expect.arrayContaining(['description']));
+    ).toEqual(expect.arrayContaining(['description', 'status']));
     expect(
       (db.pragma('table_info(teams)') as Array<{ name: string }>).map(
         (row) => row.name,

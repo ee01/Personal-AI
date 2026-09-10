@@ -110,6 +110,8 @@ export interface RoadmapItem {
   createdAt?: number;
   /** Draft user text, or Jira description mirror for non-draft items. */
   description?: string | null;
+  /** Mirrored Jira workflow status (e.g. 'Closed', 'Resolved'); null until first Jira refresh. */
+  status?: string | null;
   subs: RoadmapSub[];
   markers: RoadmapMarker[];
 }
