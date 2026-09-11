@@ -138,7 +138,8 @@ describe('v3 ExtractionWorker (P1 shadow dual-write)', () => {
     const frozen = db.prepare('SELECT * FROM ingest_extraction_results WHERE job_id = ?').get(jobId!) as any;
     expect(frozen.candidate_batch_json).toContain('cursor-license');
     // Evidence class derived from envelope, not LLM.
-    expect(src.evidence_class).toBe('self_statement');
+    // F11: colleague's message is a first-party record, not self-statement.
+    expect(src.evidence_class).toBe('first_party_record');
   });
 
   it('re-running the same job never duplicates units (I5 via work_unit_key)', async () => {

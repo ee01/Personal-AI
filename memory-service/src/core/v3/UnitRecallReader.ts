@@ -41,6 +41,25 @@ export interface UnitRecallResult {
 /** Statuses that may participate in recall (§4.3). */
 const RECALLABLE_STATUSES = "('provisional', 'active', 'disputed')";
 
+/**
+ * F5 fix (reviewed-plan §3.1): server-side policy context that the reader
+ * must receive before being wired into user-visible paths.
+ */
+export interface ReadPolicyContext {
+  /** Restrict to specific scope locator (e.g. 'work'). Null = no scope filter. */
+  scopeLocator?: string | null;
+  /** Maximum sensitivity the caller may see. Higher levels are filtered. */
+  maxSensitivity?: 'public' | 'internal' | 'private' | 'restricted';
+  /** Only return units with at least one source in these evidence classes. */
+  allowedEvidenceClasses?: string[] | null;
+  /** Temporal query mode: current facts vs historical vs audit. */
+  temporalMode?: 'current' | 'historical' | 'audit';
+  /** For historical/audit: return facts valid at this epoch time. */
+  asOfValid?: number | null;
+}
+
+const SENSITIVITY_RANK = { public: 0, internal: 1, private: 2, restricted: 3 };
+
 export class UnitRecallReader {
   constructor(private readonly db: Database.Database) {}
 
@@ -87,7 +106,13 @@ export class UnitRecallReader {
     return this.recall(queryText, limit);
   }
 
-  recall(queryText: string, limit = 20, precomputedChannels?: Map<string, Map<string, number>>): UnitRecallResult {
+  recall(
+    queryText: string,
+    limit = 20,
+    precomputedChannels?: Map<string, Map<string, number>>,
+    policy?: ReadPolicyContext,
+  ): UnitRecallResult {
+    const policyGate = policy ?? {};
     const started = Date.now();
     const perChannel = new Map<string, Map<string, number>>(); // channel → unitId → rank
 
@@ -129,17 +154,48 @@ export class UnitRecallReader {
       .slice(0, limit);
 
     const metaStmt = this.db.prepare(
-      `SELECT kind, text, language, observed_at, status
+      `SELECT kind, text, language, observed_at, status, scope_locator, sensitivity,
+              valid_from, valid_to
        FROM memory_units WHERE id = ?`,
     );
     const candidates: UnitRecallCandidate[] = [];
     for (const [unitId, entry] of top) {
-      // Re-verify status at read time (I6: projection can lag truth).
       const row = metaStmt.get(unitId) as
-        | { kind: string; text: string; language: string | null; observed_at: number | null; status: string }
+        | {
+            kind: string; text: string; language: string | null;
+            observed_at: number | null; status: string;
+            scope_locator: string | null; sensitivity: string;
+            valid_from: number | null; valid_to: number | null;
+          }
         | undefined;
       if (!row) continue;
+      // Re-verify status at read time (I6: projection can lag truth).
       if (!['provisional', 'active', 'disputed'].includes(row.status)) continue;
+
+      // F5 fix: scope gate — filter by scope_locator when policy specifies it.
+      if (policyGate.scopeLocator != null && row.scope_locator !== policyGate.scopeLocator) {
+        continue;
+      }
+
+      // F5 fix: sensitivity gate — filter out more-sensitive-than-allowed items.
+      if (
+        policyGate.maxSensitivity &&
+        SENSITIVITY_RANK[(row.sensitivity as keyof typeof SENSITIVITY_RANK) ?? 'internal']
+          > SENSITIVITY_RANK[policyGate.maxSensitivity]
+      ) {
+        continue;
+      }
+
+      // F5 fix: temporal gate — current mode checks valid_from/to is active now.
+      if (policyGate.temporalMode === 'current') {
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (row.valid_from != null && row.valid_from > nowSec) continue;
+        if (row.valid_to != null && row.valid_to <= nowSec) continue;
+      } else if (policyGate.temporalMode === 'historical' && policyGate.asOfValid != null) {
+        const t = policyGate.asOfValid;
+        if (row.valid_from != null && row.valid_from > t) continue;
+        if (row.valid_to != null && row.valid_to <= t) continue;
+      }
       candidates.push({
         unitId,
         kind: row.kind,

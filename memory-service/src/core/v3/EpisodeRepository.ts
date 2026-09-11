@@ -26,14 +26,43 @@ export class EpisodeRepository {
   constructor(private readonly db: Database.Database) {}
 
   get(id: string): EpisodeRecord | null {
+    // F7 fix (reviewed-plan §3.1): explicit snake_case → camelCase DTO mapping,
+    // not a type assertion on the raw SQL row.
     const row = this.db
       .prepare(
         `SELECT id, content, summary, scope, source_type, source_url,
                 sender, group_id, group_name, timestamp, trust_class, created_at
          FROM messages_raw WHERE id = ?`,
       )
-      .get(id) as EpisodeRecord | undefined;
-    return row ?? null;
+      .get(id) as {
+        id: string;
+        content: string;
+        summary: string | null;
+        scope: string | null;
+        source_type: string;
+        source_url: string | null;
+        sender: string | null;
+        group_id: string | null;
+        group_name: string | null;
+        timestamp: number;
+        trust_class: string | null;
+        created_at: number;
+      } | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      content: row.content,
+      summary: row.summary,
+      scope: row.scope,
+      sourceType: row.source_type,
+      sourceUrl: row.source_url,
+      sender: row.sender,
+      groupId: row.group_id,
+      groupName: row.group_name,
+      timestamp: row.timestamp,
+      trustClass: row.trust_class,
+      createdAt: row.created_at,
+    };
   }
 
   /**

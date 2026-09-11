@@ -194,25 +194,34 @@ export class ExtractionWorker {
     | { jobId: string; episodeId: string; attempts: number }
     | null {
     const nowSec = Math.floor(Date.now() / 1000);
+    // F6 fix: also claim expired-lease jobs (worker died mid-processing).
+    // The CASE + conditional WHERE ensures we only take jobs that are
+    // either not claimed, or whose lease has genuinely expired.
     const due = this.db
       .prepare(
         `SELECT job_id, episode_id, attempts FROM ingest_jobs
-         WHERE status IN ('queued', 'failed_retryable')
-           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+         WHERE (status IN ('queued', 'failed_retryable')
+           AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+           OR (status = 'claimed' AND leased_until IS NOT NULL AND leased_until <= ?)
          ORDER BY created_at ASC LIMIT 1`,
       )
-      .get(nowSec) as { job_id: string; episode_id: string; attempts: number } | undefined;
+      .get(nowSec, nowSec) as { job_id: string; episode_id: string; attempts: number } | undefined;
     if (!due) return null;
     const leasedBy = `worker-${this.userId}`;
+    // F6: fencing token = lease timestamp, prevents stale workers from
+    // overwriting newer work after the lease expires and is re-claimed.
     const claimed = this.db
       .prepare(
         `UPDATE ingest_jobs
          SET status = 'claimed', leased_by = ?, leased_until = ?,
              attempts = attempts + 1, updated_at = ?
-         WHERE job_id = ? AND status IN ('queued', 'failed_retryable')
-           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
+         WHERE job_id = ? AND (
+           (status IN ('queued', 'failed_retryable')
+             AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+           OR (status = 'claimed' AND leased_until IS NOT NULL AND leased_until <= ?)
+         )`,
       )
-      .run(leasedBy, nowSec + LEASE_SECONDS, nowSec, due.job_id, nowSec);
+      .run(leasedBy, nowSec + LEASE_SECONDS, nowSec, due.job_id, nowSec, nowSec);
     if (claimed.changes !== 1) return null; // raced with another worker
     return { jobId: due.job_id, episodeId: due.episode_id, attempts: due.attempts + 1 };
   }
@@ -283,10 +292,21 @@ export class ExtractionWorker {
       return 'zero';
     }
 
+    // F8 fix (reviewed-plan §3.1): unit-level unknown observedAt stays null
+    // (I7). Do NOT replace the candidate's explicit null with episode.timestamp
+    // — the candidate's observedAt IS the model's time judgment; if it says
+    // null, the time is unknown. Only use episode.timestamp when the candidate
+    // omitted the field entirely (undefined ≠ null).
+    const resolveObservedAt = (candidateObserved: number | null | undefined): number | null => {
+      if (candidateObserved === null) return null; // explicit unknown
+      if (typeof candidateObserved === 'number') return candidateObserved;
+      return episode.timestamp; // field omitted — inherit episode envelope time
+    };
+
     let integrated = 0;
     for (const [ordinal, candidate] of parsed.batch.candidates.entries()) {
       const workUnitKey = `${job.jobId}:${resultHash}:${ordinal}`;
-      const evidenceClass = this.deriveEvidenceClass(episode);
+      const evidenceClass = this.deriveEvidenceClass(episode, this.userId);
       const result = this.truth.propose(
         {
           memoryForm: candidate.memoryForm,
@@ -295,7 +315,7 @@ export class ExtractionWorker {
           predicateKey: candidate.predicateKey,
           text: candidate.text,
           language: candidate.language,
-          observedAt: candidate.observedAt ?? episode.timestamp,
+          observedAt: resolveObservedAt(candidate.observedAt),
           scopeLocator: episode.scope ?? undefined,
           sensitivity: episode.trustClass === 'untrusted' ? 'private' : 'internal',
         },
@@ -327,19 +347,32 @@ export class ExtractionWorker {
   }
 
   /**
-   * Deterministic evidence_class from the authenticated source envelope —
-   * never from LLM output (plan §6.4: policy can only be inherited or
-   * tightened, never upgraded by inference).
+   * F11 fix (reviewed-plan §3.1): derive evidence_class from the source
+   * envelope using the SAME semantics as MemoryClaimAttributionService —
+   * not a simplified "has sender = self_statement" rule.
+   *
+   * The mapping below mirrors the trust boundaries of the existing claim
+   * attribution system: calendar/jira are first-party system records;
+   * web pages are third-party reports; manual/typed notes are self
+   * statements; Glip messages from the OWNER are self-statements, from
+   * others are first-party records (they observed it but didn't author
+   * this memory). The LLM extraction never upgrades this.
    */
   private deriveEvidenceClass(episode: {
-    sourceType: string; sender: string | null;
-  }): UnitEvidenceClass {
+    sourceType: string;
+    sender: string | null;
+  }, ownerUserId?: string): UnitEvidenceClass {
     if (episode.sourceType === 'calendar' || episode.sourceType === 'jira') {
       return 'first_party_record';
     }
     if (episode.sourceType === 'web') return 'third_party_report';
     if (episode.sourceType === 'manual') return 'self_statement';
-    return episode.sender ? 'self_statement' : 'third_party_report';
+    // Glip: owner-authored is self-statement; others are first-party records
+    // of what they said/observed, not statements about themselves.
+    if (episode.sender && ownerUserId && episode.sender === ownerUserId) {
+      return 'self_statement';
+    }
+    return 'first_party_record';
   }
 
   private handleRetryable(

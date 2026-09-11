@@ -340,6 +340,71 @@ export class UnitTruthMaintainer {
     const newStatus =
       finalDecision === 'disputed' ? 'disputed' : conflicting.status;
 
+    // F9 fix (reviewed-plan §3.1): on dispute, save the CONFLICTING candidate
+    // as its own independent unit (with its own sources) so both claims are
+    // preserved separately. The disputed source is NOT attached to the
+    // original unit — a source supporting B must not be counted as
+    // supporting A.
+    if (finalDecision === 'disputed') {
+      // Create the counter-claim as its own provisional unit.
+      const counterId = randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      this.db
+        .prepare(
+          `INSERT INTO memory_units
+            (id, tenant_id, owner_user_id, memory_form, kind, status,
+             subject_key, predicate_key, text, normalized_text, language,
+             observed_at, observed_at_quality, valid_from, tx_start,
+             confirmation_state, confidence, scope_locator, sensitivity,
+             source_independence_count_cached, evidence_class_set_cached,
+             current_revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'disputed', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unconfirmed', 0.5, ?, ?, 1, ?, 1, ?, ?)`,
+        )
+        .run(
+          counterId,
+          conflicting.tenant_id,
+          conflicting.owner_user_id,
+          candidate.memoryForm,
+          candidate.kind,
+          candidate.subjectKey,
+          candidate.predicateKey,
+          candidate.text,
+          normalizeText(candidate.text),
+          candidate.language ?? null,
+          candidate.observedAt ?? null,
+          candidate.observedAt ? 'source_timestamp' : null,
+          candidate.observedAt ?? null,
+          now,
+          candidate.scopeLocator ?? conflicting.scope_locator,
+          candidate.sensitivity ?? 'internal',
+          JSON.stringify([...new Set(sources.map((s) => s.evidenceClass))]),
+          now,
+          now,
+        );
+      this.writeSources(counterId, newSources, now);
+      this.writeRevision(counterId, 1, 'disputed', conflicting.id, counterId, actor, workUnitKey);
+
+      // Mark the ORIGINAL unit as disputed (it already is via newStatus).
+      this.db
+        .prepare(
+          `UPDATE memory_units SET status = 'disputed', updated_at = ?
+           WHERE id = ? AND current_revision = ?`,
+        )
+        .run(nowSec, conflicting.id, conflicting.current_revision);
+
+      // Revision on the original unit records the dispute.
+      this.writeRevision(conflicting.id, conflicting.current_revision + 1, 'disputed', conflicting.id, conflicting.id, actor, workUnitKey);
+
+      const receipt = this.writeReceipt(workUnitKey, candidateHash, 'disputed', 'unit', conflicting.id, conflicting.current_revision + 1);
+      return {
+        decision: 'disputed',
+        unitId: conflicting.id,
+        revision: conflicting.current_revision + 1,
+        receipt,
+      };
+    }
+
+    // Corroborated: same path as before (sources merged into original).
     const updated = this.db
       .prepare(
         `UPDATE memory_units

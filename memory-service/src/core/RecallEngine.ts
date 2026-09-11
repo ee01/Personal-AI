@@ -1202,13 +1202,27 @@ export class RecallEngine {
       query.lifecycleMode !== 'passive_surface' &&
       query.lifecycleMode !== 'composer_surface';
 
+    // F12 fix (reviewed-plan §3.1): push scope/source filters into the FTS
+    // query itself so legal candidates aren't prematurely excluded by
+    // global top-N. This is a predicate pushdown into the CTE join rather
+    // than a post-fetch filter.
+    const scopeFilter = query.scope && query.scope !== 'all'
+      ? `AND c.scope = '${query.scope.replace(/'/g, "''")}'`
+      : '';
+    const sourceTypeFilter = query.sourceTypes && query.sourceTypes.length > 0
+      ? `AND c.source_type IN (${query.sourceTypes.map((s) => `'${s.replace(/'/g, "''")}'`).join(',')})`
+      : '';
+
     try {
       const ftsRows = this.db
         .prepare(
-          `SELECT rowid, rank
-           FROM chunks_fts
+          `SELECT f.rowid AS rowid, f.rank AS rank
+           FROM chunks_fts f
+           JOIN chunks c ON c.chunk_id = f.rowid
            WHERE chunks_fts MATCH ?
-           ORDER BY rank
+             ${scopeFilter}
+             ${sourceTypeFilter}
+           ORDER BY f.rank
            LIMIT ?`,
         )
         .all(ftsQuery, limit) as FtsRow[];
