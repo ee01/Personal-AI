@@ -902,6 +902,15 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 .toast .ok{color:#6BCB77;font-weight:700}
 @keyframes toastIn{from{opacity:0;transform:translateY(14px) scale(.95)}to{opacity:1;transform:none}}
 @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
+.jira-write-notice{position:fixed;bottom:22px;left:50%;z-index:131;
+  display:none;align-items:center;gap:10px;
+  max-width:min(92vw,560px);padding:9px 12px 9px 16px;
+  background:var(--ink);color:#fff;border-radius:10px;font-size:13px;font-weight:500;
+  line-height:1.45;box-shadow:var(--sh-lg);transform:translateX(-50%)}
+.jira-write-notice.show{display:flex;animation:toastIn .3s cubic-bezier(.2,.9,.3,1.2)}
+.jira-write-notice-action{flex:none;margin:0;padding:2px 4px;border:0;background:transparent;
+  color:#FFD9A8;font:inherit;font-size:12.5px;font-weight:700;letter-spacing:.01em;
+  text-decoration:underline;text-underline-offset:3px;cursor:pointer;white-space:nowrap}
 
 /* ============ 帮助浮层 ============ */
 .help-fab{position:fixed;right:20px;bottom:20px;width:38px;height:38px;border-radius:50%;
@@ -1081,6 +1090,10 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 <div class="tooltip" id="tooltip"></div>
 <div class="drag-hint" id="dragHint"></div>
 <div class="toast-wrap" id="toastWrap"></div>
+<div class="jira-write-notice" id="jiraWriteNotice" role="status">
+  <span>这次改动只保存在 Roadmap，没有同步到 Jira。</span>
+  <button type="button" class="jira-write-notice-action" id="jiraWriteNoticeBtn">安装插件开启同步</button>
+</div>
 
 <!-- ===================== 新建团队 Modal ===================== -->
 <div class="modal-back" id="mTeam">
@@ -1338,7 +1351,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
   <h4>Demo 说明</h4>
   <ul>
     <li><b>Jira 查询 / 创建（直连 API 与 Agent 执行器双路径）/ AI 缩写 / 协作同步均为模拟</b></li>
-    <li><b>需要 Jira 权限的操作要装 Personal AI 扩展</b>：未安装时按钮是「锁定态」而非灰掉的 disabled，点击会弹出安装引导（顶栏 <b>扩展未安装 / 已安装</b> 开关可切换两种状态）<a class="help-install" href="https://chromewebstore.google.com/detail/personal-ai/kefnadjndpllbibeklhajjddgmlbafel" target="_blank" rel="noopener">前往安装 ↗</a></li>
+    <li><b>需要 Jira 权限的操作要装 Personal AI 扩展</b>：锁定按钮点击弹出安装引导；拖动排期 / 改 Owner 会先保存在 Roadmap，并出现一行「没有同步到 Jira」+「安装插件开启同步」。打开页拉取在未安装时保持静默（顶栏 <b>扩展未安装 / 已安装</b> 可切换）<a class="help-install" href="https://chromewebstore.google.com/detail/personal-ai/kefnadjndpllbibeklhajjddgmlbafel" target="_blank" rel="noopener">前往安装 ↗</a></li>
     <li><b>创建 Jira 双路径</b>：Prompt <b>留空</b>＝按下方字段直连 Jira API（串行）；<b>填写</b>＝按 Epic 最多 <b>2 路并行</b>交给所选 <b>Agent 执行器</b>（每路只含该组 draft；部分成功也会回写已有 key）。此时下方字段占位变「自动」，已填的值作为约束带给 Agent；执行器无配置时展示引导入口。<b>fixVersion</b>：按各任务 Target End 在发布时间表上的<strong>落点列</strong>匹配（半开区间，压在分割竖线上属于下一列——和 hover「可赶 Sprint」不是同一口径）。同一列直接填入共享字段；跨列时共享字段<strong>留空</strong>，交给 Agent 按行 `suggestedFixVersion` 判断，列表内仍逐行显示绿色 chip；输入固定值可覆盖全部</li>
     <li><b>Assignee 映射</b>：弹窗内新增 Assignee 行 —— 任务 <b>Owner 优先</b>，没写 Owner 的任务<b>回落到创建人</b>；在「配置映射…」里为系统人员/创建者补全 <b>Firstname Lastname</b>（两个词以上的名字自动推断）。输入实名时可从<strong>已有两词人名</strong>下拉建议中选择，选中后<strong>合并两人</strong>（Owner / 创建者 / 成员收成实名，短名保留为映射别名）。直连 API 时转成 <b>firstname.lastname</b> 填 assignee（未映射的留空并橙色提示）；Agent 模式把<b>字段约束 + 人员名单</b>一并写入 Prompt，可点「<b>查看将发送的完整 Prompt</b>」预览。配置后全站（选人列表 / 人员视图 / 提示 / 协作日志）都展示映射后的实名</li>
     <li><b>时间轴缩放</b>：触控板<b>双指捏合</b>或 <b>⌘+滚轮</b>在甘特任意位置缩放，光标下的日期钉住不动；在顶部<b>时间标尺上双指上下滑动</b>同样缩放（横向滑动仍是平移）；<b>双击标尺</b>复位 100%，已是 100% 再双击 = 整条时间轴收进视口。缩放时右上角短暂显示当前比例与视野跨度</li>
@@ -1361,7 +1374,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li><b>创建 Jira 后草稿名保留为备注名</b>：回传 jira key 时自动把原草稿标题存为备注名，甘特上展示的名字不因创建（或 Agent 规范化 summary、后续 Jira 刷新）而改变，hover 才看正式 summary。编辑备注名时<b>清空后回车 = 恢复展示原 ticket 名</b></li>
     <li><b>清理过期</b>：过期 Epic 回退 Backlog（保留子任务记录，重拖回任务视图可还原），过期子任务从任务视图清理</li>
     <li>拖入排期：带 Target 日期的卡片<b>按 Target start/end 落位</b>，其余按松手位置 + 预估</li>
-    <li><b>拖动 / 伸缩非草稿主/子任务后自动回写 Jira</b>：新的起止日期同步到该 issue 的 Target Start/End（扩展优先用你的 Jira 账号，未装扩展回落服务端凭据；连续拖动只同步最后一次），成功后有轻提示。<b>双击更换非草稿子任务的 Owner 同样回写 assignee</b>（需已映射 Jira 实名，且仅装扩展的浏览器回写）；备注名（缩写）只是本地显示，从不回写</li>
+    <li><b>拖动 / 伸缩非草稿主/子任务后自动回写 Jira</b>：新的起止日期同步到该 issue 的 Target Start/End（需装扩展；连续拖动只同步最后一次），成功后有轻提示。<b>未装扩展时排期仍保存在 Roadmap</b>，底部出现一行安装提示，不再假装后台同步成功。<b>双击更换非草稿子任务的 Owner 同样回写 assignee</b>（需已映射 Jira 实名，且仅装扩展的浏览器回写）；备注名（缩写）只是本地显示，从不回写</li>
     <li><b>打开页面自动刷新 Jira</b>（仅装扩展）：打开 Roadmap 时静默拉取非草稿主任务 / 子任务的 summary / description / Target 日期 / assignee / status，以及依赖 ticket 的 status / Target End。主任务 Target 变化会挪 bar；Closed/Resolved/Done 的主任务条改浅绿 + ✓。<b>依赖 ETA 不会被自动改写</b>。映射后是同一人的 Owner 不动。Demo 里把顶栏「扩展未安装」切到「已安装」即可触发，被刷新的条目会闪一圈蓝光（仅演示用）</li>
     <li><b>导入 Task</b>（创建 Jira 左侧浅蓝按钮）：拉取甘特上各主任务名下的 Jira Task，按 Key 去重、已存在的不重复导入。<b>日期兜底</b>：Task 未填 Target Start/End 时与主任务同起止；只填其一时按两周落位，且不超出主任务范围</li>
     <li>顶栏 JQL 右侧 ✎ 可<b>编辑团队 JQL</b>（下次导入生效）</li>
@@ -3185,10 +3198,10 @@ function focusEditor(key){
 }
 
 /* ---------- 非 draft 主/子任务排期变更 → 自动回写 Jira Target Start/End ----------
-   真实实现：优先由扩展用当前用户的 Jira 账号回写（Options JIRA_API_TOKEN），
-   未装扩展回落服务端凭据（JIRA_PAT，修改人是 PAT 属主），皆无则静默排队。
+   真实实现：仅扩展用当前用户的 Jira 账号回写（Options JIRA_API_TOKEN）。
+   未装扩展：Roadmap 排期照常保存，不写 Jira，出一行安装提示。
    子任务与主任务写同一对字段（customfield_18350/18351）。
-   这里模拟：防抖 900ms（连续拖动只同步最后一次），成功后轻提示。 */
+   这里模拟：防抖 900ms（连续拖动只同步最后一次）。 */
 const jiraSyncTimers = {};
 function scheduleJiraTargetSync(it, sub){
   const target = sub || it;
@@ -3203,9 +3216,10 @@ function scheduleJiraTargetSync(it, sub){
       it.tStart = new Date(it.start);                     // Target 跟随最新排期
       it.tEnd = addD(it.start, it.days - 1);
     }
+    if (!extInstalled){ showJiraWriteNotice(); return; }
     const key = sub ? sub.key : itemDisplayKey(it);
     const range = `${fmtMD(target.start)} → ${fmtMD(addD(target.start, target.days - 1))}`;
-    toast(`<span class="ok">✓</span> 已回写 <b>${key}</b> Target ${range}${extInstalled ? '（经扩展 · 你的 Jira 账号）' : '（服务端凭据后台同步）'}`);
+    toast(`<span class="ok">✓</span> 已回写 <b>${key}</b> Target ${range}（经扩展 · 你的 Jira 账号）`);
   }, 900);
 }
 
@@ -3216,7 +3230,7 @@ function scheduleJiraTargetSync(it, sub){
 function syncJiraAssignee(sub){
   if (!sub.key) return;                                   // 草稿在「创建 Jira」时才带 assignee
   if (!extInstalled){
-    toast(`Owner 已更新（本地）· 未装扩展，未回写 <b>${sub.key}</b> 的 assignee`);
+    showJiraWriteNotice();
     return;
   }
   if (!sub.owner){
@@ -4093,7 +4107,10 @@ function commitDefer(movers, epics){
     + (epics && epics.length ? `；已延长 ${epics.length} 个 Epic 结束日到 ${fmtMD(epics[0].end)}` : '')
     + (stuck.length ? `；${stuck.length} 个仍放不下未动` : ''));
   const syncKeys = moved.filter(s => s.key).map(s => s.key);
-  if (syncKeys.length) setTimeout(() => toast(`<span class="ok">✓</span> 已回写 <b>${syncKeys.length}</b> 个 Task 的 Jira Target Start/End${extInstalled ? '（经扩展 · 你的 Jira 账号）' : '（服务端凭据后台同步）'}`), 1200);
+  if (syncKeys.length){
+    if (!extInstalled) setTimeout(() => showJiraWriteNotice(), 1200);
+    else setTimeout(() => toast(`<span class="ok">✓</span> 已回写 <b>${syncKeys.length}</b> 个 Task 的 Jira Target Start/End（经扩展 · 你的 Jira 账号）`), 1200);
+  }
   setTimeout(() => { renderGantt(); renderResource(); }, 420);
 }
 
@@ -4797,6 +4814,18 @@ function toast(html){
   w.appendChild(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(()=>t.remove(), 260); }, 2600);
 }
+let jiraWriteNoticeTimer = null;
+function hideJiraWriteNotice(){
+  $('#jiraWriteNotice')?.classList.remove('show');
+  if (jiraWriteNoticeTimer){ clearTimeout(jiraWriteNoticeTimer); jiraWriteNoticeTimer = null; }
+}
+function showJiraWriteNotice(){
+  const el = $('#jiraWriteNotice');
+  if (!el) return;
+  el.classList.add('show');
+  if (jiraWriteNoticeTimer) clearTimeout(jiraWriteNoticeTimer);
+  jiraWriteNoticeTimer = setTimeout(() => { jiraWriteNoticeTimer = null; el.classList.remove('show'); }, 10000);
+}
 const tip = $('#tooltip');
 document.addEventListener('mouseover', e => {
   const el = e.target.closest('[data-tip]');
@@ -4839,13 +4868,14 @@ const EXT_FEATURES = {
   importTasks: { label:'导入 Task',    why:'读取各主任务名下的 Task，需要扩展用你自己的 Jira 账号执行查询。' },
   createJira:  { label:'创建 Jira',    why:'把草稿任务写回 Jira，需要扩展用你自己的 Jira 账号创建 issue，这样 reporter 才是你本人。' },
   fetchEta:    { label:'读取 ETA',     why:'读取外部依赖 issue 的 Target End，需要扩展用你自己的 Jira 账号访问该 issue。' },
+  syncJira:    { label:'回写 Jira',    why:'把排期（Target Start/End）和 Owner 写回 issue，需要扩展用你自己的 Jira 账号执行——Roadmap 上的改动已经保存，只是没有同步到 Jira。' },
 };
 const EXT_PERKS = [
   ['import',      '导入 Backlog', '按 JQL + Quarter 把 Jira issue 拉进 Backlog'],
   ['importTasks', '导入 Task',    '拉取主任务名下的 Task，按 Jira Key 去重落位'],
   ['createJira',  '创建 Jira',    '草稿任务一键写回 Jira（直连 API 或 Agent 执行器）'],
   ['fetchEta',    '读取 ETA',     '外部依赖自动读取 Target End，缺 ETA 的红色提醒随之消失'],
-  ['refresh',     '打开自动刷新', '打开页面时静默同步 Jira 侧的 summary / description / Target 日期 / assignee 变更'],
+  ['syncJira',    '回写 Jira',    '拖动排期写回 Target Start/End，改 Owner 写回 assignee'],
   ['identity',    '自动识别身份', '免去手动填名字，协作日志直接署你的实名'],
 ];
 const EXT_LOCKED_BTNS = [['#importBtn','import'], ['#importTasksBtn','importTasks'], ['#createJiraBtn','createJira']];
@@ -4883,12 +4913,14 @@ function openExtGate(feature){
 function setExtInstalled(on){
   extInstalled = on;
   applyExtState();
+  if (on) hideJiraWriteNotice();
   toast(on
     ? '<span class="ok">✓</span> 已检测到 Personal AI 扩展，Jira 相关操作已解锁'
     : '已模拟卸载扩展：需要 Jira 权限的操作进入锁定态');
   if (on) silentJiraRefresh();     // 装扩展的浏览器打开页面即静默刷新一次
 }
 $('#egInstall').onclick = () => window.open(EXT_STORE_URL, '_blank', 'noopener');
+$('#jiraWriteNoticeBtn').onclick = () => { hideJiraWriteNotice(); openExtGate('syncJira'); };
 $('#extSim').onclick = () => setExtInstalled(!extInstalled);
 /* 真实实现是重新加载页面后由 bridge 判定；Demo 里直接模拟「刷新后检测到扩展」 */
 $('#egRefresh').onclick = () => {

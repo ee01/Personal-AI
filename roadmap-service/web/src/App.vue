@@ -8,6 +8,7 @@ import ActivityDrawer from './components/ActivityDrawer.vue';
 import HelpFab from './components/HelpFab.vue';
 import TooltipLayer from './components/TooltipLayer.vue';
 import ToastLayer from './components/ToastLayer.vue';
+import JiraWriteNotice from './components/JiraWriteNotice.vue';
 import TeamModal from './components/modals/TeamModal.vue';
 import JqlModal from './components/modals/JqlModal.vue';
 import ImportModal from './components/modals/ImportModal.vue';
@@ -38,6 +39,7 @@ const state = provideRoadmapState();
     <ActivityDrawer />
     <HelpFab />
     <TooltipLayer />
+    <JiraWriteNotice />
     <ToastLayer />
     <TeamModal />
     <JqlModal />

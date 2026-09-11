@@ -59,8 +59,9 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 
 服务端仍按 `ORDER BY quarter, key` 下发 items（没有 `sort_order` 字段），排序规则集中在前端 `buildBacklogGroups()`（`web/src/composables/useRoadmapContract.ts`），依赖 snapshot 新增的 `item.createdAt`（epoch ms，来自 `items.created_at`）：
 
-- **组内**：`source='manual'` 的条目按创建时间倒序置顶，Jira 导入条目保持服务端 key 序排在其后
+- **组内**：`source='manual'` 的条目按创建时间倒序置顶，Jira 导入条目保持服务端 key 序排在其后；镜像为 `Closed`/`Resolved`/`Done` 的 Epic 在同一分组内排到末尾（仍保持各自相对顺序）
 - **组间**：含「最新手动条目」的那个 quarter 整组提到最前，其余 quarter 仍按季度先后；没填 quarter 的 `—` 组排在所有季度之后
+- **完成态展示**：Backlog 卡片与甘特主条共用 `isDoneStatus()`——浅绿底 + `✓` 前缀；有 `jiraKey` 时 hover 左上角 ↗ 打开 Jira（与甘特 `bar-link` 同款）
 - 只提升一个分组，所以刚新建的条目必然是列表第一张卡片，其他季度的相对顺序不变
 - 新建成功后清空搜索框并把 Backlog 滚回顶部，避免新卡片被过滤或被滚动位置藏住
 - `createdAt` 缺失（老服务端）时按 0 处理：手动条目仍置顶，只是彼此之间退回 key 序
@@ -71,7 +72,7 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 - **覆盖导入不碰手动项**：覆盖删除限定 `source='jira'`，孤儿 subs 清理同理。
 - **导入按 `jira_key` 去重**：手动条目建成 `NOVA-123` 后下次 JQL 会命中它，import 先按 `jira_key` 找到原行就地更新（顺便把 `source` 升级为 `jira`），不会多插一行。
 - **cleanup 语义**：过期 draft 主任务和普通 Epic 一样退回 Backlog；退回后它会从 memory focus 里被 archive，这是预期行为。
-- **无扩展也能用**：新建条目、拖拽只需要 edit token；只有「创建 Jira」依赖扩展。缺扩展时的引导见下节。
+- **无扩展也能用**：新建条目、拖拽排期只需要 edit token。创建 Jira / 导入 / 读 ETA 要点扩展；拖动非草稿条或改 Owner **会先写进 Roadmap**，但不会改 Jira，并出现一行安装提示。缺扩展时的引导见下节。
 
 ### draft 的 memory-only 边界
 
@@ -464,7 +465,7 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 | 层 | 行为 |
 |---|---|
-| **打开页批拉** | 与甘特主/子任务同一趟 `refresh_from_jira`：主任务+子任务最多 50 key，再附加最多 25 个尚未包含的 dep key。拉 `status` + Target End。**永不改** `marker.date`，也不 bump marker version（避免和用户确认 ETA 抢 OCC） |
+| **打开页批拉** | 与甘特主/子任务、Backlog Epic 同一趟 `refresh_from_jira`：primary 最多 50 key（甘特优先，余量给 Backlog），再附加最多 25 个尚未包含的 dep key。拉 `status` + Target End。**永不改** `marker.date`，也不 bump marker version（避免和用户确认 ETA 抢 OCC） |
 | **Hover** | 只读。有 key 时展示 status；无 ETA 但 Jira 有 Target End →「单击可同步」；ETA ≠ Target End →「不一致 · 单击可同步」。`data-tip` 不能点按钮 |
 | **单击 popover** | 列出该任务全部外部依赖。Jira key 本身是链接（新标签打开 ticket）。status 在 key 右侧：有则显示状态名，没有则「未刷新」，刷新是贴在芯片旁的 ↻，不再单独放一颗「刷新 Jira」文字按钮。无 ETA + 有 Target End →「采用 8/18 为 ETA」；不一致 →「改用 Jira 8/18」。刷新只更新缓存（需扩展），不覆盖 ETA |
 | **添加时「读取 ETA」** | 仍是用户主动填入表单，保存才落 ETA |
@@ -491,24 +492,25 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 | 能力 | 凭据优先级 | 展示 / 行为 |
 |---|---|---|
 | **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重（含 `originalEstimateDays`） |
-| **拖动回写 Target** | ① 扩展 Options token → ② 服务端 `JIRA_PAT` → ③ 皆无则**静默** | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期（避免打开页静默刷新用旧 Target 把 bar 盖回去）；无 token/无扩展/失败则 `mode=queue` 走服务端；服务端未配置也不 toast。成功后轻 toast |
-| **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；无扩展/未映射 toast「未回写 assignee」；置空先 confirm |
-| **打开静默刷新 Jira** | **仅**扩展 Options token | 握手成功 + snapshot 后约 2s；甘特非 draft 主任务 + 有 key 的子任务最多 50 key，再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker）。主/子任务按 Target 可能挪 bar；主任务同步 `status`；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新 |
+| **拖动回写 Target** | **仅**扩展 Options token（无扩展不走服务端 PAT） | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期。扩展在但 token 失败才 `mode=queue` 走服务端 PAT。**未装扩展**：Roadmap 排期照常保存，不写 Jira，底部一行「这次改动只保存在 Roadmap，没有同步到 Jira。」+ 文本按钮「安装插件开启同步」（点开与创建 Jira 同一套安装弹窗）。成功回写才 toast |
+| **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；未映射 toast「未回写 assignee」；置空先 confirm。**未装扩展**：Roadmap Owner 已改，同一行安装提示，不再单独 toast |
+| **打开静默刷新 Jira（拉取）** | **仅**扩展 Options token | 无扩展时**保持静默、不拉取、也不弹安装条**（打开页不是用户主动写 Jira）。有扩展时：握手成功 + snapshot 后约 2s；**甘特**非 draft 主任务 + 有 key 的子任务与 **Backlog** 里有 `jiraKey` 的 Epic 共用最多 50 个 primary key（甘特优先），再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker；仍有 `jiraKey` 但 `status` 尚未镜像的行会绕过 TTL 再拉一次）。主/子任务按 Target 可能挪 bar；主任务同步 `status`（含仍在 Backlog 的 Epic）；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新。协作者仍能看到**上次有扩展的人**镜像进团队库的 status |
 
 注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。description ≠ alias：alias 永不回写 Jira。读方向（Jira→owner）未映射用实名入成员表；写方向（owner→Jira）必须有映射。空 assignee 刷新不清空 Roadmap Owner。
 
 ## 未安装扩展时的引导（锁定态）
 
-需要扩展的操作以前用 `disabled` 灰掉，按钮**没有任何办法解释自己为什么点不动**。现在统一走「锁定态 + 可点击」，**只在用户主动点这个操作时**才弹出安装引导，页面上没有常驻提示条：
+需要扩展的操作以前用 `disabled` 灰掉，按钮**没有任何办法解释自己为什么点不动**。现在分两路：
 
 | 层 | 位置 | 行为 |
 |---|---|---|
-| 按钮 | `.btn.locked`（`tokens.css`） | 不再 `disabled`，改成灰底 + 锁图标，hover 出 `data-tip`「需要 Personal AI 扩展 / 点击查看安装指引」 |
-| 弹窗 | `ExtensionGateModal.vue` | 说明**当前这个操作**为什么需要扩展 → 安装后解锁的 5 项能力（当前操作高亮）→ 三步安装 → 「前往 Chrome 应用商店」/「已安装好了 · 刷新页面」 |
+| 按钮 | `.btn.locked`（`tokens.css`） | 不再 `disabled`，改成灰底 + 锁图标，hover 出 `data-tip`「需要 Personal AI 扩展 / 点击查看安装指引」。**只在用户主动点这个操作时**才弹出安装引导 |
+| 回写失败条 | `.jira-write-notice` | 拖动排期 / 改 Owner 已经写进 Roadmap 之后：一行「这次改动只保存在 Roadmap，没有同步到 Jira。」+ 右侧小文本按钮「安装插件开启同步」。约 10s 后消失；连续拖动只保留一条。**打开页拉取 Jira 不走这条** |
+| 弹窗 | `ExtensionGateModal.vue` | 说明**当前这个操作**为什么需要扩展 → 安装后解锁的能力（当前操作高亮）→ 三步安装 → 「前往 Chrome 应用商店」/「已安装好了 · 刷新页面」 |
 
-单一事实来源是 `roadmap-service/web/src/composables/useExtensionGate.ts`：商店地址 `EXTENSION_STORE_URL`、功能文案 `EXTENSION_FEATURES`、解锁清单 `EXTENSION_PERKS`、tooltip 拼装 `extensionLockTip()`，以及模块级单例状态 `useExtensionGate()`。
+单一事实来源是 `roadmap-service/web/src/composables/useExtensionGate.ts`：商店地址 `EXTENSION_STORE_URL`、功能文案 `EXTENSION_FEATURES`、解锁清单 `EXTENSION_PERKS`、tooltip 拼装 `extensionLockTip()`、回写跳过文案 `JIRA_WRITE_SKIPPED_*`，以及模块级单例状态 `useExtensionGate()`。
 
-调用方把「无扩展就 return / toast」换成 `gate.openGate(feature)`：`ImportBar`（导入 Backlog）、`ImportModal`（确认导入）、`GanttPanel`（导入 Task / 创建 Jira）、`AiCreateModal`（开始创建）、`useMarkerFloats`（读取 ETA / 刷新 ETA）。
+调用方：`ImportBar`（导入 Backlog）、`ImportModal`（确认导入）、`GanttPanel`（导入 Task / 创建 Jira / 拖动回写 / 改 Owner）、`AiCreateModal`（开始创建）、`useMarkerFloats`（读取 ETA / 刷新 ETA）。锁定按钮走 `gate.openGate(feature)`；已经落库的回写走 `gate.showWriteNotice()`。
 
 只读链接（无 edit token）仍然保持 `disabled` —— 装扩展也解不开，引导反而是误导。
 
@@ -581,7 +583,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
 - Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）
-- 部署后：导入 Task / 创建 Jira 依赖扩展 Options `JIRA_API_TOKEN`；拖动回写在无扩展或未填 Options token 时可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
+- 部署后：导入 Task / 创建 Jira / 无扩展时的 Target·Owner 回写都依赖扩展 Options `JIRA_API_TOKEN`。有扩展但 token 失败时，拖动回写仍可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`
 - 部署：`npm run deploy:roadmap`（仅 roadmap-service；本地 build 后 rsync + 远端 docker compose，默认 `10.32.56.212:3220`）。若同时改 memory，用 `npm run deploy:memory`（两者一起发）
 - 部署后探活：`npm run verify:roadmap-service`（`:3220` 与 `http://roadmap.xmnup.com` 的 `/health`，并检查线上 JS 仍含依赖浮层「改用 Jira / 采用 … 为 ETA」文案，避免混合依赖再次打出空白浮窗）

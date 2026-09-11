@@ -139,6 +139,11 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
   border-radius:7px;padding:3px 9px;transition:all .13s}
 .bl-add:hover{background:#FFE9CC;border-color:var(--cur)}
 .card.draft{border-style:dashed;border-color:var(--draft-line);background:var(--draft-stripe)}
+.card.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
+.card.done .card-key{color:rgba(31,91,60,.72)}
+.card.done .card-target{background:rgba(255,255,255,.55);color:#1F5B3C}
+.card.done .card-est{background:rgba(255,255,255,.45);color:#1F5B3C}
+.card:hover>.bar-link{opacity:1;transform:none}
 .card-draft{font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.06em;
   color:#fff;background:var(--ink);border-radius:4px;padding:1px 5px;flex:none}
 .card-del{position:absolute;top:-7px;right:-7px;width:19px;height:19px;border-radius:50%;
@@ -829,6 +834,19 @@ textarea.f-input.f-desc{min-height:60px;font-family:var(--sans);font-size:12.5px
 .toast code{display:block;margin-top:6px;opacity:.92;font-weight:400}
 @keyframes toastIn{from{opacity:0;transform:translateY(14px) scale(.95)}to{opacity:1;transform:none}}
 @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
+
+/* 无扩展时 Jira 回写失败：一行文案 + 小文本按钮，不挡排期 */
+.jira-write-notice{position:fixed;bottom:22px;left:50%;z-index:131;
+  display:none;align-items:center;gap:10px;
+  max-width:min(92vw,560px);padding:9px 12px 9px 16px;
+  background:var(--ink);color:#fff;border-radius:10px;font-size:13px;font-weight:500;
+  line-height:1.45;box-shadow:var(--sh-lg);
+  transform:translateX(-50%)}
+.jira-write-notice.show{display:flex;animation:toastIn .3s cubic-bezier(.2,.9,.3,1.2)}
+.jira-write-notice-action{flex:none;margin:0;padding:2px 4px;border:0;background:transparent;
+  color:#FFD9A8;font:inherit;font-size:12.5px;font-weight:700;letter-spacing:.01em;
+  text-decoration:underline;text-underline-offset:3px;cursor:pointer;white-space:nowrap}
+.jira-write-notice-action:hover{color:#fff}
 
 /* ============ 帮助浮层 ============ */
 .help-fab{position:fixed;right:20px;bottom:20px;width:38px;height:38px;border-radius:50%;

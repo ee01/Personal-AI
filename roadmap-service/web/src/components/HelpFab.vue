@@ -11,7 +11,7 @@ const open = ref(false);
     <h4>使用说明</h4>
     <ul>
       <li>
-        <b>导入 / 创建 Jira / 读取 ETA 需要 Personal AI 扩展</b>：未安装时按钮呈锁定态，点击可查看安装指引
+        <b>导入 / 创建 Jira / 读取 ETA / 回写 Jira 需要 Personal AI 扩展</b>：未安装时锁定按钮点击可查看安装指引；拖动排期或改 Owner 会先保存在 Roadmap，并出现一行「没有同步到 Jira」提示
         <a class="help-install" :href="EXTENSION_STORE_URL" target="_blank" rel="noopener">前往安装 ↗</a>
       </li>
       <li>Bar 可<b>拖动 / 左右把手伸缩 / 上下换行</b>，按天吸附</li>
@@ -23,7 +23,7 @@ const open = ref(false);
       <li>悬浮：bar <b>左侧 ＋ 添加任务</b>，<b>右侧 ◆＋ 阶段节点/外部依赖</b>，<b>右上角 × 退回 Backlog</b></li>
       <li><b>阶段节点</b>与有 ETA 的依赖落在标记轨；缺 ETA 时红色 🔗 角标持续提醒。绑定了 Jira 的依赖：浮层里点 key 打开 Jira，点「未刷新」旁的 ↻ 刷新 status / Target End；hover 只读，单击才确认是否把 Target End 写成 ETA</li>
       <li>装了扩展时，打开 Roadmap 会<b>静默刷新</b>甘特上非草稿票的 summary / description / Target / assignee，以及依赖 ticket 的 status / Target End（10 分钟内不重复；依赖 ETA 不会被自动改写）</li>
-      <li>非草稿主/子任务拖动会回写 Jira Target；子任务改 Owner 会回写 assignee（需映射；清空会确认）</li>
+      <li>装了扩展时，非草稿主/子任务拖动会回写 Jira Target，子任务改 Owner 会回写 assignee（需映射；清空会确认）。未装扩展时这两类改动只留在 Roadmap</li>
       <li><b>人员视图</b>：按人查看任务（近 2 周 / 全部）；双击改名、添加/移除空闲成员。任务条<b>左侧色条 + 前缀 chip</b>标识所属主任务（条太窄只留色条）</li>
       <li><b>时间轴缩放</b>：触控板<b>双指捏合</b>或 <b>⌘+滚轮</b>在甘特任意位置缩放，光标下的日期钉住；顶部<b>时间标尺上双指上下滑动</b>同样缩放；<b>双击标尺</b>复位 100%，再双击 = 整条时间轴收进视口</li>
       <li><b>聚焦当前任务（人员视图）</b>：<b>单击任务条</b>标记「正在做」（可多选）；点另一人则换人重选。<b>「其余延至下周 →」</b>把其余未完成、下周前开始的任务滑到下周一开始（长度不变，受 Epic 结束日钳制；hover 预览落点）。Esc / 点空白退出</li>

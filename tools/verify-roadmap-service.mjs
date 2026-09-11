@@ -17,6 +17,8 @@ const FRONTEND_NEEDLES = [
   '为 ETA',
   'dep-status-cluster',
   '未刷新',
+  '安装插件开启同步',
+  '没有同步到 Jira',
 ];
 
 const failures = [];

@@ -49,7 +49,12 @@ import {
   mapGet,
   teamAssigneeMap,
 } from '../composables/useAssigneeMap';
-import { clipTxt, epicColor, epicShort } from '../composables/useRoadmapContract';
+import {
+  clipTxt,
+  collectJiraRefreshKeys,
+  epicColor,
+  epicShort,
+} from '../composables/useRoadmapContract';
 
 const state = useRoadmapState();
 const gate = useExtensionGate();
@@ -460,8 +465,9 @@ function editingOrDraggingJiraKeys(): Set<string> {
 }
 
 /**
- * Prefer extension Options JIRA_API_TOKEN; fall back to server JIRA_PAT.
- * If neither is available, stay silent (no toast). Success gets a light toast.
+ * Prefer extension Options JIRA_API_TOKEN; fall back to server JIRA_PAT when
+ * the extension is present but the write fails. No extension → local save
+ * only, plus the one-line install notice (do not pretend PAT synced it).
  */
 async function runTargetDateSync(ref: TargetSyncRef) {
   if (!state.teamId.value || !state.editable.value) return;
@@ -469,38 +475,41 @@ async function runTargetDateSync(ref: TargetSyncRef) {
   const end = fmtISO(addD(parseDate(start), Math.max(1, ref.days) - 1));
   const viaExt = state.hasExtension.value;
 
-  if (viaExt) {
-    try {
-      await bridgeUpdateTargetDates(ref.jiraKey, start, end);
-      const confirmed = await state.api.syncTarget(
-        state.teamId.value,
-        ref.subId
-          ? {
-              subId: ref.subId,
-              mode: 'confirm',
-              start,
-              end,
-              jiraKey: ref.jiraKey,
-            }
-          : {
-              itemKey: ref.itemKey!,
-              mode: 'confirm',
-              start,
-              end,
-              jiraKey: ref.jiraKey,
-            },
-      );
-      if (confirmed.snapshot) state.commitSnapshot(confirmed.snapshot);
-      state.toast(
-        `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}（经你的 Jira 账号）`,
-        2600,
-      );
-      return;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/jira_token_missing|扩展未接收|扩展响应超时/i.test(msg)) {
-        // Hard Jira write failure: still try server fallback once.
-      }
+  if (!viaExt) {
+    gate.showWriteNotice();
+    return;
+  }
+
+  try {
+    await bridgeUpdateTargetDates(ref.jiraKey, start, end);
+    const confirmed = await state.api.syncTarget(
+      state.teamId.value,
+      ref.subId
+        ? {
+            subId: ref.subId,
+            mode: 'confirm',
+            start,
+            end,
+            jiraKey: ref.jiraKey,
+          }
+        : {
+            itemKey: ref.itemKey!,
+            mode: 'confirm',
+            start,
+            end,
+            jiraKey: ref.jiraKey,
+          },
+    );
+    if (confirmed.snapshot) state.commitSnapshot(confirmed.snapshot);
+    state.toast(
+      `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}（经你的 Jira 账号）`,
+      2600,
+    );
+    return;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/jira_token_missing|扩展未接收|扩展响应超时/i.test(msg)) {
+      // Hard Jira write failure: still try server fallback once.
     }
   }
 
@@ -525,30 +534,30 @@ function collectRefreshKeys(): string[] {
     ...pendingTargetJiraKeys(),
     ...editingOrDraggingJiraKeys(),
   ]);
-  const itemKeys: string[] = [];
-  const depKeys: string[] = [];
-  for (const it of state.scheduledItems.value) {
-    if (it.jiraKey && !blocked.has(it.jiraKey)) itemKeys.push(it.jiraKey);
-    for (const s of it.subs) {
-      if (s.cleared || !s.key || blocked.has(s.key)) continue;
-      itemKeys.push(s.key);
-    }
-    for (const m of it.markers || []) {
-      if (m.kind !== 'dep' || !m.jiraKey || blocked.has(m.jiraKey)) continue;
-      depKeys.push(m.jiraKey);
-    }
-  }
-  const primary = [...new Set(itemKeys)].slice(0, 50);
-  const seen = new Set(primary);
-  const extra = [...new Set(depKeys)].filter((k) => !seen.has(k)).slice(0, 25);
-  return [...primary, ...extra];
+  return collectJiraRefreshKeys(
+    state.scheduledItems.value,
+    state.backlogItems.value,
+    blocked,
+  );
+}
+
+function hasUnmirroredJiraStatus(): boolean {
+  return [...state.scheduledItems.value, ...state.backlogItems.value].some(
+    (it) => Boolean(it.jiraKey) && (it.status == null || it.status === ''),
+  );
 }
 
 async function silentRefreshFromJira() {
   if (!state.teamId.value || !state.editable.value || !state.hasExtension.value) return;
   if (jiraRefreshInFlight) return;
   const last = state.snapshot.value?.team.jiraRefreshedAt || 0;
-  if (last && Date.now() - last < JIRA_REFRESH_TTL_MS) return;
+  if (
+    last &&
+    Date.now() - last < JIRA_REFRESH_TTL_MS &&
+    !hasUnmirroredJiraStatus()
+  ) {
+    return;
+  }
   const keys = collectRefreshKeys();
   if (!keys.length) return;
   jiraRefreshInFlight = true;
@@ -557,6 +566,7 @@ async function silentRefreshFromJira() {
     if (!issues.length) return;
     await state.applySnapshotFromIntent({
       op: 'refresh_from_jira',
+      ignoreTtl: hasUnmirroredJiraStatus(),
       issues: issues.map((issue) => ({
         key: issue.key,
         fetchedAt: issue.fetchedAt,
@@ -860,7 +870,7 @@ async function onUpdateSub(intent: Record<string, unknown>) {
 
   if (!ownerChanging || !jiraKey) return;
   if (!state.hasExtension.value) {
-    state.toast('未回写 assignee（需要 Personal AI 扩展）', 2600);
+    gate.showWriteNotice();
     return;
   }
   const map = teamAssigneeMap(state.snapshot.value);

@@ -204,7 +204,8 @@
 | Roadmap 打开静默刷新 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展独占读；含依赖 ticket 缓存；主任务/子任务都镜像 status；`refresh_from_jira` 10 分钟 TTL；不进 ticker |
 | Roadmap 已完成 Jira 状态配色 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Epic 与 Task 镜像 Closed/Resolved/Done；甘特/人员视图浅绿 + ✓，不与过去/当前/未来时间配色混淆 |
 | Roadmap 草稿 description | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 可选录入不挡 Enter 秒建；hover 灰色小字；非 draft 只读镜像 |
-| Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展隐藏按钮 |
+| Roadmap 导入 Task | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 Options token 搜 Task；无扩展锁定按钮并引导安装 |
+| Roadmap 无扩展回写提示 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 拖动 Target / 改 Owner 只留在 Roadmap；一行提示 +「安装插件开启同步」。打开页拉取保持静默 |
 | Roadmap 甘特缩放与人员视图 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 捏合/⌘+滚轮缩放；人员视图色条+聚焦顺延（Original Estimate 最短人天 / 缩短 / 延长 Epic）+ 近 2 周双指平移 |
 | 项目本地查找 | Project Dashboard | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 在当前浏览器本地快照内查找项目、任务、Jira、平台来源和里程碑；输入/清除/查看全部控制点与回执显示当前视图可见/隐藏命中和无外部读写边界 |
 | 项目数据源检查 | Project Dashboard | [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) | Jira/GitHub/Confluence 状态、缺口、检查口径、按钮/收起边界与 warning 状态 |
