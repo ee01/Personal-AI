@@ -39,6 +39,10 @@ import {
 } from './RecallContextExpansionService.js';
 import { CueCompilerService } from './CueCompilerService.js';
 import {
+  attachStoredMessageSummaries,
+  resolveItemOneLineSummary,
+} from './ContextOneLineSummaryService.js';
+import {
   EvidenceCohesionGateService,
   type EvidenceCohesionCandidate,
   type EvidenceCohesionResult,
@@ -777,7 +781,7 @@ export class ContextRecallService {
       }
       return true;
     });
-    const rawMatches = filteredItems
+    const rawMatches = attachStoredMessageSummaries(this.db, filteredItems)
       .map((item) => {
         const match = toContextMatch(item, expandedRequest);
         if (!match) {
@@ -2026,6 +2030,7 @@ function toContextMatch(
     links,
     whyMatched: explainMatch(item, req),
     uiSummary,
+    oneLineSummary: resolveItemOneLineSummary(item),
     reasonType: getReasonType(item),
     evidenceRole: getEvidenceRole(item),
     displayPriority: getDisplayPriority(item),

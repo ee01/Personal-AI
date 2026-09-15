@@ -143,6 +143,58 @@ describe('Context Recall API (POST /context-recall)', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('surfaces the stored extraction summary as a one-line gist for compact surfaces', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const content =
+      'Titan pricing model decision: confirmed the person-day estimate and will re-check it every quarter.';
+    db.prepare(
+      `INSERT INTO messages_raw
+        (id, content, summary, scope, source, source_type, timestamp, sender, group_id, group_name, importance, sentiment, metadata_json, created_at)
+       VALUES (?, ?, ?, 'work', 'glip', 'glip', ?, 'Colin', 'titan-grp', 'Titan Group', 0.8, 'neutral', '{}', ?)`,
+    ).run(
+      'msg-titan-oneline',
+      content,
+      'Titan 定价模型已确认按人天估算，后续按季度复核。',
+      now - 120,
+      now - 120,
+    );
+    db.prepare(
+      `INSERT INTO chunks
+        (chunk_id, file_path, line_start, line_end, content, content_hash, scope, source, source_type, related_project, created_at)
+       VALUES (?, ?, 1, 1, ?, ?, 'work', 'glip', 'glip', 'Titan', ?)`,
+    ).run(
+      9101,
+      'messages/msg-titan-oneline',
+      content,
+      'hash-titan-oneline-1',
+      now - 120,
+    );
+    db.prepare(`INSERT INTO chunks_fts(rowid, content) VALUES (?, ?)`).run(
+      9101,
+      content,
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/context-recall',
+      payload: {
+        surface: 'meeting_passive',
+        contextType: 'meeting',
+        primaryText: 'Titan pricing model decision person-day estimate',
+        limit: 3,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const match = res
+      .json()
+      .matches.find((entry: any) => entry.id === '9101');
+    expect(match).toBeTruthy();
+    expect(match.oneLineSummary).toBe(
+      'Titan 定价模型已确认按人天估算，后续按季度复核。',
+    );
+  });
+
   it('restores a saved Source Memory link when an orphaned chunk is recalled', async () => {
     const capsuleId = 'source-memory-orphan-link';
     const sourceUrl =

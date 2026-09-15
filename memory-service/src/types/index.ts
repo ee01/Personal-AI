@@ -1847,6 +1847,11 @@ export interface ContextRecallMatch {
   };
   suppressionReason?: string;
   uiSummary?: string;
+  /**
+   * Canonical one-sentence gist for compact surfaces (meeting danmaku, live
+   * feed chips). Prefers the stored/derived summary over a content prefix.
+   */
+  oneLineSummary?: string;
   reasonType?: ContextRecallReasonType;
   evidenceRole?: ContextRecallEvidenceRole;
   displayPriority?: ContextRecallDisplayPriority;

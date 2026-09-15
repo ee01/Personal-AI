@@ -7,6 +7,8 @@ import type { MeetingPilotMemoryRef } from './protocol';
 
 type ContextRecallMatchV2 = ContextRecallMatch & {
   uiSummary?: string;
+  /** Canonical one-sentence gist for compact surfaces (meeting danmaku). */
+  oneLineSummary?: string;
   whyRelevant?: string[];
   matchedAnchors?: {
     people?: string[];
@@ -329,6 +331,9 @@ export function contextMatchToMeetingPilotMemoryRef(
 ): MeetingPilotMemoryRef {
   const v2 = match as ContextRecallMatchV2;
   const summary = dropBoilerplateLines(sanitizeMemoryText(v2.uiSummary ?? ''));
+  const oneLineSummary = dropBoilerplateLines(
+    sanitizeMemoryText(v2.oneLineSummary ?? ''),
+  );
   const fullSnippet = dropBoilerplateLines(sanitizeMemoryText(match.snippet));
   const previewClean = isBoilerplate(match.snippet) ? '' : match.snippet;
   const snippet = previewClean || fallbackPreview(fullSnippet);
@@ -346,6 +351,7 @@ export function contextMatchToMeetingPilotMemoryRef(
     title,
     cueTitle: title,
     cueBody: summary || fullSnippet || snippet,
+    cueLine: oneLineSummary || undefined,
     snippet: isBoilerplate(snippet) ? '' : snippet,
     evidenceSnippet: fullSnippet || snippet,
     fullSnippet,

@@ -81,6 +81,17 @@ Meeting Pilot 的主线是“用户主动开始一次会议 capture 后，系统
 - 记忆关联以 P2 弹幕 + side panel feed 形式出现
 - hover 参会者头像可查看 stance / key quote
 
+### 会议弹幕
+
+会议页会以滚动弹幕（danmaku）把与当前话题相关的关联记忆推给用户。弹幕的实现口径是「压缩句子 + hover 原文」两层：
+
+- 收起状态只滚动**一句话**。这句话优先取 `oneLineSummary`，即存储在记忆侧的规范 gist；没有时才回退到 recall 现场的 `cueBody` / `snippet` / `title`，并且在客户端只保留第一个完整句子、超过 120 字再截断。关系标签（如 `同一项目`）单独渲染成前置 chip，不再占用句子本身的字符预算。
+- 展开状态显示**关联记忆原文**：优先 `fullSnippet`，再回退到 `evidenceSnippet` / `cueBody` / `snippet`；同时显示该记忆的来源时间、标题和安全来源链接。
+- **压缩位置的取舍**：一句话 gist 在**存储时**生成（ingestion 阶段 LLM 已写入 `messages_raw.summary`，source memory 则有蒸馏 `oneLineCue`），因为它是与场景无关、可被弹幕 / side panel / 其他紧凑入口复用的稳定事实摘要；而「为什么此刻相关」的**场景装帧**留在**提取时**完成（关系标签、`whyRelevant`、display priority）。不把场景相关的一句话写死进存储，否则同一个记忆无法适配会议、Ask、Jira 等不同展示口径；也不在弹幕滚动时临时调用 LLM，避免给会中实时链路引入不可控延迟。
+- **时间口径**：优先展示**真实信息时间**（消息发送时间 `messages_raw.timestamp`、资料时间等），因为会中用户回忆的是「这件事什么时候发生/说过」；只有当真实时间缺失时才回退到**记忆匹配时间**，并且文案会显式写成 `记忆匹配于`，不会把召回时间伪装成信息发生时间。时间标签按记忆类型区分：消息时间 / 资料时间 / 预演时间 / 记录时间。
+- **hover 暂停/恢复**：hover 时只把动画置为 `animation-play-state: paused` 并展开原文，不删除动画；移开鼠标后动画从同一偏移继续，不会消失并从右侧重新开始。滚动距离用插入时测得的像素变量（`--danmaku-start-x` / `--danmaku-end-x`）而不是百分比 keyframe，这样展开弹幕改变宽度时也不会让暂停中的位置跳动。
+- 记忆弹幕只暴露安全的记忆库/来源链接，并继续过滤 `displayPriority: hidden` 或缺解释线索的记忆。
+
 ### 会中面板
 
 - 当前话题
@@ -402,6 +413,8 @@ Speech 面板还会显示 `ASR 链路回执`；整张回执卡也带动态 hover
 - `npm run test:meeting-pilot`
 - `npm run test:meeting-pilot-panorama`
 - `node tools/verify-meeting-live-map-e2e.mjs`
+- `node tools/verify-meeting-danmaku-e2e.mjs`（真实 dist 扩展 + RingCentral fixture：校验弹幕一句话 gist、hover 展开原文与来源时间、暂停后从原位置继续滚动）
+- `TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/meeting-shell/__tests__/danmakuPresentation.test.ts`
 - `npm run test:meeting-pilot-scene1`（含 Today Pilot 会前准备 cue 加入行动项）
 - `npm --prefix desktop-app run test:meeting-pilot-scene2`
 - `npm start` 首次 dev compile

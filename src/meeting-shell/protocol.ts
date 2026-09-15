@@ -232,6 +232,12 @@ export interface MeetingPilotMemoryRef {
   title: string;
   cueTitle?: string;
   cueBody?: string;
+  /**
+   * One-sentence compressed gist (LLM summary at storage time) used by compact
+   * surfaces such as the meeting danmaku. Falls back to cueBody/snippet when the
+   * recall match has no stored gist.
+   */
+  cueLine?: string;
   snippet: string;
   evidenceSnippet?: string;
   fullSnippet?: string;

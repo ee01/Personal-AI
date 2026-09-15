@@ -21,7 +21,9 @@ function recallItem(partial: Partial<RecallItem>): RecallItem {
   } as RecallItem;
 }
 
-function contextMatch(partial: Partial<ContextRecallMatch>): ContextRecallMatch {
+function contextMatch(
+  partial: Partial<ContextRecallMatch> & { oneLineSummary?: string },
+): ContextRecallMatch {
   return {
     id: 'm1',
     type: 'message',
@@ -118,6 +120,24 @@ test('contextMatchToMeetingPilotMemoryRef: forwards v2 presentation fields', () 
   assert.equal(ref.sourceUrl, 'https://example.com/x');
   assert.deepEqual(ref.links, [{ label: '打开来源', url: 'https://example.com/x' }]);
   assert.deepEqual(ref.metadata, { meetingId: 'm-old' });
+});
+
+test('contextMatchToMeetingPilotMemoryRef: maps the stored one-line gist to cueLine', () => {
+  const ref = contextMatchToMeetingPilotMemoryRef(
+    contextMatch({
+      id: 'mem-oneline',
+      title: '历史决策标题',
+      snippet: '历史决策提醒：之前决定周五发布。',
+      uiSummary: '历史决策提醒：之前决定周五发布。',
+      oneLineSummary: '之前已决定周五发布，本次只需确认上线窗口。',
+    }),
+  );
+
+  assert.equal(
+    ref.cueLine,
+    '之前已决定周五发布，本次只需确认上线窗口。',
+  );
+  assert.equal(ref.cueBody, '历史决策提醒：之前决定周五发布。');
 });
 
 test('contextMatchToMeetingPilotMemoryRef: blacklists pure boilerplate snippet', () => {

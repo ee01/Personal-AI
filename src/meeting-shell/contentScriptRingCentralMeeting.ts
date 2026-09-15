@@ -22,6 +22,10 @@ import {
 } from './ringCentralTranscriptFilter';
 import { getVisibleMeetingMemoryCueRefs } from './liveFeedPresentation.js';
 import {
+  buildDanmakuCuePresentation,
+  buildDanmakuTravelMetrics,
+} from './danmakuPresentation.js';
+import {
   sanitizeContextExternalUrl,
   sanitizeExploreRoute,
 } from '../web-intelligence/contextRecallGuards';
@@ -258,25 +262,32 @@ function getDanmakuDuration(level: 'P1' | 'P2'): number {
   return Math.round(base * multiplier * 10) / 10;
 }
 
+/**
+ * Freeze the rolling pill while the pointer is over it so the user can read the
+ * expanded original memory. The animation is only *paused* (never removed), so
+ * releasing hover resumes from the exact same offset instead of restarting from
+ * the right edge.
+ */
 function attachDanmakuHoverFreeze(item: HTMLElement): void {
   item.addEventListener('mouseenter', () => {
-    const matrix = new DOMMatrix(getComputedStyle(item).transform);
-    item.style.transform = `translateX(${matrix.m41}px) translateZ(0)`;
     item.classList.add('paused');
   });
   item.addEventListener('mouseleave', () => {
     item.classList.remove('paused');
-    const currentX = new DOMMatrix(getComputedStyle(item).transform).m41;
-    const endX = -(window.innerWidth + 240);
-    const startX = item.getBoundingClientRect().width + 48;
-    const totalPx = startX - endX;
-    const remainingPx = currentX - endX;
-    const originalDur =
-      parseFloat(item.style.getPropertyValue('--duration')) || 8;
-    const remainingDur = originalDur * (remainingPx / totalPx);
-    item.style.setProperty('--duration', `${Math.max(remainingDur, 0.1)}s`);
-    item.style.transform = '';
   });
+}
+
+/**
+ * Pin the roll distance in absolute pixels after layout so expanding the pill on
+ * hover cannot shift its paused position (percentage keyframes would).
+ */
+function primeDanmakuTravel(item: HTMLElement): void {
+  const metrics = buildDanmakuTravelMetrics({
+    itemWidth: item.getBoundingClientRect().width,
+    viewportWidth: window.innerWidth,
+  });
+  item.style.setProperty('--danmaku-start-x', `${metrics.startX}px`);
+  item.style.setProperty('--danmaku-end-x', `${metrics.endX}px`);
 }
 
 async function hydrateDanmakuConfig(): Promise<void> {
@@ -1160,9 +1171,17 @@ function appendDanmakuContent(
   root: HTMLDivElement,
   args: {
     icon?: string;
+    badge?: string;
     title?: string;
+    /**
+     * One-sentence text shown while the pill is rolling. Falls back to the
+     * legacy title/preview composition when not supplied.
+     */
+    oneLineText?: string;
     previewText: string;
     detailText: string;
+    timeLabel?: string;
+    timeValue?: string;
     linkUrl?: string;
     linkLabel?: string;
   },
@@ -1179,11 +1198,25 @@ function appendDanmakuContent(
 
   const summary = document.createElement('span');
   summary.className = 'danmaku-summary';
-  summary.textContent = buildDanmakuSummaryText({
-    title: args.title,
-    previewText: args.previewText,
-  });
+
+  const badgeText = normalizeText(args.badge);
+  if (badgeText) {
+    const badge = document.createElement('span');
+    badge.className = 'danmaku-badge';
+    badge.textContent = badgeText;
+    summary.appendChild(badge);
+  }
+
+  const summaryText = document.createElement('span');
+  summaryText.className = 'danmaku-summary-text';
+  summaryText.textContent =
+    normalizeText(args.oneLineText) ||
+    buildDanmakuSummaryText({
+      title: args.title,
+      previewText: args.previewText,
+    });
   summary.title = normalizeText(args.detailText);
+  summary.appendChild(summaryText);
 
   const detail = document.createElement('span');
   detail.className = 'danmaku-detail';
@@ -1199,6 +1232,15 @@ function appendDanmakuContent(
   fullText.className = 'danmaku-full-text';
   fullText.textContent = normalizeText(args.detailText);
   detail.appendChild(fullText);
+
+  const timeLabel = normalizeText(args.timeLabel);
+  const timeValue = normalizeText(args.timeValue);
+  if (timeLabel && timeValue) {
+    const time = document.createElement('span');
+    time.className = 'danmaku-meta';
+    time.textContent = `${timeLabel} ${timeValue}`;
+    detail.appendChild(time);
+  }
 
   if (args.linkUrl) {
     const link = document.createElement('a');
@@ -1342,6 +1384,7 @@ function syncAlertLayers(
         detailText: alert.body,
       });
       danmakuOverlay.appendChild(item);
+      primeDanmakuTravel(item);
       attachDanmakuHoverFreeze(item);
       item.addEventListener('animationend', () => item.remove());
     });
@@ -1357,21 +1400,23 @@ function syncAlertLayers(
     item.className = 'danmaku-item p2 memory-danmaku';
     item.style.top = `${getDanmakuTop(unresolved.length + index)}px`;
     item.style.setProperty('--duration', `${getDanmakuDuration('P2') + 3}s`);
-    const title =
-      ref.relationLabel ||
-      ref.evidenceRoleLabel ||
-      `记忆关联 ${Math.round(ref.score * 100)}%`;
+    const presentation = buildDanmakuCuePresentation(ref);
     const link = getMeetingMemoryDanmakuLink(ref);
     appendDanmakuContent(item, {
       icon: '🧠',
-      title,
-      previewText: ref.cueTitle || ref.title || ref.snippet,
-      detailText: ref.cueBody || ref.fullSnippet || ref.snippet,
+      badge: presentation.badge,
+      title: presentation.detailTitle,
+      oneLineText: presentation.oneLine,
+      previewText: presentation.oneLine,
+      detailText: presentation.detail,
+      timeLabel: presentation.timeLabel,
+      timeValue: presentation.timeValue,
       linkUrl: link?.url,
       linkLabel: link?.label,
     });
 
     danmakuOverlay.appendChild(item);
+    primeDanmakuTravel(item);
     attachDanmakuHoverFreeze(item);
     item.addEventListener('animationend', () => item.remove());
   });
@@ -2715,7 +2760,7 @@ function createOverlay(): void {
         gap: 8px;
         backdrop-filter: blur(12px);
         box-shadow: 0 2px 16px rgba(0,0,0,0.3);
-        max-width: min(360px, calc(100vw - 96px));
+        max-width: min(520px, calc(100vw - 96px));
         pointer-events: auto;
         cursor: default;
         animation: danmakuSlide var(--duration, 8s) linear forwards;
@@ -2730,12 +2775,17 @@ function createOverlay(): void {
       }
       .danmaku-item:hover {
         align-items: flex-start;
-        max-width: min(560px, calc(100vw - 48px));
+        max-width: min(640px, calc(100vw - 48px));
         box-shadow: 0 10px 28px rgba(0,0,0,0.38);
         z-index: 2147483647;
       }
+      /*
+       * Only pause the roll. Removing the animation would restart the pill from
+       * the right edge on hover-out; pausing keeps its exact offset so it
+       * continues from where the user was reading.
+       */
       .danmaku-item.paused {
-        animation: none;
+        animation-play-state: paused;
       }
       .danmaku-item .icon {
         font-size: 16px;
@@ -2749,7 +2799,21 @@ function createOverlay(): void {
         gap: 6px;
       }
       .danmaku-item .danmaku-summary {
-        display: block;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .danmaku-item .danmaku-badge {
+        flex-shrink: 0;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.12);
+        font-size: 11px;
+        font-weight: 700;
+        opacity: 0.9;
+      }
+      .danmaku-item .danmaku-summary-text {
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -2757,7 +2821,8 @@ function createOverlay(): void {
       }
       .danmaku-item .danmaku-detail {
         display: none;
-        white-space: normal;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
         line-height: 1.45;
         max-height: 240px;
         overflow-y: auto;
@@ -2770,6 +2835,12 @@ function createOverlay(): void {
       }
       .danmaku-item .danmaku-full-text {
         display: block;
+      }
+      .danmaku-item .danmaku-meta {
+        display: block;
+        margin-top: 6px;
+        font-size: 11px;
+        opacity: 0.75;
       }
       .danmaku-item:hover .danmaku-summary {
         display: none;
@@ -3629,8 +3700,8 @@ function createOverlay(): void {
         to { transform: rotate(360deg); }
       }
       @keyframes danmakuSlide {
-        0% { transform: translateX(calc(100% + 48px)) translateZ(0); }
-        100% { transform: translateX(calc(-100vw - 240px)) translateZ(0); }
+        0% { transform: translateX(var(--danmaku-start-x, calc(100% + 48px))) translateZ(0); }
+        100% { transform: translateX(var(--danmaku-end-x, calc(-100vw - 240px))) translateZ(0); }
       }
       @media (max-width: 720px) {
         .side-panel {
