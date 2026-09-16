@@ -506,8 +506,10 @@ export async function formatSuccessNotificationWithTemplate(input: {
           [
             '你只负责把 Agent task 执行结果整理成 Glip 通知正文。',
             '不要执行外部操作，不要编造未出现在证据里的标识 / 人名。',
-            '严格按用户模板的结构输出（标题行、分隔线、列表项、结尾说明）。',
-            '模板的标题行、分隔线（例如 ---- 这一行）和结尾说明行必须原样保留、顺序不变；结尾说明里的 @ 提醒也要保留，不要只留 cc 部分。',
+            '严格按用户模板的结构输出（标题行、分隔线、列表项、结尾说明），顺序不变。',
+            '分隔线（例如 ---- 这一行）和结尾说明行照抄模板；结尾说明里的 @ 提醒也要保留，不要只留 cc 部分。',
+            '标题行保留模板的措辞，但里面的数量、日期等事实必须改成本次证据里的真实值：模板标题里的「4 个」「4/4 成功」只是当初写模板时的示例，照抄就等于把上一次的结果当成这一次的。',
+            '证据里没有的事实宁可写成中性描述（例如「本次已更新以下条目：」），也不要沿用模板标题里的旧数字。',
             '中间只放真实条目，一行一条并保留模板的 * 前缀；不要把列表改写成整段散文。',
             templateRequestsLinks(template)
               ? [
@@ -793,6 +795,13 @@ export function applyNotifyTemplateLocally(
  * The LLM keeps the wording but sometimes loses the template frame (separator
  * line, closing line with the cc mention). Re-anchor the frame from the template
  * and let the model own only the middle rows.
+ *
+ * The template head is a shape, not fixed copy: its title line may describe the
+ * run that the template was written for ("匹配 4 个 …（4/4 成功，0 失败）：").
+ * Re-anchoring that line next to a model-written title that reports this run's
+ * real numbers ships both lines — one stale, one true. So when the model wrote a
+ * title of its own, that title stands in for the template's and only the head
+ * lines around it are restored.
  */
 export function enforceTemplateScaffolding(template: string, body: string): string {
   const templateLines = template.replace(/\r\n/g, '\n').split('\n');
@@ -815,10 +824,67 @@ export function enforceTemplateScaffolding(template: string, body: string): stri
     .split('\n')
     .filter((line) => !isFrameEcho(line, frame));
 
-  return [...head, ...middle, ...tail]
+  return [...reconcileTemplateHead(head, middle), ...tail]
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * Decide the head lines that go in front of the model's body: the template head
+ * as-is when the model dropped the title, or the model's own title plus the head
+ * lines around the template's title when the model wrote one.
+ */
+function reconcileTemplateHead(head: string[], middle: string[]): string[] {
+  if (head.length === 0) return middle;
+
+  const titleIndex = head.findIndex((line) => line.trim() && !isStructuralHeadLine(line));
+  if (titleIndex < 0) return [...head, ...middle];
+
+  const firstRow = middle.findIndex(isRowLine);
+  const bodyHead = middle.slice(0, firstRow < 0 ? middle.length : firstRow);
+  const bodyWroteTitle = bodyHead.some(isBodyTitleLine);
+  if (!bodyWroteTitle) return [...head, ...middle];
+
+  // Everything the head says after its title (the ---- rule, the cc line) still
+  // belongs to the message; the model's echoes of them were already dropped.
+  // They go back right under the model's title, ahead of its trailing blank line.
+  const alreadyInBody = (line: string) =>
+    bodyHead.some((own) => normalizeForCompare(own) === normalizeForCompare(line));
+  const keptHeadLines = head.slice(titleIndex + 1).filter((line) => !alreadyInBody(line));
+
+  let insertAt = bodyHead.length;
+  while (insertAt > 0 && !bodyHead[insertAt - 1].trim()) insertAt -= 1;
+
+  return [
+    ...head.slice(0, titleIndex),
+    ...bodyHead.slice(0, insertAt),
+    ...keptHeadLines,
+    ...bodyHead.slice(insertAt),
+    ...(firstRow < 0 ? [] : middle.slice(firstRow)),
+  ];
+}
+
+/** Layout, not copy: blank lines and `----` / `===` style rules. */
+function isStructuralHeadLine(line: string): boolean {
+  const trimmed = line.trim();
+  return !trimmed || /^[-=~_*#]{2,}$/.test(trimmed);
+}
+
+function isRowLine(line: string): boolean {
+  return /^(\*|[-•])\s/.test(line.trim());
+}
+
+/**
+ * A body head line that is copy rather than a bare mention: mentions inside the
+ * template head are not a replacement title, they are the head line the model
+ * kept.
+ */
+function isBodyTitleLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || isStructuralHeadLine(line) || isRowLine(line)) return false;
+  if (trimmed.startsWith('@') || /^cc\b/i.test(trimmed)) return false;
+  return true;
 }
 
 function normalizeForCompare(line: string): string {

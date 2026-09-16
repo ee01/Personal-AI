@@ -292,6 +292,69 @@ describe('formatSuccessNotificationWithTemplate', () => {
     expect(generateMock).not.toHaveBeenCalled();
     expect(body).toContain('-- Nova 缺少 Team 的 Epics --');
   });
+
+  it('tells the formatter that numbers in the template title are examples, not this run', async () => {
+    generateMock.mockResolvedValue({ content: '* NOVA-7248 Debug' });
+
+    await formatSuccessNotificationWithTemplate({ ...baseInput, log: { warn: vi.fn() } });
+
+    const prompt = String(generateMock.mock.calls[0][0]);
+    expect(prompt).toMatch(/标题行保留模板的措辞/);
+    expect(prompt).toMatch(/真实值/);
+    expect(prompt).toMatch(/示例/);
+  });
+
+  it('does not ship the template example count next to the real one (E-8)', async () => {
+    const log = { warn: vi.fn() };
+    generateMock.mockResolvedValue({
+      content:
+        '匹配 2 个 INIT 是 Commit 的 Nova Epics，已将 Committed 字段全部更新为 Yes（2/2 成功，0 失败）：\n' +
+        '* [NOVA-17443](https://jira.ringcentral.com/browse/NOVA-17443) UAT UI improvements @Owner One\n' +
+        '* [NOVA-14154](https://jira.ringcentral.com/browse/NOVA-14154) [Release] Japanese, Dutch, Russian @Owner Two',
+    });
+
+    const body = await formatSuccessNotificationWithTemplate({
+      ...baseInput,
+      // Verbatim Messages!Agent_Notify_Template of msg_1787047171672.
+      template: `匹配 4 个 INIT 是 Commit 的 Nova Epics，已将 Committed 字段全部更新为 Yes（4/4 成功，0 失败）：
+* [Nova-xxx](http...) summary... @assigneeFirstName.assigneeLastName
+* ...`,
+      result: {
+        status: 'success',
+        summary:
+          '匹配 2 个 INIT 是 Commit 的 Nova Epics，已将 Committed 字段全部更新为 Yes（2/2 成功，0 失败）',
+        outcome: { mode: 'write', verdict: 'mutated', sourceSystem: 'jira', count: 2 },
+        artifacts: [
+          {
+            kind: 'jira_issue',
+            title: 'NOVA-17443 UAT UI improvements',
+            metadata: {
+              entityKey: 'NOVA-17443',
+              url: 'https://jira.ringcentral.com/browse/NOVA-17443',
+              operation: 'update',
+              changedFields: ['Committed'],
+            },
+          },
+          {
+            kind: 'jira_issue',
+            title: 'NOVA-14154 [Release] Japanese, Dutch, Russian',
+            metadata: {
+              entityKey: 'NOVA-14154',
+              url: 'https://jira.ringcentral.com/browse/NOVA-14154',
+              operation: 'update',
+              changedFields: ['Committed'],
+            },
+          },
+        ],
+      },
+      log,
+    });
+
+    expect(body).toContain('2/2 成功，0 失败');
+    expect(body).not.toContain('4/4');
+    expect(body.split('\n').filter((line) => /匹配 \d+ 个 INIT/.test(line))).toHaveLength(1);
+    expect(body).toContain('* [NOVA-17443](https://jira.ringcentral.com/browse/NOVA-17443)');
+  });
 });
 
 describe('extractNotificationEvidence / applyNotifyTemplateLocally', () => {
@@ -414,6 +477,94 @@ describe('extractNotificationEvidence / applyNotifyTemplateLocally', () => {
     expect(templateRequestsLinks('请把每条结果做成可点击链接')).toBe(true);
     expect(templateRequestsLinks('Please include links for each item')).toBe(true);
     expect(templateRequestsLinks('* NOVA-xxx summary @owner')).toBe(false);
+  });
+});
+
+describe('enforceTemplateScaffolding template-head reconciliation', () => {
+  const novaEpicsTemplate = `匹配 4 个 INIT 是 Commit 的 Nova Epics，已将 Committed 字段全部更新为 Yes（4/4 成功，0 失败）：
+* [Nova-xxx](http...) summary... @assigneeFirstName.assigneeLastName
+* ...`;
+
+  it('lets a model-written title replace a template title carrying stale facts', () => {
+    const body =
+      '匹配 2 个 INIT 是 Commit 的 Nova Epics，已将 Committed 字段全部更新为 Yes（2/2 成功，0 失败）：\n' +
+      '* [NOVA-17443](https://jira.ringcentral.com/browse/NOVA-17443) UAT UI improvements @Owner One';
+
+    expect(enforceTemplateScaffolding(novaEpicsTemplate, body)).toBe(body);
+  });
+
+  it('drops the template title even when the model only tweaked its wording', () => {
+    const out = enforceTemplateScaffolding(
+      novaEpicsTemplate,
+      '匹配 2 个 INIT 是 Commit 的 Nova Epics，Committed 已全部更新为 Yes（2/2 成功，0 失败）：\n* NOVA-17443 UAT UI improvements',
+    );
+
+    expect(out.split('\n')[0]).toContain('2/2');
+    expect(out).not.toContain('4/4');
+  });
+
+  it('still re-anchors the template title when the model emits only rows', () => {
+    expect(
+      enforceTemplateScaffolding(
+        `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](http://xxx) summary
+* ...`,
+        '* NOVA-7248 Debug',
+      ),
+    ).toBe(`-- Nova 缺少 Team 的 Epics --
+----
+
+* NOVA-7248 Debug`);
+  });
+
+  it('keeps the head lines that follow the template title, such as the cc mention', () => {
+    const out = enforceTemplateScaffolding(
+      `-- Nova 缺少 Assignee 的 INIT --
+@clare.cheng
+
+* [Nova-xxx](https://jira.ringcentral.com/browse/{key}) summary... @Request owner
+* ...`,
+      '-- Nova 缺少 Assignee 的 INIT（2026-Q3）--\n\n* [INIT-1](https://jira.ringcentral.com/browse/INIT-1) Foo @Request Owner',
+    );
+
+    expect(out).toBe(
+      '-- Nova 缺少 Assignee 的 INIT（2026-Q3）--\n@clare.cheng\n\n* [INIT-1](https://jira.ringcentral.com/browse/INIT-1) Foo @Request Owner',
+    );
+  });
+
+  it('does not treat a bare mention as a replacement title', () => {
+    const out = enforceTemplateScaffolding(
+      `-- Nova 缺少 Assignee 的 INIT --
+@clare.cheng
+
+* [Nova-xxx](http://xxx) summary
+* ...`,
+      '@clare.cheng\n* INIT-1 Foo @Request Owner',
+    );
+
+    expect(out).toContain('-- Nova 缺少 Assignee 的 INIT --');
+  });
+
+  it('keeps the closing line even when the model rewrote the title', () => {
+    const out = enforceTemplateScaffolding(
+      `-- Nova 缺少 Team 的 Epics --
+----
+
+* [Nova-xxx](http://xxx) summary
+* ...
+
+以上 Epic 麻烦各位 leads 来看看添加上对应的 Team`,
+      '-- Nova 缺少 Team 的 Epics（2026-Q3）--\n\n* NOVA-7248 Debug',
+    );
+
+    expect(out).toBe(`-- Nova 缺少 Team 的 Epics（2026-Q3）--
+----
+
+* NOVA-7248 Debug
+
+以上 Epic 麻烦各位 leads 来看看添加上对应的 Team`);
   });
 });
 
