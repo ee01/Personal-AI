@@ -26,14 +26,18 @@ export const DANMAKU_START_GAP = 48;
 export const DANMAKU_END_MARGIN = 240;
 
 export interface DanmakuCuePresentation {
-  /** Short chip rendered before the rolling sentence (relation / role / score). */
-  badge?: string;
   /** Collapsed sentence shown while the pill is rolling. */
   oneLine: string;
   /** Expanded detail heading (original memory title), when it adds information. */
   detailTitle?: string;
   /** Expanded original memory text. */
   detail: string;
+  /**
+   * Why this memory is relevant (relation label / role / score). Deliberately
+   * kept out of the rolling pill: a text prefix steals width from the sentence,
+   * so it is only shown in the expanded hover detail.
+   */
+  contextLabel?: string;
   /** Expanded time label, e.g. `消息时间`. */
   timeLabel?: string;
   /** Expanded time value, e.g. `2026-05-12 14:03`. */
@@ -97,8 +101,14 @@ export function resolveDanmakuCueLine(ref: MeetingPilotMemoryRef): string {
   return clipDanmakuText(toDanmakuSentence(candidate), DANMAKU_ONE_LINE_MAX);
 }
 
-/** Compact chip that explains why this memory is on screen. */
-export function resolveDanmakuBadge(ref: MeetingPilotMemoryRef): string {
+/**
+ * Why this memory is on screen (relation / role / score). This is expanded-only
+ * context: the rolling pill keeps just an icon plus the sentence so the text is
+ * not squeezed by a prefix.
+ */
+export function resolveDanmakuContextLabel(
+  ref: MeetingPilotMemoryRef,
+): string {
   const label =
     normalizeDanmakuText(ref.relationLabel) ||
     normalizeDanmakuText(ref.evidenceRoleLabel);
@@ -186,10 +196,10 @@ export function buildDanmakuCuePresentation(
   const detail = resolveDanmakuDetail(ref) || oneLine;
   const time = resolveDanmakuTime(ref);
   return {
-    badge: resolveDanmakuBadge(ref),
     oneLine: oneLine || detail,
     detailTitle: resolveDanmakuDetailTitle(ref, detail),
     detail,
+    contextLabel: resolveDanmakuContextLabel(ref),
     timeLabel: time?.label,
     timeValue: time?.value,
   };

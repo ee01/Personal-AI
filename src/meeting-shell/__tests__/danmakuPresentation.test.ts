@@ -5,7 +5,7 @@ import {
   buildDanmakuCuePresentation,
   buildDanmakuTravelMetrics,
   formatDanmakuTimestamp,
-  resolveDanmakuBadge,
+  resolveDanmakuContextLabel,
   resolveDanmakuCueLine,
   resolveDanmakuDetail,
   resolveDanmakuTime,
@@ -57,16 +57,19 @@ test('toDanmakuSentence only keeps the first sentence', () => {
   assert.equal(toDanmakuSentence('没有标点的一句话'), '没有标点的一句话');
 });
 
-test('badge prefers relation label, then evidence role, then score', () => {
+test('context label prefers relation label, then evidence role, then score', () => {
   assert.equal(
-    resolveDanmakuBadge(memoryRef({ relationLabel: '同一项目' })),
+    resolveDanmakuContextLabel(memoryRef({ relationLabel: '同一项目' })),
     '同一项目',
   );
   assert.equal(
-    resolveDanmakuBadge(memoryRef({ evidenceRoleLabel: '历史决策' })),
+    resolveDanmakuContextLabel(memoryRef({ evidenceRoleLabel: '历史决策' })),
     '历史决策',
   );
-  assert.equal(resolveDanmakuBadge(memoryRef({ score: 0.81 })), '关联 81%');
+  assert.equal(
+    resolveDanmakuContextLabel(memoryRef({ score: 0.81 })),
+    '关联 81%',
+  );
 });
 
 test('expanded detail prefers the original memory text', () => {
@@ -106,7 +109,7 @@ test('time falls back to recall time with an explicit label when the source time
   assert.equal(resolveDanmakuTime(memoryRef({})), undefined);
 });
 
-test('buildDanmakuCuePresentation composes badge, one line, detail and time', () => {
+test('buildDanmakuCuePresentation composes the one line, detail, context label and time', () => {
   const ts = new Date(2026, 4, 12, 14, 3).getTime();
   const presentation = buildDanmakuCuePresentation(
     memoryRef({
@@ -120,10 +123,10 @@ test('buildDanmakuCuePresentation composes badge, one line, detail and time', ()
   );
 
   assert.deepEqual(presentation, {
-    badge: '同一项目',
     oneLine: '一句话摘要。',
     detailTitle: '记忆标题',
     detail: '关联记忆原文。',
+    contextLabel: '同一项目',
     timeLabel: '消息时间',
     timeValue: '2026-05-12 14:03',
   });

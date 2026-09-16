@@ -1171,7 +1171,12 @@ function appendDanmakuContent(
   root: HTMLDivElement,
   args: {
     icon?: string;
-    badge?: string;
+    /**
+     * Why this memory is relevant (relation / role / score). Rendered in the
+     * expanded hover detail only, so the rolling pill keeps its width for the
+     * sentence.
+     */
+    contextLabel?: string;
     title?: string;
     /**
      * One-sentence text shown while the pill is rolling. Falls back to the
@@ -1199,14 +1204,6 @@ function appendDanmakuContent(
   const summary = document.createElement('span');
   summary.className = 'danmaku-summary';
 
-  const badgeText = normalizeText(args.badge);
-  if (badgeText) {
-    const badge = document.createElement('span');
-    badge.className = 'danmaku-badge';
-    badge.textContent = badgeText;
-    summary.appendChild(badge);
-  }
-
   const summaryText = document.createElement('span');
   summaryText.className = 'danmaku-summary-text';
   summaryText.textContent =
@@ -1233,12 +1230,17 @@ function appendDanmakuContent(
   fullText.textContent = normalizeText(args.detailText);
   detail.appendChild(fullText);
 
+  const contextLabel = normalizeText(args.contextLabel);
   const timeLabel = normalizeText(args.timeLabel);
   const timeValue = normalizeText(args.timeValue);
-  if (timeLabel && timeValue) {
+  const metaParts = [
+    contextLabel,
+    timeLabel && timeValue ? `${timeLabel} ${timeValue}` : '',
+  ].filter(Boolean);
+  if (metaParts.length) {
     const time = document.createElement('span');
     time.className = 'danmaku-meta';
-    time.textContent = `${timeLabel} ${timeValue}`;
+    time.textContent = metaParts.join(' · ');
     detail.appendChild(time);
   }
 
@@ -1404,7 +1406,7 @@ function syncAlertLayers(
     const link = getMeetingMemoryDanmakuLink(ref);
     appendDanmakuContent(item, {
       icon: '🧠',
-      badge: presentation.badge,
+      contextLabel: presentation.contextLabel,
       title: presentation.detailTitle,
       oneLineText: presentation.oneLine,
       previewText: presentation.oneLine,
@@ -2799,21 +2801,7 @@ function createOverlay(): void {
         gap: 6px;
       }
       .danmaku-item .danmaku-summary {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-width: 0;
-      }
-      .danmaku-item .danmaku-badge {
-        flex-shrink: 0;
-        padding: 1px 7px;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.12);
-        font-size: 11px;
-        font-weight: 700;
-        opacity: 0.9;
-      }
-      .danmaku-item .danmaku-summary-text {
+        display: block;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;

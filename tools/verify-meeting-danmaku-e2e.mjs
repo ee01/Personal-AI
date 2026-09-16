@@ -204,9 +204,18 @@ try {
     'E2E 一句话压缩摘要。',
     `弹幕一句话文案不正确: ${oneLine}`,
   );
-  const badge = (await pill.locator('.danmaku-badge').innerText()).trim();
-  assert.equal(badge, '同一项目', `弹幕关系标签不正确: ${badge}`);
-  log(`一句话文案与关系标签正确: ${badge} · ${oneLine}`);
+  assert.equal(
+    await pill.locator('.danmaku-badge').count(),
+    0,
+    '弹幕仍带有文字前缀 chip',
+  );
+  const rollingText = (await pill.locator('.danmaku-summary').innerText()).trim();
+  assert.equal(
+    rollingText,
+    oneLine,
+    `滚动弹幕仍带前缀: ${rollingText}`,
+  );
+  log(`滚动文案无前缀: ${oneLine}`);
 
   log('等待弹幕进入可 hover 区域并读取滚动偏移');
   await page.waitForFunction(
@@ -239,6 +248,7 @@ try {
 
   const detail = await pill.locator('.danmaku-detail').innerText();
   assert.match(detail, /E2E 关联记忆原文/, `hover 未展开原文: ${detail}`);
+  assert.match(detail, /同一项目/, `hover 未显示关联标签: ${detail}`);
   assert.match(detail, /消息时间 2026-05-12 14:03/, `hover 未显示来源时间: ${detail}`);
   const playState = await pill.evaluate(
     (el) => getComputedStyle(el).animationPlayState,
