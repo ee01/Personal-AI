@@ -230,6 +230,7 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '周报推送': 'Weekly Report Delivery',
   '决策中心推送': 'Decision Center Delivery',
   '主动询问结果推送': 'Outreach Result Delivery',
+  '跟进追问结果推送': 'Followup Result Delivery',
   '不推送': 'Do not send',
   '推送给 Me（user）': 'Send to Me (user)',
   '自定义群组': 'Custom group',
@@ -255,8 +256,8 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '启用消息审核': 'Enable message review',
   '关闭后，会直接推送所有命中关注项的消息。':
     'When disabled, every message matching watched items is delivered directly.',
-  '命中关注项后的即时提醒。Bot Key 和 Base URL 从 env 读取。':
-    'Instant reminders after watched items match. Bot key and base URL are read from env.',
+  '命中关注项后的即时提醒（不含关注后续）。Bot Key 和 Base URL 从 env 读取。':
+    'Instant reminders after watched items match (excluding Watch follow-ups). Bot key and base URL are read from env.',
   '过滤自己发送的消息': 'Filter messages sent by me',
   '开启后，消息分析会自动忽略自己发出的消息。':
     'When enabled, message analysis ignores messages sent by you.',
@@ -270,8 +271,8 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '启用「关注后续」功能': 'Enable Watch',
   '围绕当前消息快速创建关注后续规则，持续追踪后续讨论。':
     'Create a follow-up rule from the current message and keep tracking later discussion.',
-  '关注后续汇总和相关提醒的推送位置。默认推送给 Me。':
-    'Delivery target for follow-up summaries and related reminders. Defaults to Me.',
+  '关注后续命中和关注后续汇总的推送位置，独立于「消息分析推送」；两者使用各自的 Bot 模板。默认推送给 Me。':
+    'Delivery target for Watch matches and follow-up digests. Independent of message-analysis delivery, and each uses its own bot template. Defaults to Me.',
   '启用「自动答复」功能': 'Enable Reply',
   '配置自动答复规则，匹配消息时自动发送回复。':
     'Configure auto-reply rules that send replies when messages match.',
@@ -360,8 +361,13 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
     'Require approval by default for manual or scheduled outreach templates',
   '开启后，Scheduled Messages 里的手动模板也会进入待审批。':
     'When enabled, manual templates in Scheduled Messages also enter pending approval.',
-  '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。':
-    'When Outreach gets a final result, times out, or cannot use the reply, send a bot receipt to Me or a selected group. The receipt says whether a follow-up was sent and includes a continue-follow-up entry. Defaults to Me.',
+  '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。与「消息交互功能 → 跟进追问结果推送」共用同一份存储，改任意一处两边同步。':
+    'When Outreach gets a final result, times out, or cannot use the reply, send a bot receipt to Me or a selected group. The receipt says whether a follow-up was sent and includes a continue-follow-up entry. Defaults to Me. Shares the same storage as Message Interaction → Followup Result Delivery; editing either side updates both.',
+  '与下方「主动询问结果推送」共用同一份存储，改任意一处两边同步。跟进追问拿到结果、超时或未得到可用结论时推送终态回执。':
+    'Shares the same storage as Outreach Result Delivery below; editing either side updates both. Sends the terminal receipt when a follow-up ask gets a result, times out, or cannot reach a usable conclusion.',
+  '启用「跟进追问」功能': 'Enable Followup Ask',
+  '在你发出的消息上，用 AI 追问后续是否有了回复。需要先启用主动询问引擎并配好 RingCentral 凭据。':
+    'Ask AI to chase whether a message you sent got a reply. Requires the Outreach engine and RingCentral credentials to be configured first.',
   'RingCentral 目录缓存状态': 'RingCentral directory cache status',
   '联系人目录：': 'Contacts:',
   '群组目录：': 'Groups:',
@@ -393,13 +399,13 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
 
   // Popup
   '静默消息分析': 'Silent message analysis',
-  '后台任务': 'Background Tasks',
+  '后台作业': 'Background Jobs',
   '需处理': 'Needs action',
   '排程异常': 'Schedule issue',
   '需处理总览': 'Needs Action Overview',
-  '刷新后台任务状态': 'Refresh background task status',
-  '筛选后台任务状态': 'Filter background task status',
-  '后台任务需处理总览': 'Background task action overview',
+  '刷新后台作业状态': 'Refresh background job status',
+  '筛选后台作业状态': 'Filter background job status',
+  '后台作业需处理总览': 'Background job action overview',
   '在 RingCentral 消息页面，悬停在消息上时会显示交互工具栏。可以选择启用/禁用以下功能：':
     'On RingCentral message pages, hovering over a message shows the Message Reaction toolbar. You can enable or disable the actions below:',
   '启用或停用': 'Enable or disable',
@@ -425,14 +431,15 @@ const STATIC_UI_TRANSLATIONS_EN: Record<string, string> = {
   '任务执行失败': 'Task run failed',
   '排程修复失败': 'Schedule repair failed',
   '状态不可用': 'Status unavailable',
-  '当前没有需要处理的后台任务':
-    'No background tasks need action right now',
-  '当前没有执行中的后台任务': 'No background tasks are running right now',
+  '当前没有需要处理的后台作业':
+    'No background jobs need action right now',
+  '当前没有执行中的后台作业': 'No background jobs are running right now',
   '当前没有排程异常': 'No schedule issues right now',
   '当前没有最近跳过的任务': 'No recently skipped tasks right now',
   '当前没有失败任务': 'No failed tasks right now',
   '当前没有停用任务': 'No disabled tasks right now',
-  '暂无后台任务状态': 'No background task status yet',
+  '暂无后台作业状态': 'No background job status yet',
+  '正在加载后台作业': 'Loading background jobs',
   '正在执行': 'Running',
   '立即重试': 'Retry Now',
   '重排 Chrome alarm': 'Reschedule Chrome alarm',

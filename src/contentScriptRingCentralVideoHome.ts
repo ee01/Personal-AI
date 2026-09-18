@@ -707,9 +707,12 @@ class RingCentralVideoHomePrep {
     const prepCurrent = this.isPrepCurrent();
     const displayAssist = assist && prepCurrent ? assist : null;
     const evidence = displayAssist ? getDisplayEvidence(displayAssist) : [];
-    const cueCards = displayAssist
-      ? getDisplayCueCards(displayAssist, event, evidence.length)
-      : [];
+    const cueCards = displayAssist ? getDisplayCueCards(displayAssist) : [];
+    const visibleSummary =
+      displayAssist &&
+      shouldDisplayMeetingPrepSummary(displayAssist.summary, event)
+        ? displayAssist.summary
+        : '';
     const storylineOpportunity =
       displayAssist && prep
         ? this.getVisibleStorylineOpportunity(displayAssist, prep, event)
@@ -747,15 +750,6 @@ class RingCentralVideoHomePrep {
             this.state.syncLabel,
           ),
         )}</div>
-        <div class="pai-meeting">
-          <div class="pai-meeting-title">${escapeHtml(
-            event.title || '当前会议',
-          )}</div>
-          <div class="pai-time">${escapeHtml(
-            formatMeetingTimeRange(event),
-          )}</div>
-          ${renderMeetingMeta(event)}
-        </div>
         ${
           this.state.error
             ? `<div class="pai-error">${escapeHtml(this.state.error)}</div>`
@@ -766,10 +760,8 @@ class RingCentralVideoHomePrep {
         ${this.state.refreshReceipt ? renderRefreshReceipt(this.state.refreshReceipt) : ''}
         <div class="pai-assist-output" data-role="assist-output">
           ${
-            !this.state.error && displayAssist?.summary
-              ? `<div class="pai-empty">${escapeHtml(
-                  displayAssist.summary,
-                )}</div>`
+            !this.state.error && visibleSummary
+              ? `<div class="pai-empty">${escapeHtml(visibleSummary)}</div>`
               : ''
           }
           ${
@@ -789,18 +781,7 @@ class RingCentralVideoHomePrep {
           ${
             cueCards.length
               ? `<div class="pai-cues">${cueCards
-                  .map(
-                    (card) => `
-                      <article class="pai-cue" data-kind="${escapeHtml(
-                        card.kind,
-                      )}">
-                        <div class="pai-cue-title">${escapeHtml(
-                          card.title,
-                        )}</div>
-                        <div class="pai-cue-body">${escapeHtml(card.body)}</div>
-                      </article>
-                    `,
-                  )
+                  .map((card) => renderMeetingPrepCueCard(card, prep))
                   .join('')}</div>`
               : ''
           }
@@ -1768,34 +1749,105 @@ function getDisplayEvidence(
 
 function getDisplayCueCards(
   assist: ContextAssistResponse,
-  event?: CalendarEventSyncItem | null,
-  evidenceCount = getDisplayEvidence(assist).length,
 ): ContextAssistResponse['cueCards'] {
   const displayEvidenceIds = new Set(
     getDisplayEvidence(assist).map((item) => item.id),
   );
-  return assist.cueCards
-    .filter((card) => {
-      if (card.id === 'missing-goal') {
-        return false;
-      }
-      if (card.kind !== 'memory') {
-        return true;
-      }
-      const evidenceIds = card.evidenceIds || [];
-      return (
-        evidenceIds.length === 0 ||
-        evidenceIds.some((id) => displayEvidenceIds.has(id))
-      );
-    })
-    .map((card) => {
-      if (card.id !== 'brief') return card;
-      const title = event?.title || assist.title || '本次会议';
-      return {
-        ...card,
-        body: `${title} 已匹配到 ${evidenceCount} 条相关记忆。优先核对最近承诺、依赖进展和未关闭的问题。`,
-      };
-    });
+  return assist.cueCards.filter((card) => {
+    if (card.id === 'missing-goal') {
+      return false;
+    }
+    if (card.kind !== 'memory') {
+      return true;
+    }
+    const evidenceIds = card.evidenceIds || [];
+    return (
+      evidenceIds.length === 0 ||
+      evidenceIds.some((id) => displayEvidenceIds.has(id))
+    );
+  });
+}
+
+function shouldDisplayMeetingPrepSummary(
+  summary: string | undefined,
+  event: CalendarEventSyncItem | null,
+): boolean {
+  const text = String(summary || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return false;
+  if (
+    /\*{0,2}(Meeting|会议|Organizer|组织者|Attendees?|参会人|Participants?|Reference material|参考材料|参考资料)\*{0,2}\s*:/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  const title = String(event?.title || '').trim();
+  const organizer = String(
+    event?.organizer?.name || event?.organizer?.email || '',
+  ).trim();
+  if (
+    title &&
+    organizer &&
+    text.toLowerCase().includes(title.toLowerCase()) &&
+    text.toLowerCase().includes(organizer.toLowerCase()) &&
+    /attendee|participant|参会/i.test(text)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function splitMeetingPrepQuestionBody(body: string): string[] {
+  const text = String(body || '').trim();
+  if (!text) return [];
+  const lineItems = text
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim())
+    .filter(Boolean);
+  if (lineItems.length > 1) return lineItems;
+  const sentenceItems: string[] = [];
+  const matcher = /[^?？]*[?？]|[^?？]+/g;
+  for (const part of text.match(matcher) ?? []) {
+    const item = part.trim();
+    if (item) sentenceItems.push(item);
+  }
+  return sentenceItems.length ? sentenceItems : [text];
+}
+
+function resolveMeetingPrepQuestionItems(
+  card: ContextAssistResponse['cueCards'][number],
+  prep: TodayPilotMeetingPrepRecord | null,
+): string[] {
+  if (
+    card.id === 'suggested-questions' &&
+    Array.isArray(prep?.questions) &&
+    prep.questions.length > 0
+  ) {
+    return prep.questions.map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  return splitMeetingPrepQuestionBody(card.body);
+}
+
+function renderMeetingPrepCueCard(
+  card: ContextAssistResponse['cueCards'][number],
+  prep: TodayPilotMeetingPrepRecord | null,
+): string {
+  const questionItems =
+    card.kind === 'question' ? resolveMeetingPrepQuestionItems(card, prep) : [];
+  const body =
+    questionItems.length > 0
+      ? `<ul class="pai-cue-questions">${questionItems
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul>`
+      : `<div class="pai-cue-body">${escapeHtml(card.body)}</div>`;
+  return `
+    <article class="pai-cue" data-kind="${escapeHtml(card.kind)}">
+      <div class="pai-cue-title">${escapeHtml(card.title)}</div>
+      ${body}
+    </article>
+  `;
 }
 
 function isUsefulMeetingPrepEvidence(
@@ -1864,23 +1916,6 @@ function getMeetingPrepSubtitle(
   return `已准备 fallback · ${evidenceCount} 条证据${syncSuffix}`;
 }
 
-function formatMeetingTimeRange(event: CalendarEventSyncItem): string {
-  const start = formatMeetingDateTime(event.startTime);
-  const end = formatMeetingDateTime(event.endTime);
-  if (start && end) return `${start} - ${end}`;
-  return start || end || '时间待确认';
-}
-
-function formatMeetingDateTime(value?: number): string {
-  if (!value) return '';
-  return toCalendarDate(value).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 function formatLocalDate(value: number, timezone: string): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,
@@ -1892,17 +1927,6 @@ function formatLocalDate(value: number, timezone: string): string {
 
 function toCalendarDate(value: number): Date {
   return new Date(value > 10_000_000_000 ? value : value * 1000);
-}
-
-function renderMeetingMeta(event: CalendarEventSyncItem): string {
-  const organizer = event.organizer?.name || event.organizer?.email;
-  const attendeeCount = event.attendees?.length || 0;
-  const parts = [
-    organizer ? `Organizer: ${organizer}` : '',
-    attendeeCount ? `${attendeeCount} attendees` : '',
-  ].filter(Boolean);
-  if (parts.length === 0) return '';
-  return `<div class="pai-time">${escapeHtml(parts.join(' · '))}</div>`;
 }
 
 function getMeetingPrepModeLabel(
@@ -1929,16 +1953,10 @@ function getMeetingPrepBoundaryText(
   if (prep.status === 'fallback') {
     return 'LLM 暂不可用时使用规则 fallback；先核对 owner、下一步和风险，刷新后可补齐更完整记忆。';
   }
-  if (stats.visibleEvidence === 0 && stats.totalEvidence > 0) {
-    return '仅命中日历/基础信息；它会带入 Meeting Pilot 作为准备背景，但不会伪装成高置信记忆。';
-  }
   if (stats.totalEvidence === 0) {
     return '暂无可追溯记忆来源；先用日历信息明确 owner、下一步和风险，刷新后可补齐。';
   }
-  if (stats.backgroundEvidence > 0) {
-    return `${stats.visibleEvidence} 条高置信来源可展开，${stats.backgroundEvidence} 条日历或低信号来源只作为准备背景保留。`;
-  }
-  return '已按可追溯来源生成；可展开证据查看来源。';
+  return '';
 }
 
 function getMeetingPrepReceiptStats(
@@ -1977,6 +1995,11 @@ function renderPrepReceipt(
     `高置信 ${stats.visibleEvidence} 条`,
     `基础背景 ${stats.backgroundEvidence} 条`,
   ];
+  const boundaryText = getMeetingPrepBoundaryText(
+    prep,
+    assist,
+    visibleEvidenceCount,
+  );
   return `
     <section class="pai-prep-receipt" aria-label="Today Pilot 会前准备回执">
       <div class="pai-prep-receipt-head">
@@ -1984,9 +2007,11 @@ function renderPrepReceipt(
           .map((label) => `<span>${escapeHtml(label)}</span>`)
           .join('')}
       </div>
-      <div class="pai-prep-receipt-body">${escapeHtml(
-        getMeetingPrepBoundaryText(prep, assist, visibleEvidenceCount),
-      )}</div>
+      ${
+        boundaryText
+          ? `<div class="pai-prep-receipt-body">${escapeHtml(boundaryText)}</div>`
+          : ''
+      }
       <div class="pai-prep-receipt-handoff">
         本机会写入 Meeting Pilot handoff，只带入本场关注、待闭环项、cue cards 和证据背景；不会加入会议、录音、发消息、审批或写回日历/外部系统。
       </div>
@@ -2469,23 +2494,12 @@ function styles(): string {
       font-size: 16px;
     }
     .pai-sub,
-    .pai-time,
     .pai-source small {
       color: #64748b;
       font-size: 12px;
     }
     .pai-sub {
       margin-top: 4px;
-    }
-    .pai-meeting {
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 6px;
-      background: #f7fafc;
-    }
-    .pai-meeting-title {
-      font-weight: 700;
-      color: #111827;
     }
     .pai-goal-label {
       display: block;
@@ -2842,6 +2856,15 @@ function styles(): string {
     .pai-cue-body {
       color: #334155;
       word-break: break-word;
+    }
+    .pai-cue-questions {
+      margin: 0;
+      padding-left: 18px;
+      color: #334155;
+      word-break: break-word;
+    }
+    .pai-cue-questions li + li {
+      margin-top: 6px;
     }
     .pai-evidence {
       margin-top: 12px;

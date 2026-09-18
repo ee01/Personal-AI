@@ -1,8 +1,4 @@
 import { getIndexedDBData } from './storage.js';
-import {
-  isScheduledMessagesInitialized,
-  showInitRequiredDialog,
-} from './scheduled-messages/ScheduledMessagesUtils.js';
 import { formatLocalScheduleDateTime } from './scheduled-messages/scheduleDateTime.js';
 
 type ComposeTargetType = 'private' | 'group';
@@ -1269,13 +1265,6 @@ async function submitSchedule(
   setError?.('');
 
   try {
-    const initialized = await isScheduledMessagesInitialized();
-    if (!initialized) {
-      closePopover();
-      await showInitRequiredDialog('定时发送');
-      return;
-    }
-
     const [target, extraction] = await Promise.all([
       resolveComposeTarget(composer),
       extractComposerContent(composer),

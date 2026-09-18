@@ -32,7 +32,9 @@ import {
 import {
   getTaskEnabled,
   resolveTaskEnabledFromSchedulerStates,
-} from '../services/taskSchedulerDefinitions';
+  BACKGROUND_JOB_STATES_KEY,
+  LEGACY_TASK_SCHEDULER_STATES_KEY,
+} from '../services/backgroundJobDefinitions';
 import {
   mergeManualConcernedItemsPreservingSystem,
   partitionConcernedItems,
@@ -1167,9 +1169,14 @@ const TopicModal = () => {
       }
 
       // 监听任务状态变化
-      if (changes.taskSchedulerStates || changes.taskStates) {
+      if (
+        changes[BACKGROUND_JOB_STATES_KEY] ||
+        changes[LEGACY_TASK_SCHEDULER_STATES_KEY] ||
+        changes.taskStates
+      ) {
         const taskStates =
-          changes.taskSchedulerStates?.newValue ||
+          changes[BACKGROUND_JOB_STATES_KEY]?.newValue ||
+          changes[LEGACY_TASK_SCHEDULER_STATES_KEY]?.newValue ||
           changes.taskStates?.newValue;
         setIsSilentAnalysisEnabled(
           resolveTaskEnabledFromSchedulerStates('message_analysis', taskStates),
@@ -2015,7 +2022,7 @@ const TopicModal = () => {
 
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'CONTROL_TASK',
+        type: 'CONTROL_BACKGROUND_JOB',
         taskId: 'message_analysis',
         action: 'toggle',
         enabled: true,
@@ -2418,9 +2425,9 @@ const TopicModal = () => {
           : '后台采集开启回执 · 未确认';
     const resultText =
       receipt.status === 'pending'
-        ? '正在提交到 Task Scheduler；状态确认前，不把这批手动规则当作已经自动运行。'
+        ? '正在提交到 Background Jobs；状态确认前，不把这批手动规则当作已经自动运行。'
         : receipt.status === 'succeeded'
-          ? `Task Scheduler 已确认开启${receipt.message ? `：${receipt.message}` : ''}。`
+          ? `Background Jobs 已确认开启${receipt.message ? `：${receipt.message}` : ''}。`
           : `开启失败或未确认：${receipt.error || '任务控制失败'}。当前仍以状态条为准。`;
     const boundaryText =
       receipt.status === 'succeeded'
@@ -4093,7 +4100,7 @@ const TopicModal = () => {
               disabled={silentAnalysisControlReceipt?.status === 'pending'}
               title={
                 silentAnalysisControlReceipt?.status === 'pending'
-                  ? '正在提交开启请求；等待 Task Scheduler 确认'
+                  ? '正在提交开启请求；等待 Background Jobs 确认'
                   : '开启后台记忆采集；只影响后续新消息'
               }
               aria-label={

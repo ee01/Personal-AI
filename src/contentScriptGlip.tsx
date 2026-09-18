@@ -2249,6 +2249,7 @@ async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
       enableSnooze: config.ENABLE_SNOOZE !== false, // 默认启用
       enableFollowThread: config.ENABLE_FOLLOW_THREAD !== false, // 默认启用
       enableAutoReply: config.ENABLE_AUTO_REPLY !== false, // 默认启用
+      enableFollowupAsk: config.ENABLE_FOLLOWUP_ASK !== false, // 默认启用
       enableLinkedAction: config.ENABLE_LINKED_ACTION !== false, // 默认启用
     };
   } catch (error) {
@@ -2257,6 +2258,7 @@ async function getMessageReactionConfig(): Promise<MessageReactionConfig> {
       enableSnooze: true,
       enableFollowThread: true,
       enableAutoReply: true,
+      enableFollowupAsk: true,
       enableLinkedAction: true,
     };
   }
@@ -2266,6 +2268,7 @@ const MESSAGE_REACTION_ENV_KEYS = [
   'ENABLE_SNOOZE',
   'ENABLE_FOLLOW_THREAD',
   'ENABLE_AUTO_REPLY',
+  'ENABLE_FOLLOWUP_ASK',
   'ENABLE_LINKED_ACTION',
 ] as const;
 let messageReactionConfigWatcherAttached = false;

@@ -71,6 +71,7 @@ export interface EnvConfigType {
   ENABLE_AUTO_REPLY: boolean; // 启用自动答复功能
   ENABLE_SNOOZE: boolean; // 启用稍后处理功能
   ENABLE_FOLLOW_THREAD: boolean; // 启用关注后续功能
+  ENABLE_FOLLOWUP_ASK: boolean; // 启用跟进追问功能
   ENABLE_LINKED_ACTION: boolean; // 启用联动操作功能
   // 消息过滤配置
   FILTER_OWN_MESSAGES: boolean; // 是否过滤自己发送的消息
@@ -452,6 +453,10 @@ export function normalizeEnvConfigShape(
     typeof config.ENABLE_FOLLOW_THREAD === 'boolean'
       ? config.ENABLE_FOLLOW_THREAD
       : defaultEnvConfig.ENABLE_FOLLOW_THREAD;
+  const normalizedFollowupAskEnabled =
+    typeof config.ENABLE_FOLLOWUP_ASK === 'boolean'
+      ? config.ENABLE_FOLLOWUP_ASK
+      : defaultEnvConfig.ENABLE_FOLLOWUP_ASK;
   const normalizedLinkedActionEnabled =
     typeof config.ENABLE_LINKED_ACTION === 'boolean'
       ? config.ENABLE_LINKED_ACTION
@@ -488,6 +493,7 @@ export function normalizeEnvConfigShape(
     ...defaultEnvConfig,
     ...config,
     ENABLE_FOLLOW_THREAD: normalizedFollowThreadEnabled,
+    ENABLE_FOLLOWUP_ASK: normalizedFollowupAskEnabled,
     ENABLE_LINKED_ACTION: normalizedLinkedActionEnabled,
     MEETING_PILOT_ENABLED: normalizedMeetingPilotEnabled,
     MEETING_PILOT_FLOATING_ICON_VISIBLE:
@@ -577,6 +583,7 @@ export const defaultEnvConfig: EnvConfigType = {
   ENABLE_AUTO_REPLY: process.env.ENABLE_AUTO_REPLY !== 'false',
   ENABLE_SNOOZE: process.env.ENABLE_SNOOZE !== 'false',
   ENABLE_FOLLOW_THREAD: process.env.ENABLE_FOLLOW_THREAD !== 'false',
+  ENABLE_FOLLOWUP_ASK: process.env.ENABLE_FOLLOWUP_ASK !== 'false',
   ENABLE_LINKED_ACTION: process.env.ENABLE_LINKED_ACTION !== 'false',
   // 消息过滤配置（默认开启过滤）
   FILTER_OWN_MESSAGES: process.env.FILTER_OWN_MESSAGES !== 'false',
