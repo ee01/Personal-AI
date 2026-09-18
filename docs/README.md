@@ -24,7 +24,7 @@
 - [`task_center.md`](features/task_center.md) - **任务中心**：定时推送 / Agent 任务 / 提醒我 / 开发委派 / 帮我问 / 反思候选统一账本，两条调度 lane
   - [`scheduled_messages_manager.md`](features/scheduled_messages_manager.md) - ☁️ jira_sheet lane（Google Sheet + App Script + Jira Automation）
   - [`agent_executor_runtime.md`](features/agent_executor_runtime.md) - 执行器运行时（OpenClaw / ACP / worker）
-- [`task_scheduler_api.md`](features/task_scheduler_api.md) - 扩展后台 Chrome alarm 调度器（与任务中心无关）
+- [`background_jobs.md`](features/background_jobs.md) - **后台作业**：扩展后台 Chrome alarm 调度器（与任务中心无关）
 
 ### 集成功能
 - [`jira_automation_import.md`](features/jira_automation_import.md) - Jira自动化导入

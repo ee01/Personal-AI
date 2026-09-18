@@ -5,6 +5,10 @@
 > Demo：[`memory-reflection-governor-demo.html`](./memory-reflection-governor-demo.html)
 > Idea 来源：未使用 Reminder。本机 Reminders 可见列表没有 `Personal AI` 清单，因此没有可随机选择或标记完成的全新功能 idea。本方案来自远端 `esone.qiu` 真实记忆抽样、`docs/progressing` 去重、现有 Reflection / Action Queue 代码路径和 2026 年 agent memory / observability / context engineering 资料。
 
+> **2026-09-11 更新：运行时那一半已拆出为独立 plan** → [`memory-reflection-runtime-governance-plan.md`](./memory-reflection-runtime-governance-plan.md)
+>
+> 本文档的**产品形态（独立巡航页）继续保持搁置**，但它诊断的问题是真实的，且已在生产数据上被证实（2026-09 取证：`esone.qiu` 899 条 active 线程中 665 条从未反思过，同时单条线程最高空转 419 次）。新 plan 采纳了本文档的 Utility Score / Stop Loss Rules / Resume Triggers 设计，把它们落成**调度层代码**（前置证据闸、指数退避、自动关闭 TTL），并遵循本文档「如果未来继续做，应该怎么落地」第 5 条的建议顺序——不新建页面，治理只做内部诊断，ROI 指标接进既有 usage analytics。
+
 ## 搁置原因
 
 本方案先记录为搁置方向。

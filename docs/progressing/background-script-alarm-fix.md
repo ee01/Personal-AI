@@ -16,11 +16,11 @@
 // 原来的代码结构（有问题）
 (async () => {
     setTimeout(async () => {
-        await initializeTaskScheduler(); // 5秒后才初始化
+        await initializeBackgroundJobs(); // 5秒后才初始化
     }, 5000);
 })();
 
-async function initializeTaskScheduler() {
+async function initializeBackgroundJobs() {
     // ...
     setupAlarmListeners(); // 监听器在这里设置
 }
@@ -48,12 +48,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     console.log('🔔 收到 alarm 事件:', alarm.name);
     
     try {
-        // 处理 TaskScheduler 的任务
+        // 处理 BackgroundJobs 的任务
         if (alarm.name.startsWith('scheduled_task_')) {
-            if (!taskScheduler.isInitialized) {
-                await initializeTaskScheduler();
+            if (!backgroundJobs.isInitialized) {
+                await initializeBackgroundJobs();
             }
-            await taskScheduler.handleAlarmEvent(alarm);
+            await backgroundJobs.handleAlarmEvent(alarm);
             return;
         }
         
@@ -75,7 +75,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // 然后才是延迟初始化
 (async () => {
     setTimeout(async () => {
-        await initializeTaskScheduler();
+        await initializeBackgroundJobs();
     }, 5000);
 })();
 ```
@@ -84,10 +84,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 1. **src/background.ts**
    - 在顶层立即设置 `chrome.alarms.onAlarm.addListener`
-   - 统一处理所有 alarm 事件（TaskScheduler、memory 等）
+   - 统一处理所有 alarm 事件（BackgroundJobs、memory 等）
    - 添加详细的日志输出
 
-2. **src/services/TaskScheduler.ts**
+2. **src/services/BackgroundJobs.ts**
    - 将 `isInitialized` 改为 `public`，方便检查初始化状态
    - 移除 `setupAlarmListeners()` 中的监听器设置
    - 新增 `handleAlarmEvent()` 公共方法，由 background.ts 调用
@@ -130,12 +130,12 @@ chrome.alarms.getAll().then(alarms => {
     })));
 });
 
-// 检查 TaskScheduler 是否初始化
-taskScheduler.isInitialized
+// 检查 BackgroundJobs 是否初始化
+backgroundJobs.isInitialized
 
 // 查看任务状态
 chrome.runtime.sendMessage({
-    type: 'GET_TASK_SCHEDULER_STATUS'
+    type: 'GET_BACKGROUND_JOBS_STATUS'
 }, response => {
     console.table(response.tasks);
 });
@@ -198,15 +198,15 @@ Background script loaded
    chrome.alarms.getAll().then(console.log);
    ```
 
-3. **TaskScheduler 是否初始化**：
+3. **BackgroundJobs 是否初始化**：
    ```javascript
-   taskScheduler.isInitialized; // 应该返回 true
+   backgroundJobs.isInitialized; // 应该返回 true
    ```
 
 4. **任务是否启用**：
    ```javascript
    chrome.runtime.sendMessage({
-       type: 'GET_TASK_SCHEDULER_STATUS'
+       type: 'GET_BACKGROUND_JOBS_STATUS'
    }, response => {
        console.log(response.tasks.filter(t => t.enabled));
    });

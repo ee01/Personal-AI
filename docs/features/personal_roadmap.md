@@ -8,12 +8,12 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 
 ## 大白话运行逻辑
 
-1. 用户在 Roadmap 站点维护团队排期（Jira 导入进 Backlog，拖进 Gantt 才算重点）。
+1. 用户在 Roadmap 站点维护团队排期（Jira 导入进 Backlog，拖进 Gantt 才算重点）。没有扩展时也可以用「新建条目 → 使用 AI 批量创建」一次生成 Draft 主任务/子任务并初排甘特，**不创建 Jira**。
 2. 装了 Personal AI 扩展、且在该团队有过写操作的用户，扩展会把 **当前 Gantt 上的主任务** 同步到记忆服务（按团队覆盖，不是追加）。
 3. 消息分析把这些重点项目当成系统观察规则：命中只入库，**不发 Glip/Chrome 通知**。
 4. 高影响事件（日期变动等）抽成时间线，写双时态属性，并在 Roadmap bar 上出个人层角标；用户可「按此更新」或「忽略」，也可因 bar 收敛到建议日期而自动消除。
 5. 自我反思 / dreaming / 召回以 focus project 为锚点，但有多团队预算公平与 alias 短名压缩，避免 prompt 过载。
-6. 「创建 Jira」填了 Prompt 时，按 Epic 最多 2 路交给 Agent；某一组只成功一部分也会把已有 Jira key 写回 Roadmap，失败的行单独标错。
+6. 「创建 Jira」填了 Prompt 时，按 Epic 最多 2 路交给 Agent；某一组只成功一部分也会把已有 Jira key 写回 Roadmap，失败的行单独标错，可改字段后按组重试且不会再创建已成功的 ticket。Jira 里还没有对应 fixVersion 时留空该字段继续创建。
 
 ## 数据分层
 
@@ -78,6 +78,87 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 
 draft 同步进 memory 时 `externalRef.jiraKey` 写 `null`、`isDraft: true`。合成 key **不进 aliases**——`LOCAL-xxx` 永远不可能出现在聊天消息里，只会污染匹配和规则文本，draft 用 title / alias / displayName 匹配。`buildFocusProjectWatchRules` 对 draft 去掉 `[key]` 前缀和「exact Jira key first」指令，改为纯 alias/keyword 匹配。回填真实 key 后下次 sync 会把它加进 aliases，而 id 因 `key` 不变保持稳定。draft 和普通 focus project 一样是**只入库不通知**。
 
+## AI 批量创建 Draft（产品内入口与 MCP）
+
+两条入口共用同一份领域核心：`DraftPlanV1` Schema、校验、排期规范化、原子批次、幂等回执、撤销。产品内入口给不会写代码的 PM；MCP / Skill / Codex Plugin 给已有 Agent 的人。两者都只写 Roadmap Draft（`jiraKey === null`），**不新增服务端创建 Jira、MCP 创建 Jira 或无扩展创建 Jira**。创建 Jira 仍走原弹窗 + Chrome Extension。规划核心不依赖 Memory Service：Memory 停运时，网页生成和 MCP 结构化提交仍可用。
+
+静态 Demo：[`docs/demo/roadmap-demo.html`](../demo/roadmap-demo.html) 的「新建条目」弹窗含「使用 AI 批量创建」页，用固定 3 Epic / 12 Ticket 模拟生成（不调真实模型）。
+
+### 产品内：新建条目 → 使用 AI 批量创建
+
+Backlog「+ 新建条目」弹窗增加「手动创建 / 使用 AI 批量创建」页签（`BacklogPanel.vue` + `DraftPlanningModal.vue`）。默认只需粘贴需求，点「生成预览」；勾选「直接创建 Draft」才一次写入。页面已带当前团队与季度，不要求填模型。发送前展示实际 provider / 网关展示名及本次范围。
+
+| 状态 | 用户看到的行为 |
+|---|---|
+| idle | 可输入；切回手动创建不丢未提交文本 |
+| queued / generating / validating | 显示阶段，无伪造百分比；可取消 |
+| needs_input | 集中问必须决定的歧义（例如两个同名父任务）；尚未创建任何条目 |
+| ready（只预览） | 两级清单、初排、依据和警告；再点创建 |
+| committed | 数量、复用父任务、待分配/初排提示；定位甘特并可撤销本批 |
+| failed / cancelled | 保留输入；明确「未创建」或给出已提交回执 |
+
+勾选「直接创建 Draft」时：合法且没有必须用户选择的冲突就直接提交一批 Draft，不另开审批队列。未知 Owner、缺估算、没有 Jira 映射只出 warning，不挡 Draft。TBD 保持未分配；「Jimmie / Fairy」这类多人候选保持 `owner_resolution=ambiguous`，不回退到操作人或 `createdBy`。
+
+成功后：snapshot 更新；本机清空 Backlog 搜索；滚动并高亮本批主任务；新父项自动展开；跨季度时只改本机可见范围，不改团队共享季度。Toast 按文本转义，不把模型输出当 HTML。
+
+高级选项可改规划起点、目标季度、挂到指定主任务。预览 vs 写入由「生成」旁的勾选决定，默认不勾选（只预览）。粘贴链接只保存引用，不声称已抓取网页。
+
+### DraftPlanV1 与保真
+
+外部契约名 `DraftPlanV1`（`schemaVersion: "1"`），服务端用运行时 validator（不是只靠 TypeScript）。两级：`parents[]` + `children[]`。`ref` 是批内稳定引用，不是数据库 key。`action` 为 `create` 或 `attach`；attach 必须用本次授权上下文里的 `existingItemKey`，禁止发明 ID。禁止计划携带 `jiraKey` / SQL / 任意 intent。证据 `quote` 必须能在本次 source 原文匹配。描述超过 2000 字符拒绝，**不静默截断后写入**。空需求报 `no_actionable_content`，不硬凑任务。
+
+新主任务会把 `globalContext`（Overall 背景、约束、里程碑、风险）物化进父描述（`【整体背景与约束】` 等块）。attach 已有父任务时：不覆盖已有父描述；父描述为空才自动追加 Overall；已有 Jira key 的父项不会为追加 Overall 而改描述。
+
+排期用自然日：`schedule.basis` 为 `explicit` / `inferred` / `missing`。缺日期时用规划起点与占位天数初排，并在回执里标明推断。同 `requestId` 只物化一批；payload 不同则 409。预览（`autoCommit=false`）保存计划 revision，不写 Draft。
+
+### 服务端规划 API
+
+编辑凭据走 `X-Share-Token`（不要把 token 放进 URL 或 SSE）。`X-Actor-Source: agent` 标记 Agent 入口，由服务端赋值，不能靠 body 伪造 `web_ai`/`agent` 来源。新规划/job/receipt 都要求编辑 token。公开 snapshot 只接收已提交 Draft，不带原文证据或 secret。
+
+| 路径 | 作用 |
+|---|---|
+| `GET .../planning/capabilities` | 契约版本、限额、provider 展示名、agent 开关；`features.autoCommit` 表示请求可带 `autoCommit=true`；`features.undo` 恒为可撤本批，不是服务端产品开关 |
+| `GET .../planning/context` | 候选父任务、成员、版本；不写库、不调 LLM |
+| `POST .../planning/jobs` | 服务端 LLM 生成；省略 `autoCommit` 或 `false` 只预览，显式 `true` 才写入 |
+| `GET/POST .../planning/jobs/:jobId` / `cancel` | 查询与取消 |
+| `POST .../draft-plans` | 结构化提交（Agent 默认只预览） |
+| `POST .../draft-plans/:planId/revisions` | 白名单改字段后再校验 |
+| `POST .../draft-plans/:planId/commit` | 对固定 revision 原子落库，返回 receipt |
+| `GET .../planning/requests/:requestId` | 断线恢复，不重建 |
+| `GET/POST .../draft-batches/:batchId` / `undo` | 回执与撤销 |
+| `POST .../draft-batches/jira-handoff` | 兼容旧客户端的在途标记；不拦截「创建 Jira」，也不再挡住撤销 |
+
+批次在同一 SQLite 事务里写入 items/subs/排期/activity/receipt，失败全部回滚，提交后才广播 snapshot。事件与 activity 剥离 `shareToken`；不广播 job 原文或模型原始响应。已有团队签发新 share token 必须持有有效编辑权；不能再用可伪造的 `creator`/`extension` source 冒领。
+
+生成成功后网页可直接「撤销本批」，没有服务端开关。撤销只删仍是 Draft 且提交后没被改过的行；已经回填 `jiraKey` 的条目留下，也不从 Jira 删票。创建 Jira 走扩展弹窗（直连 API 或执行器），服务端不拦截该按钮。
+
+### MCP / Skill / Codex Plugin
+
+`roadmap-service/mcp/` 是本地 stdio MCP，只调 Roadmap HTTP API：不打开数据库、不调 Memory、不创建 Jira。生产 `ROADMAP_BASE_URL` 必须 HTTPS（`localhost` 可用 HTTP）。token 只放请求头。工具：`roadmap_get_context` / `validate_plan` / `revise_plan` / `generate_plan` / `get_request` / `cancel_job` / `commit_plan` / `get_batch` / `undo_batch`。`generate_plan` 才会花服务端 LLM 额度，默认 `autoCommit=false`。契约 `1.0.0` / schema `1`。
+
+Skill：`roadmap-service/plugin/skills/roadmap-planning/`（GitHub：`https://github.com/ee01/personal-ai/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md`；仓库若私有则 404，改用本地该路径）。Codex Plugin 把 MCP + Skill 打成可从 `roadmap-service/.agents/plugins/marketplace.json` 安装的单元。未装 Plugin 时，独立 MCP + Skill 也能 validate → commit → receipt。安装凭据走宿主安全配置，不写进 Git。不承诺官方公开目录上架。`ROADMAP_AI_AGENT_ACCESS` 关掉时 MCP / Agent 入口 403，网页「使用 AI 批量创建」不受影响。这与甘特「创建 Jira」里的扩展 Agent 执行器不是同一条路径。
+
+### 描述上限（与 Jira handoff）
+
+页面编辑、规划校验、服务端写入统一 **2000 字符**（原先前端 500、Agent 父描述摘录约 1200）。超限必须明示，不能 clip 后当完整上下文。Agent 创建 Jira 时，父 Epic 描述若超过 2000，摘录末尾带「父描述已截断至 2000 字，完整内容请再读该 issue」。直连 API 仍原文透传用户描述（受同一上限）。
+
+### 配置
+
+`.env`（见 `roadmap-service/.env.example`）：
+
+| 变量 | 含义 |
+|---|---|
+| `ROADMAP_AI_ENABLED` | 服务端 LLM 生成总开关；关时仍可手动建条目、MCP 结构化提交 |
+| `ROADMAP_AI_AGENT_ACCESS` | 允许 `X-Actor-Source: agent`（MCP / Skill）；关则 Agent 入口 403，网页不受影响 |
+| `ROADMAP_LLM_PROVIDER` | `openai` 或 `claude` |
+| `ROADMAP_OPENAI_API_BASE_URL` 等 | 仅管理员配置；调用方和需求正文不能覆盖 Base URL |
+
+Base URL 禁止用户名/密码、凭证 query、跨源带认证重定向。输入可能含公司需求，属于明确的数据外发边界；不默认加入个人 Memory 或其他团队历史。
+
+### E-12 固定验收口径
+
+参考日期锁定 `2026-09-16`，不随测试日改年份。三个已有主任务下新增 4 / 3 / 5 条子任务；Jimmie / Fairy 保持多人信息；TBD 保持未知。eval 套件 `roadmap-ai-draft-planning`（合成 fixture + 结构化计划，不证明生产模型拆解质量，不创建真实 Jira）。
+
 ## 从 JQL 识别层级
 
 `roadmap-service/src/core/JqlIntrospect.ts` 在服务端解析团队 JQL，结果随 snapshot 的 `team.jqlHints` 下发，前端与扩展共用一套：
@@ -101,11 +182,12 @@ Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同�
 
 - 标题旁徽标实时切换：`直连 API` ↔ `AGENT 执行器`
 - Agent 模式显示执行器 chip（当前 fallback：`openClawEnabled` 时出现 OpenClaw）；无配置时引导打开插件 Options
-- 字段两模式共享；Agent 模式下空字段 placeholder 为「自动 · 由 Agent 决定」，已填值作为硬约束下发
+- 字段两模式共享；Agent 模式下空字段 placeholder 为「自动 · 由 Agent 决定」，已填值作为约束下发。**fixVersion 例外**：目标版本在 Jira 项目中不存在时，直连与 Agent 都**省略该字段并继续创建**，在该行显示 warning，而不是拒绝整行或向 OpenClaw 提问（提问回不到 Roadmap 弹窗）
 - Prompt 草稿按团队写入本机 `localStorage`（`personalroadmap.aiPrompt:<teamId>`）；关闭弹窗再打开会恢复
 - 用户**执行创建**且 Prompt 非空时，写入团队配置 `team.createJiraPrompt`，其他协作者打开弹窗（本机无草稿时）也能看到
 - 执行器选择写入 `localStorage`（`personalroadmap.aiExecutor`）
 - Agent 模式逐行成功时显示紫色 chip「草稿名已存为备注」（hover 说明甘特展示名不变）；完成 toast 追加「草稿名已保留为备注名」
+- 部分失败时弹窗保持打开：错误全文换行展示（不再截成 `requir...`）；每个仍有失败项的 Epic 组右侧出现重试按钮，底栏变为「重试失败项」。重试只提交尚未拿到 jiraKey 的行，已成功的 ticket 不会再创建。关闭后再打开仍保留这次的行状态，方便对照原因改共享字段后再试
 
 ### fixVersion 自动填
 
@@ -124,6 +206,7 @@ Gantt 上的 draft 主任务和 draft 子任务，点「创建 Jira」打开同�
 - **落在不同列** → **共享字段留空**，不猜一个统一值。列表仍逐行显示绿色 chip。Agent 模式按各任务 `suggestedFixVersion` 分别填写（Prompt 写明「不要统一覆盖」）；直连 API 每行写入 `fixVersion 覆盖值 || 该行 suggestedFixVersion`
 - 用户在共享字段输入固定值 → 覆盖全部行
 - 插件侧 `buildJiraCreateFields` 写 `fixVersions`：exact → **唯一后缀匹配**（解决表里 `26.3.220` vs Jira `Nova 26.3.220`）；歧义/无匹配则丢字段并带回 warning，不阻断创建
+- **Agent 与直连同一条降级**：suggested / 覆盖值只是优先写入。直连走 `buildFixVersionsValue`；Agent 在提交前用 createmeta **加上** `/project/{key}/versions` 做预检（createmeta 的 allowedValues 经常是空的，上次 OpenClaw 拒单就是它自己查了项目版本目录后把缺失版本当成硬约束）。匹配不上就把该行 `fixVersion` / `suggestedFixVersion` / 共享约束从 payload **和 Prompt 正文**删掉，任务开头加「最高优先级」覆盖段。禁止输出「未创建任何 issue，以免写入错误版本」。能唯一匹配则写；否则省略 `fixVersions` 仍创建，并在 mapping `warning` 说明（可与 `jiraKey` 同时出现）。禁止因缺版本拒绝整行或整单，禁止问用户「改用已有版本还是先去 Jira 建版本」——OpenClaw 的 `input_required` **不会**回到 Roadmap 弹窗。也不要擅自改成邻近版本，除非用户在共享字段给了统一覆盖值
 
 Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器查当前 sprint。
 
@@ -134,7 +217,7 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 - 人员全集 = 当前用户 ∪ 团队成员 ∪ 子任务 Owner ∪ 草稿 `createdBy`
 - Owner 优先；无 Owner 回落创建人；本地自建未记名再回落当前用户
 - **直连 API**：实名转 `firstname.lastname` 写入 `fields.assignee.name`；未映射则留空，不阻塞创建
-- **Agent 模式**：前端组装完整 Prompt（**System Prompt** + 用户 Prompt + 字段约束 + 映射表 + 任务清单）；扩展提交前按父 `jiraKey` 拉取 Epic `description` 写入请求，再追加结果契约
+- **Agent 模式**：前端组装完整 Prompt（**System Prompt** + 用户 Prompt + 字段约束 + 映射表 + 任务清单）；扩展提交前按父 `jiraKey` 拉取 Epic `description`、用 createmeta 预检 fixVersion，再追加结果契约
 - 全站展示名走 `dispName()`（选人浮层、人员视图、创建者灰字、协作 ticker）；存储仍用系统名
 
 #### 实名 Suggest 与人员合并
@@ -170,11 +253,11 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 
 提交给 Agent 的 `task` 文本结构：
 
-1. **【System Prompt】** — 固定指令（角色、禁止索要 token、**子任务必须写 description**）
+1. **【System Prompt】** — 固定指令（角色、禁止索要 token、**fixVersion 缺失则留空继续**、**子任务必须写 description**）
 2. **【用户 Prompt】** — 弹窗输入
-3. **【字段约束】 / 【Assignee 规则】 / 【任务清单】** — 硬约束与逐行 draft
-4. **【父 Epic 描述（已从 Jira 拉取）】** — 扩展用 Options token 读父 issue `description`（ADF/wiki 转纯文本，约 1200 字上限）
-5. **结果契约** — `mappings` JSON，允许 `partial` 与 `error` 行；明确子任务 `description=required`；每路只创建该组 draftId
+3. **【字段约束】 / 【Assignee 规则】 / 【任务清单】** — 约束与逐行 draft（fixVersion 为优先写入，不是创建门禁）
+4. **【父 Epic 描述（已从 Jira 拉取）】** — 扩展用 Options token 读父 issue `description`（ADF/wiki 转纯文本，2000 字上限；超限会显式标注截断，并请 Agent 再读该 issue）
+5. **结果契约** — `mappings` JSON，允许 `partial`、`error` 行与 `warning`（可与 `jiraKey` 并存）；明确子任务 `description=required`；每路只创建该组尚未成功的 draftId
 
 **Description 生成规则（Agent 必须遵守）**：
 
@@ -191,7 +274,7 @@ Sprint：直连 v1 不写（需 Agile API）；Agent 模式未填时由执行器
 
 - 草稿创建者：条上用虚线样式标识草稿（无 DRAFT 角标）；协作方创建的子任务 hover 时左侧浮现灰色 `xxx created`
 - 新建子任务默认今天起 14 天（贴齐时间轴末端）
-- 草稿可折叠填 **description**（甘特快速添加 / 双击草稿条 / Backlog 新建）：标题 + Enter 仍秒建；`≡ 描述` 或 Shift+Enter 展开；已有描述时双击默认展开。非 draft 不可改 description（由打开刷新从 Jira 镜像）
+- 草稿可折叠填 **description**（甘特快速添加 / 双击草稿条 / Backlog 新建）：标题 + Enter 仍秒建；`≡ 描述` 或 Shift+Enter 展开；已有描述时双击默认展开。前端与服务端上限均为 **2000 字符**。非 draft 不可改 description（由打开刷新从 Jira 镜像）
 - 描述框样式与 demo 一致：快速添加的描述框固定 404px、与标题框左对齐（`.te-desc`）；双击编辑器内的描述框撑满面板（`.alias-editor` 用 `align-items:stretch`，收缩到 textarea 默认宽即为回归）；Backlog 新建弹窗的描述用正文字体（`.f-input.f-desc`，非 JQL 的等宽 96px 高）。展开即聚焦描述框、收起回到标题输入框且不丢内容
 - Hover 灰色小字：有 description 时展示描述（单行约 150 字）；无则保留操作提示。「可赶 Sprint」在标题行
 - 选人浮层：搜索置顶、打开即聚焦、列表限高滚动、键盘导航、视口不够时向上翻转
@@ -243,21 +326,32 @@ flowchart TD
 | 分组 | 与直连相同：`buildDraftGroups` 每个主任务一组 |
 | 并行 | 最多 **2** 路同时 `execute`（`AGENT_CREATE_CONCURRENCY`）。其余组保持「待创建」，轮到才转圈。直连 API 仍串行 |
 | Prompt 切片 | 每路只含该组 draft。预览弹窗仍展示全部草稿总览 |
-| 幂等 | `idempotencyKey = roadmap_create:{teamId}:{sorted draftIds}`，按组计算。已回写的行不再是 draft，重试只会带剩余组 |
+| 幂等 | `idempotencyKey = roadmap_create:{teamId}:{sorted draftIds}`，按组计算。已回写的行不再进入 payload；失败重试另加 `:retry-N`，避免撞上上次 `succeeded` / `input_required` 被短路 |
 | 为何不合并 | 单请求崩溃且无 artifact 时，重试可能把已建票再创建一遍。Epic 隔离把爆炸半径限制在一组 |
 
 **结果契约（允许部分成功）**：
 
 ```json
 {"partial":true,"mappings":[
-  {"draftId":"AE42…","jiraKey":"MILO-101"},
+  {"draftId":"AE42…","jiraKey":"MILO-101","warning":"fixVersion 26.4.120 不存在，已留空"},
   {"draftId":"BBx…","error":"assignee 找不到"}
 ]}
 ```
 
-- 兼容旧格式（只有 `jiraKey`、无 `partial`）
+- 兼容旧格式（只有 `jiraKey`、无 `partial` / `warning`）
 - **即使 AgentTask 为 `failed` / `dead_letter` / 轮询超时，只要 artifact 里有 `jiraKey` 就回写**，缺 mapping 的行才标错
 - 契约要求 Agent：后面某行失败也必须输出已成功的 key，禁止整单失败就省略成功行
+- **OpenClaw 人工确认回不到 Roadmap**：`input_required` 算终态，弹窗把 Agent 的问题展成该行错误，用户在本窗口改字段后重试。不要依赖在 OpenClaw 里回答
+
+**失败重试（不污染已成功 ticket）**：
+
+| 规则 | 行为 |
+|---|---|
+| 展示 | 失败原因全文换行；成功但省略了 fixVersion 的行显示 amber warning |
+| 范围 | 每个仍有失败项的 Epic 组有重试按钮；底栏「重试失败项」重试所有剩余失败组 |
+| 载荷 | `sliceDraftGroupForRetry` 去掉已有 `jiraKey` 的父/子行；父已成功则只带子任务并带上 `parentJiraKey` |
+| 幂等 | 重试递增 `retryAttempt`，避免撞上上次 `succeeded` / `input_required` 的 idempotency key 被短路 |
+| 字段 | 失败后共享字段仍可改（fixVersion / Sprint / Prompt 等），新值只作用于剩余行 |
 
 **Agent 排队 / loading**：`execute` 返回 `queueStatus: queued` 后扩展每 5s 轮询 `runtime-status`，直到 `succeeded` / `failed` / `dead_letter` / `input_required`，或就绪检查拦截（`readinessBlocked`）、排队超过约 90s。这三种「失败」不再直接 throw 整组：先解析 mappings，有 key 就回写。
 
@@ -555,7 +649,12 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 源码入口
 
 - `roadmap-service/`（`src/core/JqlIntrospect.ts`、`JiraClient.ts`、`TargetSync.ts`、`originalEstimate.ts`、`deferPlan.ts`、`src/storage/Database.ts` 的迁移表）
-- `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、ticker、`epicColor`/`epicShort`/`shouldWrapAlias`）
+- `roadmap-service/src/planning/`（`DraftPlanV1`、validator/normalizer/batch、planning jobs）
+- `roadmap-service/src/llm/`（独立 OpenAI / Claude adapter，不 import Memory `LLMClient`）
+- `roadmap-service/src/routes/planning.ts`
+- `roadmap-service/mcp/`、`roadmap-service/plugin/`（stdio MCP + Skill + Codex Plugin）
+- `roadmap-service/web/src/composables/useDraftPlanning.ts`、`web/src/components/modals/DraftPlanningModal.vue`
+- `roadmap-service/web/src/composables/useRoadmapContract.ts`（draft 判据、state 消息、创建 payload、失败重试切片 `sliceDraftGroupForRetry`、ticker、`epicColor`/`epicShort`/`shouldWrapAlias`、`DESCRIPTION_MAX_CHARS=2000`）
 - `roadmap-service/web/src/composables/useReleaseRuler.ts`（`landRelease` 落点列 vs `catchRelease` 可赶 Sprint）
 - `roadmap-service/web/src/composables/useCreateJiraAgentPrompt.ts`（多 fixVersion 时共享字段留空、按行 `suggestedFixVersion`）
 - `roadmap-service/web/src/composables/useExtensionBridge.ts`（直连 / Agent create bridge）
@@ -567,7 +666,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - `roadmap-service/web/src/components/ResourceView.vue`（人员视图：车道装箱、Epic 归属可视化、时间窗平移、聚焦顺延）
 - `roadmap-service/web/src/components/GanttPanel.vue`（缩放手势、工具栏图例、Jira Target 回写队列）
 - `roadmap-service/web/src/components/TopBar.vue`
-- `src/contentScriptRoadmap.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
+- `src/contentScriptRoadmap.ts`、`src/roadmapAgentMappings.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
 - `src/watchRules.ts`（`source: 'project'`）
 - `memory-service/src/core/FocusProjectSyncService.ts`
 - `memory-service/src/core/FocusProjectContextBuilder.ts`
@@ -578,10 +677,12 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 item/sub `status` 与 sub `originalEstimateDays` 的镜像与幂等）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 item/sub `status` 与 sub `originalEstimateDays` 的镜像与幂等、`draftPlanning` E-12 fixture / 幂等 / Owner / 撤销、MCP HTTP 头与 HTTPS 约束、前端 2000 字描述上限）
+- AI Draft 规划体验 eval：`npm run eval:validate` 与 `npm run eval:run -- --suite roadmap-ai-draft-planning --no-repair`（合成计划契约，不跑真实 Jira / Memory / 付费模型质量）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
-- Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传）
+- Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传、缺版本留空继续、失败重试不重建已成功 ticket）
+- Agent mappings：`TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/__tests__/roadmapAgentMappings.test.ts`（partial / warning / jiraKey+error 折叠）
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）
 - 部署后：导入 Task / 创建 Jira / 无扩展时的 Target·Owner 回写都依赖扩展 Options `JIRA_API_TOKEN`。有扩展但 token 失败时，拖动回写仍可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`

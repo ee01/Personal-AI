@@ -421,7 +421,6 @@
         </div>
         <div class="resume-actions">
           <button id="continueBtn" class="btn primary" type="button">继续</button>
-          <button id="newBtn" class="btn" type="button">新问题</button>
           <button id="discardBtn" class="btn text" type="button">丢弃</button>
         </div>
       </div>
@@ -489,7 +488,6 @@
   <script>
     const resumeStrip = document.getElementById('resumeStrip');
     const continueBtn = document.getElementById('continueBtn');
-    const newBtn = document.getElementById('newBtn');
     const discardBtn = document.getElementById('discardBtn');
     const chat = document.getElementById('chat');
     const receipt = document.getElementById('receipt');
@@ -523,16 +521,6 @@
       askInput.placeholder = '继续追问 MTR-148115...';
       status.textContent = '状态：已把本机 Ask 快照作为本轮线索，发送时会附带 contextHints。';
       addMessage('resume', '本地恢复', '已恢复上次 Ask 摘要：MTR-148115 可能卡在审批状态未确认。该摘要只作为线索，发送后仍会重新检索证据。');
-      askInput.focus();
-    });
-
-    newBtn.addEventListener('click', () => {
-      useResumeContext = false;
-      resumeStrip.classList.add('hidden');
-      receipt.classList.remove('visible');
-      askInput.placeholder = '输入一个新问题';
-      status.textContent = '状态：本轮按新问题处理，不会继承上次 Ask。';
-      addMessage('system', '新问题', '本轮不会带入上次 Ask 上下文。本地快照仍可保留到 TTL 到期。');
       askInput.focus();
     });
 

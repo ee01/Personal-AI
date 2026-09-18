@@ -54,8 +54,11 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 | ---------------------- | -------------------- | ------ |
 | `ENABLE_SNOOZE`        | 启用「稍后处理 / Remind」功能 | `true` |
 | `ENABLE_FOLLOW_THREAD` | 启用「关注后续 / Watch」功能 | `true` |
-| `ENABLE_AUTO_REPLY`    | 启用第三入口：别人消息为「自动答复 / Reply」，自己消息为「跟进追问 / Followup」 | `true` |
+| `ENABLE_AUTO_REPLY`    | 启用「自动答复 / Reply」，作用在别人发送的消息上 | `true` |
+| `ENABLE_FOLLOWUP_ASK`  | 启用「跟进追问 / Followup」，作用在自己发送的消息上 | `true` |
 | `ENABLE_LINKED_ACTION` | 启用「联动操作 / Openclaw」功能 | `true` |
+
+自动答复和跟进追问共用工具栏的第三个位置（别人消息显示自动答复，自己消息显示跟进追问），但开关彼此独立：可以只留自动答复、只留跟进追问，或两个都留。
 
 - 如果四个功能都关闭，消息上将不会显示交互工具栏
 - 如果只开启其中部分功能，工具栏只显示对应的按钮，顺序保持不变
@@ -69,7 +72,7 @@ Message Reaction 是“在消息旁边就地处理”的工具条：用户停留
 
 1. **稍后处理 / Remind**：中文常态显示「稍后」，英文显示 `Remind`；点击或 hover 展开快速菜单，选择具体提醒时间后创建提醒
 2. **关注后续 / Watch**：紫色按钮，打开关注后续规则配置
-3. **自动答复 / Reply** 或 **跟进追问 / Followup**：别人发送的消息显示自动答复 / Reply；自己发送的消息显示跟进追问 / Followup，不再显示自动答复。跟进追问依赖主动询问引擎和 RingCentral token；未开启或未配齐时按钮仍显示，但呈灰色 `is-setup-needed` 状态，hover / 读屏说明缺的是引擎还是 token，点击只打开 Options「主动询问」配置，不会创建 session 或发送追问
+3. **自动答复 / Reply** 或 **跟进追问 / Followup**：别人发送的消息显示自动答复 / Reply；自己发送的消息显示跟进追问 / Followup，不再显示自动答复。跟进追问需要 `ENABLE_FOLLOWUP_ASK` 打开，并且依赖主动询问引擎和 RingCentral token；关了开关就不显示该按钮，引擎未开或未配齐时按钮仍显示，但呈灰色 `is-setup-needed` 状态，hover / 读屏说明缺的是引擎还是 token，点击只打开 Options「主动询问」配置，不会创建 session 或发送追问
 4. **联动操作 / Openclaw**：红色按钮，打开“记忆入口规则”弹窗并预填一条带“联动操作”的规则
 5. **PAI 图标**：视觉标识
 6. **齿轮设置**：工具栏再长悬停约 1.4 秒后出现，可快速开关四个入口
@@ -168,9 +171,16 @@ interface TopicItem {
 
 ### 功能说明
 
-跟进追问只出现在当前用户自己发送的 Glip 消息上。点击后打开轻量弹窗，用户确认后在 memory-service 创建一次性 Outreach session，不写入 Google Sheet，也不创建 Outreach template。
+跟进追问只出现在当前用户自己发送的 Glip 消息上，且需要 Options「消息交互功能」里打开 `ENABLE_FOLLOWUP_ASK`（启用「跟进追问」）；关闭后工具栏不再显示该按钮。点击后打开轻量弹窗，用户确认后在 memory-service 创建一次性 Outreach session，不写入 Google Sheet，也不创建 Outreach template。
 
-如果 Options 里尚未启用主动询问引擎，或 RingCentral Server URL / Client ID / Client Secret / JWT 未配齐，工具栏上的「跟进追问 / Followup」按钮会变成灰色待配置状态，而不是直接消失。hover 和读屏会说明缺的是引擎开关还是 token；点击会打开 Options 的主动询问配置，并提示这次点击没有创建跟进会话、也没有发送消息。Memory Service 暂时读不到配置时同样走这条引导，不会假装可以创建。
+如果 `ENABLE_FOLLOWUP_ASK` 已打开，但 Options 里尚未启用主动询问引擎，或 RingCentral Server URL / Client ID / Client Secret / JWT 未配齐，工具栏上的「跟进追问 / Followup」按钮会变成灰色待配置状态，而不是直接消失。hover 和读屏会说明缺的是引擎开关还是 token；点击会打开 Options 的主动询问配置，并提示这次点击没有创建跟进会话、也没有发送消息。Memory Service 暂时读不到配置时同样走这条引导，不会假装可以创建。
+
+跟进追问的**终态结果推送**与「主动询问结果推送」共用同一份存储（`OUTREACH_RESULT_PUSH_TARGET` / `OUTREACH_RESULT_PUSH_GROUP_ID`），Options 里有两个入口：
+
+- 消息交互功能 →「跟进追问结果推送」（紧跟在「启用「关注后续」功能」之后）
+- 主动询问 →「主动询问结果推送」
+
+两个入口只区分 DOM id，`name` 仍是同一个存储键，因此改任意一处两边同步，保存时也只写一份运行时配置。拿到结果、超时或未得到可用结论时，回执按这份配置推给 Me 或指定群组。
 
 到点发出的 AI 追问会直接发送原问题正文，作为当前线程里的一条普通回复，不加 `Follow-up:` 这类机器前缀。
 
@@ -554,16 +564,19 @@ NotificationService.sendNotification()
 
 同一条消息若同时命中多条即时通知规则，`__关注项__` 会换行拼接这些规则；开启了 @我 的规则排在前面并带 `（@提醒）`。LLM 审核不会把这份列表覆盖成单条规则。
 
+关注后续命中使用**独立模板**，与普通「消息分析推送」不共用文案结构：
+
 ```
+📌 关注后续更新
 `Esone Qiu 确认身份定义已完成，询问是否还需补充。`
 
-📌 关注的消息（来自 AI Service）：
+__原消息__（来自 AI Service）：
 > 你是想给我做"身份定义"（也就是：我是谁、你是谁、我们怎么称呼...
 🔗 [查看原消息](https://app.ringcentral.com/...)
 
-💬 后续回复：
-__关注项__：Personal AI 讨论（@提醒）
-AI相关讨论话题,了解下是否有新工具...
+__关注话题__：关于以下内容的后续讨论："身份定义"
+
+__后续回复__：
 __在群__：@esone.qiu+sync.service
 __发送者__：Esone Qiu
 __时间__：2026-02-04 14:17:47
@@ -571,9 +584,21 @@ __原文__：我已经定义完了，还有什么要定义的么？
 __回复建议__：...
 
 🔗 [点击查看原消息](https://app.ringcentral.com/...)
+*以上是 Personal AI 监测到的「关注后续」新动态* (AI可能幻觉 仅供参考)
 ```
 
-**Chrome 浏览器通知**：仅展示 `summary`（最多 200 字），点击跳转到原消息链接。
+关注后续推送与「消息分析推送」的区分口径：
+
+| 维度 | 消息分析推送 | 关注后续推送 |
+| ---- | ------------ | ------------ |
+| 触发 | 命中普通关注项 | 命中带 `followThread` 的关注后续规则，或 LLM 返回 `follow_thread_info` |
+| 推送目标 | `MESSAGE_ANALYSIS_PUSH_TARGET` / `MESSAGE_ANALYSIS_PUSH_GROUP_ID` | `FOLLOW_UP_PUSH_TARGET` / `FOLLOW_UP_PUSH_GROUP_ID`（Options「关注后续推送」，默认推送给 Me） |
+| Bot 模板 | `buildBotNotificationMessage`，`__关注项__` + “监测到您可能关注的消息” | `buildFollowThreadBotNotificationMessage`，`📌 关注后续更新` + `__关注话题__` + “监测到的「关注后续」新动态” |
+| 汇总模板 | — | `buildFollowThreadDigestBotNotificationMessage`（每小时合并通知） |
+
+只要命中的关注项里包含关注后续规则，即时通知就会路由到 `follow_up` 场景，即使 LLM 只通过 `matched_rule` 命中而没有返回 `follow_thread_info`。因此不会出现“关注后续规则命中了，却推到消息分析群组、还用消息分析模板”的情况。
+
+**Chrome 浏览器通知**：仅展示 `summary`（最多 200 字），点击跳转到原消息链接。关注后续推送的标题也用 `📌 关注后续` 前缀区分。
 
 ### 通知方式配置 (notifyMethod)
 

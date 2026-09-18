@@ -637,6 +637,14 @@ body.no-select,body.no-select *{user-select:none!important}
   box-shadow:var(--sh-lg);width:260px}
 .drag-hint{position:fixed;z-index:99;pointer-events:none;background:var(--ink);color:#fff;
   font-family:var(--mono);font-size:11px;border-radius:7px;padding:4px 10px;display:none;white-space:nowrap}
+/* 拖动时留在起点的「原位置」虚影：拖回去 = 不改期，Esc = 直接取消 */
+.drag-origin{position:absolute;z-index:2;box-sizing:border-box;border-radius:9px;pointer-events:none;
+  border:1.5px dashed var(--cur);background:rgba(255,136,0,.07);
+  display:flex;align-items:center;padding:0 9px;overflow:hidden;
+  font-size:10px;font-weight:600;color:var(--cur-deep);white-space:nowrap;
+  animation:originIn .14s ease}
+.drag-origin.drag-origin-sub{border-radius:7px;font-size:9.5px;padding:0 7px}
+@keyframes originIn{from{opacity:0}to{opacity:1}}
 
 /* ============ Tooltip ============ */
 .tooltip{position:fixed;z-index:120;max-width:340px;background:var(--ink);color:#fff;border-radius:9px;
@@ -778,6 +786,13 @@ body.no-select,body.no-select *{user-select:none!important}
 .m-head{padding:18px 22px 0;flex:none}
 .m-title{font-size:16px;font-weight:700}
 .m-sub{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.6}
+.add-tabs{display:flex;gap:6px;margin:10px 0 8px}
+.add-tab{padding:6px 10px;border:1.5px solid var(--line);border-radius:8px;font-size:12px;font-weight:600;background:#fff;color:var(--muted)}
+.add-tab.on{border-color:var(--cur);background:#FFF4E5;color:var(--cur-deep)}
+.add-item-modal.add-item-ai{width:640px}
+.dp-disclose{margin-top:10px;font-size:12px;line-height:1.6;color:var(--muted);background:var(--bg);border-radius:9px;padding:9px 12px}
+.dp-check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink);margin:0 0 0 auto;white-space:nowrap;cursor:pointer}
+.dp-preview-box{margin-top:12px}
 .m-body{padding:16px 22px;overflow-y:auto}
 .m-foot{padding:14px 22px 18px;display:flex;justify-content:flex-end;gap:10px;flex:none;
   border-top:1px solid var(--line2)}
@@ -804,14 +819,22 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 .ai-list{border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-top:6px}
 .ai-row{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line2);font-size:12.5px}
 .ai-row:last-child{border-bottom:none}
+.ai-group{border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-top:8px}
+.ai-group .ai-row.parent{background:var(--bg);font-weight:600}
+.ai-group .child-mark{color:var(--muted)}
 .ai-row .epic-ref{font-family:var(--mono);font-size:10.5px;color:var(--muted);flex:none;
   background:var(--bg);border-radius:5px;padding:2px 7px}
 .ai-row .t{flex:1;line-height:1.45}
 .ai-row .st{flex:none;width:110px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted)}
 .ai-row .st .newkey{color:#2E8540;font-weight:600;animation:cardPop .3s ease}
-.ai-row .st .alias-kept{display:block;margin-top:2px;font-family:var(--sans);font-size:9.5px;
-  color:#6D4FA3;background:#F3EEFA;border-radius:4px;padding:1px 6px;cursor:default;
-  animation:cardPop .3s ease .1s backwards}
+.ai-row .st .failkey{display:block;color:var(--danger);font-weight:600;white-space:pre-wrap;
+  line-height:1.4;text-align:right}
+.ai-row .st .ai-warn{display:block;margin-top:3px;font-family:var(--sans);font-size:10px;
+  font-weight:600;color:#9A5B00;line-height:1.4;white-space:pre-wrap;text-align:right}
+.ai-retry{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+  margin-left:6px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--fut-deep);
+  cursor:pointer;vertical-align:middle}
+.ai-retry:hover{border-color:var(--fut);background:#F1F8FC}
 .mini-spin{display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--line);
   border-top-color:var(--cur);animation:spin .7s linear infinite;vertical-align:-2px}
 /* 创建 Jira：双路径（直连 API / Agent 执行器） */
@@ -1118,12 +1141,16 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 
 <!-- ===================== 新建 Backlog 条目 Modal ===================== -->
 <div class="modal-back" id="mAddItem">
-  <div class="modal add-item-modal">
+    <div class="modal add-item-modal" id="addItemModal">
     <div class="m-head">
       <div class="m-title">新建 Backlog 条目</div>
-      <div class="m-sub">手动条目不需要 Jira，排期后会以 <b>DRAFT</b> 状态参与规划；之后可在时间轴上一键创建为 Jira issue。</div>
+      <div class="add-tabs">
+        <button type="button" class="add-tab on" id="addTabManual">手动创建</button>
+        <button type="button" class="add-tab" id="addTabAi">使用 AI 批量创建</button>
+      </div>
+      <div class="m-sub" id="addItemSub">手动条目不需要 Jira，排期后会以 <b>DRAFT</b> 状态参与规划；之后可在时间轴上一键创建为 Jira issue。</div>
     </div>
-    <div class="m-body">
+    <div class="m-body" id="addManualBody">
       <label class="f-label">标题 <span class="req">*</span></label>
       <input class="f-input" id="aiTitle" placeholder="例如：Nova 26.4 权限模型重构">
       <label class="f-label">描述（可选）</label>
@@ -1154,9 +1181,21 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
         </div>
       </div>
     </div>
-    <div class="m-foot">
+    <div class="m-body" id="addAiBody" style="display:none">
+      <label class="f-label">需求</label>
+      <textarea class="f-input" id="dpText" style="min-height:140px;font-family:var(--sans)" placeholder="粘贴需求、会议纪要或 Markdown；已分 Epic 或尚未分组均可"></textarea>
+      <div class="dp-disclose">会将输入及必要的团队规划信息交给本服务配置的 AI（演示为静态模拟）；只创建 Roadmap 草稿，不会创建 Jira。</div>
+      <div class="dp-disclose" style="margin-top:8px">要用自己的 Agent 生成 Draft：安装 <a href="https://github.com/ee01/personal-ai/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md" target="_blank" rel="noopener">roadmap-planning Skill</a> 并配置 MCP。GitHub 打不开时用仓库里的 <code>roadmap-service/plugin/skills/roadmap-planning/SKILL.md</code>。创建 Jira 仍走甘特「创建 Jira」。</div>
+      <div id="dpPreview" class="dp-preview-box" style="display:none"></div>
+    </div>
+    <div class="m-foot" id="addManualFoot">
       <button class="btn btn-ghost" data-close>取消</button>
       <button class="btn btn-primary" id="aiCreateItem">创建条目</button>
+    </div>
+    <div class="m-foot" id="addAiFoot" style="display:none">
+      <button class="btn btn-ghost" data-close>关闭</button>
+      <label class="dp-check"><input type="checkbox" id="dpAutoCommit" /> 直接创建 Draft</label>
+      <button class="btn btn-primary" id="dpGenerate">生成预览</button>
     </div>
   </div>
 </div>
@@ -1256,7 +1295,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
   <div class="modal" style="width:620px">
     <div class="m-head">
       <div class="m-title">创建 Jira <span class="mode-badge api" id="aiModeBadge">直连 API</span></div>
-      <div class="m-sub">Prompt 留空：按下方字段<b>直连 Jira API</b> 创建。填写 Prompt：交给 <b>Agent 执行器</b>创建（可用技能、自动填当前 Sprint 等动态字段）——已填字段作为约束带给 Agent，未填字段由 Agent 决定。Prompt 与执行器选择会记住上次内容。</div>
+      <div class="m-sub">Prompt 留空：按下方字段<b>直连 Jira API</b> 创建。填写 Prompt：交给 <b>Agent 执行器</b>创建（可用技能、自动填当前 Sprint 等动态字段）——已填字段作为约束带给 Agent，未填字段由 Agent 决定。Jira 里还没有对应 fixVersion 时会<b>留空该字段继续创建</b>。失败行可改字段后重试，已成功的 ticket 不会再创建。Prompt 与执行器选择会记住上次内容。</div>
     </div>
     <div class="m-body">
       <label class="f-label">创建 Prompt（可选）</label>
@@ -1352,7 +1391,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
   <ul>
     <li><b>Jira 查询 / 创建（直连 API 与 Agent 执行器双路径）/ AI 缩写 / 协作同步均为模拟</b></li>
     <li><b>需要 Jira 权限的操作要装 Personal AI 扩展</b>：锁定按钮点击弹出安装引导；拖动排期 / 改 Owner 会先保存在 Roadmap，并出现一行「没有同步到 Jira」+「安装插件开启同步」。打开页拉取在未安装时保持静默（顶栏 <b>扩展未安装 / 已安装</b> 可切换）<a class="help-install" href="https://chromewebstore.google.com/detail/personal-ai/kefnadjndpllbibeklhajjddgmlbafel" target="_blank" rel="noopener">前往安装 ↗</a></li>
-    <li><b>创建 Jira 双路径</b>：Prompt <b>留空</b>＝按下方字段直连 Jira API（串行）；<b>填写</b>＝按 Epic 最多 <b>2 路并行</b>交给所选 <b>Agent 执行器</b>（每路只含该组 draft；部分成功也会回写已有 key）。此时下方字段占位变「自动」，已填的值作为约束带给 Agent；执行器无配置时展示引导入口。<b>fixVersion</b>：按各任务 Target End 在发布时间表上的<strong>落点列</strong>匹配（半开区间，压在分割竖线上属于下一列——和 hover「可赶 Sprint」不是同一口径）。同一列直接填入共享字段；跨列时共享字段<strong>留空</strong>，交给 Agent 按行 `suggestedFixVersion` 判断，列表内仍逐行显示绿色 chip；输入固定值可覆盖全部</li>
+    <li><b>创建 Jira 双路径</b>：Prompt <b>留空</b>＝按下方字段直连 Jira API（串行）；<b>填写</b>＝按 Epic 最多 <b>2 路并行</b>交给所选 <b>Agent 执行器</b>（每路只含该组 draft；部分成功也会回写已有 key）。此时下方字段占位变「自动」，已填的值作为约束带给 Agent；执行器无配置时展示引导入口。<b>fixVersion</b>：按各任务 Target End 在发布时间表上的<strong>落点列</strong>匹配（半开区间，压在分割竖线上属于下一列——和 hover「可赶 Sprint」不是同一口径）。同一列直接填入共享字段；跨列时共享字段<strong>留空</strong>，交给 Agent 按行 `suggestedFixVersion` 判断，列表内仍逐行显示绿色 chip；输入固定值可覆盖全部。<b>Jira 尚无此版本时留空 fixVersion 继续创建</b>（行上显示 warning），不会因此拒绝整行。<b>失败行展示完整原因</b>，可改字段后点重试，已成功的 ticket 不会再创建</li>
     <li><b>Assignee 映射</b>：弹窗内新增 Assignee 行 —— 任务 <b>Owner 优先</b>，没写 Owner 的任务<b>回落到创建人</b>；在「配置映射…」里为系统人员/创建者补全 <b>Firstname Lastname</b>（两个词以上的名字自动推断）。输入实名时可从<strong>已有两词人名</strong>下拉建议中选择，选中后<strong>合并两人</strong>（Owner / 创建者 / 成员收成实名，短名保留为映射别名）。直连 API 时转成 <b>firstname.lastname</b> 填 assignee（未映射的留空并橙色提示）；Agent 模式把<b>字段约束 + 人员名单</b>一并写入 Prompt，可点「<b>查看将发送的完整 Prompt</b>」预览。配置后全站（选人列表 / 人员视图 / 提示 / 协作日志）都展示映射后的实名</li>
     <li><b>时间轴缩放</b>：触控板<b>双指捏合</b>或 <b>⌘+滚轮</b>在甘特任意位置缩放，光标下的日期钉住不动；在顶部<b>时间标尺上双指上下滑动</b>同样缩放（横向滑动仍是平移）；<b>双击标尺</b>复位 100%，已是 100% 再双击 = 整条时间轴收进视口。缩放时右上角短暂显示当前比例与视野跨度</li>
     <li>Bar 可<b>拖动 / 左右把手伸缩 / 上下换行</b>，按天吸附</li>
@@ -1362,7 +1401,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li><b>阶段节点</b>（Design/Stage/Production/自定义）以菱形标记显示在 bar 下方的标记轨上，按日期定位、可超出 bar 范围；标记可<b>左右拖动改期</b>（按天吸附，拖到边缘自动滚动），<b>单击</b>则打开编辑器改日期 / 改名 / 删除</li>
     <li><b>外部依赖</b>不是子任务，可不填 Jira 直接手动添加，也可绑定 Jira ticket。打开页会镜像依赖票的 <b>status / Target End</b>（不自动改 ETA）。<b>Hover 只读</b>：缺 ETA 或与 Jira 日期不一致时提示「单击可同步」；<b>单击 🔗 / 标记</b>打开浮层：点 key 打开 Jira，点「未刷新」旁的 ↻ 刷新 status。缺少 ETA 时角标红色脉动；日期不一致时琥珀色</li>
     <li><b>Backlog 搜索</b>：按标题 / Key / 备注名 / 类型 / Quarter 过滤，多个关键词空格分隔需全部命中；Esc 清空</li>
-    <li><b>新建条目</b>：手动创建不依赖 Jira 的 Backlog 条目（可填类型 / Quarter / 预估 / Target 日期），卡片显示 <b>DRAFT</b> 且为虚线描边，hover 右上角 × 可删除</li>
+    <li><b>新建条目</b>：弹窗含 <b>手动创建</b> 与 <b>使用 AI 批量创建</b>。AI 路径默认先预览，勾选「直接创建 Draft」才一次写入；不创建 Jira；无扩展也能用。创建 Jira 仍走原弹窗。要用自己的 Agent 生成 Draft，安装仓库 <code>roadmap-service/plugin/skills/roadmap-planning/SKILL.md</code> 并配置 MCP。</li>
     <li>任务可选 Owner：标题里输入 <b>@</b> 触发建议（可手输自定义），或点输入框左侧头像；直接 Enter 则跳过。Owner 数据来自<b>团队成员表</b>，新名字自动加入；双击任务条可改 Owner。选人浮层<b>搜索框置顶、打开即聚焦</b>，列表限高可滚动，↑↓ + Enter 快速选择，下方空间不足时自动向上翻转</li>
     <li><b>新增任务默认从今天开始、两周长</b>；草稿任务条不再叠创建者名，<b>hover 时在条外浮出灰色「xxx created」</b></li>
     <li><b>打开 Jira</b>：主/子任务条 hover 左上角出现 <b>↗</b> 圆钮，点击新开对应 issue；<b>⌘/Ctrl+单击任务条</b>等效（草稿无 issue 不显示）</li>
@@ -1507,8 +1546,15 @@ function mkManualItem({ title, type, quarter, estW, tStart, tEnd, desc }){
   const it = mkItem('LOCAL-' + String(localSeq++).padStart(4,'0'), type || 'EPIC', title,
                     quarter || null, estW || 3, null);
   it.manual = true; it.jiraKey = null; it.desc = desc || null;
-  if (tStart){ it.tStart = tStart; it.tEnd = tEnd || addD(tStart, (estW||3)*7 - 3); }
+  if (tStart || tEnd){
+    it.tStart = tStart || addD(tEnd, -((estW||3)*7 - 3));
+    it.tEnd = tEnd || addD(it.tStart, (estW||3)*7 - 3);
+  }
   return it;
+}
+/* Target 只填了一侧也能显示（缺的一侧用 — 占位，避免 fmtMD(null) 抛错）*/
+function targetLabel(it){
+  return 'Target ' + (it.tStart ? fmtMD(it.tStart) : '—') + ' → ' + (it.tEnd ? fmtMD(it.tEnd) : '—');
 }
 const isDraftItem = it => it.manual && !it.jiraKey;
 const itemDisplayKey = it => it.jiraKey || it.key;
@@ -2064,10 +2110,10 @@ function renderBacklog(newKeys){
           <span class="card-est">${it.estW}w</span>
         </div>
         <div class="card-title">${esc(it.title)}</div>
-        ${it.tStart ? `<span class="card-target">Target ${fmtMD(it.tStart)} → ${fmtMD(it.tEnd)}</span>` : ''}${it.subs.length ? `<span class="card-subs" style="${it.tStart?'':'margin-left:0'}">↺ ${it.subs.length} 个子任务记录</span>` : ''}`;
-      c.dataset.tip = itemDisplayKey(it) + ' · 预估 ' + it.estW + 'w' + (it.tStart ? '' : ' · 无 Target 日期')
+        ${(it.tStart || it.tEnd) ? `<span class="card-target">${targetLabel(it)}</span>` : ''}${it.subs.length ? `<span class="card-subs" style="${(it.tStart||it.tEnd)?'':'margin-left:0'}">↺ ${it.subs.length} 个子任务记录</span>` : ''}`;
+      c.dataset.tip = itemDisplayKey(it) + ' · 预估 ' + it.estW + 'w' + (it.tStart || it.tEnd ? '' : ' · 无 Target 日期')
         + '||' + it.title
-        + '||' + (it.desc ? clipTxt(it.desc) : ('拖到右侧时间轴排期' + (it.tStart ? '（按 Target 日期落位）' : '')));
+        + '||' + (it.desc ? clipTxt(it.desc) : ('拖到右侧时间轴排期' + (it.tStart || it.tEnd ? '（按 Target 日期落位）' : '')));
       c.addEventListener('pointerdown', e => cardDragStart(e, it, c));
       if (canDeleteItem(it)){
         const del = document.createElement('button');
@@ -2124,6 +2170,109 @@ function submitAddItem(){
 }
 $('#aiCreateItem').onclick = submitAddItem;
 $('#aiTitle').onkeydown = e => { if (e.key === 'Enter') submitAddItem(); };
+
+let dpPreviewReady = false;
+function commitDemoDrafts(text){
+  const t = team();
+  const start = today;
+  const defs = [
+    { title: 'AIR as virtual assistant in RCCC - Inbound Voice', kids: ['Voice + Handoff 接入','Air 与 RingEX 解耦','环境搭建','AuditLog'] },
+    { title: 'AIR as virtual assistant in RCCC - Outbound Voice', kids: ['Voice + Handoff 接入','拨出走 RCCC 还是 Telco','Demo 验证'] },
+    { title: 'AIR as virtual assistant in RingCX', kids: ['Digital + Handoff','Inbound Voice','Outbound Voice','号码与 Billing','Account Autodiscovery'] },
+  ];
+  const keys = [];
+  defs.forEach((def, i) => {
+    const it = mkManualItem({ title: def.title, type: 'EPIC', quarter: CURQ, estW: 8, tStart: null, tEnd: null, desc: text.slice(0, 400) });
+    it.scheduled = true;
+    it.start = addD(start, i * 2);
+    it.days = 21;
+    it.expanded = true;
+    def.kids.forEach((title, k) => {
+      it.subs.push({
+        id: 'dp' + (keySeq++),
+        key: null,
+        alias: null,
+        title,
+        desc: null,
+        owner: null,
+        start: addD(it.start, k),
+        days: 7,
+        temp: true,
+      });
+    });
+    t.items.push(it);
+    keys.push(it.key);
+  });
+  closeModal('mAddItem');
+  state.search = ''; $('#blSearch').value = '';
+  $('#dpText').value = '';
+  resetDpPreview();
+  setAddMode('manual');
+  renderAll(keys);
+  toast(`<span class="ok">✓</span> 已创建 <b>3</b> 个主任务、<b>12</b> 个子任务 Draft（演示）`);
+}
+
+function dpPreviewHtml(){
+  const defs = [
+    { title: 'AIR as virtual assistant in RCCC - Inbound Voice', kids: ['Voice + Handoff 接入','Air 与 RingEX 解耦','环境搭建','AuditLog'] },
+    { title: 'AIR as virtual assistant in RCCC - Outbound Voice', kids: ['Voice + Handoff 接入','拨出走 RCCC 还是 Telco','Demo 验证'] },
+    { title: 'AIR as virtual assistant in RingCX', kids: ['Digital + Handoff','Inbound Voice','Outbound Voice','号码与 Billing','Account Autodiscovery'] },
+  ];
+  return defs.map(def => `
+    <div class="ai-group">
+      <div class="ai-row parent"><span class="t">新建 · ${esc(def.title)}</span><span class="st">${def.kids.length} 个子任务</span></div>
+      ${def.kids.map(title => `<div class="ai-row child"><span class="child-mark">└</span><span class="t">${esc(title)}</span></div>`).join('')}
+    </div>`).join('');
+}
+
+function resetDpPreview(){
+  dpPreviewReady = false;
+  const box = $('#dpPreview');
+  if (box){ box.style.display = 'none'; box.innerHTML = ''; }
+  const btn = $('#dpGenerate');
+  if (btn) btn.textContent = $('#dpAutoCommit') && $('#dpAutoCommit').checked ? '生成并创建 Draft' : '生成预览';
+}
+
+function updateDpGenerateLabel(){
+  const btn = $('#dpGenerate');
+  if (!btn) return;
+  if ($('#dpAutoCommit').checked) btn.textContent = '生成并创建 Draft';
+  else btn.textContent = dpPreviewReady ? '创建这些 Draft' : '生成预览';
+}
+
+function setAddMode(mode){
+  const ai = mode === 'ai';
+  $('#addTabManual').classList.toggle('on', !ai);
+  $('#addTabAi').classList.toggle('on', ai);
+  $('#addManualBody').style.display = ai ? 'none' : '';
+  $('#addAiBody').style.display = ai ? '' : 'none';
+  $('#addManualFoot').style.display = ai ? 'none' : '';
+  $('#addAiFoot').style.display = ai ? '' : 'none';
+  $('#addItemModal').classList.toggle('add-item-ai', ai);
+  $('#addItemSub').innerHTML = ai
+    ? '粘贴一段需求，一次生成主任务、子任务和初排甘特，全部保持 Draft。默认先预览；勾选「直接创建 Draft」才一次写入。本 Demo 为静态模拟，不调用真实模型。'
+    : '手动条目不需要 Jira，排期后会以 <b>DRAFT</b> 状态参与规划；之后可在时间轴上一键创建为 Jira issue。';
+  if (!ai) resetDpPreview();
+}
+$('#addTabManual').onclick = () => setAddMode('manual');
+$('#addTabAi').onclick = () => setAddMode('ai');
+$('#dpAutoCommit').onchange = () => {
+  if ($('#dpAutoCommit').checked) resetDpPreview();
+  else updateDpGenerateLabel();
+};
+$('#dpGenerate').onclick = () => {
+  const text = $('#dpText').value.trim();
+  if (!text){ $('#dpText').focus(); return; }
+  if (dpPreviewReady || $('#dpAutoCommit').checked){
+    commitDemoDrafts(text);
+    return;
+  }
+  dpPreviewReady = true;
+  const box = $('#dpPreview');
+  box.style.display = '';
+  box.innerHTML = '<div class="dp-result-title" style="font-weight:700;margin-bottom:8px">预览</div>' + dpPreviewHtml();
+  updateDpGenerateLabel();
+};
 
 /* ---------- 时间轴几何 ---------- */
 let TL = null;
@@ -3251,11 +3400,28 @@ function barDragStart(e, it, sub, barEl, rowEl_){
   const target = sub || it;
   const mode = e.target.classList.contains('hdl') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
   const orig = { start:target.start, days:target.days, x:e.clientX, y:e.clientY };
-  let moved = false;
+  let moved = false, cancelled = false;
   const hint = $('#dragHint');
   const relPDrag = teamRelParsed();            // 拖动时提示可赶的最近 Sprint
   try { barEl.setPointerCapture(e.pointerId); } catch(_){}
   barEl.classList.remove('anim');
+
+  /* 原位置虚影：拖动时留在起点，让用户看到「从哪来」并可拖回 */
+  const laneEl = barEl.parentElement;
+  let originEl = null;
+  const showOrigin = () => {
+    if (originEl || !laneEl) return;
+    const w = orig.days * DAY_W - 2;
+    originEl = document.createElement('div');
+    originEl.className = sub ? 'drag-origin drag-origin-sub' : 'drag-origin';
+    originEl.style.left = X(orig.start) + 'px';
+    originEl.style.width = w + 'px';
+    originEl.style.top = barEl.offsetTop + 'px';
+    originEl.style.height = barEl.offsetHeight + 'px';
+    if (w >= 148) originEl.textContent = '原位置 · Esc 取消';
+    laneEl.appendChild(originEl);
+  };
+  const removeOrigin = () => { if (originEl){ originEl.remove(); originEl = null; } };
 
   let scrolled = 0;                            // 边缘自动滚动的补偿量
   const gsEl = $('#gScroll');
@@ -3265,6 +3431,7 @@ function barDragStart(e, it, sub, barEl, rowEl_){
     moved = true;
     barEl.classList.add('dragging');
     document.body.classList.add('no-select');
+    showOrigin();
     /* 拖到甘特区左右边缘时自动滚动 */
     const sr = gsEl.getBoundingClientRect();
     if (ev.clientX > sr.right - 50){ gsEl.scrollLeft += 14; scrolled += 14; }
@@ -3296,13 +3463,34 @@ function barDragStart(e, it, sub, barEl, rowEl_){
       const cr = catchRelease(addD(target.start, target.days - 1), relPDrag);
       hint.textContent += cr ? ` · 赶 ${cr.release}（Pro ${fmtMD(cr.date)}）` : ' · 已无可赶 Sprint';
     }
+    hint.textContent += ' · Esc 取消';
+  };
+  /* Esc：放弃本次拖动，bar 回到原位置，不改变任何日期 */
+  const onKey = ev => {
+    if (ev.key !== 'Escape') return;
+    ev.preventDefault(); ev.stopPropagation();
+    cancelled = true;
+    if (barEl._ct){ clearTimeout(barEl._ct); barEl._ct = null; }
+    try { barEl.releasePointerCapture(e.pointerId); } catch(_){}
+    barEl.removeEventListener('pointermove', onMove);
+    barEl.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
+    hint.style.display = 'none';
+    document.body.classList.remove('no-select');
+    removeOrigin();
+    target.start = orig.start;
+    target.days = orig.days;
+    renderGantt();
   };
   const onUp = ev => {
     try { barEl.releasePointerCapture(e.pointerId); } catch(_){}
     barEl.removeEventListener('pointermove', onMove);
     barEl.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
     hint.style.display = 'none';
     document.body.classList.remove('no-select');
+    removeOrigin();
+    if (cancelled) return;
     if (!moved){
       /* ⌘/Ctrl+单击：直接打开对应 Jira issue（草稿无 issue 不响应） */
       const jk = sub ? sub.key : (isDraftItem(it) ? null : itemDisplayKey(it));
@@ -3341,13 +3529,31 @@ function barDragStart(e, it, sub, barEl, rowEl_){
   };
   barEl.addEventListener('pointermove', onMove);
   barEl.addEventListener('pointerup', onUp);
+  window.addEventListener('keydown', onKey, true);
 }
 
 /* ---------- Backlog 卡片 → Gantt 拖入 ---------- */
+/* Target 窗口：只填一侧时用预估补全；没填返回 null（按拖放位置排期）*/
+function targetWindow(it){
+  const est = Math.max(7, (it.estW || 3) * 7);
+  if (it.tStart && it.tEnd) return { start: it.tStart, end: it.tEnd };
+  if (it.tStart) return { start: it.tStart, end: addD(it.tStart, est - 1) };
+  if (it.tEnd) return { start: addD(it.tEnd, -(est - 1)), end: it.tEnd };
+  return null;
+}
+/* 收进可见时间轴：整段可见时原样；越界时保持长度、尽量靠向 Target 并压进轴内 */
+function fitTargetWindow(win){
+  const tlDays = Math.max(2, diffD(TL.start, TL.end) + 1);
+  const days = Math.min(Math.max(2, diffD(win.start, win.end) + 1), tlDays);
+  let end = win.end > TL.end ? TL.end : win.end;
+  let start = addD(end, -(days - 1));
+  if (start < TL.start){ start = TL.start; end = addD(start, days - 1); if (end > TL.end) end = TL.end; }
+  return { start, days: Math.max(2, diffD(start, end) + 1) };
+}
 function cardDragStart(e, it, cardEl){
   if (e.button !== 0) return;
   const startX = e.clientX, startY = e.clientY;
-  let ghost = null;
+  let ghost = null, cancelled = false;
   const dropLine = $('#dropLine');
   const gInner = $('#gInner'), gScroll = $('#gScroll');
 
@@ -3365,38 +3571,57 @@ function cardDragStart(e, it, cardEl){
     const sr = gScroll.getBoundingClientRect();
     if (ev.clientX > sr.left && ev.clientX < sr.right && ev.clientY > sr.top && ev.clientY < sr.bottom){
       const ir = gInner.getBoundingClientRect();
-      /* 有 Target start 的 ticket：指示线直接吸附到 target 日期 */
-      const hasTarget = it.tStart && it.tStart >= TL.start && it.tStart <= TL.end;
-      const day = hasTarget ? diffD(TL.start, it.tStart)
-                            : clamp(Math.round((ev.clientX - ir.left) / DAY_W), 0, TL.days-1);
+      /* 有 Target 的 ticket：指示线直接吸附到 Target 窗口（含只填了结束日的情况）*/
+      const win = targetWindow(it);
+      const fitted = win ? fitTargetWindow(win) : null;
+      const day = fitted ? diffD(TL.start, fitted.start)
+                         : clamp(Math.round((ev.clientX - ir.left) / DAY_W), 0, TL.days-1);
       dropLine.style.display = 'block';
       dropLine.style.left = day*DAY_W + 'px';
-      dropLine.dataset.date = (hasTarget ? 'Target ' : '') + fmtMD(addD(TL.start, day));
+      dropLine.dataset.date = (fitted ? 'Target ' : '') + fmtMD(addD(TL.start, day))
+        + (fitted ? ' → ' + fmtMD(addD(fitted.start, fitted.days - 1)) : '');
       /* 自动横向滚动 */
       if (ev.clientX > sr.right - 60) gScroll.scrollLeft += 12;
       if (ev.clientX < sr.left + 60) gScroll.scrollLeft -= 12;
     } else dropLine.style.display = 'none';
   };
-  const onUp = ev => {
+  /* Esc：放弃 Backlog → 甘特的拖入，不排期、不落位 */
+  const onKey = ev => {
+    if (ev.key !== 'Escape') return;
+    ev.preventDefault(); ev.stopPropagation();
+    cancelled = true;
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
     cardEl.style.opacity = '';
     document.body.classList.remove('no-select');
     if (ghost) ghost.remove();
+    dropLine.style.display = 'none';
+  };
+  const onUp = ev => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
+    cardEl.style.opacity = '';
+    document.body.classList.remove('no-select');
+    if (ghost) ghost.remove();
+    if (cancelled){ dropLine.style.display = 'none'; return; }
     if (dropLine.style.display === 'block'){
       const ir = gInner.getBoundingClientRect();
       it.scheduled = true;
-      const hasTarget = it.tStart && it.tStart >= TL.start && it.tStart <= TL.end;
-      if (hasTarget){
-        /* 默认按 ticket 的 Target start / Target end 落位 */
-        it.start = new Date(it.tStart);
-        it.days = Math.max(2, diffD(it.tStart, it.tEnd) + 1);
+      const win = targetWindow(it);
+      const fitted = win ? fitTargetWindow(win) : null;
+      if (fitted){
+        /* 默认按 ticket 的 Target 窗口落位（只填结束日也按结束日落位）*/
+        it.start = fitted.start;
+        it.days = fitted.days;
       } else {
         const day = clamp(Math.round((ev.clientX - ir.left) / DAY_W), 0, TL.days-1);
         it.start = addD(TL.start, day);
         it.days = Math.max(7, (it.estW||3)*7);
+        if (diffD(it.start, TL.end)+1 < it.days) it.days = diffD(it.start, TL.end)+1;
+        it.days = Math.max(2, it.days);
       }
-      if (diffD(it.start, TL.end)+1 < it.days) it.days = diffD(it.start, TL.end)+1;
       /* 按纵向位置决定插入行序 */
       const t = team();
       let insertAt = t.order.length;
@@ -3410,16 +3635,17 @@ function cardDragStart(e, it, cardEl){
       dropLine.style.display = 'none';
       enterKey = it.key;                       // 新 bar 播放生长动画
       renderAll();
-      toast(hasTarget
+      toast(fitted
         ? `<span class="ok">✓</span> ${it.key} 已按 Target 日期落位：${fmtMD(it.start)} → ${fmtMD(addD(it.start,it.days-1))}`
         : `<span class="ok">✓</span> ${it.key} 已排期 ${fmtMD(it.start)} 起 · ${it.days}d（无 Target 日期，按预估 ${it.estW}w）`);
       /* 无 Target 的 ticket 首次排期即产生新起止 → 回写 Jira */
-      if (!hasTarget) scheduleJiraTargetSync(it);
+      if (!fitted) scheduleJiraTargetSync(it);
     }
     dropLine.style.display = 'none';
   };
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
+  window.addEventListener('keydown', onKey, true);
 }
 
 /* ---------- 创建 Jira（双路径模拟：直连 API / Agent 执行器） ----------
@@ -3639,6 +3865,12 @@ const ROADMAP_CREATE_JIRA_SYSTEM_PROMPT = [
   '你是 Personal Roadmap 的 Jira 创建助手。按用户 Prompt 与下方硬性约束在 Jira 中创建 issue，并把结果回写成可验证 artifact。',
   '不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建与检索。',
   '',
+  '【fixVersion 规则 — 必须遵守】',
+  '1. suggestedFixVersion 与字段约束中的 fixVersion 是优先写入的目标，不是创建门禁。',
+  '2. 创建前在目标项目检索版本目录；能唯一匹配（含 Nova 26.4.110 ↔ 26.4.110 这种后缀）则写入。',
+  '3. Jira 中不存在（或匹配不唯一）时省略 fixVersions、仍创建该 issue，并在 mapping.warning 说明；禁止因此拒绝整行，禁止向用户提问「改用已有版本还是先创建版本」——Roadmap 收不到这次提问。不要擅自改写成邻近版本，除非用户在共享字段给了统一覆盖值。',
+  '4. 省略时在该行 mapping 增加 warning，例如："fixVersion Nova 26.4.120 在项目中不存在，已留空创建"。warning 可与 jiraKey 同时出现。',
+  '',
   '【子任务 Description 生成规则 — 必须遵守】',
   '1. 每条新建的子任务必须填写 Jira description 字段，不能留空。',
   '2. Description 综合三类输入生成：「父 Epic 的 description」「本子任务的标题」以及「该子任务用户填写的描述」（如有）。理解 Epic 目标/范围后写出交付内容与验收要点；不要整段复制任何一段输入，不要编造事实。',
@@ -3656,11 +3888,12 @@ function buildAgentPrompt(){
   L.push('', '【字段约束】已填字段为硬约束，其余由你决定');
   const override = val('#aiFixVer');
   const suggested = [...new Set(temps.map(({sub}) => draftFixVer(sub)).filter(Boolean))];
+  const omit = 'Jira 中不存在（或匹配不唯一）时省略 fixVersions、仍创建该 issue，并在 mapping.warning 说明；禁止因此拒绝整行或向用户提问';
   let fvConstraint;
-  if (override) fvConstraint = override;
-  else if (suggested.length === 1) fvConstraint = `未统一指定；各任务 Target End 落点均为 ${suggested[0]}，请按此填写`;
-  else if (suggested.length > 1) fvConstraint = `任务落在不同 release（${suggested.join(' / ')}），请按各任务 suggestedFixVersion（Target End 落点列）分别填写，不要统一覆盖`;
-  else fvConstraint = '（由 Agent 决定）';
+  if (override) fvConstraint = override + '（优先写入；' + omit + '）';
+  else if (suggested.length === 1) fvConstraint = `未统一指定；各任务 Target End 落点均为 ${suggested[0]}，优先按此填写；` + omit;
+  else if (suggested.length > 1) fvConstraint = `任务落在不同 release（${suggested.join(' / ')}），请按各任务 suggestedFixVersion（Target End 落点列）分别填写，不要统一覆盖；` + omit;
+  else fvConstraint = '（由 Agent 决定；' + omit + '）';
   [['Project', val('#aiProj')], ['主任务类型', val('#aiTypeMain')], ['子任务类型', val('#aiTypeSub')],
    ['fixVersion', fvConstraint],
    ['Sprint', val('#aiSprint') || '查询并填当前 Sprint'],
@@ -3855,7 +4088,7 @@ $('#aiGo').onclick = async () => {
     toast('请先配置并选择 Agent 执行器'); return;
   }
   $('#aiGo').disabled = true; $('#aiCancel').disabled = true;
-  const temps = tempTasks();
+  const remaining = tempTasks().filter(({sub}) => !sub.key);
   const pk = ($('#aiProj').value.trim() || (team().items[0]?.key || 'NOVA-1').split('-')[0]).toUpperCase();
   const execLabel = agentMode
     ? (AGENT_EXECUTORS.find(e => e.id === state.aiExec)?.label || 'Agent') : null;
@@ -3874,20 +4107,52 @@ $('#aiGo').onclick = async () => {
     'Shadow-mode rollout of the reply quality scorer with metrics sampling':
       'Reply quality scorer: shadow-mode rollout with metrics sampling',
   };
-  const finishRow = (sub, epic) => {
+  const demoJiraHasFixVersion = (name) => {
+    if (!name) return true;
+    const m = String(name).match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!m) return true;
+    return Number(m[1]) * 100000 + Number(m[2]) * 1000 + Number(m[3]) <= 2604110;
+  };
+  const RETRY_SVG = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M13.2 8A5.2 5.2 0 1 1 11 3.7"/><path fill="currentColor" d="M13.4 2.2v4.1h-4.1z"/></svg>`;
+  const finishRow = (sub, epic, warning) => {
     sub.key = pk + '-' + (keySeq++);
     sub.temp = false;
+    sub.createError = null;
     const draftTitle = sub.title;
     if (agentMode) sub.title = POLISHED[draftTitle] || `[${itemDisplayKey(epic)}] ${draftTitle}`;
-    if (!sub.alias) sub.alias = draftTitle;             // 草稿名 → 备注名，展示连续
+    if (!sub.alias) sub.alias = draftTitle;
     const row = document.querySelector(`.ai-row[data-sid="${sub.id}"] .st`);
     if (row) row.innerHTML = `<span class="newkey">✓ ${sub.key}</span>`
-      + (sub.title !== sub.alias ? `<span class="alias-kept" data-tip="Agent 已规范化 summary||${esc(sub.title)}||草稿名保留为备注名，甘特展示不变">草稿名已存为备注</span>` : '');
+      + (sub.title !== sub.alias ? `<span class="alias-kept" data-tip="Agent 已规范化 summary||${esc(sub.title)}||草稿名保留为备注名，甘特展示不变">草稿名已存为备注</span>` : '')
+      + (warning ? `<span class="ai-warn">${esc(warning)}</span>` : '');
   };
+  const failRow = (sub, message) => {
+    sub.createError = message;
+    const row = document.querySelector(`.ai-row[data-sid="${sub.id}"] .st`);
+    if (row) row.innerHTML = `<span class="failkey">✕ ${esc(message)}</span>`
+      + `<button type="button" class="ai-retry" data-retry="${sub.id}" title="只重试这一行，已成功的 ticket 不会再创建">${RETRY_SVG}</button>`;
+  };
+  const createOne = async ({ epic, sub }) => {
+    markLoading(sub);
+    await new Promise(r => setTimeout(r, agentMode ? 700 : 400));
+    const t = team();
+    const assignee = resolveAssignee(t, sub);
+    if (!assignee.user) {
+      failRow(sub, `assignee 找不到：${assignee.name} 未映射 Jira 实名。请先「配置映射…」再重试这一行`);
+      return 'failed';
+    }
+    const rel = draftFixVer(sub);
+    const warning = rel && !demoJiraHasFixVersion(rel)
+      ? `Jira 无 ${rel}，已留空 fixVersion 创建`
+      : '';
+    finishRow(sub, epic, warning);
+    return 'ok';
+  };
+  let created = 0, failed = 0;
   if (agentMode) {
     const groups = [];
     const byEpic = new Map();
-    for (const row of temps) {
+    for (const row of remaining) {
       const k = row.epic.key;
       if (!byEpic.has(k)) {
         const g = { rows: [] };
@@ -3901,23 +4166,34 @@ $('#aiGo').onclick = async () => {
     await Promise.all(Array.from({ length: cap }, async () => {
       while (next < groups.length) {
         const g = groups[next++];
-        g.rows.forEach((r) => markLoading(r.sub));
-        await new Promise(r => setTimeout(r, 900));
-        g.rows.forEach((r) => finishRow(r.sub, r.epic));
+        for (const row of g.rows) {
+          const outcome = await createOne(row);
+          if (outcome === 'ok') created++; else failed++;
+        }
       }
     }));
   } else {
-    for (const {epic, sub} of temps){
-      markLoading(sub);
-      await new Promise(r => setTimeout(r, 450));
-      finishRow(sub, epic);
+    for (const row of remaining){
+      const outcome = await createOne(row);
+      if (outcome === 'ok') created++; else failed++;
     }
   }
-  await new Promise(r => setTimeout(r, 650));
-  closeModal('mAI');
+  $('#aiGo').disabled = false; $('#aiCancel').disabled = false;
+  $('#aiGo').textContent = failed ? `重试失败项（${failed}）` : '开始创建';
   renderGantt();
-  toast(`<span class="ok">✓</span> ${agentMode ? `已由 <b>${esc(execLabel)}</b> 创建` : '已创建'} <b>${temps.length}</b> 个 Task 并 link 到对应 Epic${agentMode ? '；草稿名已保留为备注名' : ''}`);
+  if (created) {
+    toast(`<span class="ok">✓</span> ${agentMode ? `已由 <b>${esc(execLabel)}</b> 创建` : '已创建'} <b>${created}</b> 个 Task${agentMode ? '；草稿名已保留为备注名' : ''}${failed ? ` · ${failed} 项失败可改字段后重试` : ''}`);
+  } else if (failed) {
+    toast(`创建失败：${failed} 项未成功。可改字段后重试，已成功的 ticket 不会再创建`);
+  }
+  if (!failed) closeModal('mAI');
 };
+$('#aiList').addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-retry]');
+  if (!btn) return;
+  event.preventDefault();
+  $('#aiGo').click();
+});
 
 /* ---------- Resource view：按人查看任务（只读为主） ---------- */
 function syncView(){

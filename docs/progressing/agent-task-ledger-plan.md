@@ -322,7 +322,7 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 
 > 功能正式命名为**任务中心（Task Center）**。特性文档：[`docs/features/task_center.md`](../features/task_center.md)；
 > `scheduled_messages_manager.md` 保留并重定位为任务中心的 **L2 / ☁️ jira_sheet lane** 子文档（998 行 GAS/幂等/Timeline 运维细节全部仍然有效，且都只属于这条 lane）。
-> 注意 `task_scheduler_api.md` 是扩展的 Chrome alarm 调度器，与任务中心无关，已在两处文档点明区别。
+> 注意 `background_jobs.md` 是扩展的 Chrome alarm 调度器，与任务中心无关，已在两处文档点明区别。
 
 ### ✅ 1.1 数据模型 + depends_on 通电（已完成）
 
@@ -499,10 +499,10 @@ POST /api/v1/intent-fragments/:id/confirm   （快车道确认 → 建账本任�
 - [x] 核实凭据存储现状：memory-service 已有（`runtimeConfig.ts:50-53`）且已脱敏（`config.ts:245-249`）
 - [x] 核实两个配置面：Options 写 MS（`options.tsx:3504`）、定时消息页写 Sheet Config，互不相通
 - [x] 核实改凭据是否需重新部署 Jira 规则：**需要**（`JiraRuleUpdater.ts:63-92` 明文内联），且域策略下可能部署失败
-- [ ] **收编**：扩展在 L2 检测 / 存量接入时，若 MS 侧凭据为空则从 Sheet Config 导入一次（不覆盖已有值）
-- [ ] **下发**：凭据保存后若 L2 已配置，由扩展镜像写 Sheet Config
-- [ ] **下发后的部署提示**：尝试重新部署 Jira 规则；失败时给出明确回执（区分「MS 侧已生效」与「☁️ lane 仍是旧凭据」），复用 `AppScriptDomainPolicyAccessError` 的错误分类
-- [ ] UI：凭据配置处标注「此凭据同时用于：追问、AsMe 推送（🏠 lane 即时生效；☁️ lane 需重新部署 Jira 规则）」
+- [x] **收编**：扩展在 L2 检测 / 存量接入时，若 MS 侧凭据为空则从 Sheet Config 导入一次（不覆盖已有值）
+- [x] **下发**：凭据保存后若 L2 已配置，由扩展镜像写 Sheet Config
+- [x] **下发后的部署提示**：不自动重部署 Jira 规则；回执写明「Sheet Config 已更新，☁️ 仍持有规则快照」
+- [x] UI：凭据配置处标注「此凭据同时用于：追问、AsMe 推送（🏠 lane 即时生效；☁️ lane 需重新部署 Jira 规则）」
 - [ ] 冲突可见化：若检测到 Sheet Config 与 MS 两侧凭据不一致，在能力条 / 引导抽屉里提示，而不是任其分叉
 
 ---

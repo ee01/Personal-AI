@@ -11,13 +11,13 @@
 ```typescript
 // ❌ 重构前：background.ts 包含所有实现细节
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-    // 处理 TaskScheduler 的任务
+    // 处理 BackgroundJobs 的任务
     if (alarm.name.startsWith('scheduled_task_')) {
-        if (!taskScheduler.isInitialized) {
-            await initializeTaskScheduler();
+        if (!backgroundJobs.isInitialized) {
+            await initializeBackgroundJobs();
         }
         const taskId = alarm.name.replace('scheduled_task_', '');
-        await taskScheduler.handleAlarmEvent(alarm);
+        await backgroundJobs.handleAlarmEvent(alarm);
         return;
     }
     
@@ -60,7 +60,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     │                 │
     ▼                 ▼
 ┌─────────┐      ┌──────────┐
-│TaskScheduler    │MemorySystem│
+│BackgroundJobs    │MemorySystem│
 │.tryHandleAlarm()│.tryHandleAlarm()│
 │                 │          │
 │返回 true/false  │返回 true/false│
@@ -69,25 +69,25 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 ### 实现细节
 
-#### 1. TaskScheduler.ts
+#### 1. BackgroundJobs.ts
 
 添加静态方法 `tryHandleAlarm`：
 
 ```typescript
 /**
  * 静态方法：尝试处理 alarm 事件
- * 返回 true 表示已处理，false 表示不是 TaskScheduler 的 alarm
+ * 返回 true 表示已处理，false 表示不是 BackgroundJobs 的 alarm
  */
 public static async tryHandleAlarm(alarm: chrome.alarms.Alarm): Promise<boolean> {
     if (!alarm.name.startsWith('scheduled_task_')) {
         return false; // 不是我的 alarm，返回 false
     }
 
-    const instance = TaskScheduler.getInstance();
+    const instance = BackgroundJobs.getInstance();
     
     // 确保已初始化
     if (!instance.isInitialized) {
-        console.log('⚠️ TaskScheduler 未初始化，开始初始化...');
+        console.log('⚠️ BackgroundJobs 未初始化，开始初始化...');
         await instance.startAllTasks();
     }
     
@@ -149,7 +149,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         // 尝试让各个模块处理自己的 alarm
         // 使用责任链模式，每个模块返回 true 表示已处理
         
-        if (await TaskScheduler.tryHandleAlarm(alarm)) {
+        if (await BackgroundJobs.tryHandleAlarm(alarm)) {
             return;
         }
         
@@ -206,9 +206,9 @@ if (await NewFeature.tryHandleAlarm(alarm)) {
 每个模块的 `tryHandleAlarm` 方法可以独立测试：
 
 ```typescript
-// 测试 TaskScheduler
+// 测试 BackgroundJobs
 const alarm = { name: 'scheduled_task_test' };
-const handled = await TaskScheduler.tryHandleAlarm(alarm);
+const handled = await BackgroundJobs.tryHandleAlarm(alarm);
 expect(handled).toBe(true);
 
 // 测试 MemorySystem
@@ -227,13 +227,13 @@ expect(handled).toBe(true);
 
 1. **请求**：`chrome.alarms.Alarm` 事件
 2. **处理器链**：
-   - TaskScheduler.tryHandleAlarm()
+   - BackgroundJobs.tryHandleAlarm()
    - memorySystem.tryHandleAlarm()
    - 其他模块...
 
 3. **处理流程**：
    ```
-   alarm 事件 → TaskScheduler → 能处理？→ 是 → 结束
+   alarm 事件 → BackgroundJobs → 能处理？→ 是 → 结束
                       ↓
                       否
                       ↓
@@ -267,9 +267,9 @@ expect(handled).toBe(true);
    - 移除具体业务逻辑
    - 使用责任链模式分发
 
-2. **src/services/TaskScheduler.ts**
+2. **src/services/BackgroundJobs.ts**
    - 新增 `tryHandleAlarm()` 静态方法
-   - 封装 TaskScheduler 的 alarm 处理逻辑
+   - 封装 BackgroundJobs 的 alarm 处理逻辑
 
 3. **src/memory.ts**
    - 新增 `tryHandleAlarm()` 实例方法
@@ -278,7 +278,7 @@ expect(handled).toBe(true);
 ### 代码变化统计
 
 - **background.ts**: 简化约 20 行代码
-- **TaskScheduler.ts**: 新增约 20 行代码
+- **BackgroundJobs.ts**: 新增约 20 行代码
 - **memory.ts**: 新增约 25 行代码
 - **总体**: 代码总量增加约 25 行，但职责更清晰，可维护性大幅提升
 

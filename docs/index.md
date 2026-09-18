@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-09-11*
+*最后更新: 2026-09-17*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -141,7 +141,7 @@
 | Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
-| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP local 或 remote Worker）；成功通知分执行/整理/投递三段，结果群消息按模板直发、不加 `任务完成` 前缀；模板骨架（标题行/分隔线/结尾 cc 行）由模板锚定，命中 0 条时不调 LLM、只把列表位置换成一行说明；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |
+| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP local 或 remote Worker）；成功通知分执行/整理/投递三段，结果群消息按模板直发、不加 `任务完成` 前缀；模板骨架（标题行/分隔线/结尾 cc 行）由模板锚定、模型写出自己的标题时以模型标题为准（模板标题里的示例数字不得当成本次结果），命中 0 条时不调 LLM、只把列表位置换成一行说明；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |
 | 执行器连通性测试 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options「测试 / 深度测试」；`POST /agent-executors/:id/probe`；stage=dns/connect/auth/ready；缓存 5 分钟；不跑 LLM |
 | Agent Worker 远程执行 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | ACP `runtime=remote` 入队 `awaiting_claim`；pair/heartbeat/claim/report + lease fencing；Desktop 内嵌或 headless `install.sh` |
 | Agent Workflow 多 Agent 编排 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 标准消息入口 workflow（`ANALYSIS_TYPE=agentWorkflow`）；低置信度复核和保存样例删除都有本地边界回执 |
@@ -152,7 +152,7 @@
 | 睡眠期预计算 Anticipation | Today Pilot / Ask | [today_pilot.md](./features/today_pilot.md) / [ask.md](./features/ask.md) | 夜间从日历与开放反思主题预答，存 `anticipation_briefs`；`/ask` 命中 prior 后消费一次，过期作废 |
 | 今天排序与噪声控制 | Today Pilot | [today_pilot.md](./features/today_pilot.md) | `DayPilotService`；筛选口径和来源分布按当前可见卡片更新，标出本页已隐藏入选证据，刷新按钮说明派生快照边界 |
 | 今日预演提示 | Today Pilot | [rehearsal.md](./features/rehearsal.md) | active/stale Rehearsal 进入今日和会前 cue |
-| 会前准备 | Today Pilot | [today_pilot.md](./features/today_pilot.md) | calendar events / meeting prep；只挂载可见会议详情，大型会议 attendee 裁剪不阻断整批同步，跨日缓存按会议实际日期写入，派生材料统一脱敏；回执区分高置信记忆、基础背景、本机 handoff 和刷新补课结果边界 |
+| 会前准备 | Today Pilot | [today_pilot.md](./features/today_pilot.md) | calendar events / meeting prep；只挂载可见会议详情，不重复展示日历标题/时间/组织者/参会人；大型会议 attendee 裁剪不阻断整批同步，跨日缓存按会议实际日期写入，派生材料统一脱敏；回执用芯片区分高置信记忆和基础背景，问题按 Options 语言列表展示 |
 | 会前待闭环目标 | Today Pilot / Meeting Pilot | [today_pilot.md](./features/today_pilot.md) / [memory_system.md](./memory_system.md) | meeting prep 同轮生成 planned outcome slots，Video Home 在原卡片显示 `本场要闭环` 并带入本机 handoff |
 | Storyline 会前提示 | Today Pilot / Memory Storyline Builder | [today_pilot.md](./features/today_pilot.md) / [memory_storyline_builder.md](./features/memory_storyline_builder.md) | meeting prep LLM 判定后在摘要和 cue cards 之间提示 |
 | Storyline Draft 页面 | Memory Storyline Builder | [memory_storyline_builder.md](./features/memory_storyline_builder.md) | `memory-exploring.html#/storylines/draft`，生成等待、输出目标回执、格式切换按钮边界、复核段落、证据、风险和可复制 artifact |
@@ -194,8 +194,10 @@
 | Roadmap 两档分享 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 地址栏只读链接；右上角 token 可编辑链接 |
 | Roadmap 变更历史 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 团队层操作日志 drawer，不展示个人记忆 |
 | Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删；新建后置顶 Backlog 首位 |
+| Roadmap AI 批量创建 Draft | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Backlog「使用 AI 批量创建」；默认先预览，勾选后才写入 Draft；不创建 Jira |
+| Roadmap 规划 MCP / Plugin | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 与网页共用 DraftPlanV1；stdio MCP + Skill + 内部 Codex Plugin；无 Jira create / Memory 依赖 |
 | Roadmap draft 排期 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 判据只有 `jiraKey === null`；斜纹 bar 与 DRAFT 角标；draft 进 memory 但合成 key 不进 aliases |
-| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；fixVersion 按 Target End 落点列（跨列留空交 Agent） |
+| Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；fixVersion 按 Target End 落点列（跨列留空；Jira 无此版本则省略字段继续创建）；失败可按组重试且不重建已成功 ticket |
 | 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 background 代发 sync；落选 archived；与 Target 回写独立 |
 | Memory Service 自托管 | 记忆平台 | [self-hosting-memory-service.md](./self-hosting-memory-service.md) | Docker + Options 填地址；bootstrap / 设备 key / CORS 默认全关 |
 | 重点项目消息观察（不通知） | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | focus project 注入消息分析，只入库不 Glip 提醒 |
@@ -243,7 +245,7 @@
 | Doubao / ChatGPT explorer 输入链路 | Doubao Bridge | [doubao_bridge.md](./features/doubao_bridge.md) | 抓取外部 AI 会话并回写 Memory Service；未保存来源设置与抓取失败都会保留输入范围 / 传输边界 |
 | Revoke ingested memory | Doubao Bridge | [doubao_bridge.md](./features/doubao_bridge.md) | 删除按来源写入的 Memory Service 记忆；撤回请求和结果保留确认时的范围 / artifact 点击快照 |
 | Quick Ask 小窗 | Doubao Bridge | [doubao_bridge.md](./features/doubao_bridge.md) | menubar 默认入口 |
-| Quick Ask 本机会话续接 | Doubao Bridge / Ask | [doubao_bridge.md](./features/doubao_bridge.md) / [ask.md](./features/ask.md) | 24 小时脱敏本机快照；继续才带 hint，新问题不继承，服务端重新检索并返回续聊回执 |
+| Quick Ask 本机会话续接 | Doubao Bridge / Ask | [doubao_bridge.md](./features/doubao_bridge.md) / [ask.md](./features/ask.md) | 24 小时脱敏本机快照；续聊条只保留“继续/丢弃”，继续才带 hint，直接输入按新问题不继承，服务端重新检索并返回续聊回执 |
 | Quick Ask 语音输入 | Doubao Bridge | [doubao_bridge.md](./features/doubao_bridge.md) | native speech helper；停止/空转写、权限恢复和发送按钮 hover/读屏边界 |
 | Quick Ask 状态卡 | Doubao Bridge | [doubao_bridge.md](./features/doubao_bridge.md) | sync issue / pending outreach 等状态；状态胶囊、刷新按钮和状态行显示展开、重新读取、数量、来源和只读快照口径 |
 | 技能库技能建议 | Skill Foundry | [personal_skill_foundry.md](./features/personal_skill_foundry.md) | suggestion inbox；卡片和按钮显示处理边界回执 |

@@ -613,7 +613,7 @@ Docs/demo 阶段：
 - [`docs/memory_system.md`](../memory_system.md)：补 `TimeBasisFrame` 在 Ask、Recall、Action Queue 前的横切合约。
 - [`docs/features/ask.md`](../features/ask.md)：补 current/as-of/simulation 分栏回答和不足时的 warning。
 - [`docs/features/assist.md`](../features/assist.md)：补 Prompt Context Compiler 插入 time header 的边界。
-- [`docs/features/task_scheduler_api.md`](../features/task_scheduler_api.md)：如果 scheduled/task runner 消费 time basis，补运行时间 vs 业务时间。
+- [`docs/features/background_jobs.md`](../features/background_jobs.md)：如果 scheduled/task runner 消费 time basis，补运行时间 vs 业务时间。
 - [`docs/features/personal_skill_foundry.md`](../features/personal_skill_foundry.md)：如果 skill manifest 增加 `requires_time_basis`，补 skill runner preflight。
 - 如果 Desktop Quick Ask / Doubao Bridge 直接展示时间 chip，也应维护 [`desktop-app/docs/features/doubao_bridge.md`](../../desktop-app/docs/features/doubao_bridge.md) 或新建一个更合适的 desktop feature doc。
 

@@ -62,9 +62,8 @@ Quick Ask 会在本机 `localStorage` 保存最近一条经过裁剪和脱敏的
 重新打开 Quick Ask 且当前 renderer 没有正在进行的会话时，输入框上方会自然出现续聊条，不新增独立页面：
 
 - `继续`：显示“本机恢复、未写入长期记忆”的回执；用户下一问会附带 `contextHints`。
-- `新问题`：本轮不带 `contextHints`，旧快照可留到 TTL 到期，避免一次临时切换就丢失恢复机会。
 - `丢弃`：立即删除本机快照；只清 UI 续聊状态，不删除 Memory Service 的消息、活答案或其他长期记忆。
-- 直接输入：按新问题处理，不静默猜测用户想续接。
+- 直接输入：按新问题处理，本轮不带 `contextHints`，旧快照可留到 TTL 到期，避免一次临时切换就丢失恢复机会；不静默猜测用户想续接。
 
 服务端不会把 `topicTitle` 拼成用户问句，而是作为独立的 `preferredTopicTitle` 交给 `MemoryContextMatchService`。只有候选标题/别名与该 topic 有语义重合，或候选标题本身带同一 issue key，才获得显式续聊优先级；仅在聚合 anchors 中碰巧包含同一 issue key 的近期 frame 不能覆盖用户选择。其余 `contextHints` 只作为带“可能过时、不得作为 evidence”标记的 disambiguation / retrieval hint；本轮仍要跑正式召回。响应会返回：
 

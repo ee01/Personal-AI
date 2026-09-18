@@ -139,7 +139,7 @@ Chrome Extension ──HTTP (+X-User-Id)──→ Memory Service (Fastify, port 
 | `src/agentThinking.ts` | `cloudStorage.getSimilarMessages()` | `client.recall()` | ⭐ 简单 |
 | `src/agentWorkflow.ts` | `cloudStorage.getSimilarMessages()`, `getAllKnownPeople()`, `getAllKnownProjects()`, `storeMessage()` | `client.recall()`, `client.getEntities('Person')`, `client.getEntities('Project')`, `client.ingest()` | ⭐⭐ 中等 |
 | `src/llm.ts` | `memorySystem.ask()`, `cloudStorage.getSimilarMessages()`, `getAllKnownPeople/Projects/Topics()` | `client.ask()`, `client.recall()`, `client.getEntities()` | ⭐⭐ 中等 |
-| `src/services/TaskScheduler.ts` | `memorySystem.syncCache()`, `performHealthCheck()`, `performSystemMaintenance()`, `applyUserProfileDecay()`, `CloudStorage` 独立实例 | `client.getHealth()`, `client.getStats()`, 后端 ProactiveScheduler 自动处理 | ⭐⭐ 中等 |
+| `src/services/BackgroundJobs.ts` | `memorySystem.syncCache()`, `performHealthCheck()`, `performSystemMaintenance()`, `applyUserProfileDecay()`, `CloudStorage` 独立实例 | `client.getHealth()`, `client.getStats()`, 后端 ProactiveScheduler 自动处理 | ⭐⭐ 中等 |
 | `src/message-reaction/FollowThreadHandler.ts` | `memorySystem.cloudStorage` (ChromaDB follow thread 存储) | `client.ingest()` + metadata | ⭐⭐ 中等 |
 | `src/proactive-notifications/TaskProcessors.ts` | `cloudStorage.getSimilarMessages()` | `client.recall()` | ⭐ 简单 |
 | `src/modals/memory-exploring-messageHandler.ts` | `cloudStorage.queryEntities()`, `searchByVector()`, `getEntity()`, `updateEntity()`, `storeEntity()`, `getTimeline()`, `localStorage.*` | `client.getEntities()`, `client.getEntityDetail()`, `client.recall()` | ⭐⭐⭐ 较高 |
@@ -341,7 +341,7 @@ const recallResult = await client.recall(query, {
 | 步骤 | 文件 | 状态 |
 |------|------|------|
 | 2.1 | `src/proactive-notifications/TaskProcessors.ts` | ✅ `getSimilarMessages()` → `client.recall()` |
-| 2.2 | `src/services/TaskScheduler.ts` | ✅ 移除 CloudStorage 实例，syncCache/maintenance → no-op（后端自动处理） |
+| 2.2 | `src/services/BackgroundJobs.ts` | ✅ 移除 CloudStorage 实例，syncCache/maintenance → no-op（后端自动处理） |
 | 2.3 | `src/message-reaction/FollowThreadHandler.ts` | ✅ `cloudStorage` → `client.ingest()` + `client.recall()` |
 
 ### ~~Phase 3: UI 模态框~~（✅ 已完成）

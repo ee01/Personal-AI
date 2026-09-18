@@ -484,11 +484,10 @@ Quick Ask 的视觉目标是 `Spotlight 式胶囊壳`：
 当 app 重启或当前 renderer 已没有活跃会话时，如果快照仍有效，输入框上方显示一条嵌入式续聊条：
 
 - `继续`：恢复上一问、答案摘要和 topic 线索；下一问才会携带 `contextHints.source = local_ask_resume_snapshot`。
-- `新问题`：隐藏续聊条，本轮请求不携带上一轮 hint。
 - `丢弃`：删除本机快照，并说明不会删除 Personal AI 长期记忆。
 - 待选 topic：最多显示 3 个候选，点击候选后以该 topic 作为本轮显式续聊线索继续 Ask。
 
-快照会剔除完整长 transcript，限制问题、答案、topic 和 evidence 数量，并脱敏 secret 字段、bearer token、常见 API key、邮箱、电话及 URL query/hash 凭据。过期或格式损坏的快照在读取时直接清理。直接在续聊条仍显示时输入文本按“新问题”处理，不会静默继承。
+快照会剔除完整长 transcript，限制问题、答案、topic 和 evidence 数量，并脱敏 secret 字段、bearer token、常见 API key、邮箱、电话及 URL query/hash 凭据。过期或格式损坏的快照在读取时直接清理。续聊条只提供 `继续` 和 `丢弃` 两个按钮；直接在续聊条仍显示时输入文本按“新问题”处理（隐藏续聊条，本轮请求不携带上一轮 hint），不会静默继承。
 
 Memory Service 仍负责当前事实：收到 hint 后把用户显式选择的 `topicTitle` 作为独立的 preferred topic，优先于仅共享宽泛 anchor 的近期环境 frame，再重新跑 evidence recall；即使最终生成超时，也按已锁定 topic 保留证据。响应返回 `continuityReceipt`，明确这是本机线索、仅作提示、本轮已重新检索且快照未写入长期记忆。详见 [Ask](./ask.md)。
 

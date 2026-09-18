@@ -582,9 +582,9 @@ Memory Exploring 里 `source-memory` 和 `timeline` 是两类证据入口。`sou
 
 对外开口之前，身份一度只靠 `X-User-Id`——任意网页都能自称任意用户。现在分三层：
 
-- **全权 `API_KEY`**：可带任意 `X-User-Id` 读写。只给 Desktop App / 运维 / 部署验证，**不要打进扩展包或 Options**。生产环境配置后，匿名 `X-User-Id`（无 Bearer）一律 401。扩展日常不走这把钥匙，因此 Options 里填了也不会变成「模拟他人」。
+- **全权 `API_KEY`**：可带任意 `X-User-Id` 读写。只给运维 / 部署验证，**不要打进扩展包或 Options**。Desktop App 也只把它当签发凭据，日常请求走自己签的设备 key。生产环境配置后，匿名 `X-User-Id`（无 Bearer）一律 401。扩展日常不走这把钥匙，因此 Options 里填了也不会变成「模拟他人」。
 - **Bootstrap `BOOTSTRAP_API_KEY`**：scope 仅 `keys.issue`，且**只能认领全新命名空间**（历史上从未签发过任何 `pak`、也无真实用户数据）。扩展构建或 Options 可注入；泄露后不能直接读数据，也不能给已认领用户再签 key。新用户开箱签发只依赖 bootstrap，与是否配置全权 `API_KEY` 无关。
-- **Tier-2 个人 key（`pak.<base64url(userId)>.<secret>`）**：每台设备各自签发，绑定唯一用户。库内只存 sha256（migration `060`，含 `issued_from_ip` / `issued_from_ua`）。扩展 background 在可认领命名空间用 bootstrap 自动签发；已认领用户的新设备改走 Google 服务端校验或管理员批准。帮助中心仍可手动签发外接用 key。本机 `chrome.storage.local.memoryServiceDeviceKey` 里的 pak 如果被服务端判定 `invalid_user_api_key`（例如服务端用户库重建、key 被吊销），扩展会丢掉过期 pak 并按认领门禁重试，而不是一直带着作废密钥刷 401。Roadmap 部署不会清掉这把本机 key。
+- **Tier-2 个人 key（`pak.<base64url(userId)>.<secret>`）**：每台设备各自签发，绑定唯一用户。库内只存 sha256（migration `060`，含 `issued_from_ip` / `issued_from_ua`）。扩展 background 在可认领命名空间用 bootstrap 自动签发；已认领用户的新设备改走 Google 服务端校验或管理员批准。帮助中心仍可手动签发外接用 key。本机 `chrome.storage.local.memoryServiceDeviceKey` 里的 pak 如果被服务端判定 `invalid_user_api_key`（例如服务端用户库重建、key 被吊销），扩展会丢掉过期 pak 并按认领门禁重试，而不是一直带着作废密钥刷 401。Roadmap 部署不会清掉这把本机 key。Desktop App 走同一套流程（`desktop-app/src/deviceApiKey.ts`），密钥存 `{dataDir}/device-key.json`，签发凭据取自设置页的 API Key 或 `MEMORY_SERVICE_BOOTSTRAP_KEY`。
 
 **已认领后的新设备**（TOFU 之后）：
 
