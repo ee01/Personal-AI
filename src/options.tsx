@@ -3823,19 +3823,27 @@ const Options = () => {
     allowNone = false,
     description?: string,
     disabled = false,
+    // 同一个存储键可能在不同分区各渲染一次（例如「跟进追问结果推送」与
+    // 「主动询问结果推送」共用 OUTREACH_RESULT_PUSH_*）。只区分 DOM id，
+    // name 仍用存储键，保证两边读写同一份状态、改一处即同步。
+    domIdPrefix?: string,
   ) => {
     const targetValue = resolvePushTargetValue(
       String(config[targetKey] || ''),
       'me',
       allowNone,
     );
+    const targetDomId = domIdPrefix
+      ? `${domIdPrefix}_${targetKey}`
+      : targetKey;
+    const groupDomId = domIdPrefix ? `${domIdPrefix}_${groupKey}` : groupKey;
 
     return (
       <>
         <div className="form-group">
-          <label htmlFor={targetKey}>{label}</label>
+          <label htmlFor={targetDomId}>{label}</label>
           <select
-            id={targetKey}
+            id={targetDomId}
             name={targetKey}
             value={targetValue}
             onChange={handleInputChange}
@@ -3855,10 +3863,10 @@ const Options = () => {
         </div>
         {targetValue === 'group' && (
           <div className="form-group">
-            <label htmlFor={groupKey}>{label}群组 ID</label>
+            <label htmlFor={groupDomId}>{label}群组 ID</label>
             <input
               type="text"
-              id={groupKey}
+              id={groupDomId}
               name={groupKey}
               value={String(config[groupKey] || '')}
               onChange={handleInputChange}
@@ -4212,7 +4220,7 @@ const Options = () => {
           'MESSAGE_ANALYSIS_PUSH_TARGET',
           'MESSAGE_ANALYSIS_PUSH_GROUP_ID',
           false,
-          '命中关注项后的即时提醒。Bot Key 和 Base URL 从 env 读取。',
+          '命中关注项后的即时提醒（不含关注后续）。Bot Key 和 Base URL 从 env 读取。',
         )}
         <div className="form-group">
           <label htmlFor="CONCERNED_ITEMS_DIGEST_HOUR">
@@ -4291,7 +4299,24 @@ const Options = () => {
           'FOLLOW_UP_PUSH_TARGET',
           'FOLLOW_UP_PUSH_GROUP_ID',
           false,
-          '关注后续汇总和相关提醒的推送位置。默认推送给 Me。',
+          '关注后续命中和关注后续汇总的推送位置，独立于「消息分析推送」；两者使用各自的 Bot 模板。默认推送给 Me。',
+        )}
+        <ToggleField
+          id="ENABLE_FOLLOWUP_ASK"
+          name="ENABLE_FOLLOWUP_ASK"
+          checked={config.ENABLE_FOLLOWUP_ASK}
+          onChange={handleInputChange}
+          label="启用「跟进追问」功能"
+          description="在你发出的消息上，用 AI 追问后续是否有了回复。需要先启用主动询问引擎并配好 RingCentral 凭据。"
+        />
+        {renderPushTargetFields(
+          '跟进追问结果推送',
+          'OUTREACH_RESULT_PUSH_TARGET',
+          'OUTREACH_RESULT_PUSH_GROUP_ID',
+          false,
+          '与下方「主动询问结果推送」共用同一份存储，改任意一处两边同步。跟进追问拿到结果、超时或未得到可用结论时推送终态回执。',
+          runtimeFieldsLocked,
+          'MESSAGE_INTERACTION',
         )}
         <ToggleField
           id="ENABLE_AUTO_REPLY"
@@ -5145,7 +5170,7 @@ const Options = () => {
           'OUTREACH_RESULT_PUSH_TARGET',
           'OUTREACH_RESULT_PUSH_GROUP_ID',
           false,
-          '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。',
+          '当主动询问拿到最终结果、超时或未得到可用结论时，用 Bot 推送给 Me 或指定群组。回执会说明是否发生过追问，并提供继续追问入口。默认推送给 Me。与「消息交互功能 → 跟进追问结果推送」共用同一份存储，改任意一处两边同步。',
           runtimeFieldsLocked || config.OUTREACH_ENABLED !== true,
         )}
         <div className="form-group">

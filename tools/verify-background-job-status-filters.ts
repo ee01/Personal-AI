@@ -11,38 +11,38 @@ import {
   shouldRecommendTaskPause,
   taskMatchesStatusFilter,
   taskNeedsAttention,
-  type TaskSchedulerStatusFilterTask,
-} from '../src/services/taskSchedulerStatusFilters';
+  type BackgroundJobStatusFilterTask,
+} from '../src/services/backgroundJobStatusFilters';
 
 const now = Date.now();
 
-const running: TaskSchedulerStatusFilterTask = {
+const running: BackgroundJobStatusFilterTask = {
   enabled: true,
   scheduleHealth: 'scheduled',
   lastSuccess: true,
 };
-const executing: TaskSchedulerStatusFilterTask = {
+const executing: BackgroundJobStatusFilterTask = {
   ...running,
   isExecuting: true,
 };
-const warning: TaskSchedulerStatusFilterTask = {
+const warning: BackgroundJobStatusFilterTask = {
   ...running,
   scheduleHealth: 'overdue',
 };
-const skippedAfterFailure: TaskSchedulerStatusFilterTask = {
+const skippedAfterFailure: BackgroundJobStatusFilterTask = {
   ...running,
   lastSuccess: false,
   lastCompletedAt: now - 2_000,
   lastSkippedAt: now - 1_000,
 };
-const skippedAsLatestCompletedRun: TaskSchedulerStatusFilterTask = {
+const skippedAsLatestCompletedRun: BackgroundJobStatusFilterTask = {
   ...running,
   lastSuccess: true,
   lastCompletedAt: now,
   lastSkippedAt: now,
   runHistory: [{ success: true, skipped: true }],
 };
-const failed: TaskSchedulerStatusFilterTask = {
+const failed: BackgroundJobStatusFilterTask = {
   ...running,
   lastSuccess: false,
   lastCompletedAt: now - 1_000,
@@ -52,7 +52,7 @@ const failed: TaskSchedulerStatusFilterTask = {
     { success: true },
   ],
 };
-const repeatedlyFailed: TaskSchedulerStatusFilterTask = {
+const repeatedlyFailed: BackgroundJobStatusFilterTask = {
   ...running,
   lastSuccess: false,
   lastCompletedAt: now - 1_000,
@@ -62,7 +62,7 @@ const repeatedlyFailed: TaskSchedulerStatusFilterTask = {
     { success: false },
   ],
 };
-const disabledWithWarningFlag: TaskSchedulerStatusFilterTask = {
+const disabledWithWarningFlag: BackgroundJobStatusFilterTask = {
   enabled: false,
   scheduleHealth: 'missing_alarm',
 };

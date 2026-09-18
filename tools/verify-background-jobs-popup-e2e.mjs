@@ -13,7 +13,7 @@ const extensionPath = path.join(repoRoot, 'dist');
 
 async function launchExtensionContext() {
   const userDataDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), 'task-scheduler-popup-e2e-browser-'),
+    path.join(os.tmpdir(), 'background-jobs-popup-e2e-browser-'),
   );
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
@@ -31,12 +31,43 @@ async function launchExtensionContext() {
     });
   }
 
+  await stubMemoryLocalFetch(serviceWorker);
+  context.on('serviceworker', (worker) => {
+    void stubMemoryLocalFetch(worker);
+  });
+
   return {
     context,
     extensionId: new URL(serviceWorker.url()).host,
     serviceWorker,
     userDataDir,
   };
+}
+
+async function stubMemoryLocalFetch(serviceWorker) {
+  await serviceWorker.evaluate(() => {
+    if (globalThis.__memoryLocalFetchStubbed) {
+      return;
+    }
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input, init) => {
+      const url = String(
+        typeof input === 'string'
+          ? input
+          : input && typeof input.url === 'string'
+            ? input.url
+            : '',
+      );
+      if (url.includes('memory.local') || url.includes('/api/v1/')) {
+        return new Response(JSON.stringify({ ok: true, items: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return originalFetch(input, init);
+    };
+    globalThis.__memoryLocalFetchStubbed = true;
+  });
 }
 
 function collectPageErrors(page) {
@@ -48,7 +79,7 @@ function collectPageErrors(page) {
     assert.deepEqual(
       errors,
       [],
-      `Task scheduler popup page errors: ${errors.join('; ')}`,
+      `Background jobs popup page errors: ${errors.join('; ')}`,
     );
   };
 }
@@ -86,6 +117,7 @@ try {
       const dueCreatedAt = new Date(now - 26 * 60 * 60 * 1000).toISOString();
       await chrome.storage.local.clear();
       await chrome.storage.local.set({
+        helpCenterOnboardingSeen: true,
         envConfig: {
           MEMORY_SERVICE_BASE_URL: 'https://memory.local/api/v1',
           MESSAGE_ANALYSIS_INTERVAL: 30,
@@ -94,7 +126,7 @@ try {
           username: 'popup.verify',
           fullName: 'Popup Verify',
         },
-        taskSchedulerStates: {
+        backgroundJobStates: {
           message_analysis: { enabled: false },
           memory_sync: {
             enabled: true,
@@ -243,21 +275,30 @@ try {
       hasText: '静默消息分析',
     })
     .waitFor({ timeout: 15000 });
+  const onboardingDismiss = page.locator('.help-onboarding-dismiss');
+  if (await onboardingDismiss.isVisible()) {
+    await onboardingDismiss.click();
+  }
+  await page
+    .locator('.task-status-panel:not([open]) .task-summary-attention-preview', {
+      hasText: '需处理：系统健康监控 · 失败；记忆系统同步 · 跳过',
+    })
+    .waitFor({ timeout: 20000 });
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-    window.__restoreTaskSchedulerHeaderToggleSendMessage = () => {
+    window.__restoreBackgroundJobsHeaderToggleSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
-    window.__releaseTaskSchedulerHeaderToggle = null;
+    window.__releaseBackgroundJobsHeaderToggle = null;
 
     chrome.runtime.sendMessage = (message, ...args) => {
       if (
-        message?.type === 'CONTROL_TASK' &&
+        message?.type === 'CONTROL_BACKGROUND_JOB' &&
         message.action === 'toggle' &&
         message.taskId === 'message_analysis'
       ) {
         return new Promise((resolve) => {
-          window.__releaseTaskSchedulerHeaderToggle = () => {
+          window.__releaseBackgroundJobsHeaderToggle = () => {
             resolve({
               success: false,
               error: 'mock header toggle rejected',
@@ -293,14 +334,20 @@ try {
     0,
     'header toggle should not show enabled success before the background response returns',
   );
-  await page.evaluate(() => window.__releaseTaskSchedulerHeaderToggle());
+  await page.evaluate(() => {
+    const restore = window.__restoreBackgroundJobsHeaderToggleSendMessage;
+    const release = window.__releaseBackgroundJobsHeaderToggle;
+    if (typeof restore === 'function') {
+      restore();
+    }
+    if (typeof release === 'function') {
+      release();
+    }
+  });
   await page.locator('.task-header-pending-receipt').waitFor({
     state: 'detached',
     timeout: 15000,
   });
-  await page.evaluate(() =>
-    window.__restoreTaskSchedulerHeaderToggleSendMessage(),
-  );
 
   await page
     .locator('.task-status-panel:not([open]) .task-summary-attention-preview', {
@@ -310,7 +357,7 @@ try {
   assert.match(
     (await page.locator('.task-status-panel summary').textContent()) || '',
     /1 失败 · 7\/8 启用.*系统健康监控 · 失败.*记忆系统同步 · 跳过/,
-    'collapsed task scheduler summary should name the visible tasks that need action',
+    'collapsed background jobs summary should name the visible jobs that need action',
   );
 
   await page.locator('.task-status-panel summary').click();
@@ -335,18 +382,18 @@ try {
   await page.evaluate(() => {
     const originalSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
     let delayNextTaskStatusRequest = false;
-    window.__releaseTaskSchedulerRefresh = null;
-    window.__armTaskSchedulerRefreshDelay = () => {
+    window.__releaseBackgroundJobsRefresh = null;
+    window.__armBackgroundJobsRefreshDelay = () => {
       delayNextTaskStatusRequest = true;
     };
     chrome.runtime.sendMessage = (message, ...args) => {
       if (
         delayNextTaskStatusRequest &&
-        message?.type === 'GET_TASK_SCHEDULER_STATUS'
+        message?.type === 'GET_BACKGROUND_JOBS_STATUS'
       ) {
         delayNextTaskStatusRequest = false;
         return new Promise((resolve, reject) => {
-          window.__releaseTaskSchedulerRefresh = async () => {
+          window.__releaseBackgroundJobsRefresh = async () => {
             try {
               resolve(await originalSendMessage(message, ...args));
             } catch (error) {
@@ -364,7 +411,7 @@ try {
     if (!button || button.disabled) {
       throw new Error('task refresh button is not ready to click');
     }
-    window.__armTaskSchedulerRefreshDelay();
+    window.__armBackgroundJobsRefreshDelay();
     button.click();
   });
   await page
@@ -397,7 +444,7 @@ try {
     /上次确认 .* · .+/,
     'pending refresh should keep showing the last confirmed snapshot time',
   );
-  await page.evaluate(() => window.__releaseTaskSchedulerRefresh());
+  await page.evaluate(() => window.__releaseBackgroundJobsRefresh());
   await page
     .locator('.task-refresh-receipt', {
       hasText: '刷新回执：已核对 8 个任务',
@@ -537,7 +584,7 @@ try {
     .waitFor({ timeout: 15000 });
   await digestQueueRow
     .locator('.task-queue-summary-boundary', {
-      hasText: '等待后台任务推送',
+      hasText: '等待后台作业推送',
     })
     .waitFor({ timeout: 15000 });
   await digestQueueRow
@@ -573,7 +620,7 @@ try {
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
     const baseResponsePromise = previousSendMessage({
-      type: 'GET_TASK_SCHEDULER_STATUS',
+      type: 'GET_BACKGROUND_JOBS_STATUS',
     });
     const toggleTaskId = 'system_monitoring';
     let phase = 'enabled';
@@ -621,13 +668,13 @@ try {
       });
     };
 
-    window.__releaseTaskSchedulerToggle = null;
-    window.__restoreTaskSchedulerToggleSendMessage = () => {
+    window.__releaseBackgroundJobsToggle = null;
+    window.__restoreBackgroundJobsToggleSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = (message, ...args) => {
-      if (message?.type === 'GET_TASK_SCHEDULER_STATUS') {
+      if (message?.type === 'GET_BACKGROUND_JOBS_STATUS') {
         return buildTasks().then((tasks) => ({
           success: true,
           tasks,
@@ -635,12 +682,12 @@ try {
         }));
       }
       if (
-        message?.type === 'CONTROL_TASK' &&
+        message?.type === 'CONTROL_BACKGROUND_JOB' &&
         message.action === 'toggle' &&
         message.taskId === toggleTaskId
       ) {
         return new Promise((resolve) => {
-          window.__releaseTaskSchedulerToggle = () => {
+          window.__releaseBackgroundJobsToggle = () => {
             phase = 'disabled';
             resolve({ success: true, message: '任务状态已更新' });
           };
@@ -676,7 +723,7 @@ try {
     0,
     'toggle should not show paused success before the background response returns',
   );
-  await page.evaluate(() => window.__releaseTaskSchedulerToggle());
+  await page.evaluate(() => window.__releaseBackgroundJobsToggle());
   await page
     .locator('.task-action-receipt-panel.success', {
       hasText: '排程已停用',
@@ -685,7 +732,7 @@ try {
   await systemMonitoringRow
     .locator('.task-status-receipt.disabled', { hasText: '停用' })
     .waitFor({ timeout: 15000 });
-  await page.evaluate(() => window.__restoreTaskSchedulerToggleSendMessage());
+  await page.evaluate(() => window.__restoreBackgroundJobsToggleSendMessage());
   await page.locator('.task-refresh-btn').click();
   await systemMonitoringRow
     .locator('.task-state-badge.failed', { hasText: '失败' })
@@ -693,13 +740,13 @@ try {
 
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-    window.__restoreTaskSchedulerToggleFailureSendMessage = () => {
+    window.__restoreBackgroundJobsToggleFailureSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = (message, ...args) => {
       if (
-        message?.type === 'CONTROL_TASK' &&
+        message?.type === 'CONTROL_BACKGROUND_JOB' &&
         message.action === 'toggle' &&
         message.taskId === 'memory_sync'
       ) {
@@ -741,13 +788,13 @@ try {
     'toggle control failures should use the action receipt instead of a global control error',
   );
   await page.evaluate(() =>
-    window.__restoreTaskSchedulerToggleFailureSendMessage(),
+    window.__restoreBackgroundJobsToggleFailureSendMessage(),
   );
 
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
     const baseResponsePromise = previousSendMessage({
-      type: 'GET_TASK_SCHEDULER_STATUS',
+      type: 'GET_BACKGROUND_JOBS_STATUS',
     });
     const runTaskId = 'user_profile_decay';
     let phase = 'idle';
@@ -808,13 +855,13 @@ try {
       });
     };
 
-    window.__releaseTaskSchedulerRun = null;
-    window.__restoreTaskSchedulerRunSendMessage = () => {
+    window.__releaseBackgroundJobsRun = null;
+    window.__restoreBackgroundJobsRunSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = (message, ...args) => {
-      if (message?.type === 'GET_TASK_SCHEDULER_STATUS') {
+      if (message?.type === 'GET_BACKGROUND_JOBS_STATUS') {
         return buildTasks().then((tasks) => ({
           success: true,
           tasks,
@@ -822,12 +869,12 @@ try {
         }));
       }
       if (
-        message?.type === 'CONTROL_TASK' &&
+        message?.type === 'CONTROL_BACKGROUND_JOB' &&
         message.action === 'run' &&
         message.taskId === runTaskId
       ) {
         return new Promise((resolve) => {
-          window.__releaseTaskSchedulerRun = () => {
+          window.__releaseBackgroundJobsRun = () => {
             phase = 'completed';
             resolve({ success: true, message: '后端自动处理，扩展侧记录 no-op' });
           };
@@ -858,7 +905,7 @@ try {
     0,
     'manual run should not show success before the background response returns',
   );
-  await page.evaluate(() => window.__releaseTaskSchedulerRun());
+  await page.evaluate(() => window.__releaseBackgroundJobsRun());
   await page
     .locator('.task-action-receipt-panel.success', {
       hasText: '已手动执行',
@@ -869,13 +916,13 @@ try {
       hasText: '最近成功',
     })
     .waitFor({ timeout: 15000 });
-  await page.evaluate(() => window.__restoreTaskSchedulerRunSendMessage());
+  await page.evaluate(() => window.__restoreBackgroundJobsRunSendMessage());
   await page.locator('.task-refresh-btn').click();
 
   await page.evaluate(async () => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
     const baseResponse = await previousSendMessage({
-      type: 'GET_TASK_SCHEDULER_STATUS',
+      type: 'GET_BACKGROUND_JOBS_STATUS',
     });
     const repairTaskId = 'vector_quality_check';
     let phase = 'warning';
@@ -938,13 +985,13 @@ try {
         };
       });
 
-    window.__releaseTaskSchedulerRepair = null;
-    window.__restoreTaskSchedulerSendMessage = () => {
+    window.__releaseBackgroundJobsRepair = null;
+    window.__restoreBackgroundJobsSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = (message, ...args) => {
-      if (message?.type === 'GET_TASK_SCHEDULER_STATUS') {
+      if (message?.type === 'GET_BACKGROUND_JOBS_STATUS') {
         const tasks = buildTasks();
         return Promise.resolve({
           success: true,
@@ -953,12 +1000,12 @@ try {
         });
       }
       if (
-        message?.type === 'CONTROL_TASK' &&
+        message?.type === 'CONTROL_BACKGROUND_JOB' &&
         message.action === 'repair' &&
         message.taskId === repairTaskId
       ) {
         return new Promise((resolve) => {
-          window.__releaseTaskSchedulerRepair = () => {
+          window.__releaseBackgroundJobsRepair = () => {
             phase = 'repaired';
             resolve({ success: true, message: '排程已修复' });
           };
@@ -1018,7 +1065,7 @@ try {
     0,
     'repair should not show success before the background response returns',
   );
-  await page.evaluate(() => window.__releaseTaskSchedulerRepair());
+  await page.evaluate(() => window.__releaseBackgroundJobsRepair());
   await page
     .locator('.task-action-receipt-panel.success', {
       hasText: '排程已重排',
@@ -1032,12 +1079,12 @@ try {
     0,
     'repair pending receipt should clear after confirmed status reload',
   );
-  await page.evaluate(() => window.__restoreTaskSchedulerSendMessage());
+  await page.evaluate(() => window.__restoreBackgroundJobsSendMessage());
 
   await page.evaluate(async () => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
     const baseResponse = await previousSendMessage({
-      type: 'GET_TASK_SCHEDULER_STATUS',
+      type: 'GET_BACKGROUND_JOBS_STATUS',
     });
     const repairTaskId = 'vector_quality_check';
     const warning =
@@ -1064,12 +1111,12 @@ try {
           : task,
       );
 
-    window.__restoreTaskSchedulerRepairFailureSendMessage = () => {
+    window.__restoreBackgroundJobsRepairFailureSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = (message, ...args) => {
-      if (message?.type === 'GET_TASK_SCHEDULER_STATUS') {
+      if (message?.type === 'GET_BACKGROUND_JOBS_STATUS') {
         const tasks = buildTasks();
         return Promise.resolve({
           success: true,
@@ -1091,7 +1138,7 @@ try {
         });
       }
       if (
-        message?.type === 'CONTROL_TASK' &&
+        message?.type === 'CONTROL_BACKGROUND_JOB' &&
         message.action === 'repair' &&
         message.taskId === repairTaskId
       ) {
@@ -1135,7 +1182,7 @@ try {
     'repair control failures should use the action receipt instead of a global control error',
   );
   await page.evaluate(() =>
-    window.__restoreTaskSchedulerRepairFailureSendMessage(),
+    window.__restoreBackgroundJobsRepairFailureSendMessage(),
   );
 
   await page.evaluate(() => {
@@ -1144,7 +1191,7 @@ try {
     chrome.runtime.sendMessage = (message, ...args) => {
       if (
         failNextTaskStatusRequest &&
-        message?.type === 'GET_TASK_SCHEDULER_STATUS'
+        message?.type === 'GET_BACKGROUND_JOBS_STATUS'
       ) {
         failNextTaskStatusRequest = false;
         const response = {
@@ -1346,13 +1393,13 @@ try {
   await page
     .locator('.task-row', { hasText: '汇总推送队列处理' })
     .locator('.task-queue-summary-boundary', {
-      hasText: '等待后台任务推送',
+      hasText: '等待后台作业推送',
     })
     .waitFor({ timeout: 15000 });
   await page
     .locator('.task-row', { hasText: '汇总推送队列处理' })
     .locator('.task-queue-summary-boundary', {
-      hasText: '本地延迟摘要：到达释放窗口后由后台任务推送',
+      hasText: '本地延迟摘要：到达释放窗口后由后台作业推送',
     })
     .waitFor({ timeout: 15000 });
   await page
@@ -1407,12 +1454,12 @@ try {
 
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-    window.__restoreTaskSchedulerEmptyQueueSendMessage = () => {
+    window.__restoreBackgroundJobsEmptyQueueSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = async (message, ...args) => {
-      if (message?.type !== 'GET_TASK_SCHEDULER_STATUS') {
+      if (message?.type !== 'GET_BACKGROUND_JOBS_STATUS') {
         return previousSendMessage(message, ...args);
       }
 
@@ -1489,17 +1536,17 @@ try {
     'empty current queue should not present stale run counts as live pending items',
   );
   await page.evaluate(() =>
-    window.__restoreTaskSchedulerEmptyQueueSendMessage(),
+    window.__restoreBackgroundJobsEmptyQueueSendMessage(),
   );
 
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-    window.__restoreTaskSchedulerQueueUnavailableSendMessage = () => {
+    window.__restoreBackgroundJobsQueueUnavailableSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = async (message, ...args) => {
-      if (message?.type !== 'GET_TASK_SCHEDULER_STATUS') {
+      if (message?.type !== 'GET_BACKGROUND_JOBS_STATUS') {
         return previousSendMessage(message, ...args);
       }
 
@@ -1585,20 +1632,20 @@ try {
     'unavailable digest status aria label should defer truth to the run receipt',
   );
   await page.evaluate(() =>
-    window.__restoreTaskSchedulerQueueUnavailableSendMessage(),
+    window.__restoreBackgroundJobsQueueUnavailableSendMessage(),
   );
   await page.locator('.task-refresh-btn').click();
 
   await page.evaluate(() => {
     const previousSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-    window.__restoreTaskSchedulerCalibrationSendMessage = () => {
+    window.__restoreBackgroundJobsCalibrationSendMessage = () => {
       chrome.runtime.sendMessage = previousSendMessage;
     };
 
     chrome.runtime.sendMessage = async (message, ...args) => {
       const baseResponse = await previousSendMessage(message, ...args);
       if (
-        message?.type !== 'GET_TASK_SCHEDULER_STATUS' ||
+        message?.type !== 'GET_BACKGROUND_JOBS_STATUS' ||
         !baseResponse?.success
       ) {
         return baseResponse;
@@ -1641,7 +1688,7 @@ try {
     })
     .waitFor({ timeout: 15000 });
   await page.evaluate(() =>
-    window.__restoreTaskSchedulerCalibrationSendMessage(),
+    window.__restoreBackgroundJobsCalibrationSendMessage(),
   );
   await page.locator('.task-refresh-btn').click();
 
@@ -1672,6 +1719,12 @@ try {
       hasText: 'Analyze msg in background · every',
     })
     .waitFor({ timeout: 15000 });
+  const englishOnboardingDismiss = englishPage.locator(
+    '.help-onboarding-dismiss',
+  );
+  if (await englishOnboardingDismiss.isVisible()) {
+    await englishOnboardingDismiss.click();
+  }
   const englishToggleLabel =
     (await englishPage.locator('.toggle-label').textContent()) || '';
   assert.doesNotMatch(englishToggleLabel, /静默消息分析|每/);
@@ -1680,14 +1733,10 @@ try {
     .evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute('title')),
     );
-  assert.deepEqual(headerButtonTitles, [
-    'Desktop App',
-    'Share with colleagues',
-    'View help docs',
-  ]);
+  assert.deepEqual(headerButtonTitles, ['Desktop App', 'Help Center']);
   await englishPage.locator('.task-status-panel summary').click();
   await englishPage
-    .locator('.task-status-panel summary', { hasText: 'Background Tasks' })
+    .locator('.task-status-panel summary', { hasText: 'Background Jobs' })
     .waitFor({ timeout: 15000 });
   await englishPage
     .locator('.task-refresh-receipt', {
@@ -1787,14 +1836,14 @@ try {
   await englishPage
     .locator('.task-row', { hasText: 'Digest queue' })
     .locator('.task-queue-summary-boundary', {
-      hasText: 'ready for the next background task',
+      hasText: 'ready for the next background job',
     })
     .waitFor({ timeout: 15000 });
   await englishPage
     .locator('.task-row', { hasText: 'Digest queue' })
     .locator('.task-queue-summary-boundary', {
       hasText:
-        'Local delayed digest: after the release window, the background task checks within about 15 minutes',
+        'Local delayed digest: after the release window, the background job checks within about 15 minutes',
     })
     .waitFor({ timeout: 15000 });
   await englishPage
@@ -1842,7 +1891,7 @@ try {
   assertNoPageErrors();
   await context.close();
   await fs.rm(launched.userDataDir, { recursive: true, force: true });
-  console.log('verify-task-scheduler-popup-filters-e2e: ok');
+  console.log('verify-background-jobs-popup-e2e: ok');
 } catch (error) {
   if (launched?.context) await launched.context.close().catch(() => undefined);
   if (launched?.userDataDir) {

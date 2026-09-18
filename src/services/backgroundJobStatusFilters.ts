@@ -1,4 +1,4 @@
-export type TaskSchedulerStatusFilter =
+export type BackgroundJobStatusFilter =
   | 'all'
   | 'attention'
   | 'executing'
@@ -7,7 +7,7 @@ export type TaskSchedulerStatusFilter =
   | 'failed'
   | 'disabled';
 
-export type TaskSchedulerStatusKind =
+export type BackgroundJobStatusKind =
   | 'executing'
   | 'warning'
   | 'skipped'
@@ -17,7 +17,7 @@ export type TaskSchedulerStatusKind =
 
 export const TASK_FAILURE_PAUSE_SUGGESTION_STREAK = 3;
 
-export interface TaskSchedulerStatusFilterTask {
+export interface BackgroundJobStatusFilterTask {
   enabled: boolean;
   isExecuting?: boolean;
   lastCompletedAt?: number;
@@ -37,7 +37,7 @@ export interface TaskSchedulerStatusFilterTask {
 }
 
 export function hasTaskScheduleWarning(
-  task: TaskSchedulerStatusFilterTask,
+  task: BackgroundJobStatusFilterTask,
 ): boolean {
   return Boolean(
     task.enabled &&
@@ -48,7 +48,7 @@ export function hasTaskScheduleWarning(
   );
 }
 
-export function hasTaskRecentSkip(task: TaskSchedulerStatusFilterTask): boolean {
+export function hasTaskRecentSkip(task: BackgroundJobStatusFilterTask): boolean {
   return Boolean(
     task.lastSkippedAt &&
       (!task.lastCompletedAt || task.lastSkippedAt >= task.lastCompletedAt),
@@ -56,7 +56,7 @@ export function hasTaskRecentSkip(task: TaskSchedulerStatusFilterTask): boolean 
 }
 
 export function getTaskFailureStreak(
-  task: TaskSchedulerStatusFilterTask,
+  task: BackgroundJobStatusFilterTask,
 ): number {
   if (task.lastSuccess !== false) {
     return 0;
@@ -83,8 +83,8 @@ export function getTaskFailureStreak(
 }
 
 export function getTaskStatusKind(
-  task: TaskSchedulerStatusFilterTask,
-): TaskSchedulerStatusKind {
+  task: BackgroundJobStatusFilterTask,
+): BackgroundJobStatusKind {
   if (task.isExecuting) {
     return 'executing';
   }
@@ -101,7 +101,7 @@ export function getTaskStatusKind(
 }
 
 export function taskNeedsAttention(
-  task: TaskSchedulerStatusFilterTask,
+  task: BackgroundJobStatusFilterTask,
 ): boolean {
   const statusKind = getTaskStatusKind(task);
   return (
@@ -113,7 +113,7 @@ export function taskNeedsAttention(
 }
 
 export function getTaskAttentionRank(
-  task: TaskSchedulerStatusFilterTask,
+  task: BackgroundJobStatusFilterTask,
 ): number {
   const statusKind = getTaskStatusKind(task);
   if (statusKind === 'executing') return 0;
@@ -125,7 +125,7 @@ export function getTaskAttentionRank(
 }
 
 export function getTaskPrimaryAttentionRank(
-  task: TaskSchedulerStatusFilterTask,
+  task: BackgroundJobStatusFilterTask,
 ): number {
   const statusKind = getTaskStatusKind(task);
   if (statusKind === 'executing') return 0;
@@ -137,8 +137,8 @@ export function getTaskPrimaryAttentionRank(
 }
 
 export function taskMatchesStatusFilter(
-  task: TaskSchedulerStatusFilterTask,
-  filter: TaskSchedulerStatusFilter,
+  task: BackgroundJobStatusFilterTask,
+  filter: BackgroundJobStatusFilter,
 ): boolean {
   if (filter === 'all') {
     return true;
@@ -150,7 +150,7 @@ export function taskMatchesStatusFilter(
 }
 
 export function shouldRecommendTaskPause(
-  task: TaskSchedulerStatusFilterTask,
+  task: BackgroundJobStatusFilterTask,
 ): boolean {
   return (
     task.enabled &&
@@ -160,8 +160,15 @@ export function shouldRecommendTaskPause(
 }
 
 export function countTasksByStatusFilter(
-  tasks: TaskSchedulerStatusFilterTask[],
-  filter: TaskSchedulerStatusFilter,
+  tasks: BackgroundJobStatusFilterTask[],
+  filter: BackgroundJobStatusFilter,
 ): number {
   return tasks.filter((task) => taskMatchesStatusFilter(task, filter)).length;
 }
+
+/** @deprecated Use BackgroundJobStatusFilter */
+export type TaskSchedulerStatusFilter = BackgroundJobStatusFilter;
+/** @deprecated Use BackgroundJobStatusKind */
+export type TaskSchedulerStatusKind = BackgroundJobStatusKind;
+/** @deprecated Use BackgroundJobStatusFilterTask */
+export type TaskSchedulerStatusFilterTask = BackgroundJobStatusFilterTask;

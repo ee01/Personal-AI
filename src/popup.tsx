@@ -16,7 +16,7 @@ import {
   type DayPilotContextPackResponse,
   type DayPilotTodayResponse,
 } from './services/MemoryServiceClient';
-import { getTaskEnabled } from './services/taskSchedulerDefinitions';
+import { getTaskEnabled } from './services/backgroundJobDefinitions';
 import {
   countTasksByStatusFilter,
   getTaskFailureStreak,
@@ -27,7 +27,7 @@ import {
   hasTaskScheduleWarning,
   shouldRecommendTaskPause,
   taskNeedsAttention,
-} from './services/taskSchedulerStatusFilters';
+} from './services/backgroundJobStatusFilters';
 import {
   extractMeetingIdFromUrl,
   MeetingPilotSessionSnapshot,
@@ -74,7 +74,7 @@ const Toggle = ({
   </div>
 );
 
-interface TaskSchedulerTask {
+interface BackgroundJobsTask {
   id: string;
   name: string;
   category: string;
@@ -99,11 +99,11 @@ interface TaskSchedulerTask {
     | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
-  statusReceipt?: TaskSchedulerStatusReceipt;
+  statusReceipt?: BackgroundJobsStatusReceipt;
   currentQueueSummary?: string;
   currentQueueStatus?: DigestQueueStatusSummary;
   currentQueueStatusError?: string;
-  runHistory?: TaskSchedulerRunRecord[];
+  runHistory?: BackgroundJobsRunRecord[];
 }
 
 interface DigestQueueStatusSummary {
@@ -150,7 +150,7 @@ interface DigestQueueStatusUi {
   title: string;
 }
 
-interface TaskSchedulerStatusReceipt {
+interface BackgroundJobsStatusReceipt {
   state:
     | 'executing'
     | 'schedule_attention'
@@ -171,7 +171,7 @@ interface TaskSchedulerStatusReceipt {
   nextAction: string;
 }
 
-interface TaskSchedulerStatusRefreshReceipt {
+interface BackgroundJobStatusRefreshReceipt {
   checkedAt: number;
   checkedTaskCount: number;
   enabledTaskCount: number;
@@ -184,11 +184,11 @@ interface TaskSchedulerStatusRefreshReceipt {
   disabledAlarmsCleared: number;
   failedRepairs: number;
   queueStatusUnavailableCount?: number;
-  alarmCalibrations?: TaskSchedulerAlarmCalibration[];
+  alarmCalibrations?: BackgroundJobAlarmCalibration[];
   refreshOnly: true;
 }
 
-interface TaskSchedulerAlarmCalibration {
+interface BackgroundJobAlarmCalibration {
   taskId: string;
   taskName: string;
   action:
@@ -200,7 +200,7 @@ interface TaskSchedulerAlarmCalibration {
   detail?: string;
 }
 
-interface TaskSchedulerRunRecord {
+interface BackgroundJobsRunRecord {
   startedAt: number;
   completedAt: number;
   durationMs: number;
@@ -211,7 +211,7 @@ interface TaskSchedulerRunRecord {
   summary?: string;
 }
 
-interface TaskSchedulerActionReceipt {
+interface BackgroundJobsActionReceipt {
   taskId: string;
   tone: 'success' | 'warning' | 'failed';
   label: string;
@@ -220,33 +220,33 @@ interface TaskSchedulerActionReceipt {
   createdAt: number;
 }
 
-interface TaskSchedulerRefreshFailureReceipt {
+interface BackgroundJobsRefreshFailureReceipt {
   label: string;
   detail: string;
   boundary: string;
   createdAt: number;
 }
 
-interface TaskSchedulerRefreshPendingReceipt {
+interface BackgroundJobsRefreshPendingReceipt {
   label: string;
   detail: string;
   boundary: string;
 }
 
-interface TaskSchedulerPendingActionReceipt {
+interface BackgroundJobsPendingActionReceipt {
   tone: 'pending';
   label: string;
   detail: string;
   nextAction: string;
 }
 
-interface TaskSchedulerHeaderPendingReceipt {
+interface BackgroundJobsHeaderPendingReceipt {
   label: string;
   detail: string;
   boundary: string;
 }
 
-type TaskSchedulerPendingAction =
+type BackgroundJobsPendingAction =
   | 'toggle-enable'
   | 'toggle-disable'
   | 'run'
@@ -320,7 +320,7 @@ function isEnglishUi(language: UiLanguage): boolean {
 }
 
 function getTaskDisplayName(
-  task: Pick<TaskSchedulerTask, 'id' | 'name'>,
+  task: Pick<BackgroundJobsTask, 'id' | 'name'>,
   language: UiLanguage,
 ): string {
   if (isEnglishUi(language)) {
@@ -330,7 +330,7 @@ function getTaskDisplayName(
 }
 
 function getTaskDisplayDescription(
-  task: Pick<TaskSchedulerTask, 'id' | 'description'>,
+  task: Pick<BackgroundJobsTask, 'id' | 'description'>,
   language: UiLanguage,
 ): string {
   if (isEnglishUi(language)) {
@@ -561,12 +561,12 @@ function buildDigestQueueStatusUi(
         ? `Release-window receipt: ${pluralizeEn(
             summary.dueItems,
             'item',
-          )} ready for the next background task; refreshing status does not send now.`
-        : `释放窗口回执：${summary.dueItems} 条已具备发送资格，等待后台任务推送；刷新状态不会立即发送。`
+          )} ready for the next background job; refreshing status does not send now.`
+        : `释放窗口回执：${summary.dueItems} 条已具备发送资格，等待后台作业推送；刷新状态不会立即发送。`
       : undefined;
   const boundaryLine = isEnglish
-    ? `Local delayed digest: after the release window, the background task checks within about ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} minutes; viewing or refreshing does not send now, write to Memory Service, or confirm notifications.`
-    : `本地延迟摘要：到达释放窗口后由后台任务推送，通常 ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} 分钟内检查；查看或刷新不立即发送、不写入 Memory Service、不确认通知。`;
+    ? `Local delayed digest: after the release window, the background job checks within about ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} minutes; viewing or refreshing does not send now, write to Memory Service, or confirm notifications.`
+    : `本地延迟摘要：到达释放窗口后由后台作业推送，通常 ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} 分钟内检查；查看或刷新不立即发送、不写入 Memory Service、不确认通知。`;
   const heading = isEnglish ? 'Local digest queue' : '本地摘要队列';
   const totalLine = isEnglish
     ? `${itemLabel} pending locally`
@@ -595,12 +595,12 @@ function buildDigestQueueStatusUi(
   };
 }
 
-function isDigestQueueProcessTask(task: TaskSchedulerTask): boolean {
+function isDigestQueueProcessTask(task: BackgroundJobsTask): boolean {
   return task.id === 'digest_queue_process';
 }
 
 function formatDigestQueueRunBoundary(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   isBusy: boolean,
   language: UiLanguage = 'zh-CN',
 ): string | null {
@@ -781,7 +781,7 @@ function getLocalTaskTimeZoneLabel(language: UiLanguage = 'zh-CN'): string {
   );
 }
 
-function formatTaskSchedulerStatusError(
+function formatBackgroundJobsStatusError(
   errorMessage: string,
   options: {
     hasSnapshot: boolean;
@@ -798,7 +798,7 @@ function formatTaskSchedulerStatusError(
   if (!options.hasSnapshot) {
     return isEnglishUi(options.language)
       ? `Task status refresh failed: ${message}. No previous task snapshot is available.`
-      : `后台任务状态读取失败：${message}。当前没有可用任务快照。`;
+      : `后台作业状态读取失败：${message}。当前没有可用任务快照。`;
   }
 
   const snapshotTime = formatTaskRefreshTime(
@@ -807,17 +807,17 @@ function formatTaskSchedulerStatusError(
   );
   return isEnglishUi(options.language)
     ? `Task status refresh failed: ${message}. The list below is the last snapshot from ${snapshotTime}; current Chrome alarms and running state are not confirmed.`
-    : `后台任务状态读取失败：${message}。下方仍是 ${snapshotTime} 的上次快照；当前 Chrome alarm 和执行状态未确认。`;
+    : `后台作业状态读取失败：${message}。下方仍是 ${snapshotTime} 的上次快照；当前 Chrome alarm 和执行状态未确认。`;
 }
 
-function buildTaskSchedulerRefreshFailureReceipt(
+function buildBackgroundJobsRefreshFailureReceipt(
   errorMessage: string,
   options: {
     hasSnapshot: boolean;
     snapshotRefreshedAt: number;
     language: UiLanguage;
   },
-): TaskSchedulerRefreshFailureReceipt {
+): BackgroundJobsRefreshFailureReceipt {
   const isEnglish = isEnglishUi(options.language);
   const message =
     errorMessage ||
@@ -843,11 +843,11 @@ function buildTaskSchedulerRefreshFailureReceipt(
   };
 }
 
-function buildTaskSchedulerRefreshPendingReceipt(options: {
+function buildBackgroundJobsRefreshPendingReceipt(options: {
   hasSnapshot: boolean;
   snapshotRefreshedAt: number;
   language: UiLanguage;
-}): TaskSchedulerRefreshPendingReceipt {
+}): BackgroundJobsRefreshPendingReceipt {
   const isEnglish = isEnglishUi(options.language);
   const snapshotTime = formatTaskRefreshTime(
     options.snapshotRefreshedAt,
@@ -869,11 +869,11 @@ function buildTaskSchedulerRefreshPendingReceipt(options: {
   };
 }
 
-function buildTaskSchedulerPendingActionReceipt(
-  task: TaskSchedulerTask,
-  action: TaskSchedulerPendingAction,
+function buildBackgroundJobsPendingActionReceipt(
+  task: BackgroundJobsTask,
+  action: BackgroundJobsPendingAction,
   language: UiLanguage,
-): TaskSchedulerPendingActionReceipt {
+): BackgroundJobsPendingActionReceipt {
   const isEnglish = isEnglishUi(language);
   const displayName = getTaskDisplayName(task, language);
   if (action === 'toggle-enable' || action === 'toggle-disable') {
@@ -925,15 +925,15 @@ function buildTaskSchedulerPendingActionReceipt(
   };
 }
 
-function buildTaskSchedulerHeaderTogglePendingReceipt({
+function buildBackgroundJobsHeaderTogglePendingReceipt({
   action,
   task,
   language,
 }: {
   action: 'toggle-enable' | 'toggle-disable';
-  task?: TaskSchedulerTask;
+  task?: BackgroundJobsTask;
   language: UiLanguage;
-}): TaskSchedulerHeaderPendingReceipt {
+}): BackgroundJobsHeaderPendingReceipt {
   const isEnglish = isEnglishUi(language);
   const isEnable = action === 'toggle-enable';
   const displayName = task
@@ -963,8 +963,8 @@ function buildTaskSchedulerHeaderTogglePendingReceipt({
   };
 }
 
-function formatTaskSchedulerRefreshReceipt(
-  receipt: TaskSchedulerStatusRefreshReceipt | null,
+function formatBackgroundJobsRefreshReceipt(
+  receipt: BackgroundJobStatusRefreshReceipt | null,
   language: UiLanguage,
 ): string {
   if (!receipt) {
@@ -1021,7 +1021,7 @@ function formatTaskSchedulerRefreshReceipt(
         ? ` ${queueStatusUnavailableCount} queue detail not confirmed; see task rows.`
         : ` ${queueStatusUnavailableCount} 个队列明细未确认，详见任务行。`
       : '';
-  const calibrationDetail = formatTaskSchedulerAlarmCalibrations(
+  const calibrationDetail = formatBackgroundJobAlarmCalibrations(
     receipt,
     language,
   );
@@ -1031,8 +1031,8 @@ function formatTaskSchedulerRefreshReceipt(
     : `刷新回执：已核对 ${receipt.checkedTaskCount} 个任务，${receipt.enabledTaskCount} 个启用排程。${repairDetail}${failureDetail}${queueStatusDetail}${calibrationDetail} 刷新只读取状态并校准排程，没有立即执行任务、启用或停用任务，也没有清空运行历史。`;
 }
 
-function formatTaskSchedulerAlarmCalibrations(
-  receipt: TaskSchedulerStatusRefreshReceipt,
+function formatBackgroundJobAlarmCalibrations(
+  receipt: BackgroundJobStatusRefreshReceipt,
   language: UiLanguage,
 ): string {
   const calibrations = Array.isArray(receipt.alarmCalibrations)
@@ -1044,7 +1044,7 @@ function formatTaskSchedulerAlarmCalibrations(
 
   const isEnglish = isEnglishUi(language);
   const visible = calibrations.slice(0, 3).map((item) => {
-    const actionLabel = formatTaskSchedulerAlarmCalibrationAction(
+    const actionLabel = formatBackgroundJobAlarmCalibrationAction(
       item.action,
       language,
     );
@@ -1066,8 +1066,8 @@ function formatTaskSchedulerAlarmCalibrations(
     : ` 本次校准：${visible.join('；')}${more}。`;
 }
 
-function formatTaskSchedulerAlarmCalibrationAction(
-  action: TaskSchedulerAlarmCalibration['action'],
+function formatBackgroundJobAlarmCalibrationAction(
+  action: BackgroundJobAlarmCalibration['action'],
   language: UiLanguage,
 ): string {
   const isEnglish = isEnglishUi(language);
@@ -1087,7 +1087,7 @@ function formatTaskSchedulerAlarmCalibrationAction(
 }
 
 function formatTaskResult(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const failureStreak = getTaskFailureStreak(task);
@@ -1130,7 +1130,7 @@ function formatTaskResult(
 }
 
 function formatTaskRunTrigger(
-  trigger?: TaskSchedulerRunRecord['trigger'],
+  trigger?: BackgroundJobsRunRecord['trigger'],
   language: UiLanguage = 'zh-CN',
 ): string {
   if (isEnglishUi(language)) {
@@ -1160,7 +1160,7 @@ function formatTaskRunDuration(
 }
 
 function getTaskLatestRunSummary(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ):
   | {
@@ -1217,7 +1217,7 @@ function getTaskLatestRunSummary(
 }
 
 function formatTaskRunHistorySummary(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const history = Array.isArray(task.runHistory) ? task.runHistory : [];
@@ -1257,7 +1257,7 @@ function formatTaskRunHistorySummary(
 }
 
 function formatTaskRunHistoryTitle(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const history = Array.isArray(task.runHistory) ? task.runHistory : [];
@@ -1293,14 +1293,14 @@ function formatTaskRunHistoryTitle(
 }
 
 function findLatestManualTaskRun(
-  task?: TaskSchedulerTask,
-): TaskSchedulerRunRecord | undefined {
+  task?: BackgroundJobsTask,
+): BackgroundJobsRunRecord | undefined {
   return Array.isArray(task?.runHistory)
     ? task.runHistory.find((run) => run.trigger === 'manual')
     : undefined;
 }
 
-function buildTaskSchedulerActionReceipt({
+function buildBackgroundJobsActionReceipt({
   action,
   task,
   updatedTask,
@@ -1311,14 +1311,14 @@ function buildTaskSchedulerActionReceipt({
   language,
 }: {
   action: 'toggle' | 'run' | 'repair';
-  task: TaskSchedulerTask;
-  updatedTask?: TaskSchedulerTask;
+  task: BackgroundJobsTask;
+  updatedTask?: BackgroundJobsTask;
   enabled?: boolean;
   message?: string;
   skipped?: boolean;
   failed?: boolean;
   language: UiLanguage;
-}): TaskSchedulerActionReceipt {
+}): BackgroundJobsActionReceipt {
   const displayName = getTaskDisplayName(updatedTask || task, language);
   const currentTask = updatedTask || task;
   const isEnglish = isEnglishUi(language);
@@ -1477,7 +1477,7 @@ function buildTaskSchedulerActionReceipt({
 }
 
 function formatTaskScheduleHealthLabel(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   if (isEnglishUi(language)) {
@@ -1495,7 +1495,7 @@ function formatTaskScheduleHealthLabel(
 }
 
 function formatTaskSchedule(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   now = Date.now(),
   language: UiLanguage = 'zh-CN',
 ): string {
@@ -1531,9 +1531,9 @@ function formatTaskSchedule(
 }
 
 function formatTaskStatusReceipt(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
-): TaskSchedulerStatusReceipt | null {
+): BackgroundJobsStatusReceipt | null {
   const receipt = task.statusReceipt;
   if (!receipt) {
     return null;
@@ -1618,7 +1618,7 @@ function formatTaskStatusReceipt(
 }
 
 function formatTaskActionHint(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const statusReceipt = formatTaskStatusReceipt(task, language);
@@ -1672,7 +1672,7 @@ function formatTaskActionHint(
 }
 
 function formatTaskActionBoundary(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const isEnglish = isEnglishUi(language);
@@ -1740,7 +1740,7 @@ function formatTaskActionBoundary(
 }
 
 function getTaskRunButtonTitle(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   isBusy: boolean,
   language: UiLanguage = 'zh-CN',
 ): string {
@@ -1780,7 +1780,7 @@ function getTaskRunButtonTitle(
 }
 
 function getTaskRunButtonAriaLabel(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   isBusy: boolean,
   language: UiLanguage = 'zh-CN',
 ): string {
@@ -1788,7 +1788,7 @@ function getTaskRunButtonAriaLabel(
 }
 
 function getTaskToggleButtonTitle(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const taskName = getTaskDisplayName(task, language);
@@ -1803,14 +1803,14 @@ function getTaskToggleButtonTitle(
 }
 
 function getTaskToggleButtonAriaLabel(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   return getTaskToggleButtonTitle(task, language);
 }
 
 function getTaskRepairButtonTitle(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const taskName = getTaskDisplayName(task, language);
@@ -1825,14 +1825,14 @@ function getTaskRepairButtonTitle(
 }
 
 function getTaskRepairButtonAriaLabel(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   return getTaskRepairButtonTitle(task, language);
 }
 
 function getTaskPauseButtonTitle(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const taskName = getTaskDisplayName(task, language);
@@ -1842,7 +1842,7 @@ function getTaskPauseButtonTitle(
 }
 
 function getTaskPauseButtonAriaLabel(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   return getTaskPauseButtonTitle(task, language);
@@ -1854,16 +1854,16 @@ function formatTaskListEmptyState(
 ): string {
   if (isLoading) {
     return isEnglishUi(language)
-      ? 'Loading background tasks'
-      : '正在加载后台任务';
+      ? 'Loading background jobs'
+      : '正在加载后台作业';
   }
   return isEnglishUi(language)
-    ? 'No background task status yet'
-    : '暂无后台任务状态';
+    ? 'No background job status yet'
+    : '暂无后台作业状态';
 }
 
-function formatTaskSchedulerNextStep(
-  task: TaskSchedulerTask | undefined,
+function formatBackgroundJobsNextStep(
+  task: BackgroundJobsTask | undefined,
   language: UiLanguage = 'zh-CN',
 ): {
   tone: 'executing' | 'warning' | 'failed' | 'skipped';
@@ -1874,7 +1874,7 @@ function formatTaskSchedulerNextStep(
     return null;
   }
 
-  const boundary = formatTaskSchedulerNextStepBoundary(task, language);
+  const boundary = formatBackgroundJobsNextStepBoundary(task, language);
   const receipt = formatTaskStatusReceipt(task, language);
   if (
     receipt &&
@@ -1962,8 +1962,8 @@ function formatTaskSchedulerNextStep(
   return null;
 }
 
-function formatTaskSchedulerNextStepBoundary(
-  task: TaskSchedulerTask,
+function formatBackgroundJobsNextStepBoundary(
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const isEnglish = isEnglishUi(language);
@@ -2013,8 +2013,8 @@ function formatTaskSchedulerNextStepBoundary(
     : '这条提示只解释当前状态；真正的任务变更仍需要点击任务行操作。';
 }
 
-function formatTaskSchedulerCollapsedAttentionPreview(
-  tasks: TaskSchedulerTask[],
+function formatBackgroundJobsCollapsedAttentionPreview(
+  tasks: BackgroundJobsTask[],
   language: UiLanguage = 'zh-CN',
 ): string {
   const attentionTasks = tasks
@@ -2053,7 +2053,7 @@ function formatTaskSchedulerCollapsedAttentionPreview(
 }
 
 function formatTaskAttentionStatusLabel(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const statusKind = getTaskStatusKind(task);
@@ -2072,7 +2072,7 @@ function formatTaskAttentionStatusLabel(
 }
 
 function formatTaskAttentionReason(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const statusReceipt = formatTaskStatusReceipt(task, language);
@@ -2111,7 +2111,7 @@ function formatTaskAttentionReason(
 }
 
 function formatTaskAttentionAction(
-  task: TaskSchedulerTask,
+  task: BackgroundJobsTask,
   language: UiLanguage = 'zh-CN',
 ): string {
   const statusReceipt = formatTaskStatusReceipt(task, language);
@@ -2747,21 +2747,21 @@ const Popup = () => {
   const [isTaskStatusLoading, setIsTaskStatusLoading] = useState(false);
   const [isTaskPanelOpen, setIsTaskPanelOpen] = useState(false);
   const [taskStatusNow, setTaskStatusNow] = useState(() => Date.now());
-  const [taskSchedulerTasks, setTaskSchedulerTasks] = useState<
-    TaskSchedulerTask[]
+  const [backgroundJobsTasks, setBackgroundJobsTasks] = useState<
+    BackgroundJobsTask[]
   >([]);
-  const [taskSchedulerError, setTaskSchedulerError] = useState('');
-  const [taskSchedulerRefreshReceipt, setTaskSchedulerRefreshReceipt] =
-    useState<TaskSchedulerStatusRefreshReceipt | null>(null);
+  const [backgroundJobsError, setBackgroundJobsError] = useState('');
+  const [backgroundJobsRefreshReceipt, setBackgroundJobsRefreshReceipt] =
+    useState<BackgroundJobStatusRefreshReceipt | null>(null);
   const [
-    taskSchedulerRefreshFailureReceipt,
-    setTaskSchedulerRefreshFailureReceipt,
-  ] = useState<TaskSchedulerRefreshFailureReceipt | null>(null);
-  const [taskSchedulerActionReceipt, setTaskSchedulerActionReceipt] =
-    useState<TaskSchedulerActionReceipt | null>(null);
+    backgroundJobsRefreshFailureReceipt,
+    setBackgroundJobsRefreshFailureReceipt,
+  ] = useState<BackgroundJobsRefreshFailureReceipt | null>(null);
+  const [backgroundJobsActionReceipt, setBackgroundJobsActionReceipt] =
+    useState<BackgroundJobsActionReceipt | null>(null);
   const [busyTaskIds, setBusyTaskIds] = useState<Record<string, boolean>>({});
   const [pendingTaskActions, setPendingTaskActions] = useState<
-    Record<string, TaskSchedulerPendingAction>
+    Record<string, BackgroundJobsPendingAction>
   >({});
   const [todayPilotCards, setTodayPilotCards] = useState<DayPilotCard[]>([]);
   const [todayPilotLoading, setTodayPilotLoading] = useState(false);
@@ -2779,27 +2779,27 @@ const Popup = () => {
       ? pendingTaskActions.message_analysis
       : null;
   const headerSchedulePendingReceipt = headerSchedulePendingAction
-    ? buildTaskSchedulerHeaderTogglePendingReceipt({
+    ? buildBackgroundJobsHeaderTogglePendingReceipt({
         action: headerSchedulePendingAction,
-        task: taskSchedulerTasks.find((task) => task.id === 'message_analysis'),
+        task: backgroundJobsTasks.find((task) => task.id === 'message_analysis'),
         language: uiLanguage,
       })
     : null;
 
-  const loadTaskSchedulerStatus = async (
+  const loadBackgroundJobsStatus = async (
     showLoading = false,
-  ): Promise<TaskSchedulerTask[] | null> => {
+  ): Promise<BackgroundJobsTask[] | null> => {
     if (showLoading) {
       setIsTaskStatusLoading(true);
     }
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'GET_TASK_SCHEDULER_STATUS',
+        type: 'GET_BACKGROUND_JOBS_STATUS',
       })) as
         | {
             success?: boolean;
-            tasks?: TaskSchedulerTask[];
-            refreshReceipt?: TaskSchedulerStatusRefreshReceipt;
+            tasks?: BackgroundJobsTask[];
+            refreshReceipt?: BackgroundJobStatusRefreshReceipt;
             error?: string;
           }
         | undefined;
@@ -2808,11 +2808,11 @@ const Popup = () => {
         throw new Error(response?.error || '任务状态不可用');
       }
 
-      setTaskSchedulerTasks(response.tasks);
-      setTaskSchedulerRefreshReceipt(response.refreshReceipt || null);
-      setTaskSchedulerRefreshFailureReceipt(null);
+      setBackgroundJobsTasks(response.tasks);
+      setBackgroundJobsRefreshReceipt(response.refreshReceipt || null);
+      setBackgroundJobsRefreshFailureReceipt(null);
       setTaskStatusNow(Date.now());
-      setTaskSchedulerError('');
+      setBackgroundJobsError('');
 
       const messageAnalysisTask = response.tasks.find(
         (task) => task.id === 'message_analysis',
@@ -2823,18 +2823,18 @@ const Popup = () => {
       return response.tasks;
     } catch (error: any) {
       const message = error?.message || '任务状态不可用';
-      const hasSnapshot = taskSchedulerTasks.length > 0;
+      const hasSnapshot = backgroundJobsTasks.length > 0;
       const snapshotRefreshedAt = taskStatusNow;
-      setTaskSchedulerRefreshReceipt(null);
-      setTaskSchedulerRefreshFailureReceipt(
-        buildTaskSchedulerRefreshFailureReceipt(message, {
+      setBackgroundJobsRefreshReceipt(null);
+      setBackgroundJobsRefreshFailureReceipt(
+        buildBackgroundJobsRefreshFailureReceipt(message, {
           hasSnapshot,
           snapshotRefreshedAt,
           language: uiLanguage,
         }),
       );
-      setTaskSchedulerError(
-        formatTaskSchedulerStatusError(message, {
+      setBackgroundJobsError(
+        formatBackgroundJobsStatusError(message, {
           hasSnapshot,
           snapshotRefreshedAt,
           language: uiLanguage,
@@ -2909,10 +2909,10 @@ const Popup = () => {
 
   useEffect(() => {
     (async () => {
-      // 获取定时任务状态 - 使用辅助函数
+      // 读取静默消息分析开关与后台作业状态
       const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
       setIsScheduleActive(messageAnalysisEnabled);
-      void loadTaskSchedulerStatus(false);
+      void loadBackgroundJobsStatus(false);
       void loadTodayPilotCards();
 
       // 检查当前标签页是否是 Google Sheets 或 Google Slides
@@ -2949,7 +2949,7 @@ const Popup = () => {
     }
 
     const refreshTimer = window.setInterval(() => {
-      void loadTaskSchedulerStatus(false);
+      void loadBackgroundJobsStatus(false);
     }, 60_000);
 
     return () => {
@@ -3015,7 +3015,7 @@ const Popup = () => {
     const newState = !isScheduleActive;
     const previousState = isScheduleActive;
     setIsScheduleUpdating(true);
-    setTaskSchedulerActionReceipt(null);
+    setBackgroundJobsActionReceipt(null);
     setPendingTaskAction(
       'message_analysis',
       newState ? 'toggle-enable' : 'toggle-disable',
@@ -3023,7 +3023,7 @@ const Popup = () => {
 
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'CONTROL_TASK',
+        type: 'CONTROL_BACKGROUND_JOB',
         taskId: 'message_analysis',
         action: 'toggle',
         enabled: newState,
@@ -3032,11 +3032,11 @@ const Popup = () => {
         | undefined;
 
       if (!response?.success) {
-        await loadTaskSchedulerStatus(false);
+        await loadBackgroundJobsStatus(false);
         throw new Error(response?.error || response?.message || '任务控制失败');
       }
 
-      const updatedTasks = await loadTaskSchedulerStatus(false);
+      const updatedTasks = await loadBackgroundJobsStatus(false);
       const updatedTask = updatedTasks?.find(
         (task) => task.id === 'message_analysis',
       );
@@ -3046,11 +3046,11 @@ const Popup = () => {
         setIsScheduleActive(newState);
       }
       const fallbackTask =
-        taskSchedulerTasks.find((task) => task.id === 'message_analysis') ||
+        backgroundJobsTasks.find((task) => task.id === 'message_analysis') ||
         updatedTask;
       if (fallbackTask) {
-        setTaskSchedulerActionReceipt(
-          buildTaskSchedulerActionReceipt({
+        setBackgroundJobsActionReceipt(
+          buildBackgroundJobsActionReceipt({
             action: 'toggle',
             task: fallbackTask,
             updatedTask,
@@ -3066,12 +3066,12 @@ const Popup = () => {
       }
     } catch (error: any) {
       setIsScheduleActive(previousState);
-      const fallbackTask = taskSchedulerTasks.find(
+      const fallbackTask = backgroundJobsTasks.find(
         (task) => task.id === 'message_analysis',
       );
       if (fallbackTask) {
-        setTaskSchedulerActionReceipt(
-          buildTaskSchedulerActionReceipt({
+        setBackgroundJobsActionReceipt(
+          buildBackgroundJobsActionReceipt({
             action: 'toggle',
             task: fallbackTask,
             enabled: newState,
@@ -3081,7 +3081,7 @@ const Popup = () => {
           }),
         );
       }
-      setTaskSchedulerError('');
+      setBackgroundJobsError('');
     } finally {
       setPendingTaskAction('message_analysis', null);
       setIsScheduleUpdating(false);
@@ -3094,7 +3094,7 @@ const Popup = () => {
 
   const setPendingTaskAction = (
     taskId: string,
-    action: TaskSchedulerPendingAction | null,
+    action: BackgroundJobsPendingAction | null,
   ) => {
     setPendingTaskActions((current) => {
       const next = { ...current };
@@ -3107,11 +3107,11 @@ const Popup = () => {
     });
   };
 
-  const patchTaskSchedulerTask = (
+  const patchBackgroundJobsTask = (
     taskId: string,
-    patch: Partial<TaskSchedulerTask>,
+    patch: Partial<BackgroundJobsTask>,
   ) => {
-    setTaskSchedulerTasks((current) =>
+    setBackgroundJobsTasks((current) =>
       current.map((task) =>
         task.id === taskId
           ? {
@@ -3124,12 +3124,12 @@ const Popup = () => {
   };
 
   const updateTaskEnabled = async (
-    task: TaskSchedulerTask,
+    task: BackgroundJobsTask,
     enabled: boolean,
   ) => {
     const previousTask = task;
     setTaskBusy(task.id, true);
-    setTaskSchedulerActionReceipt(null);
+    setBackgroundJobsActionReceipt(null);
     setPendingTaskAction(
       task.id,
       enabled ? 'toggle-enable' : 'toggle-disable',
@@ -3137,7 +3137,7 @@ const Popup = () => {
 
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'CONTROL_TASK',
+        type: 'CONTROL_BACKGROUND_JOB',
         taskId: task.id,
         action: 'toggle',
         enabled,
@@ -3146,16 +3146,16 @@ const Popup = () => {
         | undefined;
 
       if (!response?.success) {
-        await loadTaskSchedulerStatus(false);
+        await loadBackgroundJobsStatus(false);
         throw new Error(response?.error || response?.message || '任务控制失败');
       }
 
-      const updatedTasks = await loadTaskSchedulerStatus(false);
+      const updatedTasks = await loadBackgroundJobsStatus(false);
       const updatedTask = updatedTasks?.find(
         (candidate) => candidate.id === task.id,
       );
-      setTaskSchedulerActionReceipt(
-        buildTaskSchedulerActionReceipt({
+      setBackgroundJobsActionReceipt(
+        buildBackgroundJobsActionReceipt({
           action: 'toggle',
           task,
           updatedTask,
@@ -3165,12 +3165,12 @@ const Popup = () => {
         }),
       );
     } catch (error: any) {
-      patchTaskSchedulerTask(task.id, previousTask);
+      patchBackgroundJobsTask(task.id, previousTask);
       if (task.id === 'message_analysis') {
         setIsScheduleActive(previousTask.enabled);
       }
-      setTaskSchedulerActionReceipt(
-        buildTaskSchedulerActionReceipt({
+      setBackgroundJobsActionReceipt(
+        buildBackgroundJobsActionReceipt({
           action: 'toggle',
           task: previousTask,
           enabled,
@@ -3179,20 +3179,20 @@ const Popup = () => {
           language: uiLanguage,
         }),
       );
-      setTaskSchedulerError('');
+      setBackgroundJobsError('');
     } finally {
       setPendingTaskAction(task.id, null);
       setTaskBusy(task.id, false);
     }
   };
 
-  const runTaskNow = async (task: TaskSchedulerTask) => {
+  const runTaskNow = async (task: BackgroundJobsTask) => {
     setTaskBusy(task.id, true);
-    setTaskSchedulerActionReceipt(null);
+    setBackgroundJobsActionReceipt(null);
     setPendingTaskAction(task.id, 'run');
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'CONTROL_TASK',
+        type: 'CONTROL_BACKGROUND_JOB',
         taskId: task.id,
         action: 'run',
       })) as
@@ -3208,13 +3208,13 @@ const Popup = () => {
         throw new Error('任务执行失败');
       }
 
-      const updatedTasks = await loadTaskSchedulerStatus(false);
+      const updatedTasks = await loadBackgroundJobsStatus(false);
       const updatedTask = updatedTasks?.find(
         (candidate) => candidate.id === task.id,
       );
       const runFailed = response.success !== true && !response.skipped;
-      setTaskSchedulerActionReceipt(
-        buildTaskSchedulerActionReceipt({
+      setBackgroundJobsActionReceipt(
+        buildBackgroundJobsActionReceipt({
           action: 'run',
           task,
           updatedTask,
@@ -3226,14 +3226,14 @@ const Popup = () => {
       );
       if (runFailed) {
         if (updatedTasks) {
-          setTaskSchedulerError('');
+          setBackgroundJobsError('');
         }
         return;
       }
     } catch (error: any) {
-      await loadTaskSchedulerStatus(false);
-      setTaskSchedulerActionReceipt(
-        buildTaskSchedulerActionReceipt({
+      await loadBackgroundJobsStatus(false);
+      setBackgroundJobsActionReceipt(
+        buildBackgroundJobsActionReceipt({
           action: 'run',
           task,
           message: error?.message || '任务执行失败',
@@ -3241,21 +3241,21 @@ const Popup = () => {
           language: uiLanguage,
         }),
       );
-      setTaskSchedulerError('');
+      setBackgroundJobsError('');
     } finally {
       setPendingTaskAction(task.id, null);
       setTaskBusy(task.id, false);
     }
   };
 
-  const repairTaskSchedule = async (task: TaskSchedulerTask) => {
+  const repairTaskSchedule = async (task: BackgroundJobsTask) => {
     setTaskBusy(task.id, true);
-    setTaskSchedulerActionReceipt(null);
+    setBackgroundJobsActionReceipt(null);
     setPendingTaskAction(task.id, 'repair');
 
     try {
       const response = (await chrome.runtime.sendMessage({
-        type: 'CONTROL_TASK',
+        type: 'CONTROL_BACKGROUND_JOB',
         taskId: task.id,
         action: 'repair',
       })) as
@@ -3266,12 +3266,12 @@ const Popup = () => {
         throw new Error(response?.error || response?.message || '排程修复失败');
       }
 
-      const updatedTasks = await loadTaskSchedulerStatus(false);
+      const updatedTasks = await loadBackgroundJobsStatus(false);
       const updatedTask = updatedTasks?.find(
         (candidate) => candidate.id === task.id,
       );
-      setTaskSchedulerActionReceipt(
-        buildTaskSchedulerActionReceipt({
+      setBackgroundJobsActionReceipt(
+        buildBackgroundJobsActionReceipt({
           action: 'repair',
           task,
           updatedTask,
@@ -3280,9 +3280,9 @@ const Popup = () => {
         }),
       );
     } catch (error: any) {
-      await loadTaskSchedulerStatus(false);
-      setTaskSchedulerActionReceipt(
-        buildTaskSchedulerActionReceipt({
+      await loadBackgroundJobsStatus(false);
+      setBackgroundJobsActionReceipt(
+        buildBackgroundJobsActionReceipt({
           action: 'repair',
           task,
           message: error?.message || '排程修复失败',
@@ -3290,7 +3290,7 @@ const Popup = () => {
           language: uiLanguage,
         }),
       );
-      setTaskSchedulerError('');
+      setBackgroundJobsError('');
     } finally {
       setPendingTaskAction(task.id, null);
       setTaskBusy(task.id, false);
@@ -3685,7 +3685,7 @@ const Popup = () => {
   };
 
   const getMessageAnalysisIntervalLabel = () => {
-    const messageAnalysisTask = taskSchedulerTasks.find(
+    const messageAnalysisTask = backgroundJobsTasks.find(
       (task) => task.id === 'message_analysis',
     );
     const intervalMinutes =
@@ -3697,34 +3697,34 @@ const Popup = () => {
     return formatTaskInterval(intervalMinutes, uiLanguage);
   };
 
-  const enabledTaskCount = taskSchedulerTasks.filter(
+  const enabledTaskCount = backgroundJobsTasks.filter(
     (task) => task.enabled,
   ).length;
   const attentionTaskCount = countTasksByStatusFilter(
-    taskSchedulerTasks,
+    backgroundJobsTasks,
     'attention',
   );
   const executingTaskCount = countTasksByStatusFilter(
-    taskSchedulerTasks,
+    backgroundJobsTasks,
     'executing',
   );
   const failedTaskCount = countTasksByStatusFilter(
-    taskSchedulerTasks,
+    backgroundJobsTasks,
     'failed',
   );
   const recentSkippedTaskCount = countTasksByStatusFilter(
-    taskSchedulerTasks,
+    backgroundJobsTasks,
     'skipped',
   );
   const scheduleWarningTaskCount = countTasksByStatusFilter(
-    taskSchedulerTasks,
+    backgroundJobsTasks,
     'warning',
   );
-  const totalTaskCount = taskSchedulerTasks.length || '-';
+  const totalTaskCount = backgroundJobsTasks.length || '-';
   const enabledStatusSummary = isEnglishUi(uiLanguage)
     ? `${enabledTaskCount}/${totalTaskCount} enabled`
     : `${enabledTaskCount}/${totalTaskCount} 启用`;
-  const taskStatusSummary = taskSchedulerError
+  const taskStatusSummary = backgroundJobsError
     ? isEnglishUi(uiLanguage)
       ? 'Status unavailable'
       : '状态不可用'
@@ -3750,8 +3750,8 @@ const Popup = () => {
       : `${recentSkippedTaskCount} 跳过 · ${enabledStatusSummary}`
     : enabledStatusSummary;
   const taskCollapsedAttentionPreview =
-    formatTaskSchedulerCollapsedAttentionPreview(taskSchedulerTasks, uiLanguage);
-  const visibleTaskSchedulerTasks = taskSchedulerTasks
+    formatBackgroundJobsCollapsedAttentionPreview(backgroundJobsTasks, uiLanguage);
+  const visibleBackgroundJobsTasks = backgroundJobsTasks
     .map((task, index) => ({ task, index }))
     .sort(
       (left, right) =>
@@ -3759,7 +3759,7 @@ const Popup = () => {
         left.index - right.index,
     )
     .map(({ task }) => task);
-  const primaryAttentionTask = taskSchedulerTasks
+  const primaryAttentionTask = backgroundJobsTasks
     .filter(taskNeedsAttention)
     .map((task, index) => ({ task, index }))
     .sort(
@@ -3767,23 +3767,23 @@ const Popup = () => {
         getTaskPrimaryAttentionRank(left.task) -
           getTaskPrimaryAttentionRank(right.task) || left.index - right.index,
     )[0]?.task;
-  const taskSchedulerNextStep = formatTaskSchedulerNextStep(
+  const backgroundJobsNextStep = formatBackgroundJobsNextStep(
     primaryAttentionTask,
     uiLanguage,
   );
-  const taskSchedulerRefreshReceiptText = formatTaskSchedulerRefreshReceipt(
-    taskSchedulerRefreshReceipt,
+  const backgroundJobsRefreshReceiptText = formatBackgroundJobsRefreshReceipt(
+    backgroundJobsRefreshReceipt,
     uiLanguage,
   );
-  const hasTaskSchedulerSnapshot = taskSchedulerTasks.length > 0;
-  const taskSchedulerRefreshPendingReceipt = isTaskStatusLoading
-    ? buildTaskSchedulerRefreshPendingReceipt({
-        hasSnapshot: hasTaskSchedulerSnapshot,
+  const hasBackgroundJobsSnapshot = backgroundJobsTasks.length > 0;
+  const backgroundJobsRefreshPendingReceipt = isTaskStatusLoading
+    ? buildBackgroundJobsRefreshPendingReceipt({
+        hasSnapshot: hasBackgroundJobsSnapshot,
         snapshotRefreshedAt: taskStatusNow,
         language: uiLanguage,
       })
     : null;
-  const taskSchedulerRefreshMeta = hasTaskSchedulerSnapshot
+  const backgroundJobsRefreshMeta = hasBackgroundJobsSnapshot
     ? isEnglishUi(uiLanguage)
       ? `Last confirmed ${formatTaskRefreshTime(
           taskStatusNow,
@@ -3797,7 +3797,7 @@ const Popup = () => {
     : isEnglishUi(uiLanguage)
     ? 'Not confirmed yet'
     : '尚未确认';
-  const taskAttentionSummaryItems = taskSchedulerTasks
+  const taskAttentionSummaryItems = backgroundJobsTasks
     .filter(taskNeedsAttention)
     .map((task, index) => ({ task, index }))
     .sort(
@@ -4060,12 +4060,12 @@ const Popup = () => {
           const isOpen = event.currentTarget.open;
           setIsTaskPanelOpen(isOpen);
           if (isOpen) {
-            void loadTaskSchedulerStatus(true);
+            void loadBackgroundJobsStatus(true);
           }
         }}
       >
         <summary>
-          <span>{t('popup.backgroundTasks')}</span>
+          <span>{t('popup.backgroundJobs')}</span>
           <span
             className={`task-summary ${
               taskCollapsedAttentionPreview ? 'has-attention-preview' : ''
@@ -4086,86 +4086,86 @@ const Popup = () => {
         </summary>
         <div className="task-status-toolbar">
           <span className="task-refresh-meta">
-            {taskSchedulerRefreshMeta} · {getLocalTaskTimeZoneLabel(uiLanguage)}
+            {backgroundJobsRefreshMeta} · {getLocalTaskTimeZoneLabel(uiLanguage)}
           </span>
           <button
             className="task-refresh-btn"
-            onClick={() => void loadTaskSchedulerStatus(true)}
+            onClick={() => void loadBackgroundJobsStatus(true)}
             disabled={isTaskStatusLoading}
             title={
               isEnglishUi(uiLanguage)
-                ? 'Refresh background task status'
-                : '刷新后台任务状态'
+                ? 'Refresh background job status'
+                : '刷新后台作业状态'
             }
             aria-label={
               isEnglishUi(uiLanguage)
-                ? 'Refresh background task status'
-                : '刷新后台任务状态'
+                ? 'Refresh background job status'
+                : '刷新后台作业状态'
             }
           >
             ↻
           </button>
         </div>
-        {taskSchedulerRefreshPendingReceipt ? (
+        {backgroundJobsRefreshPendingReceipt ? (
           <div
             className="task-refresh-receipt pending"
             role="status"
-            title={`${taskSchedulerRefreshPendingReceipt.detail} · ${taskSchedulerRefreshPendingReceipt.boundary}`}
+            title={`${backgroundJobsRefreshPendingReceipt.detail} · ${backgroundJobsRefreshPendingReceipt.boundary}`}
           >
             <div className="task-refresh-pending-title">
-              {taskSchedulerRefreshPendingReceipt.label}
+              {backgroundJobsRefreshPendingReceipt.label}
             </div>
             <div className="task-refresh-pending-detail">
-              {taskSchedulerRefreshPendingReceipt.detail}
+              {backgroundJobsRefreshPendingReceipt.detail}
             </div>
             <div className="task-refresh-pending-boundary">
-              {taskSchedulerRefreshPendingReceipt.boundary}
+              {backgroundJobsRefreshPendingReceipt.boundary}
             </div>
           </div>
-        ) : taskSchedulerRefreshReceiptText ? (
+        ) : backgroundJobsRefreshReceiptText ? (
           <div
             className={`task-refresh-receipt ${
-              taskSchedulerRefreshReceipt?.failedRepairs ||
-              taskSchedulerRefreshReceipt?.queueStatusUnavailableCount
+              backgroundJobsRefreshReceipt?.failedRepairs ||
+              backgroundJobsRefreshReceipt?.queueStatusUnavailableCount
                 ? 'warning'
                 : 'neutral'
             }`}
             role="status"
           >
-            {taskSchedulerRefreshReceiptText}
+            {backgroundJobsRefreshReceiptText}
           </div>
         ) : null}
-        {taskSchedulerRefreshFailureReceipt && (
+        {backgroundJobsRefreshFailureReceipt && (
           <div
             className="task-refresh-receipt failed"
             role="alert"
-            title={`${taskSchedulerRefreshFailureReceipt.detail} · ${taskSchedulerRefreshFailureReceipt.boundary}`}
+            title={`${backgroundJobsRefreshFailureReceipt.detail} · ${backgroundJobsRefreshFailureReceipt.boundary}`}
           >
             <div className="task-refresh-failure-title">
-              <span>{taskSchedulerRefreshFailureReceipt.label}</span>
+              <span>{backgroundJobsRefreshFailureReceipt.label}</span>
               <span>
                 {formatTaskRefreshTime(
-                  taskSchedulerRefreshFailureReceipt.createdAt,
+                  backgroundJobsRefreshFailureReceipt.createdAt,
                   uiLanguage,
                 )}
               </span>
             </div>
             <div className="task-refresh-failure-detail">
-              {taskSchedulerRefreshFailureReceipt.detail}
+              {backgroundJobsRefreshFailureReceipt.detail}
             </div>
             <div className="task-refresh-failure-boundary">
-              {taskSchedulerRefreshFailureReceipt.boundary}
+              {backgroundJobsRefreshFailureReceipt.boundary}
             </div>
           </div>
         )}
-        {taskSchedulerNextStep && (
+        {backgroundJobsNextStep && (
           <div
-            className={`task-next-step ${taskSchedulerNextStep.tone}`}
+            className={`task-next-step ${backgroundJobsNextStep.tone}`}
             role="status"
-            title={`${taskSchedulerNextStep.message} · ${taskSchedulerNextStep.boundary}`}
-            aria-label={`${taskSchedulerNextStep.message} ${taskSchedulerNextStep.boundary}`}
+            title={`${backgroundJobsNextStep.message} · ${backgroundJobsNextStep.boundary}`}
+            aria-label={`${backgroundJobsNextStep.message} ${backgroundJobsNextStep.boundary}`}
           >
-            {taskSchedulerNextStep.message}
+            {backgroundJobsNextStep.message}
           </div>
         )}
         {taskAttentionSummaryItems.length > 1 && (
@@ -4173,8 +4173,8 @@ const Popup = () => {
             className="task-attention-summary"
             aria-label={
               isEnglishUi(uiLanguage)
-                ? 'Background task action overview'
-                : '后台任务需处理总览'
+                ? 'Background job action overview'
+                : '后台作业需处理总览'
             }
           >
             <div className="task-attention-summary-title">
@@ -4215,43 +4215,43 @@ const Popup = () => {
             )}
           </div>
         )}
-        {taskSchedulerError && (
-          <div className="task-status-error">{taskSchedulerError}</div>
+        {backgroundJobsError && (
+          <div className="task-status-error">{backgroundJobsError}</div>
         )}
-        {taskSchedulerActionReceipt && (
+        {backgroundJobsActionReceipt && (
           <div
-            className={`task-action-receipt-panel ${taskSchedulerActionReceipt.tone}`}
+            className={`task-action-receipt-panel ${backgroundJobsActionReceipt.tone}`}
             role={
-              taskSchedulerActionReceipt.tone === 'failed'
+              backgroundJobsActionReceipt.tone === 'failed'
                 ? 'alert'
                 : 'status'
             }
-            title={`${taskSchedulerActionReceipt.detail} · ${taskSchedulerActionReceipt.boundary}`}
+            title={`${backgroundJobsActionReceipt.detail} · ${backgroundJobsActionReceipt.boundary}`}
           >
             <div className="task-action-receipt-title">
-              <span>{taskSchedulerActionReceipt.label}</span>
+              <span>{backgroundJobsActionReceipt.label}</span>
               <span>
                 {formatTaskRefreshTime(
-                  taskSchedulerActionReceipt.createdAt,
+                  backgroundJobsActionReceipt.createdAt,
                   uiLanguage,
                 )}
               </span>
             </div>
             <div className="task-action-receipt-detail">
-              {taskSchedulerActionReceipt.detail}
+              {backgroundJobsActionReceipt.detail}
             </div>
             <div className="task-action-receipt-boundary">
-              {taskSchedulerActionReceipt.boundary}
+              {backgroundJobsActionReceipt.boundary}
             </div>
           </div>
         )}
         <div className="task-list">
-          {!taskSchedulerError && visibleTaskSchedulerTasks.length === 0 && (
+          {!backgroundJobsError && visibleBackgroundJobsTasks.length === 0 && (
             <div className="task-empty-state">
               {formatTaskListEmptyState(isTaskStatusLoading, uiLanguage)}
             </div>
           )}
-          {visibleTaskSchedulerTasks.map((task) => {
+          {visibleBackgroundJobsTasks.map((task) => {
             const isBusy = Boolean(busyTaskIds[task.id]);
             const hasScheduleWarning = hasTaskScheduleWarning(task);
             const hasRecentSkip = hasTaskRecentSkip(task);
@@ -4292,7 +4292,7 @@ const Popup = () => {
             const pendingAction = pendingTaskActions[task.id];
             const pendingActionReceipt =
               pendingAction
-                ? buildTaskSchedulerPendingActionReceipt(
+                ? buildBackgroundJobsPendingActionReceipt(
                     task,
                     pendingAction,
                     uiLanguage,

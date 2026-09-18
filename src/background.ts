@@ -72,7 +72,11 @@ import {
   DashboardMessageHandler,
   buildProjectDashboardLaunchPath,
 } from './utils/dashboardIntegration';
-import { taskScheduler, TaskScheduler } from './services/TaskScheduler';
+import { backgroundJobs, BackgroundJobs } from './services/BackgroundJobs';
+import {
+  isBackgroundJobControlRequest,
+  isBackgroundJobStatusRequest,
+} from './services/backgroundJobDefinitions';
 import { UserProfileMessageHandler } from './services/UserProfileMessageHandler';
 import {
   findRingCentralTab,
@@ -85,6 +89,12 @@ import { ConfigSyncService } from './scheduled-messages/ConfigSyncService';
 import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
+import {
+  applyTaskCenterSheetMirrorControl,
+  registerSheetMessageInLedgerSafe,
+  TASK_CENTER_SHEET_MIRROR_MESSAGE,
+  upsertTaskCenterSheetMirror,
+} from './services/TaskCenterLedgerSync';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
 import {
   getAgentTaskWebhookConfig,
@@ -1366,7 +1376,7 @@ void runPersistentlyThrottledTask({
   console.warn('User identity bootstrap sync failed:', error);
 });
 
-// Background script 加载时检查并初始化任务调度器
+// Background script 加载时检查并初始化后台作业
 //
 // 根据 Chrome Extension 官方文档:
 // - chrome.management.onEnabled/onDisabled 只能监听其他扩展，无法监听自身
@@ -1399,20 +1409,20 @@ void runPersistentlyThrottledTask({
       } catch (error) {
         console.warn('[pai-roadmap] content script sync failed', error);
       }
-      await taskScheduler.startAllTasks();
+      await backgroundJobs.startAllTasks();
     }, 5000); // 5秒延迟，确保扩展环境完全就绪
   } catch (error) {
     console.error('❌ Background script 初始化检查失败:', error);
   }
 })();
 
-// 浏览器启动时恢复任务调度器
+// 浏览器启动时恢复后台作业
 chrome.runtime.onStartup.addListener(async () => {
   try {
     registerPersonalAiArContextMenu();
     setTimeout(async () => {
-      console.log('🔄 浏览器启动，恢复任务调度器...');
-      await taskScheduler.startAllTasks();
+      console.log('🔄 浏览器启动，恢复后台作业...');
+      await backgroundJobs.startAllTasks();
     }, 10000);
   } catch (error) {
     console.error('❌ onStartup 监听器错误:', error);
@@ -1453,8 +1463,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       console.warn('[pai-roadmap] content script sync failed', error);
     }
 
-    // 启动统一任务调度器
-    await taskScheduler.startAllTasks();
+    // 启动统一后台作业
+    await backgroundJobs.startAllTasks();
 
     // 如果是扩展更新，检查并更新 Sheet Schema、App Script 和 Jira Rule
     // 注意：使用 getCachedAuthToken 避免在无用户操作时弹出授权窗口
@@ -1675,8 +1685,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   console.log('🔔 收到 alarm 事件:', alarm.name);
 
   try {
-    // 所有定时任务统一由 TaskScheduler 管理
-    if (await TaskScheduler.tryHandleAlarm(alarm)) {
+    // 所有定时任务统一由 BackgroundJobs 管理
+    if (await BackgroundJobs.tryHandleAlarm(alarm)) {
       return;
     }
 
@@ -1986,6 +1996,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           saved = await messageService.createMessage(formData);
         }
 
+        void registerSheetMessageInLedgerSafe(saved);
         sendResponse({ success: true, message: saved });
       } catch (error: any) {
         sendResponse({
@@ -2224,7 +2235,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     analyzeMessagesInBackground(
       body.data,
       body.username,
-      body.isScheduledTask,
+      body.isBackgroundJob,
     ).then((raw) => {
       sendResponse(raw);
     });
@@ -2254,12 +2265,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // 获取任务调度状态
-  if (request.type === 'GET_TASK_SCHEDULER_STATUS') {
+  // 获取后台作业状态（兼容旧消息名 GET_TASK_SCHEDULER_STATUS）
+  if (isBackgroundJobStatusRequest(request.type)) {
     (async () => {
       try {
-        await taskScheduler.startAllTasks();
-        const status = await taskScheduler.getTaskStatusFreshResult();
+        await backgroundJobs.startAllTasks();
+        const status = await backgroundJobs.getTaskStatusFreshResult();
         sendResponse({
           success: true,
           tasks: status.tasks,
@@ -2272,14 +2283,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // 控制特定任务
-  if (request.type === 'CONTROL_TASK') {
+  // 控制特定后台作业（兼容旧消息名 CONTROL_TASK）
+  if (isBackgroundJobControlRequest(request.type)) {
     const { taskId, action } = request;
 
     (async () => {
       try {
         if (action === 'toggle') {
-          const success = await taskScheduler.toggleTask(
+          const success = await backgroundJobs.toggleTask(
             taskId,
             request.enabled,
           );
@@ -2289,7 +2300,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             error: success ? undefined : `任务控制失败: ${taskId}`,
           });
         } else if (action === 'run') {
-          const result = await taskScheduler.runTaskManuallyWithResult(taskId);
+          const result = await backgroundJobs.runTaskManuallyWithResult(taskId);
           sendResponse({
             success: result.success,
             message: result.skipped
@@ -2304,7 +2315,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             skipped: result.skipped,
           });
         } else if (action === 'repair') {
-          const success = await taskScheduler.repairTaskSchedule(taskId);
+          const success = await backgroundJobs.repairTaskSchedule(taskId);
           sendResponse({
             success,
             message: success ? '任务排程已修复' : '任务排程修复失败',
@@ -2318,6 +2329,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       } catch (error) {
         sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
+  }
+
+  if (request.type === TASK_CENTER_SHEET_MIRROR_MESSAGE) {
+    (async () => {
+      try {
+        const action = request.action || request.data?.action;
+        const task = request.task || request.data?.task;
+        if (!task) {
+          sendResponse({ success: false, error: 'missing task' });
+          return;
+        }
+        if (action === 'upsert') {
+          const saved = await upsertTaskCenterSheetMirror(task, {
+            interactive: request.interactive !== false,
+          });
+          sendResponse({ success: true, task: saved });
+          return;
+        }
+        await applyTaskCenterSheetMirrorControl(task, action, {
+          interactive: request.interactive === true,
+        });
+        sendResponse({ success: true });
+      } catch (error: any) {
+        sendResponse({ success: false, error: error?.message || 'sheet_mirror_failed' });
       }
     })();
     return true;
@@ -3919,6 +3957,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const newMessage = await service.createMessage(messageData);
 
         console.log('✅ 消息创建成功:', newMessage);
+        void registerSheetMessageInLedgerSafe(newMessage);
         sendResponse({ success: true, message: newMessage });
       } catch (error: any) {
         console.error('❌ 添加 Scheduled Message 失败:', error);
@@ -3998,10 +4037,48 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const ringCentralSenderConfigured = hasRingCentralSenderCredentials(config);
 
         if (!config || !config.sheetId) {
+          const created = await getMemoryServiceClient().createTaskCenterTask({
+            taskKind: 'push',
+            title: topic,
+            description: content,
+            lane: 'memory_cron',
+            cloudLaneAvailable: false,
+            scheduledAt: Math.floor(scheduledAt.getTime() / 1000),
+            sourceKind: 'glip_compose',
+            idempotencyKey: `glip_compose:${chatId}:${scheduledAt.toISOString()}`,
+            payload: {
+              content,
+              notifyVia: 'asme',
+              notifyTarget:
+                targetType === 'group'
+                  ? { type: 'group', targetGroupId: glipTeamId, glipTeamId }
+                  : {
+                      type: 'private',
+                      glipUserName,
+                      glipUser: glipUserName,
+                      targetUserId: glipUserName,
+                    },
+            },
+          });
+          const taskId = created.task.id;
+          await upsertGlipPendingScheduledMessage({
+            id: `compose-scheduled:ledger:${taskId}`,
+            messageId: taskId,
+            chatId,
+            topic,
+            content,
+            scheduledAt: scheduledAt.toISOString(),
+            targetType,
+            targetLabel: targetType === 'group' ? glipTeamId : glipUserName,
+            sourceUrl: typeof data.sourceUrl === 'string' ? data.sourceUrl : undefined,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            warnings: data.warnings,
+          });
           sendResponse({
-            success: false,
-            reason: 'not_initialized',
-            error: '请先在设置中初始化定时消息系统',
+            success: true,
+            messageId: taskId,
+            lane: 'memory_cron',
             ringCentralSenderConfigured,
           });
           return;
@@ -4036,6 +4113,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         };
 
         const newMessage = await service.createMessage(formData);
+        void registerSheetMessageInLedgerSafe(newMessage);
         await upsertGlipPendingScheduledMessage({
           id: `compose-scheduled:${newMessage.ID || `${chatId}:${scheduledAt.toISOString()}`}`,
           messageId: newMessage.ID,

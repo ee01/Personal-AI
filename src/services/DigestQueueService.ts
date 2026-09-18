@@ -4,7 +4,7 @@
  * 功能：
  * 1. 提供统一的队列管理（入队、消费、清理）
  * 2. 支持注册多种 Digest 任务，各有独立频率和处理器
- * 3. 由 TaskScheduler 定时触发 processAll()，检查并推送到期任务
+ * 3. 由 BackgroundJobs 定时触发 processAll()，检查并推送到期任务
  * 4. 通过 NotificationService 发送通知
  *
  * 使用方式：
@@ -12,7 +12,7 @@
  *   digestQueueService.register({ id: 'my_task', ... });
  *   // 入队
  *   digestQueueService.enqueue('my_task', { id: '...', data: {...}, createdAt: '...' });
- *   // processAll() 由 TaskScheduler 自动调用
+ *   // processAll() 由 BackgroundJobs 自动调用
  */
 
 import {
@@ -225,7 +225,7 @@ export class DigestQueueService {
 
   /**
    * 处理所有到期的 Digest 任务
-   * 由 TaskScheduler 定时调用
+   * 由 BackgroundJobs 定时调用
    */
   public async processAll(): Promise<DigestProcessResult[]> {
     const results: DigestProcessResult[] = [];
@@ -336,6 +336,11 @@ export class DigestQueueService {
             matchedRule: task.name,
             mention: notifyConfig.mention,
             pushScenario: notifyConfig.pushScenario,
+            // 关注后续汇总使用独立模板，避免与「消息分析推送」共用文案结构
+            botMessageTemplate:
+              notifyConfig.pushScenario === 'follow_up'
+                ? 'follow_thread_digest'
+                : 'default',
           };
 
           const notificationResult = await notificationService.sendNotification(
@@ -885,7 +890,7 @@ function buildConcernedItemsDigestReceipt(
   return [
     `**摘要回执**: 本次释放 ${items.length} 条已到时间的本地摘要`,
     `**释放节奏**: ${scheduleText}`,
-    '**处理边界**: 未到期条目继续留在本地队列；Bot 推送失败时不会清除本次条目，可等下次后台任务重试。',
+    '**处理边界**: 未到期条目继续留在本地队列；Bot 推送失败时不会清除本次条目，可等下次后台作业重试。',
     '**调整入口**: 在关注规则里修改摘要时间、频率或关闭摘要。',
   ].join('\n');
 }

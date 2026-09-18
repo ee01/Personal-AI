@@ -18,7 +18,7 @@ console.log('如果看到这条日志，说明监听器在顶层正确设置\n')
 console.log('📋 测试 2: 检查现有 alarm');
 chrome.alarms.getAll().then(alarms => {
     if (alarms.length === 0) {
-        console.log('⚠️  未找到任何 alarm，可能需要初始化 TaskScheduler');
+        console.log('⚠️  未找到任何 alarm，可能需要初始化 BackgroundJobs');
     } else {
         console.log(`✅ 找到 ${alarms.length} 个 alarm:`);
         console.table(alarms.map(a => ({
@@ -31,14 +31,14 @@ chrome.alarms.getAll().then(alarms => {
     console.log('');
 });
 
-// 测试 3: 检查 TaskScheduler 初始化状态
-console.log('📋 测试 3: 检查 TaskScheduler 状态');
-if (typeof taskScheduler !== 'undefined') {
-    console.log('✅ TaskScheduler 已加载');
-    console.log('初始化状态:', taskScheduler.isInitialized);
+// 测试 3: 检查 BackgroundJobs 初始化状态
+console.log('📋 测试 3: 检查 BackgroundJobs 状态');
+if (typeof backgroundJobs !== 'undefined') {
+    console.log('✅ BackgroundJobs 已加载');
+    console.log('初始化状态:', backgroundJobs.isInitialized);
     
     chrome.runtime.sendMessage({
-        type: 'GET_TASK_SCHEDULER_STATUS'
+        type: 'GET_BACKGROUND_JOBS_STATUS'
     }, response => {
         if (response && response.success) {
             const enabledTasks = response.tasks.filter(t => t.enabled);
@@ -73,7 +73,7 @@ if (typeof taskScheduler !== 'undefined') {
         console.log('');
     });
 } else {
-    console.log('❌ TaskScheduler 未加载');
+    console.log('❌ BackgroundJobs 未加载');
 }
 
 // 测试 4: 创建测试 alarm
@@ -106,17 +106,17 @@ console.log('='.repeat(60));
 console.log('\n如果看到以下内容，说明修复成功:');
 console.log('✅ 启动日志中有 "Alarm 监听器已设置（顶层同步）"');
 console.log('✅ chrome.alarms.getAll() 返回了 alarm 列表');
-console.log('✅ TaskScheduler.isInitialized 为 true');
+console.log('✅ BackgroundJobs.isInitialized 为 true');
 console.log('✅ 有启用的任务列表');
 console.log('✅ 1分钟后能看到测试 alarm 的触发日志\n');
 
 console.log('⚠️  如果有问题:');
 console.log('1. 确保扩展已重新加载');
-console.log('2. 确保 TaskScheduler 已初始化（可能需要等待 5 秒）');
+console.log('2. 确保 BackgroundJobs 已初始化（可能需要等待 5 秒）');
 console.log('3. 检查是否有错误日志');
 console.log('4. 尝试手动启用任务:\n');
 console.log('   chrome.runtime.sendMessage({');
-console.log('       type: "CONTROL_TASK",');
+console.log('       type: "CONTROL_BACKGROUND_JOB",');
 console.log('       taskId: "message_analysis",');
 console.log('       action: "toggle",');
 console.log('       enabled: true');

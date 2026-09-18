@@ -1,6 +1,6 @@
 /**
- * 统一任务调度管理器
- * 集中管理所有定时任务，避免重复执行和遗漏
+ * 统一后台作业管理器
+ * 集中管理所有后台作业，避免重复执行和遗漏
  *
  * 特性：
  * - message_analysis 任务的间隔时间从 envConfig.MESSAGE_ANALYSIS_INTERVAL 动态读取
@@ -25,7 +25,16 @@ import type {
 } from '../types/digestQueue';
 import { getMemoryServiceClient } from './MemoryServiceClient';
 import { concernedItemsSyncService } from './ConcernedItemsSyncService';
-import { TASK_DEFINITIONS } from './taskSchedulerDefinitions';
+import {
+  BACKGROUND_JOB_DEFINITIONS,
+  readBackgroundJobStates,
+  writeBackgroundJobStates,
+  isBackgroundJobAlarmName,
+  jobIdFromAlarmName,
+  backgroundJobAlarmName,
+  legacyScheduledTaskAlarmName,
+  LEGACY_SCHEDULED_TASK_ALARM_PREFIX,
+} from './backgroundJobDefinitions';
 import {
   summarizeMessageAnalysisDeliveryReceipt,
   type MessageAnalysisDeliveryReceipt,
@@ -34,10 +43,10 @@ import { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './digestQueueConfig
 export {
   getTaskEnabled,
   onTaskEnabledChanged,
-} from './taskSchedulerDefinitions';
+} from './backgroundJobDefinitions';
 
 // 任务类型定义
-export interface ScheduledTask {
+export interface BackgroundJob {
   id: string;
   name: string;
   category:
@@ -56,10 +65,10 @@ export interface ScheduledTask {
   lastSkipReason?: string;
   lastResultSummary?: string;
   nextRun?: number;
-  runHistory?: ScheduledTaskRunRecord[];
+  runHistory?: BackgroundJobRunRecord[];
 }
 
-export interface ScheduledTaskStatus extends ScheduledTask {
+export interface BackgroundJobStatus extends BackgroundJob {
   status: 'running' | 'stopped';
   isExecuting: boolean;
   scheduleHealth:
@@ -70,13 +79,13 @@ export interface ScheduledTaskStatus extends ScheduledTask {
     | 'repair_failed'
     | 'disabled';
   scheduleWarning?: string;
-  statusReceipt: ScheduledTaskStatusReceipt;
+  statusReceipt: BackgroundJobStatusReceipt;
   currentQueueSummary?: string;
   currentQueueStatus?: DigestQueueStatusSummary;
   currentQueueStatusError?: string;
 }
 
-export interface ScheduledTaskStatusReceipt {
+export interface BackgroundJobStatusReceipt {
   state:
     | 'executing'
     | 'schedule_attention'
@@ -97,7 +106,7 @@ export interface ScheduledTaskStatusReceipt {
   nextAction: string;
 }
 
-export interface TaskSchedulerStatusRefreshReceipt {
+export interface BackgroundJobStatusRefreshReceipt {
   checkedAt: number;
   checkedTaskCount: number;
   enabledTaskCount: number;
@@ -110,16 +119,16 @@ export interface TaskSchedulerStatusRefreshReceipt {
   disabledAlarmsCleared: number;
   failedRepairs: number;
   queueStatusUnavailableCount: number;
-  alarmCalibrations: TaskSchedulerAlarmCalibration[];
+  alarmCalibrations: BackgroundJobAlarmCalibration[];
   refreshOnly: true;
 }
 
-export interface TaskSchedulerStatusFreshResult {
-  tasks: Array<ScheduledTaskStatus>;
-  refreshReceipt: TaskSchedulerStatusRefreshReceipt;
+export interface BackgroundJobStatusFreshResult {
+  tasks: Array<BackgroundJobStatus>;
+  refreshReceipt: BackgroundJobStatusRefreshReceipt;
 }
 
-export interface TaskSchedulerAlarmCalibration {
+export interface BackgroundJobAlarmCalibration {
   taskId: string;
   taskName: string;
   action:
@@ -147,7 +156,7 @@ interface MessageAnalysisRunResponse {
 
 export type TaskExecutionTrigger = 'scheduled' | 'manual' | 'startup';
 
-export interface ScheduledTaskRunRecord {
+export interface BackgroundJobRunRecord {
   startedAt: number;
   completedAt: number;
   durationMs: number;
@@ -171,7 +180,7 @@ interface AlarmRefreshSummary {
   orphanedAlarmsCleared: number;
   disabledAlarmsCleared: number;
   failedRepairs: number;
-  alarmCalibrations: TaskSchedulerAlarmCalibration[];
+  alarmCalibrations: BackgroundJobAlarmCalibration[];
 }
 
 const TASK_RUN_HISTORY_LIMIT = 5;
@@ -179,7 +188,7 @@ const MIN_CHROME_ALARM_INTERVAL_MINUTES = 0.5;
 const MIN_ALARM_OVERDUE_GRACE_MS = 5 * 60 * 1000;
 const MAX_ALARM_OVERDUE_GRACE_MS = 30 * 60 * 1000;
 const DIGEST_QUEUE_STATUS_BOUNDARY =
-  `本地延迟摘要：到达释放窗口后由后台任务推送，通常 ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} 分钟内检查；查看/刷新不立即发送、不写入 Memory Service、不确认通知`;
+  `本地延迟摘要：到达释放窗口后由后台作业推送，通常 ${DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES} 分钟内检查；查看/刷新不立即发送、不写入 Memory Service、不确认通知`;
 const DIGEST_QUEUE_STATUS_UNAVAILABLE_BOUNDARY =
   '本地摘要队列状态未确认：本次刷新未能读取队列明细；刷新没有立即发送摘要、不写入 Memory Service、不确认通知，可稍后重试或检查本地摘要配置';
 
@@ -304,7 +313,7 @@ function formatDigestQueueResultDetails(
 
 function formatDigestQueueDueReleaseReceipt(dueItems: number): string {
   if (dueItems <= 0) return '';
-  return `释放窗口回执：${dueItems} 条已具备发送资格，等待 digest_queue_process 后台任务推送；查看或刷新状态不会立即发送摘要`;
+  return `释放窗口回执：${dueItems} 条已具备发送资格，等待 digest_queue_process 后台作业推送；查看或刷新状态不会立即发送摘要`;
 }
 
 function getEarliestDigestReleaseAt(
@@ -398,7 +407,7 @@ function isAlarmPersistenceFlagUnsupported(error: unknown): boolean {
   );
 }
 
-function getAlarmOverdueGraceMs(task: ScheduledTask): number {
+function getAlarmOverdueGraceMs(task: BackgroundJob): number {
   return Math.min(
     Math.max(task.intervalMinutes * 60 * 1000, MIN_ALARM_OVERDUE_GRACE_MS),
     MAX_ALARM_OVERDUE_GRACE_MS,
@@ -406,14 +415,14 @@ function getAlarmOverdueGraceMs(task: ScheduledTask): number {
 }
 
 function getAlarmOverdueMs(
-  task: ScheduledTask,
+  task: BackgroundJob,
   alarm: chrome.alarms.Alarm,
 ): number {
   return Date.now() - alarm.scheduledTime - getAlarmOverdueGraceMs(task);
 }
 
 function isAlarmOverdue(
-  task: ScheduledTask,
+  task: BackgroundJob,
   alarm: chrome.alarms.Alarm,
 ): boolean {
   return getAlarmOverdueMs(task, alarm) > 0;
@@ -490,7 +499,7 @@ export function summarizeMessageAnalysisTaskRun(
   };
 }
 
-function getTaskReceiptFailureStreak(task: ScheduledTask): number {
+function getTaskReceiptFailureStreak(task: BackgroundJob): number {
   if (task.lastSuccess !== false) {
     return 0;
   }
@@ -515,7 +524,7 @@ function getTaskReceiptFailureStreak(task: ScheduledTask): number {
   return Math.max(streak, 1);
 }
 
-function hasRecentTaskSkip(task: ScheduledTask): boolean {
+function hasRecentTaskSkip(task: BackgroundJob): boolean {
   return Boolean(
     task.lastSkippedAt &&
       (!task.lastCompletedAt || task.lastSkippedAt >= task.lastCompletedAt),
@@ -523,11 +532,11 @@ function hasRecentTaskSkip(task: ScheduledTask): boolean {
 }
 
 function buildTaskStatusReceipt(
-  task: ScheduledTask,
-  scheduleHealth: ScheduledTaskStatus['scheduleHealth'],
+  task: BackgroundJob,
+  scheduleHealth: BackgroundJobStatus['scheduleHealth'],
   scheduleWarning: string | undefined,
   isExecuting: boolean,
-): ScheduledTaskStatusReceipt {
+): BackgroundJobStatusReceipt {
   if (isExecuting) {
     return {
       state: 'executing',
@@ -636,9 +645,9 @@ function createAlarmRefreshSummary(
 }
 
 function buildTaskStatusRefreshReceipt(
-  tasks: Array<ScheduledTaskStatus>,
+  tasks: Array<BackgroundJobStatus>,
   refreshSummary: AlarmRefreshSummary,
-): TaskSchedulerStatusRefreshReceipt {
+): BackgroundJobStatusRefreshReceipt {
   return {
     checkedAt: Date.now(),
     checkedTaskCount: tasks.length,
@@ -664,9 +673,9 @@ function buildTaskStatusRefreshReceipt(
   };
 }
 
-export class TaskScheduler {
-  private static instance: TaskScheduler | null = null;
-  private tasks: Map<string, ScheduledTask> = new Map();
+export class BackgroundJobs {
+  private static instance: BackgroundJobs | null = null;
+  private tasks: Map<string, BackgroundJob> = new Map();
   private alarmListeners: Set<string> = new Set();
   private runningTasks: Set<string> = new Set();
   private scheduleRepairErrors: Map<string, string> = new Map();
@@ -687,11 +696,11 @@ export class TaskScheduler {
   /**
    * 获取单例实例
    */
-  public static getInstance(): TaskScheduler {
-    if (!TaskScheduler.instance) {
-      TaskScheduler.instance = new TaskScheduler();
+  public static getInstance(): BackgroundJobs {
+    if (!BackgroundJobs.instance) {
+      BackgroundJobs.instance = new BackgroundJobs();
     }
-    return TaskScheduler.instance;
+    return BackgroundJobs.instance;
   }
 
   private isConcernedItemsSyncEnabled(): boolean {
@@ -706,7 +715,7 @@ export class TaskScheduler {
     const config = await getEnvConfig();
 
     // 初始化所有任务
-    TASK_DEFINITIONS.forEach((task) => {
+    BACKGROUND_JOB_DEFINITIONS.forEach((task) => {
       const taskCopy = { ...task };
 
       // message_analysis 任务的间隔时间使用用户配置
@@ -727,7 +736,7 @@ export class TaskScheduler {
     });
 
     console.log(
-      '📋 任务调度器初始化完成，注册任务:',
+      '📋 后台作业初始化完成，注册任务:',
       Array.from(this.tasks.keys()),
     );
   }
@@ -737,12 +746,12 @@ export class TaskScheduler {
    */
   public async startAllTasks(): Promise<void> {
     if (this.isInitialized) {
-      console.log('⚠️ 任务调度器已启动，跳过重复启动');
+      console.log('⚠️ 后台作业已启动，跳过重复启动');
       return;
     }
 
     if (this.startPromise) {
-      console.log('⏳ 任务调度器正在启动，等待已有启动流程完成');
+      console.log('⏳ 后台作业正在启动，等待已有启动流程完成');
       await this.startPromise;
       return;
     }
@@ -756,7 +765,7 @@ export class TaskScheduler {
   }
 
   private async startAllTasksInternal(): Promise<void> {
-    console.log('🚀 启动任务调度器...');
+    console.log('🚀 启动后台作业...');
 
     // 初始化任务定义（包括从配置中读取 message_analysis 的间隔）
     await this.initializeTasks();
@@ -789,14 +798,14 @@ export class TaskScheduler {
     // 保存初始化状态
     await this.saveTaskStates();
 
-    console.log('✅ 任务调度器启动完成');
+    console.log('✅ 后台作业启动完成');
   }
 
   /**
    * 停止所有定时任务
    */
   public async stopAllTasks(): Promise<void> {
-    console.log('🛑 停止任务调度器...');
+    console.log('🛑 停止后台作业...');
 
     // 只清除我们创建的 alarms，不影响其他扩展功能的 alarms
     const existingAlarms = await this.getExistingAlarms();
@@ -824,7 +833,7 @@ export class TaskScheduler {
     // 保存停止状态
     await this.saveTaskStates();
 
-    console.log('✅ 任务调度器已停止');
+    console.log('✅ 后台作业已停止');
   }
 
   /**
@@ -832,20 +841,17 @@ export class TaskScheduler {
    */
   private async restoreTaskStates(): Promise<void> {
     try {
-      const { taskSchedulerStates } = await chrome.storage.local.get(
-        'taskSchedulerStates',
-      );
+      const savedStates = await readBackgroundJobStates();
 
-      if (taskSchedulerStates) {
-        console.log('🔄 恢复任务状态:', taskSchedulerStates);
+      if (savedStates && typeof savedStates === 'object') {
+        console.log('🔄 恢复后台作业状态:', savedStates);
 
-        // 恢复每个任务的状态
         for (const [taskId, savedState] of Object.entries(
-          taskSchedulerStates,
+          savedStates as Record<string, unknown>,
         )) {
           const task = this.tasks.get(taskId);
           if (task && savedState) {
-            const state = savedState as Partial<ScheduledTask>;
+            const state = savedState as Partial<BackgroundJob>;
             task.enabled = state.enabled ?? task.enabled;
             task.lastRun = state.lastRun;
             task.lastCompletedAt = state.lastCompletedAt;
@@ -875,7 +881,7 @@ export class TaskScheduler {
    */
   private async saveTaskStates(): Promise<void> {
     try {
-      const taskStates: Record<string, Partial<ScheduledTask>> = {};
+      const taskStates: Record<string, Partial<BackgroundJob>> = {};
 
       for (const [taskId, task] of Array.from(this.tasks.entries())) {
         taskStates[taskId] = {
@@ -892,8 +898,8 @@ export class TaskScheduler {
         };
       }
 
-      await chrome.storage.local.set({ taskSchedulerStates: taskStates });
-      console.log('💾 任务状态已保存');
+      await writeBackgroundJobStates(taskStates);
+      console.log('💾 后台作业状态已保存');
     } catch (error) {
       console.error('❌ 保存任务状态失败:', error);
     }
@@ -925,7 +931,7 @@ export class TaskScheduler {
   }
 
   private getAlarmCreateInfo(
-    task: ScheduledTask,
+    task: BackgroundJob,
   ): chrome.alarms.AlarmCreateInfo {
     const alarmInfo: chrome.alarms.AlarmCreateInfo = {
       delayInMinutes: task.intervalMinutes,
@@ -939,8 +945,8 @@ export class TaskScheduler {
     return alarmInfo;
   }
 
-  private async createTaskAlarm(task: ScheduledTask): Promise<void> {
-    const alarmName = `scheduled_task_${task.id}`;
+  private async createTaskAlarm(task: BackgroundJob): Promise<void> {
+    const alarmName = backgroundJobAlarmName(task.id);
 
     try {
       await this.createChromeAlarm(alarmName, this.getAlarmCreateInfo(task));
@@ -966,19 +972,20 @@ export class TaskScheduler {
 
     task.nextRun = createdAlarm.scheduledTime;
     this.scheduleRepairErrors.delete(task.id);
+    await this.clearAlarm(legacyScheduledTaskAlarmName(task.id));
 
     console.log(
-      `⏰ 创建定时任务: ${task.name} (${task.intervalMinutes}分钟间隔)`,
+      `⏰ 创建后台作业: ${task.name} (${task.intervalMinutes}分钟间隔)`,
     );
   }
 
-  private async refreshTaskNextRun(task: ScheduledTask): Promise<void> {
+  private async refreshTaskNextRun(task: BackgroundJob): Promise<void> {
     if (!task.enabled) {
       task.nextRun = undefined;
       return;
     }
 
-    const alarm = await this.getAlarm(`scheduled_task_${task.id}`);
+    const alarm = await this.getJobAlarm(task.id);
     task.nextRun = alarm?.scheduledTime;
   }
 
@@ -998,14 +1005,12 @@ export class TaskScheduler {
     summary.alarmCalibrations.push(...orphanedAlarmCalibrations);
 
     for (const [taskId, task] of Array.from(this.tasks.entries())) {
-      const alarmName = `scheduled_task_${taskId}`;
-
       if (!task.enabled) {
-        // 任务已禁用，确保 alarm 被清除
-        const existingAlarm = await this.getAlarm(alarmName);
+        // 作业已禁用，确保新旧前缀的 alarm 都被清除
+        const existingAlarm = await this.getJobAlarm(taskId);
         if (existingAlarm) {
-          console.log(`🗑️ 清除已禁用任务的定时器: ${task.name}`);
-          await this.clearAlarm(alarmName);
+          console.log(`🗑️ 清除已禁用后台作业的定时器: ${task.name}`);
+          await this.clearJobAlarms(taskId);
           summary.disabledAlarmsCleared += 1;
           summary.clearedAlarms += 1;
           summary.alarmCalibrations.push({
@@ -1021,7 +1026,7 @@ export class TaskScheduler {
 
       try {
         // 检查 alarm 是否存在
-        const existingAlarm = await this.getAlarm(alarmName);
+        const existingAlarm = await this.getJobAlarm(taskId);
 
         if (!existingAlarm) {
           // alarm 不存在，创建新的
@@ -1032,10 +1037,13 @@ export class TaskScheduler {
             taskName: task.name,
             action: 'created',
           });
-        } else if (existingAlarm.periodInMinutes !== task.intervalMinutes) {
-          // alarm 存在但配置不一致，直接同名替换。不要先 clear，避免创建失败时丢掉旧排程。
+        } else if (
+          existingAlarm.name.startsWith(LEGACY_SCHEDULED_TASK_ALARM_PREFIX) ||
+          existingAlarm.periodInMinutes !== task.intervalMinutes
+        ) {
+          // 旧前缀或间隔不一致：写成 background_job_*，并清掉 scheduled_task_*。
           console.log(
-            `🔄 更新定时器配置: ${task.name} (${existingAlarm.periodInMinutes}min -> ${task.intervalMinutes}min)`,
+            `🔄 更新定时器配置: ${task.name} (${existingAlarm.name}, ${existingAlarm.periodInMinutes}min -> ${task.intervalMinutes}min)`,
           );
           await this.createTaskAlarm(task);
           summary.updatedAlarms += 1;
@@ -1075,13 +1083,13 @@ export class TaskScheduler {
     return summary;
   }
 
-  private async clearOrphanedTaskAlarms(): Promise<TaskSchedulerAlarmCalibration[]> {
+  private async clearOrphanedTaskAlarms(): Promise<BackgroundJobAlarmCalibration[]> {
     const knownTaskIds = new Set(this.tasks.keys());
     const existingAlarms = await this.getExistingAlarms();
-    const cleared: TaskSchedulerAlarmCalibration[] = [];
+    const cleared: BackgroundJobAlarmCalibration[] = [];
 
     for (const alarm of existingAlarms) {
-      const taskId = alarm.name.replace('scheduled_task_', '');
+      const taskId = jobIdFromAlarmName(alarm.name);
       if (knownTaskIds.has(taskId)) {
         continue;
       }
@@ -1098,9 +1106,32 @@ export class TaskScheduler {
     return cleared;
   }
 
-  /**
-   * 获取单个 alarm
-   */
+  private async getJobAlarm(
+    jobId: string,
+  ): Promise<chrome.alarms.Alarm | undefined> {
+    return (
+      (await this.getAlarm(backgroundJobAlarmName(jobId))) ??
+      (await this.getAlarm(legacyScheduledTaskAlarmName(jobId)))
+    );
+  }
+
+  private findJobAlarm(
+    jobId: string,
+    alarmByName?: Map<string, chrome.alarms.Alarm>,
+  ): chrome.alarms.Alarm | undefined {
+    return (
+      alarmByName?.get(backgroundJobAlarmName(jobId)) ??
+      alarmByName?.get(legacyScheduledTaskAlarmName(jobId))
+    );
+  }
+
+  private async clearJobAlarms(jobId: string): Promise<boolean> {
+    const clearedNew = await this.clearAlarm(backgroundJobAlarmName(jobId));
+    const clearedLegacy = await this.clearAlarm(
+      legacyScheduledTaskAlarmName(jobId),
+    );
+    return clearedNew || clearedLegacy;
+  }
   private async getAlarm(
     name: string,
   ): Promise<chrome.alarms.Alarm | undefined> {
@@ -1128,9 +1159,9 @@ export class TaskScheduler {
   private async getExistingAlarms(): Promise<chrome.alarms.Alarm[]> {
     return new Promise((resolve) => {
       chrome.alarms.getAll((alarms) => {
-        // 只返回我们的任务调度器创建的 alarms
+        // 只返回我们的后台作业创建的 alarms
         const taskAlarms = alarms.filter((alarm) =>
-          alarm.name.startsWith('scheduled_task_'),
+          isBackgroundJobAlarmName(alarm.name),
         );
         resolve(taskAlarms);
       });
@@ -1164,7 +1195,7 @@ export class TaskScheduler {
 
     this.alarmListeners.add('main');
     console.log(
-      '✅ TaskScheduler 监听器标记已设置（实际监听器在 background.ts 顶层）',
+      '✅ BackgroundJobs 监听器标记已设置（实际监听器在 background.ts 顶层）',
     );
   }
 
@@ -1173,7 +1204,7 @@ export class TaskScheduler {
    * 由 background.ts 的顶层监听器调用
    */
   public async handleAlarmEvent(alarm: chrome.alarms.Alarm): Promise<void> {
-    const taskId = alarm.name.replace('scheduled_task_', '');
+    const taskId = jobIdFromAlarmName(alarm.name);
     const task = this.tasks.get(taskId);
 
     if (task) {
@@ -1194,24 +1225,24 @@ export class TaskScheduler {
 
   /**
    * 静态方法：尝试处理 alarm 事件
-   * 返回 true 表示已处理，false 表示不是 TaskScheduler 的 alarm
+   * 返回 true 表示已处理，false 表示不是 BackgroundJobs 的 alarm
    */
   public static async tryHandleAlarm(
     alarm: chrome.alarms.Alarm,
   ): Promise<boolean> {
-    if (!alarm.name.startsWith('scheduled_task_')) {
+    if (!isBackgroundJobAlarmName(alarm.name)) {
       return false;
     }
 
-    const instance = TaskScheduler.getInstance();
+    const instance = BackgroundJobs.getInstance();
 
     // 确保已初始化
     if (!instance.isInitialized) {
-      console.log('⚠️ TaskScheduler 未初始化，开始初始化...');
+      console.log('⚠️ BackgroundJobs 未初始化，开始初始化...');
       await instance.startAllTasks();
     }
 
-    const taskId = alarm.name.replace('scheduled_task_', '');
+    const taskId = jobIdFromAlarmName(alarm.name);
     console.log(`⚡ 执行定时任务: ${taskId}`);
     await instance.handleAlarmEvent(alarm);
 
@@ -1285,15 +1316,15 @@ export class TaskScheduler {
    * 执行具体任务
    */
   private recordTaskRun(
-    task: ScheduledTask,
-    record: ScheduledTaskRunRecord,
+    task: BackgroundJob,
+    record: BackgroundJobRunRecord,
   ): void {
     const history = Array.isArray(task.runHistory) ? task.runHistory : [];
     task.runHistory = [record, ...history].slice(0, TASK_RUN_HISTORY_LIMIT);
   }
 
   private async executeTask(
-    task: ScheduledTask,
+    task: BackgroundJob,
     trigger: TaskExecutionTrigger,
   ): Promise<TaskExecutionResult> {
     if (this.runningTasks.has(task.id)) {
@@ -1780,20 +1811,20 @@ export class TaskScheduler {
   /**
    * 获取任务状态
    */
-  public getTaskStatus(): Array<ScheduledTaskStatus> {
+  public getTaskStatus(): Array<BackgroundJobStatus> {
     return this.buildTaskStatus();
   }
 
   public async getTaskStatusFresh(
     options: TaskStatusOptions = {},
-  ): Promise<Array<ScheduledTaskStatus>> {
+  ): Promise<Array<BackgroundJobStatus>> {
     const result = await this.getTaskStatusFreshResult(options);
     return result.tasks;
   }
 
   public async getTaskStatusFreshResult(
     options: TaskStatusOptions = {},
-  ): Promise<TaskSchedulerStatusFreshResult> {
+  ): Promise<BackgroundJobStatusFreshResult> {
     if (!this.isInitialized) {
       await this.startAllTasks();
     }
@@ -1812,7 +1843,7 @@ export class TaskScheduler {
         continue;
       }
 
-      const alarm = alarmByName.get(`scheduled_task_${task.id}`);
+      const alarm = this.findJobAlarm(task.id, alarmByName);
       task.nextRun = alarm?.scheduledTime;
     }
 
@@ -1828,7 +1859,7 @@ export class TaskScheduler {
   }
 
   private async enrichDigestQueueStatus(
-    statuses: Array<ScheduledTaskStatus>,
+    statuses: Array<BackgroundJobStatus>,
   ): Promise<void> {
     const digestTask = statuses.find(
       (task) => task.id === 'digest_queue_process',
@@ -1851,12 +1882,11 @@ export class TaskScheduler {
 
   private buildTaskStatus(
     alarmByName?: Map<string, chrome.alarms.Alarm>,
-  ): Array<ScheduledTaskStatus> {
+  ): Array<BackgroundJobStatus> {
     return Array.from(this.tasks.values()).map((task) => {
-      const alarmName = `scheduled_task_${task.id}`;
-      const alarm = alarmByName?.get(alarmName);
+      const alarm = this.findJobAlarm(task.id, alarmByName);
       const repairError = this.scheduleRepairErrors.get(task.id);
-      let scheduleHealth: ScheduledTaskStatus['scheduleHealth'] = 'disabled';
+      let scheduleHealth: BackgroundJobStatus['scheduleHealth'] = 'disabled';
       let scheduleWarning: string | undefined;
 
       if (task.enabled) {
@@ -1907,7 +1937,7 @@ export class TaskScheduler {
    */
   public async toggleTask(taskId: string, enabled: boolean): Promise<boolean> {
     if (!this.isInitialized) {
-      console.log(`⚠️ 任务调度器未初始化，先启动后再控制任务: ${taskId}`);
+      console.log(`⚠️ 后台作业未初始化，先启动后再控制任务: ${taskId}`);
       await this.startAllTasks();
     }
 
@@ -1921,14 +1951,13 @@ export class TaskScheduler {
       enabled: task.enabled,
       nextRun: task.nextRun,
     };
-    const alarmName = `scheduled_task_${taskId}`;
 
     task.enabled = enabled;
     try {
       if (enabled) {
         await this.createTaskAlarm(task);
       } else {
-        await this.clearAlarm(alarmName);
+        await this.clearJobAlarms(taskId);
         task.nextRun = undefined;
       }
 
@@ -1938,7 +1967,7 @@ export class TaskScheduler {
       task.enabled = previousState.enabled;
       task.nextRun = previousState.nextRun;
       if (!previousState.enabled) {
-        await this.clearAlarm(alarmName);
+        await this.clearJobAlarms(taskId);
       }
       await this.saveTaskStates();
       throw error;
@@ -1958,7 +1987,7 @@ export class TaskScheduler {
    */
   public async repairTaskSchedule(taskId: string): Promise<boolean> {
     if (!this.isInitialized) {
-      console.log(`⚠️ 任务调度器未初始化，先启动后再修复排程: ${taskId}`);
+      console.log(`⚠️ 后台作业未初始化，先启动后再修复排程: ${taskId}`);
       await this.startAllTasks();
     }
 
@@ -1968,12 +1997,11 @@ export class TaskScheduler {
       return false;
     }
 
-    const alarmName = `scheduled_task_${taskId}`;
     if (!task.enabled) {
-      await this.clearAlarm(alarmName);
+      await this.clearJobAlarms(taskId);
       task.nextRun = undefined;
       await this.saveTaskStates();
-      console.log(`ℹ️ 任务 ${task.name} 已停用，无需修复排程`);
+      console.log(`ℹ️ 后台作业 ${task.name} 已停用，无需修复排程`);
       return true;
     }
 
@@ -1999,7 +2027,7 @@ export class TaskScheduler {
     taskId: string,
   ): Promise<TaskExecutionResult> {
     if (!this.isInitialized) {
-      console.log(`⚠️ 任务调度器未初始化，先启动后再手动执行任务: ${taskId}`);
+      console.log(`⚠️ 后台作业未初始化，先启动后再手动执行任务: ${taskId}`);
       await this.startAllTasks();
     }
 
@@ -2021,7 +2049,7 @@ export class TaskScheduler {
 
   /**
    * 重新加载 message_analysis 任务的间隔配置
-   * 注意：通常不需要手动调用此方法，因为任务调度器会自动监听配置变化
+   * 注意：通常不需要手动调用此方法，因为后台作业会自动监听配置变化
    * 此方法主要用于测试或特殊场景下的手动触发
    */
   public async reloadMessageAnalysisInterval(): Promise<boolean> {
@@ -2069,4 +2097,8 @@ export class TaskScheduler {
 }
 
 // 导出单例实例
-export const taskScheduler = TaskScheduler.getInstance();
+export const backgroundJobs = BackgroundJobs.getInstance();
+/** @deprecated Use BackgroundJobs */
+export const TaskScheduler = BackgroundJobs;
+/** @deprecated Use backgroundJobs */
+export const taskScheduler = backgroundJobs;

@@ -1,6 +1,6 @@
 import { DIGEST_QUEUE_RELEASE_CHECK_INTERVAL_MINUTES } from './digestQueueConfig';
 
-export interface TaskSchedulerDefinition {
+export interface BackgroundJobDefinition {
   id: string;
   name: string;
   category: 'message_analysis' | 'data_sync' | 'system_maintenance' | 'user_profile';
@@ -9,8 +9,65 @@ export interface TaskSchedulerDefinition {
   enabled: boolean;
 }
 
-// 预定义的任务配置
-export const TASK_DEFINITIONS: TaskSchedulerDefinition[] = [
+/** @deprecated Use BackgroundJobDefinition */
+export type TaskSchedulerDefinition = BackgroundJobDefinition;
+
+export const BACKGROUND_JOB_STATES_KEY = 'backgroundJobStates';
+export const LEGACY_TASK_SCHEDULER_STATES_KEY = 'taskSchedulerStates';
+
+export const BACKGROUND_JOB_ALARM_PREFIX = 'background_job_';
+export const LEGACY_SCHEDULED_TASK_ALARM_PREFIX = 'scheduled_task_';
+
+export const BACKGROUND_JOB_MESSAGE = {
+  GET_STATUS: 'GET_BACKGROUND_JOBS_STATUS',
+  CONTROL: 'CONTROL_BACKGROUND_JOB',
+} as const;
+
+export const LEGACY_BACKGROUND_JOB_MESSAGE = {
+  GET_STATUS: 'GET_TASK_SCHEDULER_STATUS',
+  CONTROL: 'CONTROL_TASK',
+} as const;
+
+export function isBackgroundJobStatusRequest(type: unknown): boolean {
+  return (
+    type === BACKGROUND_JOB_MESSAGE.GET_STATUS ||
+    type === LEGACY_BACKGROUND_JOB_MESSAGE.GET_STATUS
+  );
+}
+
+export function isBackgroundJobControlRequest(type: unknown): boolean {
+  return (
+    type === BACKGROUND_JOB_MESSAGE.CONTROL ||
+    type === LEGACY_BACKGROUND_JOB_MESSAGE.CONTROL
+  );
+}
+
+export function isBackgroundJobAlarmName(name: string): boolean {
+  return (
+    name.startsWith(BACKGROUND_JOB_ALARM_PREFIX) ||
+    name.startsWith(LEGACY_SCHEDULED_TASK_ALARM_PREFIX)
+  );
+}
+
+export function jobIdFromAlarmName(name: string): string {
+  if (name.startsWith(BACKGROUND_JOB_ALARM_PREFIX)) {
+    return name.slice(BACKGROUND_JOB_ALARM_PREFIX.length);
+  }
+  if (name.startsWith(LEGACY_SCHEDULED_TASK_ALARM_PREFIX)) {
+    return name.slice(LEGACY_SCHEDULED_TASK_ALARM_PREFIX.length);
+  }
+  return name;
+}
+
+export function backgroundJobAlarmName(jobId: string): string {
+  return `${BACKGROUND_JOB_ALARM_PREFIX}${jobId}`;
+}
+
+export function legacyScheduledTaskAlarmName(jobId: string): string {
+  return `${LEGACY_SCHEDULED_TASK_ALARM_PREFIX}${jobId}`;
+}
+
+export const BACKGROUND_JOB_DEFINITIONS: BackgroundJobDefinition[] = [
   {
     id: 'message_analysis',
     name: '静默消息分析',
@@ -77,37 +134,45 @@ export const TASK_DEFINITIONS: TaskSchedulerDefinition[] = [
   }
 ];
 
-export function getTaskDefaultEnabled(taskId: string): boolean {
-  return TASK_DEFINITIONS.find((task) => task.id === taskId)?.enabled ?? false;
+/** @deprecated Use BACKGROUND_JOB_DEFINITIONS */
+export const TASK_DEFINITIONS = BACKGROUND_JOB_DEFINITIONS;
+
+export function getJobDefaultEnabled(jobId: string): boolean {
+  return BACKGROUND_JOB_DEFINITIONS.find((job) => job.id === jobId)?.enabled ?? false;
 }
 
-type TaskSchedulerStorageState = {
+/** @deprecated Use getJobDefaultEnabled */
+export function getTaskDefaultEnabled(taskId: string): boolean {
+  return getJobDefaultEnabled(taskId);
+}
+
+type BackgroundJobStorageState = {
   enabled?: boolean;
 };
 
-function hasTaskSchedulerStorageState(
-  taskSchedulerStates: unknown,
-  taskId: string,
+function hasBackgroundJobStorageState(
+  backgroundJobStates: unknown,
+  jobId: string,
 ): boolean {
   return Boolean(
-    taskSchedulerStates &&
-      typeof taskSchedulerStates === 'object' &&
-      Object.prototype.hasOwnProperty.call(taskSchedulerStates, taskId),
+    backgroundJobStates &&
+      typeof backgroundJobStates === 'object' &&
+      Object.prototype.hasOwnProperty.call(backgroundJobStates, jobId),
   );
 }
 
-export function resolveTaskEnabledFromSchedulerStates(
-  taskId: string,
-  taskSchedulerStates: unknown,
+export function resolveJobEnabledFromStates(
+  jobId: string,
+  backgroundJobStates: unknown,
 ): boolean {
-  const defaultEnabled = getTaskDefaultEnabled(taskId);
-  if (!taskSchedulerStates || typeof taskSchedulerStates !== 'object') {
+  const defaultEnabled = getJobDefaultEnabled(jobId);
+  if (!backgroundJobStates || typeof backgroundJobStates !== 'object') {
     return defaultEnabled;
   }
 
   const savedState = (
-    taskSchedulerStates as Record<string, TaskSchedulerStorageState | undefined>
-  )[taskId];
+    backgroundJobStates as Record<string, BackgroundJobStorageState | undefined>
+  )[jobId];
   if (!savedState || typeof savedState !== 'object') {
     return defaultEnabled;
   }
@@ -115,45 +180,71 @@ export function resolveTaskEnabledFromSchedulerStates(
   return savedState.enabled ?? defaultEnabled;
 }
 
+/** @deprecated Use resolveJobEnabledFromStates */
+export function resolveTaskEnabledFromSchedulerStates(
+  taskId: string,
+  taskSchedulerStates: unknown,
+): boolean {
+  return resolveJobEnabledFromStates(taskId, taskSchedulerStates);
+}
+
+export async function readBackgroundJobStates(): Promise<unknown> {
+  const stored = await chrome.storage.local.get([
+    BACKGROUND_JOB_STATES_KEY,
+    LEGACY_TASK_SCHEDULER_STATES_KEY,
+  ]);
+  return stored[BACKGROUND_JOB_STATES_KEY] ?? stored[LEGACY_TASK_SCHEDULER_STATES_KEY];
+}
+
+export async function writeBackgroundJobStates(states: unknown): Promise<void> {
+  await chrome.storage.local.set({ [BACKGROUND_JOB_STATES_KEY]: states });
+  await chrome.storage.local.remove(LEGACY_TASK_SCHEDULER_STATES_KEY);
+}
+
 /**
- * 辅助函数: 获取指定任务的启用状态
+ * 辅助函数: 获取指定后台作业的启用状态
  * 用于替代旧的 scheduleActive 存储
  */
 export async function getTaskEnabled(taskId: string): Promise<boolean> {
   try {
-    const { taskSchedulerStates } = await chrome.storage.local.get('taskSchedulerStates');
-    return resolveTaskEnabledFromSchedulerStates(taskId, taskSchedulerStates);
+    const states = await readBackgroundJobStates();
+    return resolveJobEnabledFromStates(taskId, states);
   } catch (error) {
-    console.error(`获取任务 ${taskId} 状态失败:`, error);
+    console.error(`获取后台作业 ${taskId} 状态失败:`, error);
     return false;
   }
 }
 
+export const getBackgroundJobEnabled = getTaskEnabled;
+
 /**
- * 辅助函数: 监听指定任务的启用状态变化
+ * 辅助函数: 监听指定后台作业的启用状态变化
  */
 export function onTaskEnabledChanged(
   taskId: string,
   callback: (enabled: boolean) => void
 ): () => void {
   const listener = (changes: { [key: string]: chrome.storage.StorageChange }, namespace: string) => {
-    if (namespace === 'local' && changes.taskSchedulerStates) {
-      const newStates = changes.taskSchedulerStates.newValue;
-      const oldStates = changes.taskSchedulerStates.oldValue;
-      if (
-        hasTaskSchedulerStorageState(newStates, taskId) ||
-        hasTaskSchedulerStorageState(oldStates, taskId) ||
-        !newStates
-      ) {
-        callback(resolveTaskEnabledFromSchedulerStates(taskId, newStates));
-      }
+    if (namespace !== 'local') return;
+    const change =
+      changes[BACKGROUND_JOB_STATES_KEY] || changes[LEGACY_TASK_SCHEDULER_STATES_KEY];
+    if (!change) return;
+    const newStates = change.newValue;
+    const oldStates = change.oldValue;
+    if (
+      hasBackgroundJobStorageState(newStates, taskId) ||
+      hasBackgroundJobStorageState(oldStates, taskId) ||
+      !newStates
+    ) {
+      callback(resolveJobEnabledFromStates(taskId, newStates));
     }
   };
 
   chrome.storage.onChanged.addListener(listener);
 
-  // 返回清理函数
   return () => {
     chrome.storage.onChanged.removeListener(listener);
   };
 }
+
+export const onBackgroundJobEnabledChanged = onTaskEnabledChanged;

@@ -12,7 +12,7 @@ const storage: StorageMap = {
     username: 'verify.user',
     fullName: 'Verify User',
   },
-  taskSchedulerStates: {
+  backgroundJobStates: {
     message_analysis: { enabled: false },
     memory_sync: { enabled: false },
     system_monitoring: { enabled: true },
@@ -85,6 +85,20 @@ function buildStorageChange(
         }, {});
 
         Object.assign(storage, clone(items));
+        for (const listener of storageListeners) {
+          listener(changes, 'local');
+        }
+      },
+      async remove(keys: string | string[]) {
+        const list = Array.isArray(keys) ? keys : [keys];
+        const changes = list.reduce<Record<string, chrome.storage.StorageChange>>(
+          (acc, key) => {
+            acc[key] = buildStorageChange(storage[key], undefined);
+            delete storage[key];
+            return acc;
+          },
+          {},
+        );
         for (const listener of storageListeners) {
           listener(changes, 'local');
         }
@@ -216,16 +230,16 @@ async function waitForPendingFetch(): Promise<void> {
 };
 
 const { getTaskEnabled, onTaskEnabledChanged } = await import(
-  '../src/services/taskSchedulerDefinitions.ts'
+  '../src/services/backgroundJobDefinitions.ts'
 );
 const { concernedItemsSyncService } = await import(
   '../src/services/ConcernedItemsSyncService.ts'
 );
 const {
-  TaskScheduler,
-  taskScheduler,
+  BackgroundJobs,
+  backgroundJobs,
   summarizeMessageAnalysisTaskRun,
-} = await import('../src/services/TaskScheduler.ts');
+} = await import('../src/services/BackgroundJobs.ts');
 const {
   CONCERNED_ITEMS_DIGEST_TASK_ID,
   digestQueueService,
@@ -303,8 +317,8 @@ const unsubscribe = onTaskEnabledChanged(
   },
 );
 await chrome.storage.local.set({
-  taskSchedulerStates: {
-    ...storage.taskSchedulerStates,
+  backgroundJobStates: {
+    ...storage.backgroundJobStates,
     vectorized_data_maintenance: { lastRun: 456 },
   },
 });
@@ -316,8 +330,8 @@ assert.equal(
 );
 
 await chrome.storage.local.set({
-  taskSchedulerStates: {
-    ...storage.taskSchedulerStates,
+  backgroundJobStates: {
+    ...storage.backgroundJobStates,
     vectorized_data_maintenance: { enabled: false },
   },
 });
@@ -331,9 +345,9 @@ const unsubscribeRemoved = onTaskEnabledChanged(
 const {
   vectorized_data_maintenance: _removedVectorizedDataMaintenance,
   ...taskStatesWithoutVectorMaintenance
-} = storage.taskSchedulerStates;
+} = storage.backgroundJobStates;
 await chrome.storage.local.set({
-  taskSchedulerStates: taskStatesWithoutVectorMaintenance,
+  backgroundJobStates: taskStatesWithoutVectorMaintenance,
 });
 unsubscribeRemoved();
 assert.equal(
@@ -343,8 +357,8 @@ assert.equal(
 );
 
 await chrome.storage.local.set({
-  taskSchedulerStates: {
-    ...storage.taskSchedulerStates,
+  backgroundJobStates: {
+    ...storage.backgroundJobStates,
     message_analysis: { enabled: true },
   },
 });
@@ -355,7 +369,7 @@ const unsubscribeCleared = onTaskEnabledChanged(
     observedClearedEnabled = enabled;
   },
 );
-await chrome.storage.local.set({ taskSchedulerStates: {} });
+await chrome.storage.local.set({ backgroundJobStates: {} });
 unsubscribeCleared();
 assert.equal(
   observedClearedEnabled,
@@ -364,7 +378,7 @@ assert.equal(
 );
 
 await chrome.storage.local.set({
-  taskSchedulerStates: {
+  backgroundJobStates: {
     message_analysis: { enabled: false },
     memory_sync: { enabled: false },
     system_monitoring: { enabled: true },
@@ -382,18 +396,18 @@ alarms.scheduled_task_removed_before_start = {
   periodInMinutes: 5,
 };
 
-await taskScheduler.startAllTasks();
+await backgroundJobs.startAllTasks();
 
-let status = taskScheduler.getTaskStatus();
+let status = backgroundJobs.getTaskStatus();
 
 const scheduledSystemMonitoringAlarm =
-  alarms.scheduled_task_system_monitoring?.scheduledTime;
+  alarms.background_job_system_monitoring?.scheduledTime;
 assert.ok(
   scheduledSystemMonitoringAlarm,
   'enabled tasks should create a Chrome alarm on scheduler startup',
 );
 assert.equal(
-  alarmCreateInfos.scheduled_task_system_monitoring?.persistAcrossSessions,
+  alarmCreateInfos.background_job_system_monitoring?.persistAcrossSessions,
   true,
   'scheduled task alarms should explicitly persist across browser sessions',
 );
@@ -408,7 +422,7 @@ alarms.scheduled_task_removed_later = {
   scheduledTime: Date.now() + 10_000,
   periodInMinutes: 5,
 };
-status = await taskScheduler.getTaskStatusFresh();
+status = await backgroundJobs.getTaskStatusFresh();
 assert.equal(
   alarms.scheduled_task_removed_later,
   undefined,
@@ -420,7 +434,7 @@ alarms.scheduled_task_removed_when_fired = {
   scheduledTime: Date.now() + 10_000,
   periodInMinutes: 5,
 };
-const handledOrphanAlarm = await TaskScheduler.tryHandleAlarm({
+const handledOrphanAlarm = await BackgroundJobs.tryHandleAlarm({
   name: 'scheduled_task_removed_when_fired',
   scheduledTime: Date.now(),
   periodInMinutes: 5,
@@ -428,7 +442,7 @@ const handledOrphanAlarm = await TaskScheduler.tryHandleAlarm({
 assert.equal(
   handledOrphanAlarm,
   true,
-  'TaskScheduler should claim scheduled_task alarms even when their task definition was removed',
+  'BackgroundJobs should claim scheduled_task alarms even when their task definition was removed',
 );
 assert.equal(
   alarms.scheduled_task_removed_when_fired,
@@ -436,17 +450,17 @@ assert.equal(
   'unknown scheduled_task alarms should be cleared when they fire',
 );
 
-const enabledProfileDecay = await taskScheduler.toggleTask(
+const enabledProfileDecay = await backgroundJobs.toggleTask(
   'user_profile_decay',
   true,
 );
 assert.equal(enabledProfileDecay, true);
 assert.ok(
-  alarms.scheduled_task_user_profile_decay,
+  alarms.background_job_user_profile_decay,
   'enabling a task should create its Chrome alarm',
 );
 await new Promise((resolve) => setTimeout(resolve, 0));
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 const userProfileDecay = status.find(
   (task) => task.id === 'user_profile_decay',
 );
@@ -460,10 +474,10 @@ let memorySyncStartupCalls = 0;
 (concernedItemsSyncService as any).syncOnStartup = async () => {
   memorySyncStartupCalls += 1;
 };
-const enabledMemorySync = await taskScheduler.toggleTask('memory_sync', true);
+const enabledMemorySync = await backgroundJobs.toggleTask('memory_sync', true);
 assert.equal(enabledMemorySync, true);
 assert.ok(
-  alarms.scheduled_task_memory_sync,
+  alarms.background_job_memory_sync,
   'enabling memory_sync should create its Chrome alarm',
 );
 assert.equal(
@@ -476,9 +490,9 @@ let periodicMemorySyncCalls = 0;
 (concernedItemsSyncService as any).runPeriodicSync = async () => {
   periodicMemorySyncCalls += 1;
 };
-await taskScheduler.toggleTask('memory_sync', false);
+await backgroundJobs.toggleTask('memory_sync', false);
 const disabledMemorySyncManualRun =
-  await taskScheduler.runTaskManuallyWithResult('memory_sync');
+  await backgroundJobs.runTaskManuallyWithResult('memory_sync');
 assert.equal(
   disabledMemorySyncManualRun.success,
   true,
@@ -492,11 +506,11 @@ assert.equal(
 
 nextAlarmCreateError = 'maximum number of alarms reached';
 await assert.rejects(
-  () => taskScheduler.toggleTask('vector_quality_check', true),
+  () => backgroundJobs.toggleTask('vector_quality_check', true),
   /maximum number of alarms reached/,
   'alarm creation failures should be surfaced to callers',
 );
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 const vectorQualityCheck = status.find(
   (task) => task.id === 'vector_quality_check',
 );
@@ -506,21 +520,21 @@ assert.equal(
   'alarm creation failures should roll back the in-memory enabled state',
 );
 assert.equal(
-  storage.taskSchedulerStates.vector_quality_check.enabled,
+  storage.backgroundJobStates.vector_quality_check.enabled,
   false,
   'alarm creation failures should persist the rolled-back enabled state',
 );
 assert.equal(
-  alarms.scheduled_task_vector_quality_check,
+  alarms.background_job_vector_quality_check,
   undefined,
   'alarm creation failures should not leave a partial alarm behind',
 );
 
 fetchMode = 'pending';
-const pendingRun = taskScheduler.runTaskManuallyWithResult('system_monitoring');
+const pendingRun = backgroundJobs.runTaskManuallyWithResult('system_monitoring');
 await Promise.resolve();
 
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 let systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(
   systemMonitoring?.isExecuting,
@@ -543,12 +557,12 @@ assert.equal(
   'manual runs should preserve the real scheduled alarm time while executing',
 );
 
-const duplicateRun = await taskScheduler.runTaskManuallyWithResult(
+const duplicateRun = await backgroundJobs.runTaskManuallyWithResult(
   'system_monitoring',
 );
 assert.equal(duplicateRun.success, false);
 assert.equal(duplicateRun.skipped, true);
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.ok(
   systemMonitoring?.lastSkippedAt,
@@ -565,7 +579,7 @@ assert.equal(
   'duplicate task triggers should be recorded in recent run history',
 );
 assert.equal(
-  storage.taskSchedulerStates.system_monitoring.runHistory[0].skipped,
+  storage.backgroundJobStates.system_monitoring.runHistory[0].skipped,
   true,
   'skipped run history should be persisted to chrome.storage.local',
 );
@@ -584,7 +598,7 @@ await waitForPendingFetch();
 releasePendingFetch?.();
 assert.equal((await pendingRun).success, true);
 
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(systemMonitoring?.isExecuting, false);
 assert.equal(systemMonitoring?.lastSuccess, true);
@@ -612,7 +626,7 @@ assert.equal(
 );
 
 fetchMode = 'failure';
-const failed = await taskScheduler.runTaskManuallyWithResult(
+const failed = await backgroundJobs.runTaskManuallyWithResult(
   'system_monitoring',
 );
 assert.equal(
@@ -626,7 +640,7 @@ assert.match(
   'manual task result should include the real failure reason',
 );
 
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
 assert.equal(systemMonitoring?.lastSuccess, false);
 assert.match(
@@ -650,12 +664,12 @@ assert.equal(
   'recent run history should keep the previous successful run',
 );
 assert.equal(
-  storage.taskSchedulerStates.system_monitoring.lastSuccess,
+  storage.backgroundJobStates.system_monitoring.lastSuccess,
   false,
   'failure state should be persisted to chrome.storage.local',
 );
 assert.equal(
-  storage.taskSchedulerStates.system_monitoring.runHistory[0].success,
+  storage.backgroundJobStates.system_monitoring.runHistory[0].success,
   false,
   'recent run history should be persisted to chrome.storage.local',
 );
@@ -715,7 +729,7 @@ try {
     frequency: { type: 'custom', intervalMinutes: 0 },
     lastExecutedAt: new Date(0).toISOString(),
   });
-  const failedDigestRun = await taskScheduler.runTaskManuallyWithResult(
+  const failedDigestRun = await backgroundJobs.runTaskManuallyWithResult(
     'digest_queue_process',
   );
   assert.equal(
@@ -728,7 +742,7 @@ try {
     /队列已保留 1 条/,
     'manual digest failure result should keep the queue-retained summary',
   );
-  status = taskScheduler.getTaskStatus();
+  status = backgroundJobs.getTaskStatus();
   const digestTaskStatus = status.find(
     (task) => task.id === 'digest_queue_process',
   );
@@ -743,7 +757,7 @@ try {
     'failed digest queue run history should retain the recovery summary',
   );
   assert.match(
-    storage.taskSchedulerStates.digest_queue_process.lastResultSummary || '',
+    storage.backgroundJobStates.digest_queue_process.lastResultSummary || '',
     /队列已保留 1 条/,
     'failed digest queue recovery summary should be saved to chrome.storage.local',
   );
@@ -758,7 +772,7 @@ const originalGetDigestQueueStatusSummary = (digestQueueService as any)
 };
 try {
   const queueStatusUnavailableResult =
-    await taskScheduler.getTaskStatusFreshResult({
+    await backgroundJobs.getTaskStatusFreshResult({
       repairAlarms: false,
       persist: false,
     });
@@ -791,12 +805,12 @@ try {
 }
 
 for (let i = 0; i < 6; i += 1) {
-  const result = await taskScheduler.runTaskManuallyWithResult(
+  const result = await backgroundJobs.runTaskManuallyWithResult(
     'user_profile_decay',
   );
   assert.equal(result.success, true);
 }
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 const profileDecayHistory = status.find(
   (task) => task.id === 'user_profile_decay',
 )?.runHistory;
@@ -806,8 +820,8 @@ assert.equal(
   'recent run history should be capped to the latest five runs',
 );
 
-delete alarms.scheduled_task_system_monitoring;
-const missingAlarmStatusResult = await taskScheduler.getTaskStatusFreshResult({
+delete alarms.background_job_system_monitoring;
+const missingAlarmStatusResult = await backgroundJobs.getTaskStatusFreshResult({
   repairAlarms: false,
   persist: false,
 });
@@ -850,7 +864,7 @@ assert.match(
 );
 
 nextAlarmCreateError = 'maximum number of alarms reached';
-const failedRepairStatusResult = await taskScheduler.getTaskStatusFreshResult();
+const failedRepairStatusResult = await backgroundJobs.getTaskStatusFreshResult();
 status = failedRepairStatusResult.tasks;
 assert.equal(
   failedRepairStatusResult.refreshReceipt.autoRepairAttempted,
@@ -894,7 +908,7 @@ assert.match(
   'automatic alarm repair failures should surface the Chrome error reason',
 );
 assert.equal(
-  alarms.scheduled_task_system_monitoring,
+  alarms.background_job_system_monitoring,
   undefined,
   'failed automatic alarm repair should not leave a partial alarm behind',
 );
@@ -905,7 +919,7 @@ assert.match(
 );
 
 const repairedMissingAlarmStatusResult =
-  await taskScheduler.getTaskStatusFreshResult();
+  await backgroundJobs.getTaskStatusFreshResult();
 status = repairedMissingAlarmStatusResult.tasks;
 assert.equal(
   repairedMissingAlarmStatusResult.refreshReceipt.createdAlarms,
@@ -934,17 +948,17 @@ assert.equal(
   'fresh status should repair missing alarms by default',
 );
 assert.ok(
-  alarms.scheduled_task_system_monitoring?.scheduledTime,
+  alarms.background_job_system_monitoring?.scheduledTime,
   'status refresh should recreate the missing Chrome alarm',
 );
 
 const priorSystemMonitoringAlarm = {
-  ...alarms.scheduled_task_system_monitoring,
+  ...alarms.background_job_system_monitoring,
 };
-alarms.scheduled_task_system_monitoring.periodInMinutes = 30;
+alarms.background_job_system_monitoring.periodInMinutes = 30;
 nextAlarmCreateError = 'temporary alarm replacement failure';
 const failedMismatchRepairStatusResult =
-  await taskScheduler.getTaskStatusFreshResult();
+  await backgroundJobs.getTaskStatusFreshResult();
 status = failedMismatchRepairStatusResult.tasks;
 assert.equal(
   failedMismatchRepairStatusResult.refreshReceipt.failedRepairs,
@@ -984,18 +998,18 @@ assert.match(
   'period mismatch repair failures should surface the Chrome error reason',
 );
 assert.equal(
-  alarms.scheduled_task_system_monitoring?.scheduledTime,
+  alarms.background_job_system_monitoring?.scheduledTime,
   priorSystemMonitoringAlarm.scheduledTime,
   'failed period mismatch repair should preserve the existing alarm schedule',
 );
 assert.equal(
-  alarms.scheduled_task_system_monitoring?.periodInMinutes,
+  alarms.background_job_system_monitoring?.periodInMinutes,
   30,
   'failed period mismatch repair should keep the existing alarm interval',
 );
 
 const repairedMismatchStatusResult =
-  await taskScheduler.getTaskStatusFreshResult();
+  await backgroundJobs.getTaskStatusFreshResult();
 status = repairedMismatchStatusResult.tasks;
 assert.equal(
   repairedMismatchStatusResult.refreshReceipt.updatedAlarms,
@@ -1025,14 +1039,14 @@ assert.equal(
   'a later status refresh should still be able to repair a period mismatch',
 );
 assert.equal(
-  alarms.scheduled_task_system_monitoring?.periodInMinutes,
+  alarms.background_job_system_monitoring?.periodInMinutes,
   60,
   'successful period mismatch repair should replace the alarm interval',
 );
 
-alarms.scheduled_task_system_monitoring.scheduledTime =
+alarms.background_job_system_monitoring.scheduledTime =
   Date.now() - 31 * 60_000;
-status = await taskScheduler.getTaskStatusFresh({
+status = await backgroundJobs.getTaskStatusFresh({
   persist: false,
 });
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
@@ -1058,17 +1072,17 @@ assert.match(
 );
 
 const lastRunBeforeRepair = systemMonitoring?.lastRun;
-const repairResult = await taskScheduler.repairTaskSchedule('system_monitoring');
+const repairResult = await backgroundJobs.repairTaskSchedule('system_monitoring');
 assert.equal(
   repairResult,
   true,
   'repairing an enabled task should return success',
 );
 assert.ok(
-  alarms.scheduled_task_system_monitoring?.scheduledTime > Date.now(),
+  alarms.background_job_system_monitoring?.scheduledTime > Date.now(),
   'repairing a task should reschedule its Chrome alarm into the future',
 );
-status = await taskScheduler.getTaskStatusFresh({
+status = await backgroundJobs.getTaskStatusFresh({
   persist: false,
 });
 systemMonitoring = status.find((task) => task.id === 'system_monitoring');
@@ -1085,19 +1099,19 @@ assert.equal(
 
 rejectPersistAcrossSessionsOnce = true;
 const fallbackRepairResult =
-  await taskScheduler.repairTaskSchedule('system_monitoring');
+  await backgroundJobs.repairTaskSchedule('system_monitoring');
 assert.equal(
   fallbackRepairResult,
   true,
   'unsupported persistAcrossSessions alarm option should fall back without blocking scheduling',
 );
 assert.equal(
-  alarmCreateInfos.scheduled_task_system_monitoring?.persistAcrossSessions,
+  alarmCreateInfos.background_job_system_monitoring?.persistAcrossSessions,
   undefined,
   'fallback alarm creation should omit persistAcrossSessions after detecting unsupported Chromium',
 );
 
-const missingTask = await taskScheduler.runTaskManuallyWithResult(
+const missingTask = await backgroundJobs.runTaskManuallyWithResult(
   'missing_task',
 );
 assert.equal(missingTask.success, false);
@@ -1106,7 +1120,7 @@ assert.match(missingTask.error || '', /任务不存在: missing_task/);
 const previousUserInfo = storage.userinfo;
 storage.userinfo = { username: 'verify.user', fullName: '' };
 const skippedMessageAnalysis =
-  await taskScheduler.runTaskManuallyWithResult('message_analysis');
+  await backgroundJobs.runTaskManuallyWithResult('message_analysis');
 assert.equal(
   skippedMessageAnalysis.success,
   true,
@@ -1122,7 +1136,7 @@ assert.match(
   /用户信息不完整/,
   'skipped message analysis should keep a user-visible reason',
 );
-status = taskScheduler.getTaskStatus();
+status = backgroundJobs.getTaskStatus();
 const messageAnalysis = status.find((task) => task.id === 'message_analysis');
 assert.equal(
   messageAnalysis?.lastSuccess,
@@ -1167,8 +1181,8 @@ let startupTimerCount = 0;
 };
 
 try {
-  (TaskScheduler as any).instance = null;
-  delete storage.taskSchedulerStates;
+  (BackgroundJobs as any).instance = null;
+  delete storage.backgroundJobStates;
   for (const key of Object.keys(alarms)) {
     delete alarms[key];
   }
@@ -1176,7 +1190,7 @@ try {
     delete alarmCreateInfos[key];
   }
 
-  const freshScheduler = TaskScheduler.getInstance();
+  const freshScheduler = BackgroundJobs.getInstance();
   await freshScheduler.startAllTasks();
   const freshStatus = freshScheduler.getTaskStatus();
 
@@ -1191,7 +1205,7 @@ try {
     'first scheduler startup should only create alarms, not execute enabled tasks',
   );
   assert.ok(
-    alarms.scheduled_task_memory_sync,
+    alarms.background_job_memory_sync,
     'first scheduler startup should still create alarms for default enabled tasks',
   );
   assert.equal(
