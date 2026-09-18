@@ -555,6 +555,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 创建 AppScript 项目
 - 设置触发器
 - 部署 Web App
+- 一键初始化写入的欢迎 Demo 必须按 `MESSAGES_SCHEMA.columns` **列名**占位：`Next_Exec` 才是一分钟后的时间，`Agent_Executor` 保持空。不要按 Status / Last_Exec / Next_Exec 紧挨 `Automation_Link` 的旧列序写 positional 数组，否则时间会落到 `Agent_Executor`。
 
 #### 2. ScheduledMessageService
 
@@ -875,6 +876,7 @@ A:
 
 ## 最近更新
 
+- 2026-09-18：一键初始化欢迎 Demo 改为按 `MESSAGES_SCHEMA.columns` 列名写入（E-21）。v2.9 起表头在 Status 前插入了 Agent_* 列，旧 positional 数组把一分钟后的 `Next_Exec` 写进了 `Agent_Executor`。
 - 2026-09-18：Scheduled Messages 新建弹窗读 memory-service `GET /config` 误报未配置（E-21）。公共 `MemoryServiceClient.request()` 在 userinfo 尚未解析、或弹窗用 Google 本地名覆盖了已解析 userId 时会跳过本机已签发的 `pak.…`，生产环境因此 401 `authentication_required`。现改为始终优先使用 chrome.storage 里已下发的设备 key / 帮助中心 key，且只在 client 仍是 `default` 时才补 userId。
 - 2026-09-08：帮我做执行结果不再因信封格式不达标而改判失败。成功/失败只看阻断性条件（超时、空输出、执行器自报 error/缺工具/缺权限、正文明确说做不了）；格式好坏降为 `evidenceGrade`（verified / reported / unparsed），只出现在 owner 完成回执。裸文本会包成 `note` 交付物。群通知在结构化提取失败时用 Memory Service LLM 从原文补救填模板。`notifyWhenEmpty` 只对封闭 `empty` 生效，`noop`/`unparsed` 仍推。
 - 2026-09-02：AgentTask 成功通知拆成「执行 → 整理 → 投递」三段：执行器仍交 JSON 信封 + artifact，`notifyTemplate` 只抽证据字段提示（key / url / title / assignee），Jira 收据约定带实际实例 browse/self URL；模板格式化改走 Memory Service LLM（不委派 OpenClaw），失败回落本地填空；成功结果通知不再加 `任务完成: <Topic>` 前缀。OpenClaw Gateway `agent.wait` 超时后进入 30s/60s/120s 确认环，N 次对不上才 `dead_letter`。

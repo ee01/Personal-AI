@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { SheetInitializer } from '../src/scheduled-messages/SheetInitializer';
+import {
+  MESSAGES_SCHEMA,
+  SheetInitializer,
+  columnIndexToName,
+} from '../src/scheduled-messages/SheetInitializer';
 import {
   buildScheduledMessagesSetupReceipt,
   buildScheduledMessagesSetupReceiptNotice,
@@ -141,7 +145,8 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
   }
 
   if (
-    url === 'https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Messages!A2:AA2?valueInputOption=USER_ENTERED' &&
+    url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Messages!A2:') &&
+    url.includes('valueInputOption=USER_ENTERED') &&
     method === 'PUT'
   ) {
     return jsonResponse({});
@@ -238,6 +243,21 @@ try {
   assert.equal(completed.deploymentId, 'deployment-123');
   assert.equal(completed.messagesSheetId, 101);
   assert.equal(completed.logsSheetId, 103);
+
+  const expectedSampleRange = `Messages!A2:${columnIndexToName(MESSAGES_SCHEMA.columns.length)}2`;
+  const sampleWrite = capturedRequests.find((request) =>
+    request.url.includes(`/values/${expectedSampleRange}?`) && request.method === 'PUT',
+  );
+  assert.ok(sampleWrite, `Completed setup should write the welcome row to ${expectedSampleRange}`);
+  const sampleRow = JSON.parse(sampleWrite.body || '{}').values?.[0] as Array<string | number>;
+  const sampleByName = Object.fromEntries(
+    MESSAGES_SCHEMA.columns.map((column, index) => [column, sampleRow[index]]),
+  );
+  assert.equal(sampleRow.length, MESSAGES_SCHEMA.columns.length);
+  assert.equal(sampleByName.Agent_Executor, '');
+  assert.equal(sampleByName.Status, 'Active');
+  assert.match(String(sampleByName.Next_Exec), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.notEqual(sampleByName.Agent_Executor, sampleByName.Next_Exec);
 
   const configWrite = capturedRequests.find((request) =>
     request.url === 'https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Config!A2:B57?valueInputOption=RAW',
