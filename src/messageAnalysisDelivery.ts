@@ -238,6 +238,74 @@ export function getImmediateNotificationItem(params: {
   return getImmediateNotificationItems(params)[0];
 }
 
+/**
+ * 即时通知的推送场景。
+ *
+ * - `message_analysis`：普通关注项命中，使用「消息分析推送」目标和通用模板。
+ * - `follow_up`：关注后续命中，使用「关注后续推送」目标和独立模板。
+ */
+export type ImmediateNotificationPushScenario =
+  | 'message_analysis'
+  | 'follow_up';
+
+export const MESSAGE_ANALYSIS_PUSH_SCENARIO = 'message_analysis' as const;
+export const FOLLOW_THREAD_PUSH_SCENARIO = 'follow_up' as const;
+
+/**
+ * 一个关注项是否代表「关注后续 / Watch」规则。
+ */
+export function isFollowThreadPushItem(
+  item?: TopicItemWithAutoReply,
+): boolean {
+  return Boolean(item?.followThread);
+}
+
+/**
+ * 判定这次即时通知是否属于关注后续推送。
+ *
+ * 关注后续命中有两条路径：
+ * 1. LLM 通过 `follow_thread_info` 明确识别出关联原消息（`followThreadItem`）；
+ * 2. LLM 只按 `matched_rule` 命中了某条关注后续规则，此时命中的关注项本身
+ *    带 `followThread` 标记，但没有 `follow_thread_info`。
+ * 两条路径都属于关注后续推送，必须走同一套独立配置和模板，否则第 2 类命中
+ * 会被当成普通消息分析推送，落到「消息分析推送」目标并使用通用模板。
+ */
+export function resolveFollowThreadPushItem(params: {
+  followThreadItem?: TopicItemWithAutoReply;
+  items: TopicItemWithAutoReply[];
+}): TopicItemWithAutoReply | undefined {
+  if (isFollowThreadPushItem(params.followThreadItem)) {
+    return params.followThreadItem;
+  }
+  return params.items.find((item) => isFollowThreadPushItem(item));
+}
+
+export interface FollowThreadOriginalMessageInfo {
+  sender: string;
+  content: string;
+  datetime: string;
+  messageUrl: string;
+}
+
+/**
+ * 从关注后续规则里取出原消息锚点，供独立模板展示原消息预览。
+ */
+export function buildFollowThreadOriginalMessageInfo(
+  followThreadItem?: TopicItemWithAutoReply,
+): FollowThreadOriginalMessageInfo | undefined {
+  const original = followThreadItem?.followConfig?.originalMessage;
+  if (!original) {
+    return undefined;
+  }
+
+  return {
+    sender: original.sender || '',
+    content: original.content || '',
+    datetime: String(original.datetime ?? ''),
+    messageUrl: original.messageUrl || '',
+  };
+}
+
 export function formatImmediateNotificationMatchedRule(
   items: TopicItemWithAutoReply[],
   fallback = '',
@@ -264,6 +332,8 @@ export function resolveImmediateNotificationDelivery(params: {
   notifyMethod: string;
   mention: boolean;
   matchedRule: string;
+  pushScenario: ImmediateNotificationPushScenario;
+  followThreadPushItem?: TopicItemWithAutoReply;
 } {
   const items = getImmediateNotificationItems(params);
   const fallback =
@@ -271,11 +341,19 @@ export function resolveImmediateNotificationDelivery(params: {
     (params.followThreadItem
       ? `关注后续：${params.followThreadItem.followConfig?.originalMessage.content?.substring(0, 50) || ''}...`
       : '');
+  const followThreadPushItem = resolveFollowThreadPushItem({
+    followThreadItem: params.followThreadItem,
+    items,
+  });
 
   return {
     items,
     notifyMethod: items[0]?.notifyMethod || '',
     mention: items.some((item) => Boolean(item.mentionMe)),
     matchedRule: formatImmediateNotificationMatchedRule(items, fallback),
+    pushScenario: followThreadPushItem
+      ? FOLLOW_THREAD_PUSH_SCENARIO
+      : MESSAGE_ANALYSIS_PUSH_SCENARIO,
+    followThreadPushItem,
   };
 }

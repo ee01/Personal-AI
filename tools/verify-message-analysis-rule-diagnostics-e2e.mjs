@@ -185,7 +185,7 @@ try {
           username: 'diagnostic.verify',
           fullName: 'Diagnostic Verify',
         },
-        taskSchedulerStates: {
+        backgroundJobStates: {
           message_analysis: { enabled: false },
         },
         concernedItems: [
@@ -794,7 +794,7 @@ try {
     timeout: 5000,
   });
   await silentAnalysisReceipt
-    .locator('text=Task Scheduler 已确认开启')
+    .locator('text=Background Jobs 已确认开启')
     .waitFor({ timeout: 5000 });
   await silentAnalysisReceipt
     .locator(

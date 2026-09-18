@@ -66,7 +66,7 @@ try {
         MEMORY_SERVICE_BASE_URL: 'http://127.0.0.1:49211/api/v1',
         OPENCLAW_ENABLED: false,
       },
-      taskSchedulerStates: {
+      backgroundJobStates: {
         message_analysis: { enabled: true },
       },
       userinfo: {

@@ -16,7 +16,7 @@ import {
 import {
   getTaskEnabled,
   onTaskEnabledChanged,
-} from './services/taskSchedulerDefinitions';
+} from './services/backgroundJobDefinitions';
 import {
   handleAutoReplyRules,
   TopicItemWithAutoReply,
@@ -36,6 +36,7 @@ import {
 import { buildMessageFilterSystemPrompt } from './prompts';
 import { enqueueConcernedItemDigest } from './services/DigestQueueService';
 import {
+  buildFollowThreadOriginalMessageInfo,
   createMessageAnalysisDeliveryReceipt,
   getDigestDeliveryItems,
   persistMessageAnalysisDeliveryReceipt,
@@ -154,12 +155,12 @@ function getMessageAnalysisRunMode(
 
 function createDeliveryReceiptForRun(params: {
   envConfig: EnvConfigType;
-  isScheduledTask: boolean;
+  isBackgroundJob: boolean;
   groupCount?: number;
 }) {
   return createMessageAnalysisDeliveryReceipt({
     runMode: getMessageAnalysisRunMode(params.envConfig),
-    source: params.isScheduledTask ? 'scheduled' : 'manual',
+    source: params.isBackgroundJob ? 'scheduled' : 'manual',
     groupsAnalyzed: params.groupCount || 0,
   });
 }
@@ -770,7 +771,7 @@ async function queueMatchedRuleDigests(params: {
 export async function analyzeMessages(
   data: any[],
   username: string,
-  isScheduledTask = false,
+  isBackgroundJob = false,
 ) {
   try {
     // 检查是否在 background script 环境中
@@ -783,7 +784,7 @@ export async function analyzeMessages(
       const response = await analyzeMessagesInBackground(
         data,
         username,
-        isScheduledTask,
+        isBackgroundJob,
       );
       return response;
     } else {
@@ -794,14 +795,14 @@ export async function analyzeMessages(
           body: {
             data,
             username,
-            isScheduledTask,
+            isBackgroundJob,
           },
         },
       });
 
       // 检查响应格式 - 支持新的统一响应格式
       if (response && response.success) {
-        console.log("LLM's response:", response, { data, isScheduledTask });
+        console.log("LLM's response:", response, { data, isBackgroundJob });
         // Todo: Toast 方法在 popup 中无法调用
         // showToast(response.message || 'Analysis complete', 'success');
         return response;
@@ -821,7 +822,7 @@ export async function analyzeMessages(
 export async function analyzeMessagesInBackground(
   data: any[],
   username: string,
-  isScheduledTask = false,
+  isBackgroundJob = false,
 ) {
   // 获取环境配置
   const envConfig = await getEnvConfig();
@@ -829,7 +830,7 @@ export async function analyzeMessagesInBackground(
 
   // 检查是否定时任务被终止 - 使用辅助函数
   const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
-  if (!messageAnalysisEnabled && isScheduledTask) {
+  if (!messageAnalysisEnabled && isBackgroundJob) {
     console.log('定时分析任务已被终止，跳过处理');
     chrome.storage.local.remove('ollamaAnalysisProgress');
     return {
@@ -1001,7 +1002,7 @@ export async function analyzeMessagesInBackground(
       // 直接将所有messageGroups传递给processMessage，让它内部决定如何处理
       const agent = new IntelligentAgent();
       // 监听任务状态变化，如果任务被禁用则停止分析 - 使用辅助函数
-      if (isScheduledTask) {
+      if (isBackgroundJob) {
         onTaskEnabledChanged('message_analysis', (enabled) => {
           if (!enabled) agent.stop();
           chrome.storage.local.remove('ollamaAnalysisProgress');
@@ -1046,7 +1047,7 @@ export async function analyzeMessagesInBackground(
       ).length;
       const deliveryReceipt = createDeliveryReceiptForRun({
         envConfig,
-        isScheduledTask,
+        isBackgroundJob,
         groupCount: data.length,
       });
       deliveryReceipt.counters.analyzedMessages = resultsArray.length;
@@ -1233,20 +1234,13 @@ export async function analyzeMessagesInBackground(
             matchedRule: immediateDelivery.matchedRule,
             replyAdvice: result.replyAdvice || '',
             mention: shouldMention,
-            pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
+            pushScenario: immediateDelivery.pushScenario,
             autoReplyInfo,
-            // 如果是关注后续，添加原消息信息
-            originalMessageInfo: followThreadItem?.followConfig
-              ? {
-                  sender: followThreadItem.followConfig.originalMessage.sender,
-                  content: followThreadItem.followConfig.originalMessage.content,
-                  datetime: String(
-                    followThreadItem.followConfig.originalMessage.datetime,
-                  ),
-                  messageUrl:
-                    followThreadItem.followConfig.originalMessage.messageUrl,
-                }
-              : undefined,
+            // 如果是关注后续（含 LLM 只按 matched_rule 命中的关注后续规则），
+            // 添加原消息信息供独立模板展示原消息锚点
+            originalMessageInfo: buildFollowThreadOriginalMessageInfo(
+              immediateDelivery.followThreadPushItem,
+            ),
           };
 
           // 使用 NotificationService 发送通知
@@ -1407,7 +1401,7 @@ export async function analyzeMessagesInBackground(
     console.log('Using Intelligent Agent Workflow to process messages');
     const deliveryReceipt = createDeliveryReceiptForRun({
       envConfig,
-      isScheduledTask,
+      isBackgroundJob,
       groupCount: data.length,
     });
 
@@ -1423,7 +1417,7 @@ export async function analyzeMessagesInBackground(
 
       // 检查是否需要继续分析 - 使用辅助函数
       const messageAnalysisEnabled = await getTaskEnabled('message_analysis');
-      if (!messageAnalysisEnabled && isScheduledTask) {
+      if (!messageAnalysisEnabled && isBackgroundJob) {
         console.log('分析任务已被终止');
         chrome.storage.local.remove('ollamaAnalysisProgress');
         break;
@@ -1516,7 +1510,10 @@ export async function analyzeMessagesInBackground(
               matchedRule: immediateDelivery.matchedRule,
               replyAdvice: processResult.replyAdvice || '',
               mention: shouldMention,
-              pushScenario: 'message_analysis',
+              pushScenario: immediateDelivery.pushScenario,
+              originalMessageInfo: buildFollowThreadOriginalMessageInfo(
+                immediateDelivery.followThreadPushItem,
+              ),
             };
 
             deliveryReceipt.counters.immediateNotificationAttempts += 1;
@@ -1605,7 +1602,7 @@ export async function analyzeMessagesInBackground(
       concernedItems,
       runtimeWatchRules,
       username,
-      isScheduledTask,
+      isBackgroundJob,
       sourcePostIndex,
     );
   }
@@ -1615,13 +1612,13 @@ async function processMessageFilterByConcernedItems(
   concernedItems: { text: string }[],
   runtimeWatchRules: WatchRule[],
   username: string,
-  isScheduledTask: boolean,
+  isBackgroundJob: boolean,
   sourcePostIndex: Map<string, any>,
 ) {
   const envConfig = await getEnvConfig();
   const deliveryReceipt = createDeliveryReceiptForRun({
     envConfig,
-    isScheduledTask,
+    isBackgroundJob,
     groupCount: data.length,
   });
 
@@ -1640,7 +1637,7 @@ async function processMessageFilterByConcernedItems(
     let messageAnalysisEnabled = await getTaskEnabled('message_analysis');
 
     // 监听任务状态变化 - 使用辅助函数
-    if (isScheduledTask) {
+    if (isBackgroundJob) {
       onTaskEnabledChanged('message_analysis', (enabled) => {
         messageAnalysisEnabled = enabled;
       });
@@ -1650,7 +1647,7 @@ async function processMessageFilterByConcernedItems(
       const item = data[index];
       console.log(`--开始分析第 ${index + 1}/${data.length} 个群组的消息--`);
       // 检查是否需要继续分析
-      if (!messageAnalysisEnabled && isScheduledTask) {
+      if (!messageAnalysisEnabled && isBackgroundJob) {
         console.log('分析任务已被终止');
         chrome.storage.local.remove('ollamaAnalysisProgress');
         break;
@@ -1762,7 +1759,7 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
       body.deliveryReceipt ||
       createDeliveryReceiptForRun({
         envConfig,
-        isScheduledTask: Boolean(body.isScheduledTask),
+        isBackgroundJob: Boolean(body.isBackgroundJob),
         groupCount: body.messageData ? 1 : 0,
       });
     const shouldPersistReceipt = !body.deliveryReceipt;
@@ -2079,20 +2076,13 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             matchedRule: immediateDelivery.matchedRule,
             replyAdvice: json.reply_advice,
             mention: shouldMention,
-            pushScenario: followThreadItem ? 'follow_up' : 'message_analysis',
+            pushScenario: immediateDelivery.pushScenario,
             autoReplyInfo,
-            // 如果是关注后续，添加原消息信息
-            originalMessageInfo: followThreadItem?.followConfig
-              ? {
-                  sender: followThreadItem.followConfig.originalMessage.sender,
-                  content: followThreadItem.followConfig.originalMessage.content,
-                  datetime: String(
-                    followThreadItem.followConfig.originalMessage.datetime,
-                  ),
-                  messageUrl:
-                    followThreadItem.followConfig.originalMessage.messageUrl,
-                }
-              : undefined,
+            // 如果是关注后续（含 LLM 只按 matched_rule 命中的关注后续规则），
+            // 添加原消息信息供独立模板展示原消息锚点
+            originalMessageInfo: buildFollowThreadOriginalMessageInfo(
+              immediateDelivery.followThreadPushItem,
+            ),
           };
 
           // 使用 NotificationService 发送通知

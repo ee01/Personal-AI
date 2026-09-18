@@ -126,6 +126,7 @@ export interface MessageReactionConfig {
   enableSnooze: boolean;
   enableFollowThread: boolean;
   enableAutoReply: boolean;
+  enableFollowupAsk: boolean;
   enableLinkedAction: boolean;
 }
 
@@ -134,6 +135,7 @@ let globalConfig: MessageReactionConfig = {
   enableSnooze: true,
   enableFollowThread: true,
   enableAutoReply: true,
+  enableFollowupAsk: true,
   enableLinkedAction: true,
 };
 
@@ -220,7 +222,8 @@ function getReactionSettingsPreviewLabels(
   const labels: string[] = [];
   if (config.enableSnooze) labels.push(ui('稍后处理'));
   if (config.enableFollowThread) labels.push(ui('关注后续'));
-  if (config.enableAutoReply) labels.push(ui('自动答复 / 跟进追问'));
+  if (config.enableAutoReply) labels.push(ui('自动答复'));
+  if (config.enableFollowupAsk) labels.push(ui('跟进追问'));
   if (config.enableLinkedAction) labels.push(ui('联动操作'));
   return labels;
 }
@@ -335,6 +338,7 @@ async function getRealtimeConfig(): Promise<MessageReactionConfig> {
       enableSnooze: config.ENABLE_SNOOZE !== false,
       enableFollowThread: config.ENABLE_FOLLOW_THREAD !== false,
       enableAutoReply: config.ENABLE_AUTO_REPLY !== false,
+      enableFollowupAsk: config.ENABLE_FOLLOWUP_ASK !== false,
       enableLinkedAction: config.ENABLE_LINKED_ACTION !== false,
     };
   } catch (error) {
@@ -343,6 +347,7 @@ async function getRealtimeConfig(): Promise<MessageReactionConfig> {
       enableSnooze: true,
       enableFollowThread: true,
       enableAutoReply: true,
+      enableFollowupAsk: true,
       enableLinkedAction: true,
     };
   }
@@ -360,6 +365,7 @@ async function saveReactionConfig(
     envConfig.ENABLE_SNOOZE = config.enableSnooze;
     envConfig.ENABLE_FOLLOW_THREAD = config.enableFollowThread;
     envConfig.ENABLE_AUTO_REPLY = config.enableAutoReply;
+    envConfig.ENABLE_FOLLOWUP_ASK = config.enableFollowupAsk;
     envConfig.ENABLE_LINKED_ACTION = config.enableLinkedAction;
     await chrome.storage.local.set({ envConfig });
     console.log('💬 消息交互配置已保存:', config);
@@ -396,6 +402,7 @@ function hasEnabledMessageReactionFeature(config: MessageReactionConfig): boolea
     config.enableSnooze ||
     config.enableFollowThread ||
     config.enableAutoReply ||
+    config.enableFollowupAsk ||
     config.enableLinkedAction
   );
 }
@@ -2951,7 +2958,15 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
           config.enableAutoReply ? 'checked' : ''
         }>
         <span class="reaction-settings-label">${escapeSnoozeMenuText(
-          ui('自动答复 / 跟进追问'),
+          ui('自动答复'),
+        )}</span>
+      </label>
+      <label class="reaction-settings-option">
+        <input type="checkbox" class="reaction-settings-checkbox" data-feature="followupAsk" ${
+          config.enableFollowupAsk ? 'checked' : ''
+        }>
+        <span class="reaction-settings-label">${escapeSnoozeMenuText(
+          ui('跟进追问'),
         )}</span>
       </label>
       <label class="reaction-settings-option">
@@ -3007,6 +3022,9 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
     const autoReplyCheckbox = popup.querySelector(
       '[data-feature="autoReply"]',
     ) as HTMLInputElement;
+    const followupAskCheckbox = popup.querySelector(
+      '[data-feature="followupAsk"]',
+    ) as HTMLInputElement;
     const linkedActionCheckbox = popup.querySelector(
       '[data-feature="linkedAction"]',
     ) as HTMLInputElement;
@@ -3015,6 +3033,7 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
       enableSnooze: snoozeCheckbox.checked,
       enableFollowThread: followThreadCheckbox.checked,
       enableAutoReply: autoReplyCheckbox.checked,
+      enableFollowupAsk: followupAskCheckbox.checked,
       enableLinkedAction: linkedActionCheckbox.checked,
     };
   };
@@ -3060,6 +3079,7 @@ async function showSettingsPopup(anchorElement: HTMLElement) {
       !newConfig.enableSnooze &&
       !newConfig.enableFollowThread &&
       !newConfig.enableAutoReply &&
+      !newConfig.enableFollowupAsk &&
       !newConfig.enableLinkedAction
     ) {
       showSuccessToast(
@@ -3577,6 +3597,7 @@ function processMessageElement(messageElement: HTMLElement) {
       !config.enableSnooze &&
       !config.enableFollowThread &&
       !config.enableAutoReply &&
+      !config.enableFollowupAsk &&
       !config.enableLinkedAction
     ) {
       setToolbarVisible(toolbar, false);

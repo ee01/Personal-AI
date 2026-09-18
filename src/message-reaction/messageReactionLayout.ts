@@ -4,6 +4,7 @@ export interface MessageReactionToolbarConfig {
   enableSnooze: boolean;
   enableFollowThread: boolean;
   enableAutoReply: boolean;
+  enableFollowupAsk: boolean;
   enableLinkedAction: boolean;
 }
 
@@ -100,7 +101,7 @@ export function getMessageReactionActionDefinitions(
       case 'autoReply':
         return config.enableAutoReply && !context.isOwnMessage;
       case 'followupAsk':
-        return config.enableAutoReply && context.isOwnMessage;
+        return config.enableFollowupAsk && context.isOwnMessage;
       case 'linkedAction':
         return config.enableLinkedAction;
     }

@@ -38,6 +38,7 @@ test('toolbar keeps linked action in the fourth functional slot', () => {
     enableSnooze: true,
     enableFollowThread: true,
     enableAutoReply: true,
+    enableFollowupAsk: true,
     enableLinkedAction: true,
   });
 
@@ -66,6 +67,7 @@ test('toolbar replaces auto-reply with follow-up ask on own messages', () => {
       enableSnooze: true,
       enableFollowThread: true,
       enableAutoReply: true,
+      enableFollowupAsk: true,
       enableLinkedAction: true,
     },
     { isOwnMessage: true },
@@ -85,6 +87,7 @@ test('toolbar exposes English button labels through the shared i18n map', () => 
       enableSnooze: true,
       enableFollowThread: true,
       enableAutoReply: true,
+      enableFollowupAsk: true,
       enableLinkedAction: true,
     },
     { isOwnMessage: false },
@@ -105,6 +108,7 @@ test('toolbar exposes English button labels through the shared i18n map', () => 
       enableSnooze: true,
       enableFollowThread: true,
       enableAutoReply: true,
+      enableFollowupAsk: true,
       enableLinkedAction: true,
     },
     { isOwnMessage: true },
@@ -122,12 +126,63 @@ test('toolbar respects linked-action toggle filtering', () => {
     enableSnooze: false,
     enableFollowThread: true,
     enableAutoReply: false,
+    enableFollowupAsk: false,
     enableLinkedAction: true,
   });
 
   assert.deepEqual(
     actions.map((action) => action.key),
     ['followThread', 'linkedAction'],
+  );
+});
+
+test('toolbar gates follow-up ask on its own toggle, independent from auto reply', () => {
+  const ownMessageActions = getMessageReactionActionDefinitions(
+    {
+      enableSnooze: true,
+      enableFollowThread: true,
+      enableAutoReply: false,
+      enableFollowupAsk: true,
+      enableLinkedAction: true,
+    },
+    { isOwnMessage: true },
+  );
+
+  assert.deepEqual(
+    ownMessageActions.map((action) => action.key),
+    ['snooze', 'followThread', 'followupAsk', 'linkedAction'],
+  );
+
+  const followupDisabledActions = getMessageReactionActionDefinitions(
+    {
+      enableSnooze: true,
+      enableFollowThread: true,
+      enableAutoReply: true,
+      enableFollowupAsk: false,
+      enableLinkedAction: true,
+    },
+    { isOwnMessage: true },
+  );
+
+  assert.deepEqual(
+    followupDisabledActions.map((action) => action.key),
+    ['snooze', 'followThread', 'linkedAction'],
+  );
+
+  const otherMessageActions = getMessageReactionActionDefinitions(
+    {
+      enableSnooze: true,
+      enableFollowThread: true,
+      enableAutoReply: true,
+      enableFollowupAsk: true,
+      enableLinkedAction: true,
+    },
+    { isOwnMessage: false },
+  );
+
+  assert.deepEqual(
+    otherMessageActions.map((action) => action.key),
+    ['snooze', 'followThread', 'autoReply', 'linkedAction'],
   );
 });
 

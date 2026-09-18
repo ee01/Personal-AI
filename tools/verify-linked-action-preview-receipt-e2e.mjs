@@ -142,7 +142,7 @@ try {
         username: 'linked.preview.verify',
         fullName: 'Linked Preview Verify',
       },
-      taskSchedulerStates: {
+      backgroundJobStates: {
         message_analysis: { enabled: true },
       },
       concernedItems: [
