@@ -1,6 +1,13 @@
 export type RepeatUnit = 'Day' | 'Week' | 'Month' | 'Year';
 export type NotifyVia = 'plugin' | 'bot' | 'asme';
 export type TargetType = 'private' | 'group';
+export type ScheduleTrigger = 'time' | 'timeline';
+
+export const TIMELINE_TRIGGER = 'timeline';
+
+export function taskKindSupportsTimelineTrigger(kind?: string | null): boolean {
+  return kind === 'push' || kind === 'agent';
+}
 
 export const WEEK_DAYS = [
   { day: 0, label: '日' },
@@ -120,7 +127,19 @@ export function buildNotifyPayload(input: {
   };
 }
 
+export function isTimelineRecurrenceSpec(
+  spec?: Record<string, unknown> | null,
+): boolean {
+  if (!spec) return false;
+  const trigger = typeof spec.trigger === 'string' ? spec.trigger.trim() : '';
+  if (trigger === TIMELINE_TRIGGER) return true;
+  const milestone = typeof spec.timelineMilestone === 'string' ? spec.timelineMilestone.trim() : '';
+  const scheduleDate = typeof spec.scheduleDate === 'string' ? spec.scheduleDate.trim() : '';
+  return Boolean(milestone) && !scheduleDate;
+}
+
 export function buildRecurrenceSpec(input: {
+  trigger?: ScheduleTrigger;
   repeating: boolean;
   repeatEvery: number;
   repeatUnit: RepeatUnit;
@@ -130,7 +149,24 @@ export function buildRecurrenceSpec(input: {
   endDate: string;
   repeatCount: number | '';
   timezone?: string;
+  timelineProject?: string;
+  timelineMilestone?: string;
+  timelineOffset?: number | '';
 }): Record<string, unknown> | undefined {
+  if (input.trigger === TIMELINE_TRIGGER) {
+    const project = input.timelineProject?.trim();
+    const milestone = input.timelineMilestone?.trim();
+    if (!project || !milestone) return undefined;
+    const offset = Number(input.timelineOffset);
+    return {
+      trigger: TIMELINE_TRIGGER,
+      timelineProject: project,
+      timelineMilestone: milestone,
+      timelineOffset: Number.isInteger(offset) ? offset : 0,
+      scheduleTime: input.scheduleTime || '09:00',
+      timezone: input.timezone || 'Asia/Shanghai',
+    };
+  }
   if (!input.repeating) return undefined;
   const every = Number(input.repeatEvery);
   if (!Number.isFinite(every) || every < 1) return undefined;
@@ -209,8 +245,42 @@ export function notifyTargetIncomplete(input: {
   return input.recipients.length === 0;
 }
 
+/** Chrome plugin notifications only work on 🏠 memory_cron. Jira/GAS cannot write them. */
+export function cloudLaneAllowsPluginNotify(lane?: string | null): boolean {
+  return lane !== 'jira_sheet';
+}
+
+export function resolveNotifyViaForLane(input: {
+  lane?: string | null;
+  notifyVia: NotifyVia;
+  botAvailable: boolean;
+  asmeAvailable: boolean;
+}): NotifyVia {
+  if (cloudLaneAllowsPluginNotify(input.lane) || input.notifyVia !== 'plugin') {
+    return input.notifyVia;
+  }
+  if (input.botAvailable) return 'bot';
+  if (input.asmeAvailable) return 'asme';
+  return 'bot';
+}
+
 export function recurrenceLabelFromSpec(spec?: Record<string, unknown> | null): string {
   if (!spec) return '一次性';
+  if (isTimelineRecurrenceSpec(spec)) {
+    const project = typeof spec.timelineProject === 'string' ? spec.timelineProject.trim() : '';
+    const milestone = typeof spec.timelineMilestone === 'string' ? spec.timelineMilestone.trim() : 'Milestone';
+    const offset = Number(spec.timelineOffset);
+    const offsetText = !Number.isInteger(offset) || offset === 0
+      ? '当天'
+      : offset > 0
+        ? `后${offset}天`
+        : `前${Math.abs(offset)}天`;
+    const time = typeof spec.scheduleTime === 'string' && spec.scheduleTime.trim()
+      ? spec.scheduleTime.trim()
+      : '';
+    const parts = ['每个版本', project, milestone, offsetText, time].filter(Boolean);
+    return parts.join(' · ');
+  }
   const every = Number(spec.repeatEvery) || 1;
   const unit = String(spec.repeatUnit ?? '');
   const map: Record<string, string> = { Day: '工作日', Week: '周', Month: '月', Year: '年' };
@@ -251,14 +321,21 @@ export interface TaskCenterDraft {
   extraText: string;
   outreachMaxFollowup: number;
   outreachFollowupHours: number;
+  planGate: boolean;
+  dependsOnIds: string[];
+  parentActionId: string;
   scheduleDate: string;
   scheduleTime: string;
+  trigger: ScheduleTrigger;
   repeating: boolean;
   repeatEvery: number;
   repeatUnit: RepeatUnit;
   weekDays: number[];
   endDate: string;
   repeatCount: number | '';
+  timelineProject: string;
+  timelineMilestone: string;
+  timelineOffset: number;
 }
 
 export function createEmptyTaskDraft(input: {
@@ -285,14 +362,21 @@ export function createEmptyTaskDraft(input: {
     extraText: '',
     outreachMaxFollowup: 2,
     outreachFollowupHours: 24,
+    planGate: true,
+    dependsOnIds: [],
+    parentActionId: '',
     scheduleDate: formatLocalDate(nowDate),
     scheduleTime: formatLocalTime(nowDate),
+    trigger: 'time',
     repeating: false,
     repeatEvery: 1,
     repeatUnit: 'Week',
     weekDays: [],
     endDate: '',
     repeatCount: '',
+    timelineProject: '',
+    timelineMilestone: 'FF',
+    timelineOffset: 0,
   };
 }
 
@@ -333,6 +417,8 @@ export function hydrateTaskDraftFromTask(
     scheduledAt?: number;
     recurrenceSpec?: Record<string, unknown> | null;
     params?: Record<string, unknown> | null;
+    dependsOn?: string[];
+    parentActionId?: string;
   },
   defaults: { botConfigured: boolean; asmeConfigured: boolean; now?: Date },
 ): TaskCenterDraft {
@@ -353,6 +439,11 @@ export function hydrateTaskDraftFromTask(
     readString(params.body) ||
     readString(task.description);
   draft.acceptance = readString(params.acceptance);
+  draft.planGate = draft.taskKind === 'dev' ? params.planGate !== false : params.planGate === true;
+  draft.dependsOnIds = Array.isArray(task.dependsOn)
+    ? task.dependsOn.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+    : [];
+  draft.parentActionId = readString(task.parentActionId);
   draft.mode = readString(params.mode).toLowerCase() === 'write' ? 'write' : 'read';
   draft.remindPreset = readString(params.remindPreset);
   draft.lane = task.lane === 'jira_sheet' ? 'jira_sheet' : task.lane === 'memory_cron' ? 'memory_cron' : undefined;
@@ -395,6 +486,17 @@ export function hydrateTaskDraftFromTask(
     : defaults.now ?? new Date();
   draft.scheduleDate = readString(spec.scheduleDate) || formatLocalDate(scheduled);
   draft.scheduleTime = readString(spec.scheduleTime) || formatLocalTime(scheduled);
+  if (isTimelineRecurrenceSpec(spec)) {
+    draft.trigger = 'timeline';
+    draft.repeating = false;
+    draft.timelineProject = readString(spec.timelineProject);
+    draft.timelineMilestone = readString(spec.timelineMilestone) || 'FF';
+    const offset = Number(spec.timelineOffset);
+    draft.timelineOffset = Number.isInteger(offset) ? offset : 0;
+    draft.scheduleDate = '';
+    applyDraftLaneNotifyConstraint(draft, defaults);
+    return draft;
+  }
   const every = Number(spec.repeatEvery);
   const unit = readString(spec.repeatUnit) as RepeatUnit;
   draft.repeating = Boolean(every > 0 && ['Day', 'Week', 'Month', 'Year'].includes(unit));
@@ -406,7 +508,21 @@ export function hydrateTaskDraftFromTask(
     const count = Number(spec.repeatCount);
     draft.repeatCount = Number.isFinite(count) && count > 0 ? count : '';
   }
+  applyDraftLaneNotifyConstraint(draft, defaults);
   return draft;
+}
+
+function applyDraftLaneNotifyConstraint(
+  draft: TaskCenterDraft,
+  defaults: { botConfigured: boolean; asmeConfigured: boolean },
+): void {
+  const lane = draft.trigger === 'timeline' || draft.lane === 'jira_sheet' ? 'jira_sheet' : draft.lane;
+  draft.notifyVia = resolveNotifyViaForLane({
+    lane,
+    notifyVia: draft.notifyVia,
+    botAvailable: defaults.botConfigured || lane === 'jira_sheet',
+    asmeAvailable: defaults.asmeConfigured,
+  });
 }
 
 export function notifyWhenEmptyFromTask(params?: Record<string, unknown> | null): boolean | null {

@@ -7,7 +7,7 @@
 - ☁️ lane 子文档：[`scheduled_messages_manager.md`](scheduled_messages_manager.md)
 - 执行器运行时：[`agent_executor_runtime.md`](agent_executor_runtime.md)
 
-> ⚠️ 勿与 [`task_scheduler_api.md`](task_scheduler_api.md) 混淆：那是 Chrome 扩展后台的 `scheduled_task_*` alarm 调度器（memory_sync 之类的插件内务任务），与本文的任务中心是两套完全不同的东西。
+> ⚠️ 勿与 [`background_jobs.md`](background_jobs.md) 混淆：那是 Chrome 扩展后台的 `background_job_*` alarm 调度器（memory_sync 之类的插件内务作业），与本文的任务中心是两套完全不同的东西。
 
 ---
 
@@ -18,7 +18,7 @@
 | 任务类型 | 谁创建 | 调度器 | 特有能力 |
 |---|---|---|---|
 | ⏰ 定时推送 | 用户 | 🏠 / ☁️ 可选 | 内容/JQL、通知通道、Timeline 里程碑触发 |
-| 🤖 Agent 任务 | 用户 | 🏠 / ☁️ 可选（执行恒在 🏠） | read/write 边界、执行器选择、结果通知模板 |
+| 🤖 Agent 任务 | 用户 | 🏠 / ☁️ 可选（执行恒在 🏠） | read/write 边界、执行器选择、结果通知模板、Timeline 里程碑触发 |
 | ⏳ 提醒我 | 用户（Glip 消息 / 网页） | 🏠 固定 | 来源引用、快捷时间 |
 | 📣 帮我问 | 用户 | 🏠 固定 | OutreachEngine 会话、RingCentral 凭据 |
 | 🛠 开发委派 | 用户 / 会话交接 | 🏠 固定 | 验收标准、plan gate、依赖、文件产物 |
@@ -43,7 +43,7 @@
 | **L2 云端 lane** | Google Sheet + App Script + Jira Automation | 高（需 Google 授权 + Jira 项目 admin） | ☁️ `jira_sheet` 调度器、Timeline 里程碑触发、Drive 附件、AsMe 邮件 |
 
 - **存量用户**：探测本机 `chrome.storage.local.scheduledMessagesConfig.sheetId`（与定时消息页同一份缓存）即判定 L2 已激活，原 Sheet / Jira 规则**照常运行、无需迁移**。L2 的 Jira 执行规则 / Sheet AsMe **不必、也不该**复制进 memory-service 才能点亮抽屉——Google token 只在扩展手里。
-- **反向镜像尚未落地**：在定时消息页（L2）直接新建的任务目前**不会**自动出现在任务中心。设计上的方向是账本只读登记 `lane=jira_sheet` 的镜像行，且 `listDueAutoActions` **排除**该 lane，避免本地再跑一遍。从任务中心选 ☁️ 保存时，账本会先落库并返回 `mirrorRequired`，由扩展写 Sheet。
+- **Sheet 双向镜像**：任务中心选 ☁️ 保存时，账本先落库；扩展再用 Google token 写 / 更新 Sheet 行，并把 `mirrorRef.sheetMessageId` 回写账本。暂停 / 恢复 / 删除 / 标记完成同样回写 Sheet，避免 Jira 规则继续领取已停掉的行。定时消息页、Glip 发送框、AR 绑定新建的 Sheet 行会按幂等键 `jira_sheet:<Sheet ID>` 登记到任务中心（`listDueAutoActions` **排除** `jira_sheet`，本地不会再跑一遍）。没有 L2 时，Glip「定时发送」改为写入 🏠 账本，不再挡住。
 - **L2 受阻**：受管 Google 账号的域策略可能禁止匿名 Web App 部署（见 [scheduled_messages_manager.md § App Script 自动更新](scheduled_messages_manager.md#11-app-script-自动更新)）。向导明示逃生舱（个人 Google 账号部署）并标注数据治理风险，不作为推荐路径。
 - UI 上未解锁的能力一律**置灰 + 说明 + 直达配置入口**，不隐藏——用户要能看见"还有这个能力，缺什么才能用"。
 
@@ -64,8 +64,8 @@
 
 每类任务的编辑器字段不同，但共享底部三件套：**通知通道 / 推送目标 → 执行时间与重复规则 → 调度器**。字段对齐定时消息新建弹窗：Bot / AsMe 要选私发还是群组，并填写接收人或群组 ID；循环要能选每周几、每月几号、结束日期和次数。
 
-- **定时推送**：形态（文本 / AI Report）、标题、内容或 JQL、通知通道（插件 / Bot / AsMe）、推送目标（私发人名或群组 ID）、执行日期时间、重复规则（每隔 N 天/周/月/年、每周几、每月几号、结束日期、次数）、调度器。
-- **Agent 任务**：任务描述（必填）、执行边界（只读/写入，写入需审批）、结果通知通道与目标、成功回执开关、**0 匹配是否仍推结果通知**（默认不推，只留 run 账本）、执行时间与重复规则、调度器。
+- **定时推送**：形态（文本 / AI Report）、标题、内容或 JQL、通知通道（插件 / Bot / AsMe）、推送目标（私发人名或群组 ID）、**触发方式（时间 / Timeline）**、执行日期时间或项目 Milestone + 偏移、日历重复规则（仅时间触发：每隔 N 天/周/月/年、每周几、每月几号、结束日期、次数）、调度器。Timeline 触发强制 ☁️ `jira_sheet`，每个新版本的该 Milestone 都会再推一次，不走日历 `Repeat_Every`，需要 Level 2 的 Timeline Sync Rule。
+- **Agent 任务**：任务描述（必填）、执行边界（只读/写入，写入需审批）、结果通知通道与目标、成功回执开关、**0 匹配是否仍推结果通知**（默认不推，只留 run 账本）、**触发方式（时间 / Timeline）**、执行日期时间或项目 Milestone + 偏移、日历重复规则（仅时间触发）、调度器。Timeline 触发强制 ☁️ `jira_sheet`，每个新版本的该 Milestone 都会再执行一次，不走日历 `Repeat_Every`，需要 Level 2 的 Timeline Sync Rule（与定时消息页「帮我做」相同）。
 - **提醒我**：标题、快捷时间（1 小时后 / 今晚 / 明早 / 下周一）或自定义日期时间、通知通道（Glip 时可填接收人，空则发给自己）。
 - **开发委派**：标题、任务说明、**验收标准（必填）**、执行器 + 工作目录、plan gate 开关、依赖任务。
 - **帮我问**：问题、询问对象（私发人名或群组 ID）、追问次数 / 间隔；固定 🏠，走 OutreachEngine。
@@ -88,12 +88,12 @@
 
 | 通道 | 需要 | 未解锁表现 |
 |---|---|---|
-| 🔔 插件通知（Chrome notification） | L0 | 始终可用，L0 默认 |
+| 🔔 插件通知（Chrome notification） | L0 · **仅 🏠 `memory_cron`** | 🏠 始终可用，L0 默认。☁️ `jira_sheet` / Timeline / 定时消息 Sheet **不能**走插件通知：Jira Automation 和 GAS 写不了 Chrome `notification_records`，选 ☁️ 时该通道置灰并落到 Bot（有 Jira 内嵌 Bot）或 AsMe |
 | 🤖 Glip Bot | L1（Bot 凭据） | 置灰 + "需 Level 1"；选中后还需选私发 / 群组并填写接收人或群组 ID |
 | 👥 Glip 群组 | L1（Bot 或 AsMe）+ 目标类型=群组 | 与 Bot/AsMe 通道组合，不再作为独立通道 |
 | 👤 AsMe 本人身份 | L1（RingCentral 凭据） | 同上；可私发多人（AsMe）或群组 |
 
-**L1 配置入口**：任务中心「分层设置」与 Options（`#outreach-config`）写入同一份 memory-service runtime config（`PUT /config`）。服务端 `.env` 默认值经 `GET /config` 的 `*Configured` 字段体现，扩展不直接读 `.env` 文件。进入任务中心时，若 MS 尚无 RingCentral JWT 而本机 L2 Sheet 缓存里已有 `ringCentralSender`，会**一次性静默收编**（不覆盖已有 MS 值）；L2 的 Jira 内嵌 Bot **不会**收编为 🏠 Bot。
+**L1 配置入口**：任务中心「分层设置」与 Options（`#outreach-config`）写入同一份 memory-service runtime config（`PUT /config`）。服务端 `.env` 默认值经 `GET /config` 的 `*Configured` 字段体现，扩展不直接读 `.env` 文件。进入任务中心时，若 MS 尚无 RingCentral JWT 而本机 L2 Sheet 缓存里已有 `ringCentralSender`，会**一次性静默收编**（不覆盖已有 MS 值）；L2 的 Jira 内嵌 Bot **不会**收编为 🏠 Bot。任务中心保存 AsMe 后，若 L2 已配置，扩展会把同一份凭据**下发到 Sheet Config**；不会自动重部署 Jira 规则。
 
 **AsMe 的凭据来源**：`getUserRuntimeConfig()` 里的 `ringCentralClientId/Secret/Jwt`，与 OutreachEngine 的「追问」是同一份，`GET /config` 已按 `*Configured` 布尔脱敏、不回传明文。☁️ lane 由 Sheet 临时传入的 `asmeSender` 仍然优先，没有时回落这份——与 notify-config 的「body 优先、表兜底」同构。
 
@@ -101,7 +101,7 @@
 
 > ⚠️ Sheet 侧凭据被 `JiraRuleUpdater` **明文烤进 Jira 规则 payload**（部署时替换占位符），所以改凭据必须**重新部署 Jira 规则**才对 ☁️ lane 生效；域策略禁止部署时，☁️ lane 的 AsMe 凭据事实上是冻结的。🏠 lane 不受此限制——它直接读 runtime config。详见 [plan § 12.1](../progressing/agent-task-ledger-plan.md)。
 
-🏠 lane 的 `push` / `agent` 到期执行走 `ActionExecutor`，完成后调用与 `POST /agent-tasks/execute` 同一套投递规划（`planAgentTaskNotifications` + `deliverAgentTaskRunNotifications`）。身份支持 `bot` / `asme` / `plugin`；`asme` 优先用请求里的临时凭据，否则回落 `getUserRuntimeConfig()`。投递失败写入 `params.metadata.notifyDeliveryError` 并私发 owner，**不改 run 状态**。
+🏠 lane 的 `push` / `agent` 到期执行走 `ActionExecutor`，完成后调用与 `POST /agent-tasks/execute` 同一套投递规划（`planAgentTaskNotifications` + `deliverAgentTaskRunNotifications`）。身份支持 `bot` / `asme` / `plugin`；`plugin` **只对 🏠 有效**。`asme` 优先用请求里的临时凭据，否则回落 `getUserRuntimeConfig()`。投递失败写入 `params.metadata.notifyDeliveryError` 并私发 owner，**不改 run 状态**。
 
 动作类型按任务形态分流：纯文本推送 / 提醒落 `notify_user`；AI Report 落 `run_http_push`（默认 `POST https://dify.int.rclabenv.com/v1/chat-messages`，鉴权用 env `DIFY_API_KEY` 或任务 `aiHeaders`，不复制 Sheet 侧硬编码 Bearer）；帮我问落 `ask_external_user`；Agent / 开发委派落 `delegate_agent`。`notify_user` / `ask_external_user` 自己负责投递，执行器终态不再二次扇出。
 
@@ -131,7 +131,7 @@
 | 字段 | 用途 |
 |---|---|
 | `parent_action_id` | 子任务树；父任务在全部子任务 succeeded 时聚合完成 |
-| `recurrence_spec` | 重复调度（复用 OutreachEngine 的 scheduleSpec 语义）；完成时按 spec 克隆下一次，幂等键加时间片后缀 |
+| `recurrence_spec` | 重复调度。日历重复复用 OutreachEngine 的 scheduleSpec（`repeatEvery` / `repeatUnit`）；Timeline 触发写 `{ trigger:'timeline', timelineProject, timelineMilestone, timelineOffset, scheduleTime }`。日历完成时按 spec 克隆下一次；Timeline 不克隆，由 ☁️ Sheet 行保持 Active，每个新版本 Milestone 再命中 |
 | `lane` | `memory_cron` / `jira_sheet` |
 | `task_kind` | `push` / `agent` / `remind` / `dev` / `outreach` / `reflection` |
 | `mirror_ref` | ☁️ 任务对应的 Sheet 行 id（`msg_*`）与同步状态 |
@@ -147,9 +147,11 @@
 
 **任务中心页面**：扩展的 memory-exploring 页 → 侧边栏「🗂 任务中心」，或直接 `memory-exploring.html#/task-center`。
 
-页面提供：分层激活状态条（L0/L1/L2 各自是否就绪）、按执行顺序分组的任务列表（需要处理 / 待执行 / 已暂停 / 已完成）、类型筛选、任务详情（含子任务树与 Sheet 镜像状态）、新建 / 编辑共用同一弹窗（字段随类型变化，调度器按 L2 是否就绪置灰）。编辑走 `PATCH /task-center/tasks/:id`，载荷与新建相同，不会另建一条。
+页面提供：分层激活状态条（L0/L1/L2 各自是否就绪）、按执行顺序分组的任务列表（需要处理 / 待执行 / 已暂停 / 已完成）、类型筛选（含「需要处理」收件箱 chip）、同标题反思候选折叠、任务详情（含子任务树、产物、Sheet 镜像状态）、新建 / 编辑共用同一弹窗（开发委派可开 plan gate、选依赖与父任务；字段随类型变化，调度器按 L2 是否就绪置灰）。详情里 `input_required` 提供「批准继续」（`retry`）。编辑走 `PATCH /task-center/tasks/:id`，载荷与新建相同，不会另建一条。
 
 行级操作对齐定时消息页：暂停 / 恢复、编辑、删除；详情里额外提供立即执行、失败重试、标记完成、复制。暂停把 `queue_status` 设为 `paused`，到期扫描会跳过；恢复不改原 `scheduledAt`。删除走 `DELETE /task-center/tasks/:id`（先清关联 session / result / attempt，再删账本行）。页头「清理已完成」对应定时消息页同名动作，走 `POST /task-center/cleanup-completed`。
+
+**会话交接（MCP）**：Claude Code / Codex 等 MCP 客户端可调用 `create_ledger_task`，把定稿工作单写入账本（开发委派默认 `planGate=true`，验收标准必填）。不写 Google Sheet；☁️ 镜像仍由扩展做。不做 OpenClaw 记忆笔 / `save_intent_fragment`。
 
 端到端验证：
 
@@ -164,7 +166,7 @@ npm run verify:task-center-ui
 | **1 通电** ✅ | `recurrence_spec` + `memory_cron` 调度、`parent_action_id`、depends_on 消费、`resume_action_id` 通用续跑、drain 短 interval、`POST /task-center/tasks` 统一入口、任务中心 UI | 两条 lane 的任务共用同一账本/幂等/runtime-status |
 | **1b L0 投递与能力面** ✅ | 🏠 执行后投递、AI Report `run_http_push`、帮我问、L1 认 AsMe、「提醒我」文案 | 没配 L2 也能用文本推送 / AI Report / Agent / 帮我问；投递失败可见 |
 | **2 执行承载** ✅ | worker lease 续租、公共池 claim + 空闲判定、file artifact 契约 | lease 心跳续租；未绑定任务进共享池按 capabilities 领取；`kind:'file'` 收据（路径强制相对、禁 `..`） |
-| **3 人工节点** | `input_required` 通用停靠、反思挂树、产物目录规范 | 反思→批准→执行→产物→review→解锁下游全程可见 |
-| **4 收敛** | Sheet 降只读镜像、GAS access 降 `DOMAIN`、升级通道解冻 | 见 scheduled_messages_manager.md |
+| **3 人工节点** ✅ | `input_required` 通用停靠、plan gate UI、依赖/父任务编辑、产物展示、反思挂树、MCP `create_ledger_task` | 开发委派可先停在批准；详情可见产物；反思候选带 `taskKind` |
+| **4 收敛** ⏸ | Sheet 降只读镜像、GAS access 降 `DOMAIN`、升级通道解冻 | **暂缓**：现网无法发新 App Script；切断 Jira→GAS 会停 ☁️ 24/7 |
 
 每期独立可验收、独立可停；Phase 1 与"方案 B 最小化"完全重合，最坏情况零浪费。

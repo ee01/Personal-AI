@@ -100,3 +100,55 @@ export function buildL1AsmeSavePayload(draft: {
   if (jwt) payload.ringCentralJwt = jwt;
   return payload;
 }
+
+export type AsmeSheetMerge =
+  | { kind: 'skip'; reason: 'no_sheet' | 'incomplete' }
+  | { kind: 'ready'; config: SheetConfig };
+
+export function mergeAsmePayloadIntoSheetConfig(
+  config: Partial<SheetConfig> | null | undefined,
+  payload: UpdateRuntimeConfigPayload,
+): AsmeSheetMerge {
+  const sheetId = config?.sheetId?.trim();
+  if (!sheetId) return { kind: 'skip', reason: 'no_sheet' };
+  const existing = config.ringCentralSender;
+  const clientId = payload.ringCentralClientId?.trim() || existing?.clientId?.trim() || '';
+  const clientSecret =
+    payload.ringCentralClientSecret?.trim() || existing?.clientSecret?.trim() || '';
+  const jwt = payload.ringCentralJwt?.trim() || existing?.jwt?.trim() || '';
+  if (!clientId || !clientSecret || !jwt) {
+    return { kind: 'skip', reason: 'incomplete' };
+  }
+  return {
+    kind: 'ready',
+    config: {
+      ...(config as SheetConfig),
+      sheetId,
+      ringCentralSender: {
+        enabled: true,
+        clientId,
+        clientSecret,
+        jwt,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
+export type AsmeSheetPushResult = {
+  pushed: boolean;
+  reason?: 'no_sheet' | 'incomplete' | 'write_failed' | 'ok';
+  error?: string;
+};
+
+export function asmePushReceipt(result: AsmeSheetPushResult): string {
+  if (result.pushed) {
+    return 'Sheet Config 已更新。☁️ AsMe 仍用 Jira 规则快照，当前域策略无法重新部署规则';
+  }
+  if (result.reason === 'no_sheet') return '未找到 L2 Sheet，只写了 memory-service';
+  if (result.reason === 'incomplete') {
+    return 'Sheet 未写：缺少完整 Client Secret / JWT';
+  }
+  if (result.error) return `Sheet 未更新：${result.error}`;
+  return 'Sheet 未更新';
+}

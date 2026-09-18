@@ -11,6 +11,7 @@ import {
   type TaskLane,
 } from '../repositories/ActionRepository.js';
 import { TaskCenterMaintenanceService } from '../core/TaskCenterMaintenanceService.js';
+import { ConfirmRequestRepository } from '../repositories/ConfirmRequestRepository.js';
 import { now } from '../utils/time.js';
 
 /**
@@ -107,8 +108,22 @@ interface CreateTaskBody {
   mirrorRef?: Record<string, unknown>;
 }
 
+function hasSheetMessageId(mirrorRef: unknown): boolean {
+  if (!mirrorRef || typeof mirrorRef !== 'object' || Array.isArray(mirrorRef)) {
+    return false;
+  }
+  const id = (mirrorRef as Record<string, unknown>).sheetMessageId;
+  return typeof id === 'string' && id.trim().length > 0;
+}
+
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function parseIdList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+    : [];
 }
 
 /**
@@ -315,9 +330,7 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'title is required' });
     }
 
-    const dependsOn = Array.isArray(body.dependsOn)
-      ? body.dependsOn.filter((id): id is string => typeof id === 'string' && !!id.trim())
-      : [];
+    const dependsOn = parseIdList(body.dependsOn);
     const cycle = findDependencyCycle(repo, dependsOn);
     if (cycle) {
       return reply.status(400).send({
@@ -350,7 +363,7 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       laneReason: laneDecision.reason,
     });
 
-    const action = repo.create({
+    let action = repo.create({
       actionType,
       title,
       description: nonEmpty(body.description),
@@ -371,12 +384,36 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       queueStatus: 'queued',
     });
 
+    const planGate = taskKind === 'dev' && payload.planGate === true;
+    if (planGate) {
+      repo.markInputRequired(action.id, '', {
+        status: 'need_human_decision',
+        summary: '等待批准 plan 后再执行',
+        gate: 'task_center_plan_gate',
+      }, '等待批准 plan 后再执行');
+      new ConfirmRequestRepository(db).createOrReusePending({
+        question: `批准「${title}」的执行计划后再开工？`,
+        context: nonEmpty(body.description) ?? nonEmpty(payload.acceptance),
+        options: [
+          { label: '批准 plan，开始执行', value: 'approve' },
+          { label: '取消任务', value: 'cancel' },
+        ],
+        category: 'task_center_plan_gate',
+        resumeActionId: action.id,
+        evidenceRefs: [`action:${action.id}`],
+        priority: 'normal',
+      });
+      action = repo.getById(action.id) ?? action;
+    }
+
     return reply.status(201).send({
       task: serializeTask(action),
       lane: laneDecision,
       // The Sheet row is written by the extension (it holds the Google token),
       // so a jira_sheet task is not fully scheduled until that mirror lands.
-      mirrorRequired: laneDecision.lane === 'jira_sheet',
+      // Registering an existing Sheet row already has the id, so skip the hint.
+      mirrorRequired:
+        laneDecision.lane === 'jira_sheet' && !hasSheetMessageId(body.mirrorRef),
     });
   });
 
@@ -411,9 +448,18 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       body.lane !== undefined ||
       body.description !== undefined ||
       body.cloudLaneAvailable !== undefined ||
-      body.taskKind !== undefined;
+      body.taskKind !== undefined ||
+      body.dependsOn !== undefined ||
+      body.parentActionId !== undefined;
 
     if (!isFullEdit) {
+      if (body.mirrorRef && typeof body.mirrorRef === 'object') {
+        repo.updateMirrorRef(
+          request.params.id,
+          body.mirrorRef,
+          nonEmpty(body.sourceRefId),
+        );
+      }
       if (typeof body.scheduledAt === 'number' && Number.isFinite(body.scheduledAt)) {
         repo.rescheduleTask(request.params.id, body.scheduledAt, nonEmpty(body.title));
       }
@@ -440,7 +486,30 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       laneReason: laneDecision.reason,
     });
 
-    const updated = repo.updateTask(request.params.id, {
+    const dependsOn = body.dependsOn === undefined
+      ? undefined
+      : parseIdList(body.dependsOn);
+    if (dependsOn) {
+      const cycle = findDependencyCycle(repo, dependsOn, request.params.id);
+      if (cycle) {
+        return reply.status(400).send({
+          error: 'dependency_cycle',
+          detail: `依赖成环，任务将永远不会执行：${cycle.join(' → ')}`,
+          cycle,
+        });
+      }
+    }
+    if (body.parentActionId !== undefined) {
+      const parentId = nonEmpty(body.parentActionId);
+      if (parentId && !repo.getById(parentId)) {
+        return reply.status(400).send({
+          error: 'parent_not_found',
+          detail: `父任务不存在：${parentId}`,
+        });
+      }
+    }
+
+    let updated = repo.updateTask(request.params.id, {
       title,
       description: description ?? null,
       params,
@@ -452,13 +521,42 @@ export async function taskCenterRoutes(app: FastifyInstance): Promise<void> {
       scheduledAt: typeof body.scheduledAt === 'number' ? body.scheduledAt : existing.scheduledAt,
       requiresApproval: body.requiresApproval === true,
       actionType: nonEmpty(body.actionType) ?? defaultActionType(taskKind, payload),
-      requeue: existing.queueStatus !== 'running',
+      dependsOn,
+      parentActionId:
+        body.parentActionId === undefined ? undefined : nonEmpty(body.parentActionId) ?? null,
+      requeue:
+        existing.queueStatus !== 'running' && existing.queueStatus !== 'input_required',
     });
+
+    const planGate = taskKind === 'dev' && payload.planGate === true;
+    if (planGate && updated && updated.queueStatus === 'queued') {
+      repo.markInputRequired(updated.id, '', {
+        status: 'need_human_decision',
+        summary: '等待批准 plan 后再执行',
+        gate: 'task_center_plan_gate',
+      }, '等待批准 plan 后再执行');
+      new ConfirmRequestRepository(db).createOrReusePending({
+        question: `批准「${title}」的执行计划后再开工？`,
+        context: description ?? nonEmpty(payload.acceptance),
+        options: [
+          { label: '批准 plan，开始执行', value: 'approve' },
+          { label: '取消任务', value: 'cancel' },
+        ],
+        category: 'task_center_plan_gate',
+        resumeActionId: updated.id,
+        evidenceRefs: [`action:${updated.id}`],
+        priority: 'normal',
+      });
+      updated = repo.getById(updated.id) ?? updated;
+    }
 
     return reply.status(200).send({
       task: updated ? serializeTask(updated) : null,
       lane: laneDecision,
-      mirrorRequired: laneDecision.lane === 'jira_sheet',
+      mirrorRequired:
+        laneDecision.lane === 'jira_sheet' &&
+        !hasSheetMessageId(body.mirrorRef) &&
+        !hasSheetMessageId(existing.mirrorRef),
     });
   });
 

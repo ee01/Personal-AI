@@ -77,3 +77,31 @@ test('unlocks home-lane Bot from memory-service runtime, not Jira executor rules
   assert.equal(probed.cloudBotConfigured, true);
   assert.equal(probed.botConfigured, true);
 });
+
+test('lights up Timeline Sync from the nested botAutomation rule', () => {
+  const probed = probeTaskCenterLevels({
+    scheduledMessagesConfig: {
+      sheetId: '1abcSheet',
+      botAutomation: {
+        executorRule: {
+          ruleId: '2154',
+          ruleName: 'executor',
+          webhookUrl: 'https://script.example/exec',
+          projectKey: 'MTR',
+          jiraUrl: 'https://jira.example.com',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        timelineSyncRule: {
+          ruleId: '2160',
+          ruleName: 'timeline-sync',
+          webhookUrl: 'https://script.example/exec',
+          projectKey: 'MTR',
+          jiraUrl: 'https://jira.example.com',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    },
+  });
+  assert.equal(probed.cloudLaneAvailable, true);
+  assert.equal(probed.cloudTimelineConfigured, true);
+});

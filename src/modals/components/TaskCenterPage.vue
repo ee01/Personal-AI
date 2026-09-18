@@ -121,7 +121,9 @@
                   <span>JWT{{ l1AsmeDraft.jwtConfigured ? '（留空则保留已保存）' : '' }}</span>
                   <input v-model="l1AsmeDraft.ringCentralJwt" type="password" autocomplete="off" />
                 </label>
-                <p class="setup-channel-note">与主动询问（Outreach）共用；也可在 Options → 主动询问 中修改。</p>
+                <p class="setup-channel-note">
+                  此凭据同时用于：追问、AsMe 推送（🏠 即时生效）。若已开 L2，保存后会镜像写 Sheet Config；☁️ AsMe 仍用 Jira 规则里烤进去的快照，当前域策略通常无法重新部署规则。
+                </p>
               </template>
               <div class="l1-config-actions">
                 <button class="tc-btn primary" :disabled="l1Saving" @click="saveL1Config()">
@@ -224,7 +226,10 @@
             <span class="tc-time">{{ formatWhen(task) }}</span>
             <span class="tc-kind" :class="task.taskKind">{{ kindLabel(task.taskKind) }}</span>
             <span class="tc-lane" :title="laneTitle(task)">{{ task.lane === 'jira_sheet' ? '☁️' : '🏠' }}</span>
-            <span class="tc-title">{{ task.title }}</span>
+            <span class="tc-title">
+              {{ task.title }}
+              <small v-if="task.reflectionDupes" class="tc-dupes">×{{ task.reflectionDupes }}</small>
+            </span>
             <span class="tc-status" :class="statusTone(task.queueStatus)">{{ statusLabel(task) }}</span>
             <span class="tc-row-actions" @click.stop>
               <button
@@ -266,6 +271,15 @@
           <div v-if="selectedContent"><dt>内容</dt><dd class="tc-pre">{{ selectedContent }}</dd></div>
           <div v-if="selectedNotifyLabel"><dt>通知</dt><dd>{{ selectedNotifyLabel }}</dd></div>
           <div v-if="selected.dependsOn?.length"><dt>依赖</dt><dd>{{ selected.dependsOn.length }} 个前置任务未完成前不会执行</dd></div>
+          <div v-if="selectedArtifacts.length">
+            <dt>产物</dt>
+            <dd>
+              <div v-for="(item, index) in selectedArtifacts" :key="index" class="tc-artifact">
+                <strong>{{ item.title || item.kind || 'artifact' }}</strong>
+                <span class="tc-pre">{{ item.content || item.path || item.url || JSON.stringify(item) }}</span>
+              </div>
+            </dd>
+          </div>
           <div v-if="selected.mirrorRef"><dt>Sheet 镜像</dt><dd>{{ mirrorLabel(selected) }}</dd></div>
           <div v-if="selected.retryCount > 0"><dt>重试</dt><dd>{{ selected.retryCount }} 次</dd></div>
         </dl>
@@ -311,7 +325,13 @@
             class="tc-btn"
             @click="controlTask(selected, 'complete')"
           >标记完成</button>
+          <button
+            v-if="canApproveGate(selected)"
+            class="tc-btn primary"
+            @click="controlTask(selected, 'retry')"
+          >批准继续</button>
           <button class="tc-btn" @click="duplicateTask(selected)">复制</button>
+          <button class="tc-btn" @click="copyTaskSpec(selected)">复制 spec 到剪贴板</button>
           <router-link
             v-if="selected.sourceRefId"
             class="tc-btn"
@@ -349,7 +369,7 @@
                 class="tc-opt"
                 :class="{ on: draft.taskKind === opt.value, off: isEditMode && draft.taskKind !== opt.value }"
                 :disabled="isEditMode && draft.taskKind !== opt.value"
-                @click="!isEditMode && (draft.taskKind = opt.value)"
+                @click="!isEditMode && selectTaskKind(opt.value)"
               >
                 {{ opt.label }}<small>{{ opt.hint }}</small>
               </button>
@@ -451,6 +471,10 @@
                 placeholder="怎样算完成？说不清就先回 Codex / Claude Code 里聊，定稿再委派"
               />
             </div>
+            <label class="ck">
+              <input v-model="draft.planGate" type="checkbox" />
+              先出 plan，你批准后再执行
+            </label>
           </template>
 
           <template v-if="draft.taskKind === 'outreach'">
@@ -504,27 +528,35 @@
           <div v-if="showsNotifyChannel" class="tc-field">
             <label>通知通道</label>
             <div class="tc-opts">
-              <button class="tc-opt" :class="{ on: draft.notifyVia === 'plugin' }" @click="draft.notifyVia = 'plugin'">
-                🔔 插件通知<small>Chrome 通知 · 零配置</small>
+              <button
+                class="tc-opt"
+                :class="{ on: draft.notifyVia === 'plugin', off: pluginNotifyDisabled }"
+                :disabled="pluginNotifyDisabled"
+                @click="selectNotifyVia('plugin')"
+              >
+                🔔 插件通知<small>{{ pluginNotifyDisabled ? '☁️ 不能走 Chrome 通知' : 'Chrome 通知 · 零配置' }}</small>
               </button>
               <button
                 class="tc-opt"
-                :class="{ on: draft.notifyVia === 'bot', off: !levelsProbeReady || !botConfigured }"
-                :disabled="!levelsProbeReady || !botConfigured"
+                :class="{ on: draft.notifyVia === 'bot', off: !levelsProbeReady || !botChannelAvailable }"
+                :disabled="!levelsProbeReady || !botChannelAvailable"
                 @click="selectNotifyVia('bot')"
               >
                 🤖 Glip Bot<small>{{ notifyChannelHint('bot') }}</small>
               </button>
               <button
                 class="tc-opt"
-                :class="{ on: draft.notifyVia === 'asme', off: !levelsProbeReady || !asmeConfigured }"
-                :disabled="!levelsProbeReady || !asmeConfigured"
+                :class="{ on: draft.notifyVia === 'asme', off: !levelsProbeReady || !asmeChannelAvailable }"
+                :disabled="!levelsProbeReady || !asmeChannelAvailable"
                 @click="selectNotifyVia('asme')"
               >
                 👤 AsMe 本人身份<small>{{ notifyChannelHint('asme') }}</small>
               </button>
             </div>
-            <div v-if="levelsProbeReady && !botConfigured && !asmeConfigured" class="tc-lane-note blocked">
+            <div v-if="pluginNotifyDisabled" class="tc-lane-note cloud">
+              ☁️ 由 Jira / GAS 投递，不能走 Chrome 插件通知。请改用 Bot 或 AsMe。
+            </div>
+            <div v-else-if="levelsProbeReady && !botConfigured && !asmeConfigured" class="tc-lane-note blocked">
               Glip 通道需要 Level 1（Bot 或 AsMe）。点右上「能力」去配置。
             </div>
           </div>
@@ -570,7 +602,56 @@
             </div>
           </template>
 
-          <div v-if="showsSchedule" class="tc-field">
+          <template v-if="draft.taskKind === 'dev' || draft.taskKind === 'agent'">
+            <div class="tc-field">
+              <label>父任务</label>
+              <select v-model="draft.parentActionId">
+                <option value="">无</option>
+                <option
+                  v-for="item in parentCandidateTasks"
+                  :key="item.id"
+                  :value="item.id"
+                >{{ item.title }}</option>
+              </select>
+            </div>
+            <div class="tc-field">
+              <label>依赖（必须先完成）</label>
+              <select multiple class="tc-multi" v-model="draft.dependsOnIds">
+                <option
+                  v-for="item in dependCandidateTasks"
+                  :key="item.id"
+                  :value="item.id"
+                >{{ item.title }}</option>
+              </select>
+              <small class="tc-hint">未完成的依赖会卡住这条任务，不会偷偷跑下去。</small>
+            </div>
+          </template>
+
+          <div v-if="showsTimelineTrigger" class="tc-field">
+            <label>触发方式 *</label>
+            <div class="tc-opts">
+              <button
+                type="button"
+                class="tc-opt"
+                :class="{ on: draft.trigger === 'time' }"
+                @click="setScheduleTrigger('time')"
+              >
+                ⏰ 时间触发<small>固定日期，可选日历重复</small>
+              </button>
+              <button
+                type="button"
+                class="tc-opt"
+                :class="{ on: draft.trigger === 'timeline', off: !timelineSelectable }"
+                :disabled="!timelineSelectable"
+                @click="setScheduleTrigger('timeline')"
+              >
+                📅 Timeline 触发<small>{{ timelineTriggerHint }}</small>
+              </button>
+            </div>
+            <small v-if="!timelineSelectable" class="tc-hint">{{ timelineBlockedHint }}</small>
+          </div>
+
+          <div v-if="showsSchedule && draft.trigger !== 'timeline'" class="tc-field">
             <label>执行时间 *</label>
             <div class="tc-inline">
               <input v-model="draft.scheduleDate" type="date" />
@@ -583,14 +664,59 @@
             </div>
           </div>
 
-          <div v-if="showsSchedule" class="tc-field">
+          <div v-if="showsSchedule && draft.trigger === 'timeline'" class="tc-repeat tc-timeline">
+            <div class="tc-inline">
+              <div class="tc-field">
+                <label>项目 *</label>
+                <select v-model="draft.timelineProject" :disabled="!timelineSelectable">
+                  <option
+                    v-for="project in timelineProjects"
+                    :key="project.value"
+                    :value="project.value"
+                  >{{ project.label }}</option>
+                </select>
+              </div>
+              <div class="tc-field">
+                <label>Milestone *</label>
+                <select v-model="draft.timelineMilestone" :disabled="!timelineSelectable">
+                  <option
+                    v-for="item in timelineMilestones"
+                    :key="item.value"
+                    :value="item.value"
+                  >{{ item.label }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="tc-inline">
+              <div class="tc-field">
+                <label>偏移天数 *</label>
+                <input
+                  v-model.number="draft.timelineOffset"
+                  type="number"
+                  min="-30"
+                  max="30"
+                  step="1"
+                  :disabled="!timelineSelectable"
+                />
+                <small class="tc-hint">-30 到 30。负数=之前，0=当天，正数=之后。</small>
+              </div>
+              <div class="tc-field">
+                <label>执行时间</label>
+                <input v-model="draft.scheduleTime" type="time" :disabled="!timelineSelectable" />
+                <small class="tc-hint">留空则按执行器早上排队。</small>
+              </div>
+            </div>
+            <small class="tc-hint">每个新版本的该 Milestone 都会再{{ draft.taskKind === 'agent' ? '执行' : '推' }}一次，不会在第一次成功后标完成。</small>
+          </div>
+
+          <div v-if="showsSchedule && draft.trigger !== 'timeline'" class="tc-field">
             <label class="ck">
               <input v-model="draft.repeating" type="checkbox" @change="onRepeatingToggle" />
               {{ draft.taskKind === 'agent' ? '重复执行' : '是否重复推送' }}
             </label>
           </div>
 
-          <div v-if="showsSchedule && draft.repeating" class="tc-repeat">
+          <div v-if="showsSchedule && draft.trigger !== 'timeline' && draft.repeating" class="tc-repeat">
             <div class="tc-inline">
               <div class="tc-field">
                 <label>每隔 *</label>
@@ -655,16 +781,17 @@
             <div class="tc-opts">
               <button
                 class="tc-opt"
-                :class="{ on: effectiveLane === 'memory_cron' }"
-                @click="draft.lane = 'memory_cron'"
+                :class="{ on: effectiveLane === 'memory_cron', off: draft.trigger === 'timeline' }"
+                :disabled="draft.trigger === 'timeline'"
+                @click="draft.trigger !== 'timeline' && (draft.lane = 'memory_cron')"
               >
-                🏠 memory_cron<small>本地到期队列 · 秒级入队</small>
+                🏠 memory_cron<small>{{ draft.trigger === 'timeline' ? 'Timeline 必须走云端 lane' : '本地到期队列 · 秒级入队' }}</small>
               </button>
               <button
                 class="tc-opt"
                 :class="{ on: effectiveLane === 'jira_sheet', off: !cloudSelectable }"
                 :disabled="!cloudSelectable"
-                @click="cloudSelectable && (draft.lane = 'jira_sheet')"
+                @click="selectCloudLane()"
               >
                 ☁️ jira_sheet<small>{{ cloudLaneHint }}</small>
               </button>
@@ -688,15 +815,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import {
   getMemoryServiceClient,
   type TaskCenterTask,
   type TaskKind,
   type TaskLane,
 } from '../../services/MemoryServiceClient';
+import {
+  applyTaskCenterSheetMirrorControl,
+  pushAsmeCredentialsToSheet,
+  retryPendingTaskCenterMirrors,
+  upsertTaskCenterSheetMirror,
+} from '../../services/TaskCenterLedgerSync';
+import {
+  foldReflectionTasks,
+  isInboxTask,
+} from '../../scheduled-messages/taskCenterSheetMirror';
 import { probeTaskCenterLevels } from '../taskCenterLevels';
 import {
+  asmePushReceipt,
   buildL1AsmeSavePayload,
   buildL1BotSavePayload,
   decideRingCentralAdoptFromSheet,
@@ -710,29 +848,41 @@ import {
   applyQuickSchedule,
   buildNotifyPayload,
   buildRecurrenceSpec,
+  cloudLaneAllowsPluginNotify,
   createEmptyTaskDraft,
   dayOfMonth,
   formatLocalDate,
   formatLocalTime,
   hydrateTaskDraftFromTask,
+  isTimelineRecurrenceSpec,
   notifyTargetIncomplete,
   notifyWhenEmptyFromTask,
   recurrenceLabelFromSpec,
+  resolveNotifyViaForLane,
   resolveScheduledAtMs,
   setDateDay,
   snapScheduleDateToWeekDays,
+  taskKindSupportsTimelineTrigger,
   type NotifyVia,
   type RepeatUnit,
+  type ScheduleTrigger,
+  type TaskDraftKind,
 } from '../taskCenterSchedule';
+import { DEFAULT_TIMELINE_PROJECT, TIMELINE_PROJECTS } from '../../scheduled-messages/timelineProjects';
+import { STANDARD_TIMELINE_MILESTONE_OPTIONS } from '../../scheduled-messages/timelineMilestones';
+import { isValidTimelineOffsetValue } from '../../scheduled-messages/timelineFormatting';
 import type { RuntimeConfigResponse } from '../../services/MemoryServiceClient';
 
 const client = getMemoryServiceClient();
+
+type KindFilter = TaskKind | 'all' | 'paused' | 'inbox';
+type ListedTask = TaskCenterTask & { reflectionDupes?: number };
 
 const loading = ref(true);
 const loadError = ref('');
 const tasks = ref<TaskCenterTask[]>([]);
 const selectedId = ref('');
-const activeKind = ref<TaskKind | 'all' | 'paused'>('all');
+const activeKind = ref<KindFilter>('all');
 const createOpen = ref(false);
 const editingTaskId = ref('');
 const pendingDelete = ref(false);
@@ -778,6 +928,8 @@ const repeatUnits: Array<{ value: RepeatUnit; label: string }> = [
   { value: 'Month', label: '月' },
   { value: 'Year', label: '年' },
 ];
+const timelineProjects = TIMELINE_PROJECTS;
+const timelineMilestones = STANDARD_TIMELINE_MILESTONE_OPTIONS;
 
 /**
  * null means the task never chose. Empty results stay silent until the user
@@ -846,7 +998,12 @@ async function saveL1Config() {
         : buildL1AsmeSavePayload(l1AsmeDraft.value);
     await client.updateRuntimeConfig(payload);
     await detectLevels();
-    showToast(l1ConfigPanel.value === 'bot' ? 'Bot 配置已保存' : 'AsMe 配置已保存');
+    let note = l1ConfigPanel.value === 'bot' ? 'Bot 配置已保存' : 'AsMe 配置已保存（🏠 即时生效）';
+    if (l1ConfigPanel.value === 'asme' && cloudLaneAvailable.value) {
+      const push = await pushAsmeCredentialsToSheet(payload);
+      note += `；${asmePushReceipt(push)}`;
+    }
+    showToast(note);
     closeL1Config();
   } catch (error) {
     showToast(`保存失败：${(error as Error).message}`);
@@ -973,8 +1130,18 @@ function l2ChannelLabel(configured: boolean, detailLabel?: string) {
 
 function notifyChannelHint(kind: 'bot' | 'asme') {
   if (!levelsProbeReady.value) return '检测凭据…';
-  if (kind === 'bot') return botConfigured.value ? 'SM AI 机器人' : '需 Level 1 · Bot';
-  return asmeConfigured.value ? '与追问共用凭据' : '需 Level 1 · AsMe';
+  if (kind === 'bot') {
+    if (botConfigured.value) return 'SM AI 机器人';
+    if (effectiveLane.value === 'jira_sheet' && cloudBotConfigured.value) {
+      return 'Jira Automation 内嵌 Bot';
+    }
+    return '需 Level 1 · Bot';
+  }
+  if (asmeConfigured.value) return '与追问共用凭据';
+  if (effectiveLane.value === 'jira_sheet' && cloudAsmeConfigured.value) {
+    return 'Sheet Config 凭据';
+  }
+  return '需 Level 1 · AsMe';
 }
 
 const pageDescription = computed(
@@ -989,6 +1156,11 @@ const kindChips = computed(() => {
   }
   return [
     { value: 'all' as const, label: '全部', count: tasks.value.length },
+    {
+      value: 'inbox' as const,
+      label: '需要处理',
+      count: tasks.value.filter((task) => isInboxTask(task)).length,
+    },
     ...(Object.keys(KIND_LABELS) as TaskKind[]).map((kind) => ({
       value: kind,
       label: KIND_LABELS[kind],
@@ -1002,15 +1174,18 @@ const kindChips = computed(() => {
   ];
 });
 
-const visibleTasks = computed(() => {
-  if (activeKind.value === 'paused') {
-    return tasks.value.filter((task) => task.queueStatus === 'paused');
+const visibleTasks = computed((): ListedTask[] => {
+  let filtered: TaskCenterTask[] = tasks.value;
+  if (activeKind.value === 'inbox') {
+    filtered = tasks.value.filter((task) => isInboxTask(task));
+  } else if (activeKind.value === 'paused') {
+    filtered = tasks.value.filter((task) => task.queueStatus === 'paused');
+  } else if (activeKind.value !== 'all') {
+    filtered = tasks.value.filter(
+      (task) => task.taskKind === activeKind.value && task.queueStatus !== 'paused',
+    );
   }
-  const byKind = activeKind.value === 'all'
-    ? tasks.value
-    : tasks.value.filter((task) => task.taskKind === activeKind.value);
-  if (activeKind.value === 'all') return byKind;
-  return byKind.filter((task) => task.queueStatus !== 'paused');
+  return foldReflectionTasks(filtered);
 });
 
 /** Ordered by when they run, which is how people actually look for a task. */
@@ -1069,6 +1244,21 @@ const selectedNotifyLabel = computed(() => {
   }
   return viaLabel;
 });
+const selectedArtifacts = computed(() => {
+  const raw = selected.value?.result?.artifacts;
+  if (!Array.isArray(raw)) return [] as Array<Record<string, unknown>>;
+  return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object');
+});
+const parentCandidateTasks = computed(() =>
+  tasks.value.filter((task) => task.id !== editingTaskId.value),
+);
+const dependCandidateTasks = computed(() =>
+  tasks.value.filter((task) => {
+    if (task.id === editingTaskId.value) return false;
+    if (draft.value.parentActionId && task.id === draft.value.parentActionId) return false;
+    return true;
+  }),
+);
 
 const completedCount = computed(
   () => tasks.value.filter((task) => ['succeeded', 'cancelled'].includes(task.queueStatus)).length,
@@ -1079,6 +1269,8 @@ const emptyMessage = computed(() =>
     ? '账本里还没有任务。'
     : activeKind.value === 'paused'
       ? '没有已暂停的任务。'
+      : activeKind.value === 'inbox'
+        ? '没有需要你处理的任务。'
       : `没有${KIND_LABELS[activeKind.value as TaskKind]}类型的任务。`,
 );
 
@@ -1093,6 +1285,28 @@ const showsNotifyTarget = computed(
 const showsSchedule = computed(
   () => ['push', 'agent', 'remind', 'outreach'].includes(draft.value.taskKind),
 );
+const showsTimelineTrigger = computed(() => taskKindSupportsTimelineTrigger(draft.value.taskKind));
+const timelineSelectable = computed(
+  () =>
+    showsTimelineTrigger.value &&
+    levelsProbeReady.value &&
+    cloudLaneAvailable.value &&
+    cloudTimelineConfigured.value,
+);
+const timelineTriggerHint = computed(() => {
+  if (!levelsProbeReady.value) return '检测 Timeline Sync…';
+  if (timelineSelectable.value) {
+    return draft.value.taskKind === 'agent'
+      ? '每个版本的 Milestone 再执行一次'
+      : '每个版本的 Milestone 再推一次';
+  }
+  return '需 Level 2 · Timeline Sync';
+});
+const timelineBlockedHint = computed(() => {
+  if (!cloudLaneAvailable.value) return 'Timeline 触发需要 Level 2（Google Sheet + Jira Automation）。点右上「能力」可去配置。';
+  if (!cloudTimelineConfigured.value) return '已有 Sheet，但还缺 Timeline Sync Rule。打开定时消息页补齐后即可按 Milestone 重复推送。';
+  return '';
+});
 const scheduleMonthDay = computed(() => dayOfMonth(draft.value.scheduleDate));
 const cloudSelectable = computed(
   () =>
@@ -1106,7 +1320,27 @@ const cloudLaneHint = computed(() => {
   return cloudLaneAvailable.value ? 'Jira Automation 云端触发 · 24/7' : '未启用 Level 2';
 });
 const effectiveLane = computed<TaskLane>(() =>
-  draft.value.lane === 'jira_sheet' && cloudSelectable.value ? 'jira_sheet' : 'memory_cron',
+  (draft.value.trigger === 'timeline' || draft.value.lane === 'jira_sheet') && cloudSelectable.value
+    ? 'jira_sheet'
+    : 'memory_cron',
+);
+const pluginNotifyDisabled = computed(() => !cloudLaneAllowsPluginNotify(effectiveLane.value));
+const botChannelAvailable = computed(
+  () =>
+    botConfigured.value ||
+    (effectiveLane.value === 'jira_sheet' && cloudBotConfigured.value),
+);
+const asmeChannelAvailable = computed(
+  () =>
+    asmeConfigured.value ||
+    (effectiveLane.value === 'jira_sheet' && cloudAsmeConfigured.value),
+);
+
+watch(
+  () => effectiveLane.value,
+  () => {
+    applyDraftNotifyConstraint();
+  },
 );
 const laneNoteTone = computed(() => {
   if (!laneSelectableKinds.value.includes(draft.value.taskKind)) return 'locked';
@@ -1127,7 +1361,9 @@ const laneNote = computed(() => {
     return `🔒 ${KIND_LABELS[draft.value.taskKind]}需要人工节点 / 依赖 / 产物能力，固定由 memory-service 调度`;
   }
   if (effectiveLane.value === 'jira_sheet') {
-    return '☁️ 保存后需同步一行 Sheet，由 Jira Automation 每分钟领取；memory-service 离线也会执行。';
+    return draft.value.trigger === 'timeline'
+      ? '☁️ Timeline 由 Jira 每分钟对照项目 Milestone 缓存领取；每个新版本都会再推，memory-service 离线也会执行。'
+      : '☁️ 保存后需同步一行 Sheet，由 Jira Automation 每分钟领取；memory-service 离线也会执行。';
   }
   return cloudLaneAvailable.value
     ? '🏠 由 memory-service 调度。切到 ☁️ 会创建 Sheet 镜像行交给 Jira 调度。'
@@ -1151,6 +1387,9 @@ const titlePlaceholder = computed(() => {
 
 const canSave = computed(() => {
   if (!draft.value.title.trim()) return false;
+  if (showsNotifyChannel.value && pluginNotifyDisabled.value && draft.value.notifyVia === 'plugin') {
+    return false;
+  }
   if (draft.value.taskKind === 'agent' && !draft.value.content.trim()) return false;
   if (draft.value.taskKind === 'outreach' && !draft.value.content.trim()) return false;
   if (draft.value.taskKind === 'push' && draft.value.pushMethod === 'ai' && !draft.value.content.trim()) {
@@ -1166,13 +1405,22 @@ const canSave = computed(() => {
     });
   }
   if (showsNotifyTarget.value) {
-    return !notifyTargetIncomplete({
-      notifyVia: draft.value.notifyVia,
-      targetType: draft.value.targetType,
-      recipients: draft.value.recipients,
-      glipTeamId: draft.value.glipTeamId,
-      allowEmptyPrivate: draft.value.taskKind === 'remind',
-    });
+    if (
+      notifyTargetIncomplete({
+        notifyVia: draft.value.notifyVia,
+        targetType: draft.value.targetType,
+        recipients: draft.value.recipients,
+        glipTeamId: draft.value.glipTeamId,
+        allowEmptyPrivate: draft.value.taskKind === 'remind',
+      })
+    ) {
+      return false;
+    }
+  }
+  if (draft.value.trigger === 'timeline') {
+    if (!timelineSelectable.value) return false;
+    if (!draft.value.timelineProject.trim() || !draft.value.timelineMilestone.trim()) return false;
+    if (!isValidTimelineOffsetValue(draft.value.timelineOffset)) return false;
   }
   return true;
 });
@@ -1209,6 +1457,10 @@ function statusLabel(task: TaskCenterTask) {
   return map[task.queueStatus] ?? task.queueStatus;
 }
 function formatWhen(task: TaskCenterTask) {
+  const spec = task.recurrenceSpec as Record<string, unknown> | undefined;
+  if (isTimelineRecurrenceSpec(spec)) {
+    return recurrenceLabelFromSpec(spec);
+  }
   const at = task.scheduledAt ?? task.createdAt;
   if (!at) return '—';
   const date = new Date(at * 1000);
@@ -1223,7 +1475,7 @@ function mirrorLabel(task: TaskCenterTask) {
   return `${ref.sheetMessageId ?? '未同步'} · ${ref.syncState ?? 'pending'}`;
 }
 
-function setKind(kind: TaskKind | 'all' | 'paused') {
+function setKind(kind: KindFilter) {
   activeKind.value = kind;
 }
 function select(task: TaskCenterTask) {
@@ -1249,6 +1501,22 @@ function canRetry(task: TaskCenterTask) {
 function canComplete(task: TaskCenterTask) {
   return ['queued', 'paused', 'failed', 'input_required'].includes(task.queueStatus);
 }
+function canApproveGate(task: TaskCenterTask) {
+  return task.queueStatus === 'input_required';
+}
+
+async function syncSheetControl(
+  task: TaskCenterTask,
+  action: 'pause' | 'resume' | 'delete' | 'complete',
+): Promise<string> {
+  if (task.lane !== 'jira_sheet') return '';
+  try {
+    await applyTaskCenterSheetMirrorControl(task, action, { interactive: false });
+    return '';
+  } catch (error) {
+    return `；Sheet 未同步：${(error as Error).message}`;
+  }
+}
 
 async function controlTask(
   task: TaskCenterTask,
@@ -1258,12 +1526,16 @@ async function controlTask(
     const labels = {
       pause: '已暂停',
       resume: '已恢复',
-      retry: '已重新入队',
+      retry: task.queueStatus === 'input_required' ? '已批准继续' : '已重新入队',
       run_now: '已改为立即执行',
       complete: '已标记完成',
     };
     const result = await client.controlTaskCenterTask(task.id, action);
-    showToast(`${labels[action]}「${result.task.title}」`);
+    let sheetNote = '';
+    if (action === 'pause' || action === 'resume' || action === 'complete') {
+      sheetNote = await syncSheetControl(result.task ?? task, action);
+    }
+    showToast(`${labels[action]}「${result.task.title}」${sheetNote}`);
     await loadAll({ silent: true });
     selectedId.value = result.task.id;
   } catch (error) {
@@ -1282,14 +1554,37 @@ function duplicateTask(task: TaskCenterTask) {
   notifyWhenEmptyChoice.value = notifyWhenEmptyFromTask(task.params);
   pendingDelete.value = false;
   createOpen.value = true;
+  applyDraftNotifyConstraint();
+}
+
+async function copyTaskSpec(task: TaskCenterTask) {
+  const params = (task.params ?? {}) as Record<string, unknown>;
+  const spec = {
+    id: task.id,
+    title: task.title,
+    taskKind: task.taskKind,
+    description: task.description,
+    acceptance: params.acceptance,
+    dependsOn: task.dependsOn,
+    parentActionId: task.parentActionId,
+    queueStatus: task.queueStatus,
+    artifacts: task.result?.artifacts,
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(spec, null, 2));
+    showToast('已复制 spec，可贴进 Codex / Claude Code 继续聊');
+  } catch (error) {
+    showToast(`复制失败：${(error as Error).message}`);
+  }
 }
 
 async function confirmDeleteTask(task: TaskCenterTask) {
   saving.value = true;
   try {
     await client.deleteTaskCenterTask(task.id);
+    const sheetNote = await syncSheetControl(task, 'delete');
     pendingDelete.value = false;
-    showToast(`已删除「${task.title}」`);
+    showToast(`已删除「${task.title}」${sheetNote}`);
     if (selectedId.value === task.id) selectedId.value = '';
     await loadAll();
   } catch (error) {
@@ -1336,6 +1631,7 @@ function openEdit(task: TaskCenterTask) {
   recipientError.value = '';
   notifyWhenEmptyChoice.value = notifyWhenEmptyFromTask(task.params);
   createOpen.value = true;
+  applyDraftNotifyConstraint();
 }
 
 function closeEditor() {
@@ -1343,10 +1639,25 @@ function closeEditor() {
   editingTaskId.value = '';
 }
 
+function selectCloudLane() {
+  if (!cloudSelectable.value) return;
+  draft.value.lane = 'jira_sheet';
+}
+
 function selectNotifyVia(via: NotifyVia) {
-  if (via === 'bot' && !botConfigured.value) return;
-  if (via === 'asme' && !asmeConfigured.value) return;
+  if (via === 'plugin' && pluginNotifyDisabled.value) return;
+  if (via === 'bot' && !botChannelAvailable.value) return;
+  if (via === 'asme' && !asmeChannelAvailable.value) return;
   draft.value.notifyVia = via;
+}
+
+function applyDraftNotifyConstraint() {
+  draft.value.notifyVia = resolveNotifyViaForLane({
+    lane: effectiveLane.value,
+    notifyVia: draft.value.notifyVia,
+    botAvailable: botChannelAvailable.value,
+    asmeAvailable: asmeChannelAvailable.value,
+  });
 }
 
 function commitRecipient() {
@@ -1368,6 +1679,28 @@ function commitRecipient() {
 
 function removeRecipient(tag: string) {
   draft.value.recipients = draft.value.recipients.filter((item) => item !== tag);
+}
+
+function selectTaskKind(kind: TaskDraftKind) {
+  draft.value.taskKind = kind;
+  if (!taskKindSupportsTimelineTrigger(kind) && draft.value.trigger === 'timeline') {
+    setScheduleTrigger('time');
+  }
+}
+
+function setScheduleTrigger(mode: ScheduleTrigger) {
+  if (mode === 'timeline') {
+    if (!timelineSelectable.value) return;
+    draft.value.trigger = 'timeline';
+    draft.value.lane = 'jira_sheet';
+    draft.value.repeating = false;
+    draft.value.timelineProject = draft.value.timelineProject || DEFAULT_TIMELINE_PROJECT;
+    draft.value.timelineMilestone = draft.value.timelineMilestone || 'FF';
+    if (!Number.isInteger(draft.value.timelineOffset)) draft.value.timelineOffset = 0;
+    return;
+  }
+  draft.value.trigger = 'time';
+  if (!draft.value.scheduleDate) draft.value.scheduleDate = formatLocalDate();
 }
 
 function applyQuick(kind: 'one-minute' | 'next-hour' | 'default-morning') {
@@ -1430,11 +1763,12 @@ function setMonthDay(day: number) {
 }
 function showToast(message: string) {
   toast.value = message;
-  window.setTimeout(() => { toast.value = ''; }, 3500);
+  window.setTimeout(() => { toast.value = ''; }, message.length > 60 ? 7000 : 3500);
 }
 
 function buildRecurrence(): Record<string, unknown> | undefined {
   return buildRecurrenceSpec({
+    trigger: showsTimelineTrigger.value ? draft.value.trigger : 'time',
     repeating: draft.value.repeating,
     repeatEvery: Number(draft.value.repeatEvery) || 1,
     repeatUnit: draft.value.repeatUnit,
@@ -1443,6 +1777,9 @@ function buildRecurrence(): Record<string, unknown> | undefined {
     weekDays: draft.value.weekDays,
     endDate: draft.value.endDate,
     repeatCount: draft.value.repeatCount,
+    timelineProject: draft.value.timelineProject,
+    timelineMilestone: draft.value.timelineMilestone,
+    timelineOffset: draft.value.timelineOffset,
   });
 }
 
@@ -1456,8 +1793,14 @@ function resolveScheduledAt(): number {
 }
 
 function notifyPayload() {
-  return buildNotifyPayload({
+  const notifyVia = resolveNotifyViaForLane({
+    lane: effectiveLane.value,
     notifyVia: draft.value.notifyVia,
+    botAvailable: botChannelAvailable.value,
+    asmeAvailable: asmeChannelAvailable.value,
+  });
+  return buildNotifyPayload({
+    notifyVia,
     targetType: draft.value.targetType,
     recipients: draft.value.recipients,
     glipTeamId: draft.value.glipTeamId,
@@ -1490,9 +1833,12 @@ function editorWriteBody() {
     requiresApproval: draft.value.taskKind === 'dev' || draft.value.mode === 'write',
     scheduledAt: resolveScheduledAt(),
     recurrenceSpec: buildRecurrence() ?? null,
+    dependsOn: draft.value.dependsOnIds.filter(Boolean),
+    parentActionId: draft.value.parentActionId.trim() || undefined,
     payload: {
       content: draft.value.content.trim() || undefined,
       acceptance: draft.value.acceptance.trim() || undefined,
+      planGate: draft.value.taskKind === 'dev' ? draft.value.planGate : undefined,
       mode: draft.value.taskKind === 'agent' ? draft.value.mode : undefined,
       remindPreset: draft.value.taskKind === 'remind' ? draft.value.remindPreset : undefined,
       pushMethod: draft.value.taskKind === 'push' ? draft.value.pushMethod : undefined,
@@ -1520,17 +1866,35 @@ async function saveTask() {
   if (!canSave.value) return;
   saving.value = true;
   try {
+    const previous = editingTaskId.value
+      ? tasks.value.find((item) => item.id === editingTaskId.value)
+      : undefined;
     const body = editorWriteBody();
     const response = editingTaskId.value
       ? await client.updateTaskCenterTask(editingTaskId.value, body)
       : await client.createTaskCenterTask(body);
-    const saved = response.task;
+    let saved = response.task;
+    let sheetNote = '';
+    if (previous?.lane === 'jira_sheet' && saved?.lane !== 'jira_sheet') {
+      sheetNote = await syncSheetControl(previous, 'delete');
+      if (sheetNote) sheetNote = sheetNote.replace('Sheet 未同步', '旧 Sheet 行未删');
+    } else if (saved?.lane === 'jira_sheet') {
+      try {
+        saved = await upsertTaskCenterSheetMirror(saved, { interactive: true });
+        sheetNote = ' · 已同步 Sheet ☁️';
+      } catch (error) {
+        sheetNote = ` · Sheet 未同步：${(error as Error).message}`;
+      }
+    }
     closeEditor();
     const lane = response.lane;
+    const title = saved?.title ?? body.title;
     showToast(
       lane && !lane.honoredRequest
         ? `已保存，但调度器回落为 🏠：${lane.reason}`
-        : `已保存「${saved?.title ?? body.title}」· ${response.mirrorRequired ? '待同步 Sheet ☁️' : '已入 memory_cron 队列 🏠'}`,
+        : saved?.lane === 'jira_sheet'
+          ? `已保存「${title}」${sheetNote || (response.mirrorRequired ? ' · 待同步 Sheet ☁️' : ' · ☁️')}`
+          : `已保存「${title}」· 已入 memory_cron 队列 🏠`,
     );
     await loadAll();
     if (saved?.id) selectedId.value = saved.id;
@@ -1599,6 +1963,11 @@ async function loadAll(options: { silent?: boolean } = {}) {
     loadError.value = '';
     if (!selectedId.value && list.items.length > 0) {
       selectedId.value = list.items[0].id;
+    }
+    if (!options.silent) {
+      void retryPendingTaskCenterMirrors(list.items, { interactive: false }).then((synced) => {
+        if (synced > 0) void loadAll({ silent: true });
+      });
     }
   } catch (error) {
     loadError.value = (error as Error).message;
@@ -1718,7 +2087,8 @@ onUnmounted(() => {
 .tc-inline .tc-field { flex: 1; min-width: 0; }
 .tc-inline select, .tc-inline input { flex: 1; }
 .tc-quick { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem; }
-.tc-repeat {
+.tc-repeat,
+.tc-timeline {
   border: 1px solid var(--tc-line);
   border-radius: 0.55rem;
   padding: 0.7rem 0.75rem;
@@ -1727,6 +2097,9 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 0.55rem;
   margin-bottom: 0.7rem;
+}
+.tc-timeline {
+  background: rgba(59, 130, 246, 0.08);
 }
 .tc-opts.compact { gap: 0.3rem; }
 .tc-opts.compact .tc-opt { min-height: 2rem; padding: 0.3rem 0.5rem; }
@@ -1811,6 +2184,7 @@ onUnmounted(() => {
 .tc-time { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.68rem; color: var(--tc-dim); flex-shrink: 0; }
 .tc-lane { flex-shrink: 0; }
 .tc-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5e1; }
+.tc-dupes { margin-left: 0.35rem; color: #94a3b8; font-size: 0.75rem; }
 
 .tc-kind { font-size: 0.62rem; padding: 0.08rem 0.45rem; border-radius: 999px; white-space: nowrap; flex-shrink: 0; background: rgba(255, 255, 255, 0.08); color: var(--tc-muted); }
 .tc-kind.push { background: rgba(34, 211, 238, 0.14); color: var(--tc-cyan); }
@@ -1867,13 +2241,16 @@ onUnmounted(() => {
 .tc-field { margin-bottom: 0.85rem; }
 .tc-field label { display: block; font-size: 0.74rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.3rem; }
 .tc-field .req { color: var(--tc-red); }
-.tc-field input[type='text'], .tc-field textarea, .tc-field select {
+.tc-field input[type='text'], .tc-field input[type='number'], .tc-field textarea, .tc-field select {
   width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--tc-line);
   border-radius: 8px; color: var(--tc-ink); font-size: 0.78rem; padding: 0.5rem 0.65rem;
   font-family: inherit; outline: none;
 }
 .tc-field textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; resize: vertical; }
 .tc-field input:focus, .tc-field textarea:focus, .tc-field select:focus { border-color: rgba(59, 130, 246, 0.5); }
+.tc-multi { min-height: 5.5rem; }
+.tc-artifact { margin-bottom: 0.45rem; }
+.tc-artifact strong { display: block; font-size: 0.72rem; color: #cbd5e1; }
 .tc-hint { display: block; margin-top: 0.28rem; font-size: 0.68rem; color: var(--tc-dim); line-height: 1.45; }
 .tc-opts { display: flex; gap: 0.45rem; flex-wrap: wrap; }
 .tc-opt { border: 1px solid var(--tc-line); background: rgba(255, 255, 255, 0.03); color: var(--tc-muted); border-radius: 8px; padding: 0.45rem 0.8rem; font-size: 0.74rem; cursor: pointer; text-align: left; font-family: inherit; }

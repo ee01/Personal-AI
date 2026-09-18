@@ -28,6 +28,32 @@ const TASKS = [
     createdAt: Math.floor(Date.now() / 1000),
     mirrorRef: { sheetMessageId: 'msg_123', syncState: 'synced' },
     recurrenceSpec: { repeatEvery: 1, repeatUnit: 'Day' },
+    params: {
+      notifyVia: 'bot',
+      notifyTarget: { type: 'private', glipUserName: 'esone.qiu', targetUserId: 'esone.qiu' },
+    },
+  },
+  {
+    id: 'task-timeline-1',
+    title: 'FF 当天提醒扫 bug',
+    taskKind: 'push',
+    lane: 'jira_sheet',
+    queueStatus: 'queued',
+    priority: 5,
+    dependsOn: [],
+    retryCount: 0,
+    createdAt: Math.floor(Date.now() / 1000),
+    recurrenceSpec: {
+      trigger: 'timeline',
+      timelineProject: 'mThor',
+      timelineMilestone: 'FF',
+      timelineOffset: 0,
+      scheduleTime: '09:00',
+    },
+    params: {
+      notifyVia: 'bot',
+      notifyTarget: { type: 'private', glipUserName: 'esone.qiu', targetUserId: 'esone.qiu' },
+    },
   },
   {
     id: 'task-remind-1',
@@ -186,6 +212,8 @@ async function main() {
     const bodyText = await page.evaluate(() => document.body.innerText);
     assert.ok(bodyText.includes('☁️'), '云端 lane 图标应出现');
     assert.ok(bodyText.includes('🏠'), '本地 lane 图标应出现');
+    assert.ok(bodyText.includes('需要处理'), '失败 / 等人的任务应有收件箱 chip');
+    assert.ok(bodyText.includes('每个版本'), 'Timeline 任务应显示按版本重复而不是日历时间');
     console.log('✓ 两条 lane 在列表中可区分');
 
     // 3. Capability bar is compact, and opens a guided setup with a real way in.
@@ -279,6 +307,13 @@ async function main() {
     assert.ok(dialogText.includes('Level 2'), '应说明缺什么才能用 ☁️');
     assert.ok(dialogText.includes('执行时间'), '应有执行日期/时间，与定时消息页对齐');
     assert.ok(dialogText.includes('是否重复推送'), '应有重复开关');
+    assert.ok(dialogText.includes('Timeline 触发'), '应露出 Timeline 触发入口');
+    const timelineDisabled = await page.evaluate(() => {
+      const opts = Array.from(document.querySelectorAll('.tc-dialog .tc-opt'));
+      const timeline = opts.find((el) => el.textContent?.includes('Timeline 触发'));
+      return timeline ? timeline.hasAttribute('disabled') || timeline.classList.contains('off') : null;
+    });
+    assert.equal(timelineDisabled, true, '未启用 Timeline Sync 时 Timeline 触发必须置灰');
     await page.click('.tc-dialog label.ck:has-text("是否重复推送")');
     await page.waitForFunction(
       () => document.querySelector('.tc-dialog')?.textContent?.includes('每周几'),
@@ -331,6 +366,14 @@ async function main() {
               jiraUrl: 'https://jira.example.com',
               createdAt: '2026-01-01T00:00:00.000Z',
             },
+            timelineSyncRule: {
+              ruleId: '2160',
+              ruleName: 'timeline-sync',
+              webhookUrl: 'https://script.example/exec',
+              projectKey: 'MTR',
+              jiraUrl: 'https://jira.example.com',
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
           },
         },
       }),
@@ -348,7 +391,127 @@ async function main() {
     assert.ok(existingL2Text.includes('已从本机缓存探测'), '存量 L2 应显示探测结果');
     assert.ok(existingL2Text.includes('打开定时消息页'), '存量 L2 应打开已有配置页，而不是初始化');
     assert.equal(existingL2Text.includes('去一键初始化'), false, '存量 L2 不应再引导一键初始化');
+    assert.ok(existingL2Text.includes('Timeline Sync'), 'L2 抽屉应列出 Timeline Sync');
+    assert.ok(
+      /Timeline Sync[\s\S]{0,40}已探测/.test(existingL2Text),
+      `有 timelineSyncRule 时 Timeline Sync 应为已探测：${existingL2Text}`,
+    );
     console.log('✓ 本机已有 L2 缓存时抽屉探测为已启用，不再走初始化');
+
+    await page.click('.tc-dialog-foot .tc-btn:has-text("关闭")');
+    await page.waitForSelector('.setup-step', { state: 'detached', timeout: 5000 });
+    await page.click('button.tc-btn.primary:has-text("新建任务")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('触发方式'),
+      { timeout: 5000 },
+    );
+    const timelineReady = await page.evaluate(() => {
+      const opts = Array.from(document.querySelectorAll('.tc-dialog .tc-opt'));
+      const timeline = opts.find((el) => el.textContent?.includes('Timeline 触发'));
+      return {
+        text: document.querySelector('.tc-dialog')?.textContent ?? '',
+        found: Boolean(timeline),
+        disabled: timeline ? timeline.hasAttribute('disabled') : null,
+        off: timeline ? timeline.classList.contains('off') : null,
+      };
+    });
+    assert.equal(timelineReady.found, true, `新建弹窗应有 Timeline 触发：${timelineReady.text}`);
+    assert.equal(timelineReady.disabled, false, `L2+Sync 后 Timeline 应可点：${timelineReady.text}`);
+    await page.click('.tc-dialog .tc-opt:has-text("jira_sheet")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('不能走 Chrome'),
+      { timeout: 3000 },
+    );
+    const pluginOnCloud = await page.evaluate(() => {
+      const opts = Array.from(document.querySelectorAll('.tc-dialog .tc-opt'));
+      const plugin = opts.find((el) => el.textContent?.includes('插件通知'));
+      return {
+        disabled: plugin ? plugin.hasAttribute('disabled') : null,
+        on: plugin ? plugin.classList.contains('on') : null,
+        text: document.querySelector('.tc-dialog')?.textContent ?? '',
+      };
+    });
+    assert.equal(pluginOnCloud.disabled, true, '选 ☁️ 后插件通知必须置灰');
+    assert.equal(pluginOnCloud.on, false, '选 ☁️ 后不能继续选中插件通知');
+    assert.ok(pluginOnCloud.text.includes('不能走 Chrome'), '应说明 ☁️ 不能走插件通知');
+    await page.click('.tc-dialog .tc-opt:has-text("Timeline 触发")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('Milestone'),
+      { timeout: 3000 },
+    );
+    const timelineDialog = await page.evaluate(
+      () => document.querySelector('.tc-dialog')?.textContent ?? '',
+    );
+    assert.ok(timelineDialog.includes('项目'), 'Timeline 模式应选择项目');
+    assert.ok(timelineDialog.includes('偏移天数'), 'Timeline 模式应能填偏移');
+    assert.equal(timelineDialog.includes('是否重复推送'), false, 'Timeline 本身就是按版本重复，不再显示日历重复开关');
+    await page.fill('.tc-dialog input[type=text]', 'FF 当天扫 Nova bug');
+    await page.waitForSelector('.tc-dialog .tc-tags input', { timeout: 3000 });
+    await page.fill('.tc-dialog .tc-tags input', 'Esone Qiu');
+    await page.locator('.tc-dialog .tc-tags input').press('Enter');
+    const createdBefore = createdPayloads.length;
+    await page.click('.tc-dialog-foot .tc-btn.primary');
+    const started = Date.now();
+    while (createdPayloads.length === createdBefore && Date.now() - started < 8000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const timelinePayload = createdPayloads.at(-1);
+    assert.equal(timelinePayload?.taskKind, 'push');
+    assert.equal(timelinePayload?.lane, 'jira_sheet', 'Timeline 必须走云端 lane');
+    assert.equal(timelinePayload?.recurrenceSpec?.trigger, 'timeline');
+    assert.equal(timelinePayload?.recurrenceSpec?.timelineProject, 'mThor');
+    assert.equal(timelinePayload?.recurrenceSpec?.timelineMilestone, 'FF');
+    assert.equal(timelinePayload?.recurrenceSpec?.repeatEvery, undefined);
+    assert.notEqual(timelinePayload?.payload?.notifyVia, 'plugin', '☁️ 不得写出插件通知');
+    assert.equal(timelinePayload?.payload?.notifyVia, 'bot', '☁️ 默认落到 Jira Bot');
+    console.log('✓ Timeline 触发写入 recurrenceSpec 并强制 ☁️；插件通知在 ☁️ 上置灰');
+
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(
+      () => document.body.innerText.includes('任务中心'),
+      { timeout: 15000 },
+    );
+    await page.click('button.tc-btn.primary:has-text("新建任务")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('触发方式'),
+      { timeout: 5000 },
+    );
+    await page.click('.tc-dialog .tc-opt:has-text("Timeline 触发")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('Milestone'),
+      { timeout: 3000 },
+    );
+    await page.click('.tc-dialog .tc-opt:has-text("Agent 任务")');
+    await page.waitForFunction(
+      () => document.querySelector('.tc-dialog')?.textContent?.includes('任务描述'),
+      { timeout: 3000 },
+    );
+    const agentTimelineDialog = await page.evaluate(
+      () => document.querySelector('.tc-dialog')?.textContent ?? '',
+    );
+    assert.ok(agentTimelineDialog.includes('Timeline 触发'), 'Agent 任务应保留 Timeline 触发入口');
+    assert.ok(agentTimelineDialog.includes('Milestone'), '从定时推送切到 Agent 应保留 Timeline 配置');
+    assert.equal(agentTimelineDialog.includes('重复执行'), false, 'Agent Timeline 不再显示日历重复开关');
+    await page.fill('.tc-dialog input[type=text]', 'FF 当天扫 Nova');
+    await page.fill('.tc-dialog textarea', '查无 assignee 的 Nova bug');
+    await page.waitForSelector('.tc-dialog .tc-tags input', { timeout: 3000 });
+    await page.fill('.tc-dialog .tc-tags input', 'Esone Qiu');
+    await page.locator('.tc-dialog .tc-tags input').press('Enter');
+    const agentCreatedBefore = createdPayloads.length;
+    await page.click('.tc-dialog-foot .tc-btn.primary');
+    const agentStarted = Date.now();
+    while (createdPayloads.length === agentCreatedBefore && Date.now() - agentStarted < 8000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const agentTimelinePayload = createdPayloads.at(-1);
+    assert.equal(agentTimelinePayload?.taskKind, 'agent');
+    assert.equal(agentTimelinePayload?.lane, 'jira_sheet', 'Agent Timeline 必须走云端 lane');
+    assert.equal(agentTimelinePayload?.recurrenceSpec?.trigger, 'timeline');
+    assert.equal(agentTimelinePayload?.recurrenceSpec?.timelineProject, 'mThor');
+    assert.equal(agentTimelinePayload?.recurrenceSpec?.timelineMilestone, 'FF');
+    assert.equal(agentTimelinePayload?.recurrenceSpec?.repeatEvery, undefined);
+    assert.notEqual(agentTimelinePayload?.payload?.notifyVia, 'plugin', 'Agent ☁️ 不得写出插件通知');
+    console.log('✓ Agent / 帮我做 Timeline 触发写入 recurrenceSpec 并强制 ☁️');
 
     console.log('\n全部通过：任务中心 UI 端到端可用');
   } finally {

@@ -25,6 +25,7 @@ describe('Task Center API', () => {
   beforeEach(() => {
     db.prepare('DELETE FROM proposed_action_attempts').run();
     db.prepare('DELETE FROM proposed_actions').run();
+    db.prepare('DELETE FROM confirm_requests').run();
   });
 
   function post(payload: Record<string, unknown>) {
@@ -45,6 +46,73 @@ describe('Task Center API', () => {
       expect(body.lane.honoredRequest).toBe(true);
       // The extension owns the Sheet write, so the caller must be told.
       expect(body.mirrorRequired).toBe(true);
+    });
+
+    it('does not ask the extension to write Sheet when the row is already mirrored', async () => {
+      const res = await post({
+        taskKind: 'push',
+        title: '存量 Sheet 任务',
+        lane: 'jira_sheet',
+        cloudLaneAvailable: true,
+        idempotencyKey: 'jira_sheet:msg_existing',
+        sourceRefId: 'msg_existing',
+        mirrorRef: { sheetMessageId: 'msg_existing', syncState: 'synced' },
+      });
+      const body = res.json();
+      expect(body.task.lane).toBe('jira_sheet');
+      expect(body.task.mirrorRef.sheetMessageId).toBe('msg_existing');
+      expect(body.mirrorRequired).toBe(false);
+    });
+
+    it('records a later Sheet id without requeueing the task', async () => {
+      const created = await post({
+        taskKind: 'push',
+        title: '待同步',
+        lane: 'jira_sheet',
+        cloudLaneAvailable: true,
+      });
+      const id = created.json().task.id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/task-center/tasks/${id}`,
+        payload: {
+          mirrorRef: { sheetMessageId: 'msg_new', syncState: 'synced' },
+          sourceRefId: 'msg_new',
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().task.mirrorRef.sheetMessageId).toBe('msg_new');
+      expect(res.json().task.queueStatus).toBe('queued');
+      const lookup = await app.inject({
+        method: 'GET',
+        url: '/api/v1/task-center/tasks/by-key?idempotencyKey=jira_sheet%3Amsg_new',
+      });
+      expect(lookup.json().task.id).toBe(id);
+    });
+
+    it('full edit of an already-mirrored jira_sheet task does not demand a new Sheet row', async () => {
+      const created = await post({
+        taskKind: 'push',
+        title: '已镜像',
+        lane: 'jira_sheet',
+        cloudLaneAvailable: true,
+        mirrorRef: { sheetMessageId: 'msg_keep', syncState: 'synced' },
+      });
+      const id = created.json().task.id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/task-center/tasks/${id}`,
+        payload: {
+          title: '已镜像改名',
+          taskKind: 'push',
+          lane: 'jira_sheet',
+          cloudLaneAvailable: true,
+          payload: { content: 'x' },
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().task.lane).toBe('jira_sheet');
+      expect(res.json().mirrorRequired).toBe(false);
     });
 
     it('falls back to local when the cloud lane was asked for without Level 2', async () => {
@@ -81,6 +149,22 @@ describe('Task Center API', () => {
         cloudLaneAvailable: true,
       });
       expect(res.json().task.lane).toBe('memory_cron');
+    });
+
+    it('parks a dev task at a plan gate when asked', async () => {
+      const res = await post({
+        taskKind: 'dev',
+        title: 'lease 心跳续租',
+        payload: { acceptance: 'lease 在过期前续上', planGate: true },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().task.queueStatus).toBe('input_required');
+      const gates = db
+        .prepare(
+          `SELECT resume_action_id, category FROM confirm_requests WHERE resume_action_id = ?`,
+        )
+        .all(res.json().task.id) as Array<{ category: string }>;
+      expect(gates.some((row) => row.category === 'task_center_plan_gate')).toBe(true);
     });
 
     it('defaults to local when no lane is requested', async () => {
@@ -403,6 +487,41 @@ describe('Task Center task updates', () => {
     });
     const listed = await app2.inject({ method: 'GET', url: '/api/v1/task-center/tasks' });
     expect(listed.json().total).toBe(1);
+  });
+
+  it('updates dependsOn and parentActionId on a full editor save', async () => {
+    const parent = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: { taskKind: 'dev', title: '父任务' },
+    });
+    const dep = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: { taskKind: 'agent', title: '前置' },
+    });
+    const child = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/task-center/tasks',
+      payload: { taskKind: 'dev', title: '子任务', payload: { acceptance: 'done' } },
+    });
+    const parentId = parent.json().task.id as string;
+    const depId = dep.json().task.id as string;
+    const childId = child.json().task.id as string;
+    const res = await app2.inject({
+      method: 'PATCH',
+      url: `/api/v1/task-center/tasks/${childId}`,
+      payload: {
+        taskKind: 'dev',
+        title: '子任务',
+        payload: { acceptance: 'done' },
+        dependsOn: [depId],
+        parentActionId: parentId,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().task.dependsOn).toEqual([depId]);
+    expect(res.json().task.parentActionId).toBe(parentId);
   });
 
   it('pauses, resumes, runs now, completes and deletes a task', async () => {
