@@ -1,6 +1,6 @@
 # 定时消息统一管理功能（任务中心 ☁️ jira_sheet lane）
 
-*最后更新: 2026-09-03*
+*最后更新: 2026-09-18*
 
 > **定位**：本文是[任务中心](task_center.md)的 **Level 2 / ☁️ `jira_sheet` lane** 子文档，覆盖 Google Sheet + App Script + Jira Automation 这条云端 24/7 调度链路的全部实现细节（数据模型、执行匹配与幂等、Config 同步、Timeline 缓存、App Script 自动更新）。
 >
@@ -405,7 +405,7 @@
 #### Outreach（帮我问 / 主动询问）
 
 - 这不是普通消息推送，而是一个 **主动询问计划**
-- 创建计划前会检查 memory-service `GET /config` 的 `outreachEnabled` 和 RingCentral 凭据。Options 里的勾选只是本机镜像；打开 Options 时会先加载服务端值，加载完成前不能保存这些运行时开关，避免另一台设备上的设置被旧缓存覆盖
+- 创建计划前会检查 memory-service `GET /config` 的 `outreachEnabled` 和 RingCentral 凭据。这条检查必须走 `MemoryServiceClient.request()` / `getRuntimeConfig()`（会带上本机已签发的 `pak.…` 设备 key）。不要对 `/config` 发匿名 `fetch`：生产环境开了服务密钥后匿名请求会 401 `authentication_required`，新建弹窗会误报「无法验证配置」，即使 RingCentral 已经配好。Options 里的勾选只是本机镜像；打开 Options 时会先加载服务端值，加载完成前不能保存这些运行时开关，避免另一台设备上的设置被旧缓存覆盖
 - Sheet 中保留的是计划入口；真正的运行时状态在 memory-service 的 `outreach_templates / outreach_sessions / outreach_events`（表名沿用内部 template 命名）
 - 发送前会先做 **目标解析**，确认应该问谁
 - 真正触发时会先做 **答案预检**
@@ -617,7 +617,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - AppScript 在返回 AgentTask webhook 前检查 `Config!agent_task_webhook_url` 或行级 `AI_Endpoint`。缺失时不会领取该任务，也不会写 `Last_Exec`，避免配置错误导致任务静默跳过。
 - 管理页保存 / 更新“帮我做”时会先检查 Config；缺少默认 webhook 时从本机 `MEMORY_SERVICE_BASE_URL` 派生 `/agent-tasks/execute`，并连同 `agent_task_user_id` 写回 Sheet Config 后才保存任务行。
 - 管理页普通打开和基础列表加载只是只读检查：不会因为发现本机缺少 AgentTask webhook 就静默写回 Config。只有用户点击手动同步、创建/保存“帮我做”、AR 入口创建重复 AgentTask，或明确运行 schema/规则升级路径时，才会进入 Sheet-first webhook 补齐。
-- 打开新建/编辑弹窗且选中“帮我做”时，管理页会用当前 Options/env 里的 `MEMORY_SERVICE_BASE_URL` 和当前用户 id 请求 memory-service `/config`，确认后端 runtime 里 `openClawEnabled/openClawBaseUrl/openClawApiKeyConfigured` 已就绪；这个检查只读，不写 Messages，也不创建可领取任务。
+- 打开新建/编辑弹窗且选中“帮我做”时，管理页会用当前 Options/env 里的 `MEMORY_SERVICE_BASE_URL` 和当前用户 id 请求 memory-service `/config`，确认后端 runtime 里 `openClawEnabled/openClawBaseUrl/openClawApiKeyConfigured` 已就绪；这个检查只读，不写 Messages，也不创建可领取任务。请求走扩展公共 `MemoryServiceClient`（已下发的设备 `pak.…`），不单独裸请求 `/config`。
 - Options/env 里的 `OPENCLAW_*` 是扩展侧配置，memory-service `/config` 返回的是后端当前用户 runtime 配置。两边可能短暂不一致：例如 Options 已保存但后端 runtime 未同步、请求未带 `X-User-Id` 读到 default 用户、或扩展仍复用旧 memory-service 地址。此时会阻止保存并显示缺失原因，避免创建到期后必然失败的 AgentTask。
 - AgentTask webhook 默认是 `POST https://.../api/v1/agent-tasks/execute`，内网环境也可配置 `http://...`；需要 `Config!agent_task_user_id` 填写 memory-service 的用户 id，Jira Rule 模板会把它作为 `X-User-Id` 转发。
 - memory-service 是执行账本和结果真源：`/api/v1/agent-tasks/execute` 使用确定性 `idempotencyKey` 创建或复用 `delegate_agent` action（兼容旧 `delegate_openclaw`），入队即返回；由 Options「Agent 执行器」registry 选择 OpenClaw Gateway/Responses 或 ACP 执行。详见 [Agent Executor Runtime](./agent_executor_runtime.md)。
@@ -875,6 +875,7 @@ A:
 
 ## 最近更新
 
+- 2026-09-18：Scheduled Messages 新建弹窗读 memory-service `GET /config` 误报未配置（E-21）。公共 `MemoryServiceClient.request()` 在 userinfo 尚未解析、或弹窗用 Google 本地名覆盖了已解析 userId 时会跳过本机已签发的 `pak.…`，生产环境因此 401 `authentication_required`。现改为始终优先使用 chrome.storage 里已下发的设备 key / 帮助中心 key，且只在 client 仍是 `default` 时才补 userId。
 - 2026-09-08：帮我做执行结果不再因信封格式不达标而改判失败。成功/失败只看阻断性条件（超时、空输出、执行器自报 error/缺工具/缺权限、正文明确说做不了）；格式好坏降为 `evidenceGrade`（verified / reported / unparsed），只出现在 owner 完成回执。裸文本会包成 `note` 交付物。群通知在结构化提取失败时用 Memory Service LLM 从原文补救填模板。`notifyWhenEmpty` 只对封闭 `empty` 生效，`noop`/`unparsed` 仍推。
 - 2026-09-02：AgentTask 成功通知拆成「执行 → 整理 → 投递」三段：执行器仍交 JSON 信封 + artifact，`notifyTemplate` 只抽证据字段提示（key / url / title / assignee），Jira 收据约定带实际实例 browse/self URL；模板格式化改走 Memory Service LLM（不委派 OpenClaw），失败回落本地填空；成功结果通知不再加 `任务完成: <Topic>` 前缀。OpenClaw Gateway `agent.wait` 超时后进入 30s/60s/120s 确认环，N 次对不上才 `dead_letter`。
 - 2026-08-28：AgentTask 结果通知配置由插件在保存时直接注册到 memory-service（`agent_task_notify_configs`），不再单靠 Apps Script 版本转发；`result` 类型投递不配模板或模板格式化失败时，兜底文案改成「标题 + 摘要」的纯公告，不再误发只给 owner 看的回执体（Run id / 触发来源 / Sheet 账本边界）；模板格式化失败会记录具体原因，不再静默；结果投递失败会写入 `channel_delivery_records` 并私发 owner 说明，`runtime-status` 一并暴露 `resultNotifyDelivery`；查询/扫描类任务查到 0 个匹配现在算合法 success（`query_result` 收据），不再被判成缺证据的 error。

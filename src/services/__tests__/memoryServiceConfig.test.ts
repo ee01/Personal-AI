@@ -436,3 +436,155 @@ test('claim-gate 409 does not continue with unauthenticated business requests', 
     (globalThis as any).chrome = previousChrome;
   }
 });
+
+test('GET /config uses the stored device key even before userinfo is resolved', async () => {
+  const previousChrome = (globalThis as any).chrome;
+  const previousFetch = globalThis.fetch;
+  const requested: Array<{ url: string; auth: string; method: string }> = [];
+
+  installChromeStorage({
+    memoryServiceDeviceKey: {
+      userId: 'esone.qiu',
+      id: 'key-1',
+      token: 'pak.esone.qiu.stored',
+      keyPrefix: 'pak.esone.qiu.stored',
+    },
+  });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = new Headers(init?.headers);
+    requested.push({
+      url,
+      auth: headers.get('Authorization') || '',
+      method: String(init?.method || 'GET').toUpperCase(),
+    });
+    return new Response(
+      JSON.stringify({
+        outreachEnabled: true,
+        ringCentralServerUrl: 'https://platform.ringcentral.com',
+        ringCentralClientId: 'cid',
+        ringCentralClientSecretConfigured: true,
+        ringCentralJwtConfigured: true,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const client = new MemoryServiceClient({
+      baseUrl: 'http://memory.xmnup.com/api/v1',
+    });
+    await client.getRuntimeConfig();
+    const configCall = requested.find((item) => item.url.endsWith('/config'));
+    assert.equal(configCall?.auth, 'Bearer pak.esone.qiu.stored');
+    assert.equal(
+      requested.some((item) => item.url.endsWith('/users/me/keys')),
+      false,
+      'must reuse the issued pak instead of re-POSTing /users/me/keys',
+    );
+    assert.equal(client.getUserId(), 'esone.qiu');
+  } finally {
+    globalThis.fetch = previousFetch;
+    (globalThis as any).chrome = previousChrome;
+  }
+});
+
+test('GET /config keeps the stored pak when a caller overrides userId', async () => {
+  const previousChrome = (globalThis as any).chrome;
+  const previousFetch = globalThis.fetch;
+  const requested: Array<{ url: string; auth: string; method: string }> = [];
+
+  installChromeStorage({
+    envConfig: {
+      MEMORY_SERVICE_BOOTSTRAP_KEY: 'test-bootstrap',
+    },
+    userinfo: { username: 'esone.qiu' },
+    memoryServiceDeviceKey: {
+      userId: 'esone.qiu',
+      id: 'key-1',
+      token: 'pak.esone.qiu.stored',
+    },
+  });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = new Headers(init?.headers);
+    requested.push({
+      url,
+      auth: headers.get('Authorization') || '',
+      method: String(init?.method || 'GET').toUpperCase(),
+    });
+    if (url.endsWith('/users/me/keys') && String(init?.method || 'GET').toUpperCase() === 'POST') {
+      return new Response(
+        JSON.stringify({
+          error: 'issuer_not_trusted',
+          message: 'bootstrap cannot reissue',
+        }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(JSON.stringify({ outreachEnabled: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new MemoryServiceClient({
+      baseUrl: 'http://memory.xmnup.com/api/v1',
+    });
+    client.setUserId('google.localpart');
+    await client.getRuntimeConfig();
+    const configCall = requested.find((item) => item.url.endsWith('/config'));
+    assert.equal(configCall?.auth, 'Bearer pak.esone.qiu.stored');
+  } finally {
+    globalThis.fetch = previousFetch;
+    (globalThis as any).chrome = previousChrome;
+  }
+});
+
+test('falls back to the help-center key for /config when bootstrap reissue is unavailable', async () => {
+  const previousChrome = (globalThis as any).chrome;
+  const previousFetch = globalThis.fetch;
+  let configAuth = '';
+
+  installChromeStorage({
+    envConfig: {
+      MEMORY_SERVICE_BOOTSTRAP_KEY: 'test-bootstrap',
+    },
+    userinfo: { username: 'esone.qiu' },
+    memoryServiceUserApiKey: {
+      userId: 'esone.qiu',
+      id: 'key-help',
+      token: 'pak.esone.qiu.helpkey',
+    },
+  });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = new Headers(init?.headers);
+    if (url.endsWith('/users/me/keys') && init?.method === 'POST') {
+      return new Response(JSON.stringify({ error: 'issuer_not_trusted' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.endsWith('/config')) {
+      configAuth = headers.get('Authorization') || '';
+    }
+    return new Response(JSON.stringify({ outreachEnabled: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new MemoryServiceClient({
+      baseUrl: 'http://memory.xmnup.com/api/v1',
+      userId: 'esone.qiu',
+    });
+    await client.getRuntimeConfig();
+    assert.equal(configAuth, 'Bearer pak.esone.qiu.helpkey');
+  } finally {
+    globalThis.fetch = previousFetch;
+    (globalThis as any).chrome = previousChrome;
+  }
+});
