@@ -1,4 +1,4 @@
-export type ActorSource = 'creator' | 'extension' | 'anonymous' | 'system';
+export type ActorSource = 'creator' | 'extension' | 'anonymous' | 'system' | 'web_ai' | 'agent';
 
 /** Persisted per-team release-train ruler config (shared via snapshot). */
 export interface ReleaseFilter {
@@ -160,6 +160,7 @@ export interface SubRow {
   status: string | null;
   /** Mirrored Jira Original Estimate, ceiled to 8h man-days; null if empty. */
   original_estimate_days: number | null;
+  owner_resolution: 'explicit' | 'ambiguous' | 'unassigned' | 'legacy';
   version: number;
   created_at: number;
   updated_at: number;
@@ -259,6 +260,7 @@ export interface TeamSnapshot {
       description?: string | null;
       status?: string | null;
       originalEstimateDays?: number | null;
+      ownerResolution?: 'explicit' | 'ambiguous' | 'unassigned' | 'legacy';
     }>;
     markers: Array<{
       id: string;

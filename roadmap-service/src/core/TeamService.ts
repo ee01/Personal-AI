@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { nanoid } from 'nanoid';
 import { getDb } from '../storage/Database.js';
-import { getEventBus } from './EventBus.js';
+import { emitTeamEvent } from '../planning/eventBuffer.js';
+import { publicIntentEvent } from '../planning/sanitize.js';
+import { restoreUndoneRow } from '../planning/DraftBatchService.js';
 import { config } from '../config.js';
 import { buildJqlHints } from './JqlIntrospect.js';
 import type {
@@ -157,6 +159,15 @@ function normalizeSource(raw: string | null | undefined): ItemSource {
   return raw === 'manual' ? 'manual' : 'jira';
 }
 
+function normalizeOwnerResolution(
+  raw: string | null | undefined,
+): NonNullable<TeamSnapshot['items'][number]['subs'][number]['ownerResolution']> {
+  if (raw === 'explicit' || raw === 'ambiguous' || raw === 'unassigned' || raw === 'legacy') {
+    return raw;
+  }
+  return 'legacy';
+}
+
 /** Derive the Jira project key from a real issue key (`NOVA-123` -> `NOVA`). */
 function projectKeyFromJiraKey(key: string): string | null {
   const match = /^([A-Za-z][A-Za-z0-9_]*)-\d+$/.exec(key.trim());
@@ -220,6 +231,7 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
         typeof sub.original_estimate_days === 'number'
           ? sub.original_estimate_days
           : null,
+      ownerResolution: normalizeOwnerResolution(sub.owner_resolution),
     })),
     markers: markers.map(mapMarker),
   };
@@ -429,7 +441,7 @@ export function createTeam(input: {
   });
 
   const snapshot = getTeamSnapshot(id)!;
-  getEventBus().emit('team_created', snapshot, id);
+  emitTeamEvent('team_created', snapshot, id);
   return snapshot;
 }
 
@@ -476,7 +488,7 @@ export function touchPresence(
        source = excluded.source,
        last_seen = excluded.last_seen`,
   ).run(teamId, actor.clientId, actor.name, actor.source, now());
-  getEventBus().emit(
+  emitTeamEvent(
     'presence',
     { teamId, clientId: actor.clientId, name: actor.name, source: actor.source },
     teamId,
@@ -529,7 +541,7 @@ export function writeActivity(input: {
     ip: input.actor.ip || null,
   };
 
-  getEventBus().emit('activity', formatActivity(row), input.teamId);
+  emitTeamEvent('activity', formatActivity(row), input.teamId);
   return row;
 }
 
@@ -1230,7 +1242,10 @@ export function applyIntent(
     const key = String(intent.itemKey || '');
     const jiraKey = String(intent.jiraKey || '').trim();
     if (!jiraKey) return { ok: false, error: 'jira_key_required' };
-    const item = getItem(teamId, key);
+    let item = getItem(teamId, key);
+    if (!item && restoreUndoneRow({ teamId, itemKey: key, jiraKey })) {
+      item = getItem(teamId, key);
+    }
     if (!item) return { ok: false, error: 'item_not_found' };
     const type = String(intent.type || '').trim() || item.type;
     const projectKey =
@@ -1348,10 +1363,16 @@ export function applyIntent(
       intent.description !== undefined
         ? clipDescription(intent.description)
         : sub.description;
+    const nextResolution =
+      intent.owner !== undefined
+        ? nextOwner
+          ? 'explicit'
+          : 'unassigned'
+        : sub.owner_resolution || 'legacy';
     db.prepare(
       `UPDATE subs SET
         title = ?, alias = ?, owner = ?, start_date = ?, days = ?, cleared = ?,
-        description = ?, version = version + 1, updated_at = ?
+        description = ?, owner_resolution = ?, version = version + 1, updated_at = ?
        WHERE id = ?`,
     ).run(
       nextTitle,
@@ -1361,6 +1382,7 @@ export function applyIntent(
       nextDays,
       nextCleared,
       nextDesc,
+      nextResolution,
       ts,
       sub.id,
     );
@@ -1407,7 +1429,14 @@ export function applyIntent(
       const sub = db
         .prepare(`SELECT * FROM subs WHERE team_id = ? AND id = ?`)
         .get(teamId, mapping.draftId) as SubRow | undefined;
-      if (!sub) continue;
+      if (!sub) {
+        restoreUndoneRow({
+          teamId,
+          subId: mapping.draftId,
+          jiraKey: mapping.jiraKey,
+        });
+        continue;
+      }
       if (sub.jira_key === mapping.jiraKey && !sub.is_draft) continue;
       // Same alias preservation as resolve_item above.
       const alias = sub.alias || sub.title;
@@ -1719,7 +1748,7 @@ export function applyIntent(
       ts,
       ts + config.softLockTtlMs,
     );
-    getEventBus().emit(
+    emitTeamEvent(
       'lock',
       {
         teamId,
@@ -1741,7 +1770,7 @@ export function applyIntent(
       String(intent.targetKey || ''),
       actor.clientId,
     );
-    getEventBus().emit(
+    emitTeamEvent(
       'unlock',
       {
         teamId,
@@ -1940,8 +1969,8 @@ export function applyIntent(
   }
 
   const snapshot = getTeamSnapshot(teamId)!;
-  getEventBus().emit('snapshot', snapshot, teamId);
-  getEventBus().emit('intent', { op, intent, actor }, teamId);
+  emitTeamEvent('snapshot', snapshot, teamId);
+  emitTeamEvent('intent', publicIntentEvent(op, intent, actor), teamId);
   return {
     ok: true,
     snapshot,
@@ -2191,8 +2220,8 @@ export function importRemoteTasks(
   });
 
   const snapshot = getTeamSnapshot(teamId)!;
-  getEventBus().emit('snapshot', snapshot, teamId);
-  getEventBus().emit('intent', { op: 'import_tasks', actor }, teamId);
+  emitTeamEvent('snapshot', snapshot, teamId);
+  emitTeamEvent('intent', publicIntentEvent('import_tasks', {}, actor), teamId);
 
   return {
     ok: true,
@@ -2280,7 +2309,12 @@ function applyRefreshFromJira(
   ts: number,
 ): boolean {
   const db = getDb();
-  if (team.jira_refreshed_at && ts - Number(team.jira_refreshed_at) < JIRA_REFRESH_TTL_MS) {
+  const ignoreTtl = Boolean(intent.ignoreTtl);
+  if (
+    !ignoreTtl &&
+    team.jira_refreshed_at &&
+    ts - Number(team.jira_refreshed_at) < JIRA_REFRESH_TTL_MS
+  ) {
     return true;
   }
   db.prepare(
@@ -2559,7 +2593,7 @@ export function confirmTargetSync(
       },
     });
     const snapshot = getTeamSnapshot(teamId)!;
-    getEventBus().emit('snapshot', snapshot, teamId);
+    emitTeamEvent('snapshot', snapshot, teamId);
     return { ok: true, snapshot };
   }
 
@@ -2604,6 +2638,6 @@ export function confirmTargetSync(
   });
 
   const snapshot = getTeamSnapshot(teamId)!;
-  getEventBus().emit('snapshot', snapshot, teamId);
+  emitTeamEvent('snapshot', snapshot, teamId);
   return { ok: true, snapshot };
 }

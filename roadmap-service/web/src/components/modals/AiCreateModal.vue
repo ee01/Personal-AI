@@ -4,8 +4,12 @@ import { useRoadmapState } from '../../composables/useRoadmapState';
 import {
   buildCreateJiraPayload,
   buildDraftGroups,
+  createItemRowId,
+  createSubRowId,
+  draftGroupCanRetry,
   isDraftItem,
   itemDisplayKey,
+  sliceDraftGroupForRetry,
   subTypeComesFromCreateMeta,
   typeBadge,
   type DraftGroup,
@@ -45,8 +49,8 @@ import {
 type RowStatus =
   | { kind: 'pending' }
   | { kind: 'loading' }
-  | { kind: 'ok'; jiraKey: string; aliasKept?: boolean }
-  | { kind: 'error'; message: string };
+  | { kind: 'ok'; jiraKey: string; aliasKept?: boolean; warnings?: string[] }
+  | { kind: 'error'; message: string; jiraKey?: string };
 
 const AI_EXECUTOR_KEY = 'personalroadmap.aiExecutor';
 
@@ -60,6 +64,7 @@ const running = computed({
 });
 const rowStatus = ref<Record<string, RowStatus>>({});
 const promptPeekOpen = ref(false);
+const createAttempt = ref(0);
 
 const prompt = ref('');
 const projectKey = ref('');
@@ -212,10 +217,10 @@ const fixVersionNote = computed(() => {
     return '配置发布时间表（JQL ✎ 弹窗）后可按 Target End 落点列自动填写';
   }
   if (uniqueSuggestedReleases.value.length === 1) {
-    return '已按任务 Target End 在发布时间表上的落点列填入，可修改';
+    return '已按任务 Target End 在发布时间表上的落点列填入，可修改。Jira 尚无此版本时会留空 fixVersion 并继续创建';
   }
   if (uniqueSuggestedReleases.value.length > 1) {
-    return `任务落在不同 release（${uniqueSuggestedReleases.value.join(' / ')}），共享字段留空；Agent 按各任务落点自行判断。输入固定值可覆盖全部`;
+    return `任务落在不同 release（${uniqueSuggestedReleases.value.join(' / ')}），共享字段留空；优先按各任务落点填写，Jira 无此版本则留空继续。输入固定值可覆盖全部`;
   }
   return '所有任务的 Target End 没有落在任何 release 列';
 });
@@ -266,11 +271,30 @@ const blockReason = computed(() => {
 });
 
 function itemRowId(key: string) {
-  return `item:${key}`;
+  return createItemRowId(key);
 }
 function subRowId(id: string) {
-  return `sub:${id}`;
+  return createSubRowId(id);
 }
+
+function hasCreateProgress(): boolean {
+  return Object.values(rowStatus.value).some(
+    (status) => status.kind === 'ok' || status.kind === 'error',
+  );
+}
+
+function warningsOf(id: string): string[] {
+  const status = statusOf(id);
+  return status.kind === 'ok' ? status.warnings || [] : [];
+}
+
+function groupCanRetry(group: DraftGroup): boolean {
+  return !running.value && draftGroupCanRetry(group, rowStatus.value);
+}
+
+const retryableGroupCount = computed(
+  () => groups.value.filter((group) => draftGroupCanRetry(group, rowStatus.value)).length,
+);
 
 function statusOf(id: string): RowStatus {
   return rowStatus.value[id] || { kind: 'pending' };
@@ -344,11 +368,13 @@ watch(
   () => state.modals.value.aiCreate,
   (open) => {
     if (!open) return;
-    // Re-opening mid-run keeps progress rows; only reset for a fresh session.
-    if (!running.value) {
+    // Re-opening mid-run, or after a partial result, keeps progress rows so
+    // the user can read errors and retry remaining drafts.
+    if (!running.value && !hasCreateProgress()) {
       const hints = state.jqlHints.value;
       rowStatus.value = {};
       frozenGroups.value = null;
+      createAttempt.value = 0;
       promptPeekOpen.value = false;
       const teamId = state.teamId.value;
       const draft = getAiPromptDraft(teamId);
@@ -397,13 +423,55 @@ function promptForGroup(group: DraftGroup): string {
   });
 }
 
-async function start() {
+function stampFrozenParentKey(itemKey: string, jiraKey: string) {
+  const groupsFrozen = frozenGroups.value;
+  if (!groupsFrozen || !jiraKey) return;
+  frozenGroups.value = groupsFrozen.map((group) =>
+    group.item.key === itemKey
+      ? { ...group, item: { ...group.item, jiraKey } }
+      : group,
+  );
+}
+
+function rowFromCreateResult(
+  result: { jiraKey?: string; error?: string; warnings?: string[] } | undefined,
+  fallback: string,
+): RowStatus {
+  const jiraKey = String(result?.jiraKey || '').trim();
+  const warnings = [...(result?.warnings || [])];
+  if (result?.error && jiraKey) warnings.push(result.error);
+  if (jiraKey) {
+    return {
+      kind: 'ok',
+      jiraKey,
+      aliasKept: agentMode.value,
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+  return { kind: 'error', message: result?.error || fallback };
+}
+
+async function start(opts?: { groupKey?: string }) {
   if (extensionMissing.value) {
     gate.openGate('createJira');
     return;
   }
   if (blockReason.value || running.value) return;
-  frozenGroups.value = groups.value;
+  const retrying = hasCreateProgress();
+  if (!frozenGroups.value) frozenGroups.value = groups.value;
+  if (retrying) createAttempt.value += 1;
+
+  const sourceGroups = opts?.groupKey
+    ? groups.value.filter((group) => group.item.key === opts.groupKey)
+    : groups.value;
+  const jobs = sourceGroups
+    .map((group) => sliceDraftGroupForRetry(group, rowStatus.value))
+    .filter((group): group is DraftGroup => group != null);
+  if (!jobs.length) {
+    state.toast('没有可重试的失败项');
+    return;
+  }
+
   running.value = true;
   const teamId = state.teamId.value;
   setAiPromptDraft(teamId, prompt.value);
@@ -458,6 +526,7 @@ async function start() {
             prompt: promptForGroup(group),
             executor: selectedExecutor.value,
             teamName,
+            retryAttempt: createAttempt.value || undefined,
             constraints: {
               projectKey: projectKey.value.trim() || null,
               issueType: itemType.value.trim() || null,
@@ -471,25 +540,15 @@ async function start() {
         : await bridgeCreateJira(createPayload);
 
       if (parentIsDraft) {
-        const parent = result.parent;
-        if (parent?.jiraKey) {
-          rowStatus.value[parentId] = {
-            kind: 'ok',
-            jiraKey: parent.jiraKey,
-            aliasKept: agentMode.value,
-          };
+        const parentStatus = rowFromCreateResult(
+          result.parent,
+          '未返回 Jira key',
+        );
+        rowStatus.value[parentId] = parentStatus;
+        if (parentStatus.kind === 'ok') {
           created += 1;
-          if (parent.error) {
-            rowStatus.value[parentId] = {
-              kind: 'error',
-              message: parent.error,
-            };
-          }
+          stampFrozenParentKey(group.item.key, parentStatus.jiraKey);
         } else {
-          rowStatus.value[parentId] = {
-            kind: 'error',
-            message: parent?.error || '未返回 Jira key',
-          };
           failed += 1;
         }
       }
@@ -497,25 +556,12 @@ async function start() {
       const mappings: Array<{ draftId: string; jiraKey: string }> = [];
       for (const sub of group.subs) {
         const row = result.children.find((c) => c.draftId === sub.id);
-        if (row?.jiraKey) {
-          rowStatus.value[subRowId(sub.id)] = {
-            kind: 'ok',
-            jiraKey: row.jiraKey,
-            aliasKept: agentMode.value,
-          };
-          mappings.push({ draftId: sub.id, jiraKey: row.jiraKey });
+        const childStatus = rowFromCreateResult(row, '未创建');
+        rowStatus.value[subRowId(sub.id)] = childStatus;
+        if (childStatus.kind === 'ok') {
+          mappings.push({ draftId: sub.id, jiraKey: childStatus.jiraKey });
           created += 1;
-          if (row.error) {
-            rowStatus.value[subRowId(sub.id)] = {
-              kind: 'error',
-              message: row.error,
-            };
-          }
         } else {
-          rowStatus.value[subRowId(sub.id)] = {
-            kind: 'error',
-            message: row?.error || '未创建',
-          };
           failed += 1;
         }
       }
@@ -538,14 +584,10 @@ async function start() {
 
   try {
     if (agentMode.value) {
-      await runWithConcurrency(
-        groups.value,
-        AGENT_CREATE_CONCURRENCY,
-        createOneGroup,
-      );
+      await runWithConcurrency(jobs, AGENT_CREATE_CONCURRENCY, createOneGroup);
     } else {
-      for (const group of groups.value) {
-        await createOneGroup(group);
+      for (const job of jobs) {
+        await createOneGroup(job);
       }
     }
 
@@ -574,12 +616,13 @@ async function start() {
   if (failed) {
     state.toast(
       created
-        ? `部分失败：成功 ${created} · 失败 ${failed}`
-        : `创建失败：${failed} 项未成功`,
+        ? `部分失败：成功 ${created} · 失败 ${failed}。可改字段后点组上的重试，已成功的 ticket 不会再创建`
+        : `创建失败：${failed} 项未成功。可改字段后重试`,
       toastMs,
     );
-  } else {
+  } else if (!retryableGroupCount.value) {
     frozenGroups.value = null;
+    createAttempt.value = 0;
     if (modalOpen) state.modals.value.aiCreate = false;
   }
 }
@@ -607,7 +650,7 @@ function closeModal() {
         <div class="m-sub">
           Prompt 留空：按下方字段<b>直连 Jira API</b> 创建。填写 Prompt：交给
           <b>Agent 执行器</b>创建（可用技能、自动填当前 Sprint 等动态字段）——已填字段作为约束带给
-          Agent，未填字段由 Agent 决定。Prompt 草稿保存在本机；执行创建时同步为团队配置，协作者也能看到。
+          Agent，未填字段由 Agent 决定。Jira 里还没有对应 fixVersion 时会<b>留空该字段继续创建</b>，不会因此整行拒绝。失败行可改字段后按 Epic 重试，已成功的 ticket 不会再创建。Prompt 草稿保存在本机；执行创建时同步为团队配置，协作者也能看到。
         </div>
       </div>
       <div class="m-body">
@@ -788,10 +831,7 @@ function closeModal() {
               {{ fixVersionByKey[g.item.key] || '无匹配 release' }}
             </span>
             <span class="st">
-              <template v-if="!isDraftItem(g.item)">
-                <span class="newkey">{{ itemDisplayKey(g.item) }}</span>
-              </template>
-              <template v-else-if="kindOf(itemRowId(g.item.key)) === 'loading'">
+              <template v-if="kindOf(itemRowId(g.item.key)) === 'loading'">
                 <span class="mini-spin" /> {{ loadingLabel() }}
               </template>
               <span v-else-if="kindOf(itemRowId(g.item.key)) === 'ok'" class="newkey">
@@ -801,15 +841,42 @@ function closeModal() {
                   class="alias-kept"
                   data-tip="Agent 已规范化 summary||草稿名保留为备注名，甘特展示不变"
                 >草稿名已存为备注</span>
+                <span
+                  v-for="(warning, idx) in warningsOf(itemRowId(g.item.key))"
+                  :key="idx"
+                  class="ai-warn"
+                  :title="warning"
+                >{{ warning }}</span>
               </span>
               <span
                 v-else-if="kindOf(itemRowId(g.item.key)) === 'error'"
                 class="failkey"
-                :title="errorOf(itemRowId(g.item.key))"
               >
                 ✕ {{ errorOf(itemRowId(g.item.key)) }}
               </span>
+              <span v-else-if="!isDraftItem(g.item)" class="newkey">
+                {{ itemDisplayKey(g.item) }}
+              </span>
               <template v-else>待创建</template>
+              <button
+                v-if="groupCanRetry(g)"
+                type="button"
+                class="ai-retry"
+                title="只重试本组失败项，已成功的 ticket 不会再创建"
+                :disabled="running"
+                @click.stop="start({ groupKey: g.item.key })"
+              >
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    d="M13.2 8A5.2 5.2 0 1 1 11 3.7"
+                  />
+                  <path fill="currentColor" d="M13.4 2.2v4.1h-4.1z" />
+                </svg>
+              </button>
             </span>
           </div>
           <div v-for="s in g.subs" :key="s.id" class="ai-row child">
@@ -849,11 +916,16 @@ function closeModal() {
                   class="alias-kept"
                   data-tip="Agent 已规范化 summary||草稿名保留为备注名，甘特展示不变"
                 >草稿名已存为备注</span>
+                <span
+                  v-for="(warning, idx) in warningsOf(subRowId(s.id))"
+                  :key="idx"
+                  class="ai-warn"
+                  :title="warning"
+                >{{ warning }}</span>
               </span>
               <span
                 v-else-if="kindOf(subRowId(s.id)) === 'error'"
                 class="failkey"
-                :title="errorOf(subRowId(s.id))"
               >
                 ✕ {{ errorOf(subRowId(s.id)) }}
               </span>
@@ -874,6 +946,9 @@ function closeModal() {
               : '关闭后工具栏按钮会保持创建中，完成后 toast 通知'
           }}
         </span>
+        <span v-else-if="retryableGroupCount" class="foot-note">
+          {{ retryableGroupCount }} 组仍有失败项 · 可改上方字段后重试，已成功的 ticket 不会再创建
+        </span>
         <button class="btn btn-ghost" @click="closeModal">
           {{ running ? '关闭（后台继续）' : '取消' }}
         </button>
@@ -883,9 +958,15 @@ function closeModal() {
           :disabled="running || (!extensionMissing && (!!blockReason || !groups.length))"
           :title="extensionMissing ? undefined : blockReason || undefined"
           :data-tip="extensionMissing ? extensionLockTip('createJira') : undefined"
-          @click="start"
+          @click="start()"
         >
-          {{ running ? '创建中…' : '开始创建' }}
+          {{
+            running
+              ? '创建中…'
+              : retryableGroupCount
+                ? `重试失败项（${retryableGroupCount}）`
+                : '开始创建'
+          }}
         </button>
       </div>
     </div>

@@ -43,3 +43,23 @@ npm run deploy:roadmap
 ## 文档
 
 - 功能说明：[`docs/features/personal_roadmap.md`](../docs/features/personal_roadmap.md)
+- 静态 Demo：[`docs/demo/roadmap-demo.html`](../docs/demo/roadmap-demo.html)
+
+## AI 批量规划 Draft
+
+产品内入口：Backlog「新建条目 → 使用 AI 批量创建」。服务端调用 OpenAI 或 Claude 生成两级 Draft 并初排甘特，**不创建 Jira**。MCP 结构化提交不依赖服务端 LLM。
+
+1. 复制 `.env.example` 后按需填写 `ROADMAP_OPENAI_API_KEY` 或 `ROADMAP_CLAUDE_API_KEY`
+2. `ROADMAP_AI_ENABLED=true` 才打开网页「生成」；关掉时手动创建和 MCP `validate/commit` 仍可用
+3. 网页「生成」旁勾选「直接创建 Draft」才一次写入，默认只预览（不再用服务端 `ROADMAP_AI_AUTO_COMMIT`）
+4. 生成成功后可「撤销本批」，没有 `ROADMAP_AI_UNDO_ENABLED`；已经回填 Jira key 的条目会留下
+5. Base URL 只允许部署管理员改，不能由请求或需求正文覆盖
+
+Agent 入口：
+
+- MCP：[`mcp/README.md`](mcp/README.md)
+- Codex Plugin：[`plugin/README.md`](plugin/README.md)
+
+```bash
+npm --prefix roadmap-service/mcp run build
+```

@@ -298,7 +298,7 @@ export function formatEstimate(estimate: number | null | undefined): string {
 }
 
 /** UI cap for user-entered draft descriptions (Prompt budget). */
-export const DESCRIPTION_MAX_CHARS = 500;
+export const DESCRIPTION_MAX_CHARS = 2000;
 
 export function clipTxt(text: string | null | undefined, max: number): string {
   const flat = String(text || '').replace(/\s+/g, ' ').trim();
@@ -359,6 +359,38 @@ export function subTypeComesFromCreateMeta(
   );
 }
 
+/**
+ * Keys for open-page silent Jira refresh. Scheduled main/subs/dep tickets come
+ * first; backlog epics with a jiraKey fill the same 50-key primary budget so
+ * unscheduled rows can mirror status too.
+ */
+export function collectJiraRefreshKeys(
+  scheduledItems: RoadmapItem[],
+  backlogItems: RoadmapItem[],
+  blockedKeys: ReadonlySet<string> = new Set(),
+): string[] {
+  const itemKeys: string[] = [];
+  const depKeys: string[] = [];
+  for (const it of scheduledItems) {
+    if (it.jiraKey && !blockedKeys.has(it.jiraKey)) itemKeys.push(it.jiraKey);
+    for (const s of it.subs) {
+      if (s.cleared || !s.key || blockedKeys.has(s.key)) continue;
+      itemKeys.push(s.key);
+    }
+    for (const m of it.markers || []) {
+      if (m.kind !== 'dep' || !m.jiraKey || blockedKeys.has(m.jiraKey)) continue;
+      depKeys.push(m.jiraKey);
+    }
+  }
+  for (const it of backlogItems) {
+    if (it.jiraKey && !blockedKeys.has(it.jiraKey)) itemKeys.push(it.jiraKey);
+  }
+  const primary = [...new Set(itemKeys)].slice(0, 50);
+  const seen = new Set(primary);
+  const extra = [...new Set(depKeys)].filter((k) => !seen.has(k)).slice(0, 25);
+  return [...primary, ...extra];
+}
+
 /* ------------------------------------------------------------------ *
  * Backlog ordering
  * ------------------------------------------------------------------ */
@@ -406,6 +438,8 @@ export function buildBacklogGroups(
   for (const list of groups.values()) {
     // Array#sort is stable, so Jira rows keep the incoming key order.
     list.sort((a, b) => {
+      const doneCmp = Number(isDoneStatus(a)) - Number(isDoneStatus(b));
+      if (doneCmp !== 0) return doneCmp;
       if (a.source !== b.source) return a.source === 'manual' ? -1 : 1;
       if (a.source !== 'manual') return 0;
       return createdAtOf(b) - createdAtOf(a);
@@ -568,6 +602,12 @@ export interface AgentCreateJiraPayload {
   constraints: AgentCreateConstraints;
   parent: CreateJiraParent | null;
   children: CreateJiraChild[];
+  /**
+   * Incremented on each retry of remaining drafts. A succeeded / input_required
+   * AgentTask is reused by the same idempotency key, so retries that need a
+   * new prompt (e.g. user changed fixVersion) must not collide with the old run.
+   */
+  retryAttempt?: number | null;
 }
 
 /** One main item plus the draft children waiting on it. */
@@ -642,4 +682,70 @@ export function buildCreateJiraPayload(
       };
     }),
   };
+}
+
+export type CreateRowStatusLite = {
+  kind: 'pending' | 'loading' | 'ok' | 'error';
+  jiraKey?: string;
+};
+
+export function createItemRowId(itemKey: string): string {
+  return `item:${itemKey}`;
+}
+
+export function createSubRowId(subId: string): string {
+  return `sub:${subId}`;
+}
+
+function statusJiraKey(
+  status: CreateRowStatusLite | undefined,
+): string | undefined {
+  const key = String(status?.jiraKey || '').trim();
+  return key || undefined;
+}
+
+/**
+ * Drop already-created rows from a retry payload. A jiraKey on the item, or on
+ * the row status (including writeback warnings), means that issue already
+ * exists — sending it again would duplicate the ticket.
+ */
+export function sliceDraftGroupForRetry(
+  group: DraftGroup,
+  rowStatus: Record<string, CreateRowStatusLite | undefined>,
+): DraftGroup | null {
+  const parentStatus = rowStatus[createItemRowId(group.item.key)];
+  const parentJiraKey =
+    String(group.item.jiraKey || '').trim() ||
+    statusJiraKey(parentStatus) ||
+    '';
+
+  const remainingSubs = group.subs.filter((sub) => {
+    const status = rowStatus[createSubRowId(sub.id)];
+    if (statusJiraKey(status) || status?.kind === 'ok') return false;
+    return true;
+  });
+
+  if (parentJiraKey && remainingSubs.length === 0) return null;
+
+  return {
+    item: parentJiraKey
+      ? { ...group.item, jiraKey: parentJiraKey }
+      : group.item,
+    subs: remainingSubs,
+  };
+}
+
+/** True when this group has a failed row that still has no Jira key. */
+export function draftGroupCanRetry(
+  group: DraftGroup,
+  rowStatus: Record<string, CreateRowStatusLite | undefined>,
+): boolean {
+  const parentStatus = rowStatus[createItemRowId(group.item.key)];
+  if (parentStatus?.kind === 'error' && !statusJiraKey(parentStatus)) {
+    return true;
+  }
+  return group.subs.some((sub) => {
+    const status = rowStatus[createSubRowId(sub.id)];
+    return status?.kind === 'error' && !statusJiraKey(status);
+  });
 }

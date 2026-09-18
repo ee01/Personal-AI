@@ -137,7 +137,30 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit}
 .bl-add{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
   font-weight:600;color:var(--cur-deep);background:#FFF4E5;border:1px solid #FFD9A8;
   border-radius:7px;padding:3px 9px;transition:all .13s}
-.bl-add:hover{background:#FFE9CC;border-color:var(--cur)}
+.add-tabs{display:flex;gap:6px;margin:10px 0 8px}
+.add-tab{padding:6px 10px;border:1.5px solid var(--line);border-radius:8px;font-size:12px;font-weight:600;background:#fff;color:var(--muted)}
+.add-tab.on{border-color:var(--cur);background:#FFF4E5;color:var(--cur-deep)}
+.add-item-modal.add-item-ai{width:640px}
+.dp-input{min-height:140px}
+.dp-meta{display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:11.5px;color:var(--muted)}
+.dp-disclose{margin-top:10px;font-size:12px;line-height:1.6;color:var(--muted);background:var(--bg);border-radius:9px;padding:9px 12px}
+.dp-adv-toggle{margin-top:12px;font-size:12px;font-weight:600;color:var(--fut-deep)}
+.dp-adv{margin-top:8px}
+.dp-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px}
+.dp-check-inline{margin-top:0}
+.dp-progress{display:flex;align-items:center;gap:10px;margin-top:14px;color:var(--muted)}
+.dp-phase,.dp-note{margin-top:10px;font-size:12.5px;color:var(--muted);line-height:1.6}
+.dp-error{margin-top:10px;font-size:12.5px;color:var(--danger);line-height:1.6}
+.dp-issue{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.dp-issue-msg{font-size:12.5px;line-height:1.55}
+.dp-opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.dp-actions,.dp-result-actions{margin-top:14px;display:flex;justify-content:flex-end;gap:8px;align-items:center}
+.dp-actions{justify-content:space-between}
+.dp-hint a{color:var(--fut-deep)}
+.dp-hint code{font-size:11px}
+.dp-result-title{font-weight:700;margin-bottom:6px}
+.dp-result-body{font-size:13px;line-height:1.6}
+.bar.pop,.g-row.pop .bar{animation:barIn .45s cubic-bezier(.25,.9,.3,1.1) backwards;outline:2px solid rgba(6,132,188,.35);outline-offset:2px}
 .card.draft{border-style:dashed;border-color:var(--draft-line);background:var(--draft-stripe)}
 .card.done{background:#CBE6D6;color:#1F5B3C;border:1px solid rgba(31,91,60,.25)}
 .card.done .card-key{color:rgba(31,91,60,.72)}
@@ -684,6 +707,14 @@ body.no-select,body.no-select *{user-select:none!important}
   box-shadow:var(--sh-lg);width:260px}
 .drag-hint{position:fixed;z-index:99;pointer-events:none;background:var(--ink);color:#fff;
   font-family:var(--mono);font-size:11px;border-radius:7px;padding:4px 10px;display:none;white-space:nowrap}
+/* 拖动时留在起点的「原位置」虚影：拖回去 = 不改期，Esc = 直接取消 */
+.drag-origin{position:absolute;z-index:2;box-sizing:border-box;border-radius:9px;pointer-events:none;
+  border:1.5px dashed var(--cur);background:rgba(255,136,0,.07);
+  display:flex;align-items:center;padding:0 9px;overflow:hidden;
+  font-size:10px;font-weight:600;color:var(--cur-deep);white-space:nowrap;
+  animation:originIn .14s ease}
+.drag-origin.drag-origin-sub{border-radius:7px;font-size:9.5px;padding:0 7px}
+@keyframes originIn{from{opacity:0}to{opacity:1}}
 
 /* ============ Tooltip ============ */
 .tooltip{position:fixed;z-index:120;max-width:340px;background:var(--ink);color:#fff;border-radius:9px;
@@ -761,9 +792,16 @@ textarea.f-input.f-desc{min-height:60px;font-family:var(--sans);font-size:12.5px
 .ai-group .ai-row.parent{background:var(--bg);font-weight:600}
 .ai-group .ai-row.child{padding-left:24px}
 .ai-row .child-mark{font-family:var(--mono);color:var(--muted);flex:none}
-.ai-group .ai-row .st{width:150px}
+.ai-group .ai-row .st{width:auto;min-width:150px;max-width:280px;white-space:normal}
 .ai-group .ai-row .st .failkey{color:var(--danger);font-weight:600;max-width:100%;
-  display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  display:block;white-space:pre-wrap;overflow:visible;text-align:right;line-height:1.4}
+.ai-group .ai-row .st .ai-warn{display:block;margin-top:3px;font-family:var(--sans);
+  font-size:10px;font-weight:600;color:#9A5B00;line-height:1.4;white-space:pre-wrap;text-align:right}
+.ai-retry{flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;margin-left:6px;border:1px solid var(--line);border-radius:7px;
+  background:#fff;color:var(--fut-deep);cursor:pointer;vertical-align:middle}
+.ai-retry:hover{border-color:var(--fut);background:#F1F8FC}
+.ai-retry:disabled{opacity:.45;cursor:default}
 .ai-empty{border:1.5px dashed var(--line);border-radius:11px;padding:22px;text-align:center;
   color:var(--muted);font-size:12.5px;margin-top:6px}
 .m-foot .foot-note{margin-right:auto;font-size:12px;color:var(--muted);align-self:center}
@@ -862,6 +900,7 @@ textarea.f-input.f-desc{min-height:60px;font-family:var(--sans);font-size:12.5px
 .help-pop li b{color:var(--ink);font-weight:600}
 .help-pop .help-install{display:inline-flex;align-items:center;gap:4px;color:var(--cur-deep);
   font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.help-pop code{font-size:11px}
 
 /* ============ 未安装扩展的引导 ============ */
 /* 锁定按钮：不再用 disabled（无处解释原因），保持可点击并弹出安装引导 */

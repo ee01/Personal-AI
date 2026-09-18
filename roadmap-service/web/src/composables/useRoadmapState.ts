@@ -281,6 +281,37 @@ export function createRoadmapState() {
     }
   }
 
+  function applyPlanningReceipt(receipt: {
+    createdParents?: string[];
+    attachedParents?: string[];
+  }) {
+    const keys = [
+      ...new Set([
+        ...(receipt.createdParents || []),
+        ...(receipt.attachedParents || []),
+      ]),
+    ].filter(Boolean);
+    popKeys.value = keys;
+    if (keys[0]) enterKey.value = keys[0];
+    const next = new Set(expandedKeys.value);
+    for (const key of keys) next.add(key);
+    expandedKeys.value = next;
+    if (snapshot.value) snapshot.value = overlayExpand(snapshot.value);
+    view.value = 'gantt';
+    const first = snapshot.value?.items.find((item) => keys.includes(item.key));
+    if (first?.quarter) focusQuarter.value = first.quarter;
+    syncUrl();
+    requestAnimationFrame(() => {
+      const target = keys[0]
+        ? document.querySelector(`.g-row[data-key="${CSS.escape(keys[0])}"]`)
+        : null;
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    window.dispatchEvent(
+      new CustomEvent('roadmap-planning-committed', { detail: { keys } }),
+    );
+  }
+
   async function applySnapshotFromIntent(
     intent: Record<string, unknown>,
   ) {
@@ -542,6 +573,7 @@ export function createRoadmapState() {
     loadTeams,
     selectTeam,
     applySnapshotFromIntent,
+    applyPlanningReceipt,
     deferSubsToNextMonday,
     ensureActorName,
     expiredStats,
@@ -590,17 +622,52 @@ export function itemEndDate(item: { start?: string | null; days?: number | null 
   return addD(item.start, item.days - 1);
 }
 
-export function hasTargetInTimeline(
-  item: RoadmapItem,
-  tlStart: Date,
-  tlEnd: Date,
-) {
-  if (!item.targetStart) return false;
-  const ts = parseDate(item.targetStart);
-  return ts >= tlStart && ts <= tlEnd;
+/**
+ * Target 窗口：Backlog 表单可以只填 Target 结束（或只填开始），缺失的一侧用预估周数补出来。
+ * 返回 null = 没有 Target，应当按拖放位置 + 预估排期。
+ */
+export function targetWindow(
+  item: Pick<RoadmapItem, 'targetStart' | 'targetEnd' | 'estimate'>,
+): { start: Date; end: Date; days: number } | null {
+  const estDays = Math.max(7, (item.estimate || 3) * 7);
+  const tStart = item.targetStart ? parseDate(item.targetStart) : null;
+  const tEnd = item.targetEnd ? parseDate(item.targetEnd) : null;
+  let start: Date;
+  let end: Date;
+  if (tStart && tEnd) {
+    start = tStart;
+    end = tEnd;
+  } else if (tStart) {
+    start = tStart;
+    end = addD(start, estDays - 1);
+  } else if (tEnd) {
+    // 只填了 Target 结束：向前推预估长度，让 bar 落在结束日上，而不是丢掉结束日。
+    end = tEnd;
+    start = addD(end, -(estDays - 1));
+  } else {
+    return null;
+  }
+  if (end < start) end = start; // 结束早于开始的脏数据不倒挂
+  return { start, end, days: diffD(start, end) + 1 };
 }
 
-export function targetDays(item: RoadmapItem) {
-  if (!item.targetStart || !item.targetEnd) return Math.max(7, (item.estimate || 3) * 7);
-  return Math.max(2, diffD(item.targetStart, item.targetEnd) + 1);
+/**
+ * 把 Target 窗口收进可见时间轴：窗口整段可见时原样返回；越界时保持长度不变，把整段尽量
+ * 靠向 Target 并压进时间轴内（绝不产生 days < 2 或落在时间轴外的 bar）。
+ */
+export function fitTargetWindow(
+  win: { start: Date; end: Date; days: number },
+  tlStart: Date,
+  tlEnd: Date,
+): { start: Date; days: number } {
+  const tlDays = Math.max(2, diffD(tlStart, tlEnd) + 1);
+  const days = Math.min(Math.max(2, win.days), tlDays);
+  let end = win.end > tlEnd ? tlEnd : win.end;
+  let start = addD(end, -(days - 1));
+  if (start < tlStart) {
+    start = tlStart;
+    end = addD(start, days - 1);
+    if (end > tlEnd) end = tlEnd;
+  }
+  return { start, days: Math.max(2, diffD(start, end) + 1) };
 }

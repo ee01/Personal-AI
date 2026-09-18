@@ -16,6 +16,7 @@ import {
 } from '../core/TeamService.js';
 import { getEventBus } from '../core/EventBus.js';
 import { config } from '../config.js';
+import { serializeTeamEvent } from '../planning/sanitize.js';
 import { queueTargetSync, queueSubTargetSync } from '../core/TargetSync.js';
 import type { ActorContext, ActorSource } from '../types.js';
 
@@ -59,9 +60,10 @@ function requireWriteAccess(
       error: 'Editable share token required for write operations',
     };
   }
+  const { shareToken: _ignored, ...rest } = actor;
   return {
     ok: true,
-    actor: { ...actor, shareTokenId: result.shareTokenId || null },
+    actor: { ...rest, shareTokenId: result.shareTokenId || null },
   };
 }
 
@@ -138,17 +140,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const actor = readActor(request) as ActorContext & { shareToken?: string };
       const access = requireWriteAccess(request.params.teamId, actor);
       if (!access.ok) {
-        // Allow creator of brand-new team without token only if team has no tokens yet?
-        // For simplicity: also allow if actorSource is creator and team exists.
-        const snapshot = getTeamSnapshot(request.params.teamId);
-        if (!snapshot) return reply.code(404).send({ error: 'team_not_found' });
-        if (actor.source !== 'creator' && actor.source !== 'extension') {
-          return reply.code(access.status).send({ error: access.error });
-        }
+        return reply.code(access.status).send({ error: access.error });
       }
       const share = createShareToken(
         request.params.teamId,
-        access.ok ? access.actor : actor,
+        access.actor,
       );
       return { token: share.token, id: share.id };
     },
@@ -275,7 +271,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
       const unsubscribe = getEventBus().subscribe((event, data, eventTeamId) => {
         if (eventTeamId !== teamId) return;
-        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        const serialized = serializeTeamEvent(event, data);
+        if (!serialized) return;
+        reply.raw.write(
+          `event: ${serialized.event}\ndata: ${JSON.stringify(serialized.data)}\n\n`,
+        );
       });
 
       const heartbeat = setInterval(() => {

@@ -352,12 +352,127 @@ export function useRoadmapApi() {
     return data.items;
   }
 
-  function subscribeEvents(
+  async function fetchPlanningCapabilities(teamId: string) {
+    return apiFetch<{
+      contractVersion: string;
+      schemaVersion: string;
+      compatibleContractRange: string[];
+      limits: Record<string, number>;
+      features: {
+        serverLlm: boolean;
+        autoCommit: boolean;
+        undo: boolean;
+        agentAccess: boolean;
+      };
+      providerDisplayName: string | null;
+      endpointDisplayName: string | null;
+      configurationVersion: string | null;
+      autoCommitEligible: boolean;
+      planningClientMinVersion: number;
+    }>(`/api/v1/teams/${teamId}/planning/capabilities`, { teamId, method: 'GET' });
+  }
+
+  async function fetchPlanningContext(teamId: string, itemKeys?: string[]) {
+    const q = itemKeys?.length
+      ? `?itemKeys=${encodeURIComponent(itemKeys.join(','))}`
+      : '';
+    return apiFetch<Record<string, unknown>>(
+      `/api/v1/teams/${teamId}/planning/context${q}`,
+      { teamId, method: 'GET' },
+    );
+  }
+
+  async function submitPlanningJob(
+    teamId: string,
+    body: Record<string, unknown>,
+  ) {
+    return apiFetch<{ jobId: string; status: string; requestId: string }>(
+      `/api/v1/teams/${teamId}/planning/jobs`,
+      {
+        teamId,
+        method: 'POST',
+        body: JSON.stringify({ ...actorPayload.value, ...body }),
+      },
+    );
+  }
+
+  async function fetchPlanningJob(teamId: string, jobId: string) {
+    return apiFetch<Record<string, unknown>>(
+      `/api/v1/teams/${teamId}/planning/jobs/${jobId}`,
+      { teamId, method: 'GET' },
+    );
+  }
+
+  async function cancelPlanningJob(teamId: string, jobId: string) {
+    return apiFetch<Record<string, unknown>>(
+      `/api/v1/teams/${teamId}/planning/jobs/${jobId}/cancel`,
+      {
+        teamId,
+        method: 'POST',
+        body: JSON.stringify(actorPayload.value),
+      },
+    );
+  }
+
+  async function fetchPlanningPlan(teamId: string, planId: string) {
+    return apiFetch<Record<string, unknown>>(
+      `/api/v1/teams/${teamId}/draft-plans/${planId}`,
+      { teamId, method: 'GET' },
+    );
+  }
+
+  async function revisePlanningPlan(
+    teamId: string,
+    planId: string,
+    body: Record<string, unknown>,
+  ) {
+    return apiFetch<Record<string, unknown>>(
+      `/api/v1/teams/${teamId}/draft-plans/${planId}/revisions`,
+      {
+        teamId,
+        method: 'POST',
+        body: JSON.stringify({ ...actorPayload.value, ...body }),
+      },
+    );
+  }
+
+  async function commitPlanningPlan(
+    teamId: string,
+    planId: string,
+    body: Record<string, unknown>,
+  ) {
+    return apiFetch<{ receipt: Record<string, unknown> }>(
+      `/api/v1/teams/${teamId}/draft-plans/${planId}/commit`,
+      {
+        teamId,
+        method: 'POST',
+        body: JSON.stringify({ ...actorPayload.value, ...body }),
+      },
+    );
+  }
+
+  async function undoPlanningBatch(
+    teamId: string,
+    batchId: string,
+    body: Record<string, unknown> = {},
+  ) {
+    return apiFetch<{ receipt: Record<string, unknown> }>(
+      `/api/v1/teams/${teamId}/draft-batches/${batchId}/undo`,
+      {
+        teamId,
+        method: 'POST',
+        body: JSON.stringify({ ...actorPayload.value, ...body }),
+      },
+    );
+  }
+
+  async function fetchActivity(
     teamId: string,
     handlers: {
       onSnapshot?: (snapshot: TeamSnapshot) => void;
       onActivity?: (entry: ActivityEntry) => void;
       onPresence?: (data: unknown) => void;
+      onPlanning?: (data: unknown) => void;
     },
   ) {
     unsubscribeEvents();
@@ -381,6 +496,13 @@ export function useRoadmapApi() {
     es.addEventListener('presence', (ev) => {
       try {
         handlers.onPresence?.(JSON.parse((ev as MessageEvent).data));
+      } catch {
+        /* ignore */
+      }
+    });
+    es.addEventListener('planning', (ev) => {
+      try {
+        handlers.onPlanning?.(JSON.parse((ev as MessageEvent).data));
       } catch {
         /* ignore */
       }
@@ -416,6 +538,15 @@ export function useRoadmapApi() {
     deferSubs,
     importTasks,
     syncTarget,
+    fetchPlanningCapabilities,
+    fetchPlanningContext,
+    submitPlanningJob,
+    fetchPlanningJob,
+    cancelPlanningJob,
+    fetchPlanningPlan,
+    revisePlanningPlan,
+    commitPlanningPlan,
+    undoPlanningBatch,
     fetchActivity,
     subscribeEvents,
     unsubscribeEvents,

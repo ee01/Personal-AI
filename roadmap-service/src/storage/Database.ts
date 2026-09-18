@@ -174,6 +174,117 @@ const MIGRATIONS: Migration[] = [
       addColumn(database, 'items', 'status', 'TEXT');
     },
   },
+  {
+    id: '016_draft_planning',
+    up: (database) => {
+      addColumn(
+        database,
+        'subs',
+        'owner_resolution',
+        `TEXT NOT NULL DEFAULT 'legacy'`,
+      );
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS draft_planning_requests (
+          team_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          request_hash TEXT NOT NULL,
+          result_kind TEXT NOT NULL,
+          result_id TEXT,
+          result_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (team_id, operation, request_id),
+          FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS draft_planning_jobs (
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          auto_commit INTEGER NOT NULL DEFAULT 1,
+          configuration_version TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          schema_version TEXT NOT NULL,
+          provider TEXT,
+          model TEXT,
+          endpoint_display TEXT,
+          lease_until INTEGER,
+          lease_generation INTEGER NOT NULL DEFAULT 0,
+          attempt INTEGER NOT NULL DEFAULT 0,
+          deadline_at INTEGER,
+          queued_at INTEGER NOT NULL,
+          started_at INTEGER,
+          finished_at INTEGER,
+          cancel_requested INTEGER NOT NULL DEFAULT 0,
+          plan_id TEXT,
+          batch_id TEXT,
+          error_code TEXT,
+          error_message TEXT,
+          source_json TEXT,
+          source_hash TEXT NOT NULL,
+          options_json TEXT NOT NULL,
+          usage_json TEXT,
+          issues_json TEXT,
+          FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_draft_jobs_team_status
+          ON draft_planning_jobs(team_id, status, queued_at);
+        CREATE TABLE IF NOT EXISTS draft_plans (
+          id TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          team_id TEXT NOT NULL,
+          plan_hash TEXT NOT NULL,
+          status TEXT NOT NULL,
+          source_json TEXT,
+          source_hash TEXT NOT NULL,
+          plan_json TEXT NOT NULL,
+          normalized_json TEXT NOT NULL,
+          issues_json TEXT NOT NULL DEFAULT '[]',
+          context_fingerprint TEXT NOT NULL DEFAULT '',
+          committed_batch_id TEXT,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          PRIMARY KEY (id, revision),
+          FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_draft_plans_team ON draft_plans(team_id, id);
+        CREATE TABLE IF NOT EXISTS draft_batches (
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          plan_id TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          request_id TEXT NOT NULL,
+          receipt_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          undo_until INTEGER NOT NULL,
+          committed_at INTEGER NOT NULL,
+          UNIQUE(team_id, plan_id),
+          FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS draft_batch_rows (
+          batch_id TEXT NOT NULL,
+          ref TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          item_key TEXT,
+          sub_id TEXT,
+          existing INTEGER NOT NULL DEFAULT 0,
+          written_version INTEGER,
+          handoff_state TEXT,
+          snapshot_json TEXT,
+          PRIMARY KEY (batch_id, ref)
+        );
+        CREATE TABLE IF NOT EXISTS draft_llm_usage (
+          day TEXT NOT NULL,
+          team_id TEXT NOT NULL DEFAULT '',
+          calls INTEGER NOT NULL DEFAULT 0,
+          tokens INTEGER NOT NULL DEFAULT 0,
+          reserved_calls INTEGER NOT NULL DEFAULT 0,
+          reserved_tokens INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (day, team_id)
+        );
+      `);
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

@@ -100,6 +100,8 @@ const jiraBase = computed(
   () => state.snapshot.value?.team.jiraBaseUrl || 'https://jira.ringcentral.com',
 );
 const currentUser = computed(() => state.api.actorName.value || '');
+/** Injected state is a plain object of refs; templates do not auto-unwrap nested refs. */
+const isPop = computed(() => state.popKeys.value.includes(props.item.key));
 
 function showName(name: string | null | undefined) {
   return dispName(assigneeMap.value, name);
@@ -222,7 +224,12 @@ function barDragStart(
   };
   let moved = false;
   let scrolled = 0;
+  let cancelled = false;
   const gs = barEl.closest('.gantt-scroll') as HTMLElement;
+  const laneEl = barEl.parentElement as HTMLElement | null;
+  const origLaneHeight = laneEl?.style.height ?? '';
+  /** 「原位置」虚影：拖动时留在起点，拖回去即回到原位。 */
+  let originEl: HTMLElement | null = null;
   type BarWithClickTimer = HTMLElement & {
     _ct?: ReturnType<typeof setTimeout> | null;
   };
@@ -239,6 +246,19 @@ function barDragStart(
   barEl.classList.add('drag-transform');
   barEl.classList.remove('anim');
 
+  const showOriginGhost = () => {
+    if (originEl || !laneEl) return;
+    const w = orig.days * DAY_W.value - 2;
+    originEl = document.createElement('div');
+    originEl.className = sub ? 'drag-origin drag-origin-sub' : 'drag-origin';
+    originEl.style.left = `${X(props.tl, orig.start)}px`;
+    originEl.style.width = `${w}px`;
+    originEl.style.top = `${barEl.offsetTop}px`;
+    originEl.style.height = `${barEl.offsetHeight}px`;
+    if (w >= 148) originEl.textContent = '原位置 · Esc 取消';
+    laneEl.appendChild(originEl);
+  };
+
   const applyVisual = () => {
     barEl.style.left = `${X(props.tl, live.start)}px`;
     barEl.style.width = `${live.days * DAY_W.value - 2}px`;
@@ -254,6 +274,7 @@ function barDragStart(
     moved = true;
     barEl.classList.add('dragging');
     document.body.classList.add('no-select');
+    showOriginGhost();
 
     if (gs) {
       const sr = gs.getBoundingClientRect();
@@ -292,11 +313,13 @@ function barDragStart(
       hint.style.top = `${ev.clientY - 34}px`;
       hint.textContent =
         `${fmtMD(live.start)} → ${fmtMD(addD(live.start, live.days - 1))} · ${live.days}d` +
-        catchReleaseHint(addD(live.start, live.days - 1), teamRelParsed.value);
+        catchReleaseHint(addD(live.start, live.days - 1), teamRelParsed.value) +
+        ' · Esc 取消';
     }
   };
 
-  const onUp = async (ev: PointerEvent) => {
+  /** 落地与取消共用的收尾：拆监听、还原样式、移除原位置虚影。 */
+  const finishDrag = () => {
     try {
       barEl.releasePointerCapture(e.pointerId);
     } catch {
@@ -304,10 +327,34 @@ function barDragStart(
     }
     barEl.removeEventListener('pointermove', onMove);
     barEl.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
     if (hint) hint.style.display = 'none';
     document.body.classList.remove('no-select');
     barEl.classList.remove('dragging', 'drag-transform');
     barEl.style.transform = '';
+    originEl?.remove();
+    originEl = null;
+  };
+
+  /** Esc：放弃本次拖动，bar 直接回到原位置，不提交任何变更。 */
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    cancelled = true;
+    if (barWithTimer._ct) {
+      clearTimeout(barWithTimer._ct);
+      barWithTimer._ct = null;
+    }
+    barEl.style.left = `${X(props.tl, orig.start)}px`;
+    barEl.style.width = `${orig.days * DAY_W.value - 2}px`;
+    if (laneEl) laneEl.style.height = origLaneHeight;
+    finishDrag();
+  };
+
+  const onUp = async (ev: PointerEvent) => {
+    if (cancelled) return;
+    finishDrag();
 
     if (!moved) {
       if (barWithTimer._ct) {
@@ -344,6 +391,16 @@ function barDragStart(
       lane = insertAt;
     }
 
+    // 拖了一圈又回到起点（原位置）：日期未变就不提交，避免留下无意义的活动记录。
+    if (
+      props.item.scheduled &&
+      lane == null &&
+      diffD(live.start, orig.start) === 0 &&
+      live.days === orig.days
+    ) {
+      return;
+    }
+
     emit('commit', {
       start: fmtISO(live.start),
       days: live.days,
@@ -363,6 +420,8 @@ function barDragStart(
 
   barEl.addEventListener('pointermove', onMove);
   barEl.addEventListener('pointerup', onUp);
+  // 捕获阶段监听，确保 Esc 先被拖拽吃掉（不被其他全局 Esc 处理器抢走）。
+  window.addEventListener('keydown', onKey, true);
 }
 
 function parseDate(s: string) {
@@ -382,11 +441,16 @@ function openAlias(sub: RoadmapSub | null) {
   aliasOwnerDirty.value = false;
   aliasDesc.value = editingTitle ? String(target.description || '') : '';
   aliasDescOpen.value = editingTitle && Boolean(String(target.description || '').trim());
+  // 先量后挂：编辑器首次挂载时 aliasStyle 还是默认的 left:0，浏览器 focus() 会把
+  // .gantt-scroll 滚到最左侧去「露出」这个元素（任务在远处时视图直接跳回开头）。
+  // 这里在 aliasOpen 之前就把真实坐标算好，首帧即落在 bar 上方。
+  positionAliasEditor();
   aliasOpen.value = true;
   nextTick(() => {
     positionAliasEditor();
     const inp = rowRef.value?.querySelector('.alias-editor input') as HTMLInputElement | null;
-    inp?.focus();
+    // preventScroll：双击改名时保持甘特当前滚动位置不变。
+    inp?.focus({ preventScroll: true });
     inp?.select();
   });
 }
@@ -841,7 +905,7 @@ watch(
         class="bar"
         :class="[
           itemDone ? 'done' : item.start && item.days ? colorCls(item.start, item.days) : '',
-          { 'free-h': wrapMode, enter: enter, draft: isDraft && !itemDone },
+          { 'free-h': wrapMode, enter: enter, draft: isDraft && !itemDone, pop: isPop },
         ]"
         :style="{ left: `${barLeft()}px`, width: `${barW}px` }"
         :data-tip="`${dispKey} · ${item.start ? fmtMD(item.start) : ''} → ${item.start && item.days ? fmtMD(addD(item.start, item.days - 1)) : ''} · ${item.days}d${isDraft ? ' · 未创建 Jira' : ''}${barSprintTitle(item.start, item.days)}${itemDone ? ` · ${item.status}` : ''}||${item.title}||${tooltipHintLine(item.description, itemOpsHint())}`"

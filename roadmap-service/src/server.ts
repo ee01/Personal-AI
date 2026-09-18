@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { getDb } from './storage/Database.js';
 import { registerRoutes } from './routes/api.js';
+import { registerPlanningRoutes } from './routes/planning.js';
+import { startPlanningWorker } from './planning/DraftPlanningService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +33,8 @@ async function main() {
   });
 
   await registerRoutes(app);
+  await registerPlanningRoutes(app);
+  startPlanningWorker();
 
   const webDist = path.resolve(__dirname, '../web/dist');
   if (fs.existsSync(webDist)) {

@@ -38,12 +38,13 @@ describe('a database created from schema.sql', () => {
       '013_subs_status',
       '014_subs_original_estimate_days',
       '015_items_status',
+      '016_draft_planning',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
         (row) => row.name,
       ),
-    ).toEqual(expect.arrayContaining(['cleared', 'description', 'status', 'original_estimate_days']));
+    ).toEqual(expect.arrayContaining(['cleared', 'description', 'status', 'original_estimate_days', 'owner_resolution']));
     expect(
       (db.pragma('table_info(items)') as Array<{ name: string }>).map(
         (row) => row.name,
@@ -82,5 +83,12 @@ describe('a database created from schema.sql', () => {
         )
         .get(),
     ).toEqual({ name: 'idx_items_jira_key' });
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'draft_batches'`,
+        )
+        .get(),
+    ).toEqual({ name: 'draft_batches' });
   });
 });

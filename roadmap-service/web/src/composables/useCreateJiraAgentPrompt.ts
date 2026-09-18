@@ -7,10 +7,21 @@ import {
   type AssigneeMap,
 } from './useAssigneeMap';
 
+/** Shared with the extension result-contract: missing versions must not block create. */
+export const FIX_VERSION_OMIT_IF_MISSING =
+  'Jira 中不存在（或匹配不唯一）时省略 fixVersions、仍创建该 issue，并在 mapping.warning 说明；禁止因此拒绝整行或整单，禁止向用户提问「改用已有版本还是先创建版本」——Roadmap 收不到这次提问。禁止输出「未创建任何 issue，以免写入错误版本」';
+
 /** Fixed system instructions prepended to every Agent create-Jira submission. */
 export const ROADMAP_CREATE_JIRA_SYSTEM_PROMPT = [
   '你是 Personal Roadmap 的 Jira 创建助手。按用户 Prompt 与下方硬性约束在 Jira 中创建 issue，并把结果回写成可验证 artifact。',
   '不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建与检索。',
+  '',
+  '【fixVersion 规则 — 必须遵守】',
+  '1. suggestedFixVersion 与字段约束中的 fixVersion 不是硬约束，只是优先写入的目标，不是创建门禁。',
+  '2. 创建前在目标项目检索版本目录；能唯一匹配（含 Nova 26.4.110 ↔ 26.4.110 这种后缀）则写入。',
+  `3. ${FIX_VERSION_OMIT_IF_MISSING}。不要擅自改写成邻近版本，除非用户在共享字段给了统一覆盖值。`,
+  '4. 省略时在该行 mapping 增加 warning，例如："fixVersion Nova 26.4.120 在项目中不存在，已留空创建"。warning 可与 jiraKey 同时出现。',
+  '5. 即使 Jira 技能返回版本不存在，也要去掉 fixVersions 后重新提交创建，不要停在拒单。',
   '',
   '【子任务 Description 生成规则 — 必须遵守】',
   '1. 每条新建的子任务必须填写 Jira description 字段，不能留空。',
@@ -20,6 +31,23 @@ export const ROADMAP_CREATE_JIRA_SYSTEM_PROMPT = [
   '5. 父 issue 也是本批 draft、尚无 description 时：以父标题 + 父条目的用户描述（如有）+ 子标题生成简短 description。',
   '6. 主任务未要求 description 时可省略；带用户描述的 draft 主任务以用户描述为基础润色。子任务不可省略。',
 ].join('\n');
+
+export function describeFixVersionConstraint(input: {
+  override: string;
+  suggestedValues: string[];
+}): string {
+  const override = input.override.trim();
+  if (override) {
+    return `${override}（优先写入；${FIX_VERSION_OMIT_IF_MISSING}）`;
+  }
+  if (input.suggestedValues.length === 1) {
+    return `未统一指定；各任务 Target End 落点均为 ${input.suggestedValues[0]}，优先按此填写；${FIX_VERSION_OMIT_IF_MISSING}`;
+  }
+  if (input.suggestedValues.length > 1) {
+    return `任务落在不同 release（${input.suggestedValues.join(' / ')}），请按各任务 suggestedFixVersion（Target End 落点列）分别填写，不要统一覆盖；${FIX_VERSION_OMIT_IF_MISSING}`;
+  }
+  return `（由 Agent 决定；${FIX_VERSION_OMIT_IF_MISSING}）`;
+}
 
 export function buildAgentCreatePrompt(input: {
   userPrompt: string;
@@ -41,7 +69,7 @@ export function buildAgentCreatePrompt(input: {
   const L: string[] = [];
   L.push('【System Prompt】', ROADMAP_CREATE_JIRA_SYSTEM_PROMPT);
   L.push('', '【用户 Prompt】', input.userPrompt.trim() || '（空）');
-  L.push('', '【字段约束】已填字段为硬约束，其余由你决定');
+  L.push('', '【字段约束】类型 / Sprint 等已填字段优先遵守。fixVersion 不是硬约束：缺失则留空并继续创建');
   const override = input.fixVersion.trim();
   const suggestedValues = [
     ...new Set(
@@ -50,16 +78,10 @@ export function buildAgentCreatePrompt(input: {
       ),
     ),
   ];
-  let fixVersionConstraint: string;
-  if (override) {
-    fixVersionConstraint = override;
-  } else if (suggestedValues.length === 1) {
-    fixVersionConstraint = `未统一指定；各任务 Target End 落点均为 ${suggestedValues[0]}，请按此填写`;
-  } else if (suggestedValues.length > 1) {
-    fixVersionConstraint = `任务落在不同 release（${suggestedValues.join(' / ')}），请按各任务 suggestedFixVersion（Target End 落点列）分别填写，不要统一覆盖`;
-  } else {
-    fixVersionConstraint = '（由 Agent 决定）';
-  }
+  const fixVersionConstraint = describeFixVersionConstraint({
+    override,
+    suggestedValues,
+  });
   const fields: Array<[string, string]> = [
     ['Project', input.projectKey],
     ['主任务类型', input.itemType],
@@ -138,8 +160,8 @@ export function buildAgentCreatePrompt(input: {
   return L.join('\n');
 }
 
-function truncateEpicDesc(text: string, max = 1200): string {
+export function truncateEpicDesc(text: string, max = 2000): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   if (flat.length <= max) return flat;
-  return `${flat.slice(0, max)}…`;
+  return `${flat.slice(0, max)}…【父描述已截断至 ${max} 字，完整内容请读取 Jira】`;
 }

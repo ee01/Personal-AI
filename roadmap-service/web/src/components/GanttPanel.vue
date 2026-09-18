@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoadmapState, scheduleFromBacklog, hasTargetInTimeline, targetDays } from '../composables/useRoadmapState';
+import { useRoadmapState, scheduleFromBacklog, targetWindow, fitTargetWindow } from '../composables/useRoadmapState';
 import {
   X,
   DAY_W,
@@ -629,6 +629,7 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
   const startX = e.clientX;
   const startY = e.clientY;
   let ghost: HTMLElement | null = null;
+  let cancelled = false;
   const cardEl = e.currentTarget as HTMLElement;
 
   const onMove = (ev: PointerEvent) => {
@@ -652,9 +653,10 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
       ev.clientY > sr.top &&
       ev.clientY < sr.bottom
     ) {
-      const hasTarget = hasTargetInTimeline(it, tl.value.start, tl.value.end);
-      const day = hasTarget
-        ? diffD(tl.value.start, it.targetStart!)
+      const win = targetWindow(it);
+      const fitted = win ? fitTargetWindow(win, tl.value.start, tl.value.end) : null;
+      const day = fitted
+        ? diffD(tl.value.start, fitted.start)
         : clamp(
             Math.round((ev.clientX - inner.getBoundingClientRect().left) / DAY_W.value),
             0,
@@ -662,12 +664,10 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
           );
       dropVisible.value = true;
       dropLeft.value = day * DAY_W.value;
-      const startHint = addD(tl.value.start, day);
-      const daysHint = hasTarget
-        ? targetDays(it)
-        : Math.max(7, (it.estimate || 3) * 7);
+      const startHint = fitted ? fitted.start : addD(tl.value.start, day);
+      const daysHint = fitted ? fitted.days : Math.max(7, (it.estimate || 3) * 7);
       const endHint = addD(startHint, daysHint - 1);
-      dropDate.value = `${hasTarget ? 'Target ' : ''}${fmtMD(startHint)}${catchReleaseHint(endHint, teamRel.value)}`;
+      dropDate.value = `${fitted ? 'Target ' : ''}${fmtMD(startHint)} → ${fmtMD(endHint)}${catchReleaseHint(endHint, teamRel.value)}`;
       if (ev.clientX > sr.right - 60) gs.scrollLeft += 12;
       if (ev.clientX < sr.left + 60) gs.scrollLeft -= 12;
     } else {
@@ -678,17 +678,22 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
   const onUp = async (ev: PointerEvent) => {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
     cardEl.style.opacity = '';
     document.body.classList.remove('no-select');
     ghost?.remove();
+    ghost = null;
+    if (cancelled) return;
     if (dropVisible.value && gBody.value) {
       const inner = gScroll.value?.querySelector('.g-inner') as HTMLElement;
-      const hasTarget = hasTargetInTimeline(it, tl.value.start, tl.value.end);
+      const win = targetWindow(it);
+      const fitted = win ? fitTargetWindow(win, tl.value.start, tl.value.end) : null;
       let start: Date;
       let days: number;
-      if (hasTarget && it.targetStart) {
-        start = parseDate(it.targetStart);
-        days = targetDays(it);
+      if (fitted) {
+        // Target 落位：整段跟随 Target（含只填了 Target 结束的情况）
+        start = fitted.start;
+        days = fitted.days;
       } else {
         const day = clamp(
           Math.round((ev.clientX - inner.getBoundingClientRect().left) / DAY_W.value),
@@ -697,9 +702,10 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
         );
         start = addD(tl.value.start, day);
         days = Math.max(7, (it.estimate || 3) * 7);
-      }
-      if (diffD(start, tl.value.end) + 1 < days) {
-        days = diffD(start, tl.value.end) + 1;
+        if (diffD(start, tl.value.end) + 1 < days) {
+          days = diffD(start, tl.value.end) + 1;
+        }
+        days = Math.max(2, days);
       }
       const rows = [...gBody.value.querySelectorAll('.g-row')];
       let lane = state.scheduledItems.value.length;
@@ -724,7 +730,7 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
           });
         }
         state.toast(
-          hasTarget
+          fitted
             ? `<span class="ok">✓</span> ${it.key} 已按 Target 日期落位：${fmtMD(start)} → ${fmtMD(addD(start, days - 1))}`
             : `<span class="ok">✓</span> ${it.key} 已排期 ${fmtMD(start)} 起 · ${days}d`,
         );
@@ -735,8 +741,25 @@ function cardDragStart(e: PointerEvent, it: RoadmapItem) {
     dropVisible.value = false;
   };
 
+  /** Esc：放弃本次 Backlog → 甘特的拖入，不排期、不落位。 */
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    cancelled = true;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('keydown', onKey, true);
+    cardEl.style.opacity = '';
+    document.body.classList.remove('no-select');
+    ghost?.remove();
+    ghost = null;
+    dropVisible.value = false;
+  };
+
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
+  window.addEventListener('keydown', onKey, true);
 }
 
 async function unscheduleItem(it: RoadmapItem) {

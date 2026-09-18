@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildBacklogGroups,
+  collectJiraRefreshKeys,
   buildCreateJiraPayload,
   buildDraftGroups,
   buildStateMessage,
+  createItemRowId,
+  createSubRowId,
+  draftGroupCanRetry,
   NO_QUARTER_GROUP,
   canDeleteItem,
   defaultPhaseDate,
@@ -24,13 +28,22 @@ import {
   pendingDepCount,
   pickTickerEntry,
   shouldWrapAlias,
+  sliceDraftGroupForRetry,
   subTypeComesFromCreateMeta,
   tickerLabel,
   tooltipHintLine,
   trackMarkers,
   typeBadge,
+  clampDescription,
+  DESCRIPTION_MAX_CHARS,
 } from '../composables/useRoadmapContract';
-import { ROADMAP_CREATE_JIRA_SYSTEM_PROMPT } from '../composables/useCreateJiraAgentPrompt';
+import {
+  buildAgentCreatePrompt,
+  describeFixVersionConstraint,
+  FIX_VERSION_OMIT_IF_MISSING,
+  ROADMAP_CREATE_JIRA_SYSTEM_PROMPT,
+  truncateEpicDesc,
+} from '../composables/useCreateJiraAgentPrompt';
 import type { RoadmapItem, RoadmapSub } from '../types';
 
 function sub(overrides: Partial<RoadmapSub> = {}): RoadmapSub {
@@ -167,6 +180,28 @@ describe('display helpers', () => {
   });
 });
 
+describe('collectJiraRefreshKeys', () => {
+  const backlog = (overrides: Partial<RoadmapItem> = {}) =>
+    item({ scheduled: false, start: null, days: null, ...overrides });
+
+  it('includes backlog jira keys after scheduled keys within the 50-key budget', () => {
+    const scheduled = item({
+      key: 'NOVA-1',
+      jiraKey: 'NOVA-1',
+      subs: [{ ...sub({ key: 'NOVA-2' }), cleared: false }],
+    });
+    const keys = collectJiraRefreshKeys(
+      [scheduled],
+      [
+        backlog({ key: 'NOVA-9', jiraKey: 'NOVA-9' }),
+        backlog({ key: 'LOCAL-x', jiraKey: null }),
+      ],
+      new Set(),
+    );
+    expect(keys).toEqual(['NOVA-1', 'NOVA-2', 'NOVA-9']);
+  });
+});
+
 describe('backlog grouping', () => {
   const backlog = (overrides: Partial<RoadmapItem> = {}) =>
     item({ scheduled: false, start: null, days: null, ...overrides });
@@ -235,6 +270,36 @@ describe('backlog grouping', () => {
       backlog({ key: 'LOCAL-b', quarter: '2026-Q3', source: 'manual', jiraKey: null }),
     ]);
     expect(groups[0][1].map((i) => i.key)).toEqual(['LOCAL-a', 'LOCAL-b', 'NOVA-1']);
+  });
+
+  it('sinks Closed/Resolved/Done epics to the back of each quarter group', () => {
+    const groups = buildBacklogGroups([
+      backlog({ key: 'NOVA-3', quarter: '2026-Q3', status: 'Closed' }),
+      backlog({ key: 'NOVA-1', quarter: '2026-Q3', status: 'In Progress' }),
+      backlog({ key: 'NOVA-2', quarter: '2026-Q3', status: 'Resolved' }),
+      backlog({
+        key: 'LOCAL-open',
+        quarter: '2026-Q3',
+        source: 'manual',
+        jiraKey: null,
+        createdAt: 50,
+      }),
+      backlog({
+        key: 'LOCAL-done',
+        quarter: '2026-Q3',
+        source: 'manual',
+        jiraKey: 'NOVA-9',
+        status: 'Closed',
+        createdAt: 200,
+      }),
+    ]);
+    expect(groups[0][1].map((i) => i.key)).toEqual([
+      'LOCAL-open',
+      'NOVA-1',
+      'LOCAL-done',
+      'NOVA-3',
+      'NOVA-2',
+    ]);
   });
 });
 
@@ -675,5 +740,129 @@ describe('draft description contract', () => {
     expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain(
       '带用户描述的 draft 主任务以用户描述为基础润色',
     );
+  });
+
+  it('system prompt treats a missing fixVersion as omit-and-continue, not a hard gate', () => {
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain('【fixVersion 规则');
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain(FIX_VERSION_OMIT_IF_MISSING);
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain('Roadmap 收不到这次提问');
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain(
+      '未创建任何 issue，以免写入错误版本',
+    );
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain('不是硬约束');
+    expect(ROADMAP_CREATE_JIRA_SYSTEM_PROMPT).toContain('去掉 fixVersions 后重新提交创建');
+  });
+});
+
+describe('fixVersion create constraint', () => {
+  it('tells the Agent to omit a missing version instead of refusing the row', () => {
+    expect(describeFixVersionConstraint({ override: '26.4.120', suggestedValues: [] })).toContain(
+      '26.4.120',
+    );
+    expect(describeFixVersionConstraint({ override: '', suggestedValues: ['26.4.110'] })).toContain(
+      '优先按此填写',
+    );
+    expect(describeFixVersionConstraint({ override: '', suggestedValues: ['26.4.110'] })).toContain(
+      FIX_VERSION_OMIT_IF_MISSING,
+    );
+  });
+});
+
+describe('retry remaining drafts', () => {
+  const fields = {
+    teamId: 'T1',
+    token: 'tok',
+    projectKey: 'NOVA',
+    issueType: 'Epic',
+    subType: 'Task',
+  };
+
+  it('keeps already-created parent and children out of the retry payload', () => {
+    const group = buildDraftGroups([
+      item({
+        key: 'LOCAL-ab12cd34',
+        source: 'manual',
+        jiraKey: null,
+        title: 'Manual epic',
+        subs: [
+          sub({ id: 'd1', title: 'ok child' }),
+          sub({ id: 'd2', title: 'failed child' }),
+        ],
+      }),
+    ])[0];
+    const rowStatus = {
+      [createItemRowId('LOCAL-ab12cd34')]: { kind: 'ok' as const, jiraKey: 'NOVA-18674' },
+      [createSubRowId('d1')]: { kind: 'ok' as const, jiraKey: 'NOVA-18675' },
+      [createSubRowId('d2')]: {
+        kind: 'error' as const,
+        message: 'Required fixVersion Nova 26.4.120 does not exist',
+      },
+    };
+
+    const sliced = sliceDraftGroupForRetry(group, rowStatus);
+    expect(sliced?.item.jiraKey).toBe('NOVA-18674');
+    expect(sliced?.subs.map((row) => row.id)).toEqual(['d2']);
+    expect(draftGroupCanRetry(group, rowStatus)).toBe(true);
+    expect(buildCreateJiraPayload(sliced!, fields).parent).toBeNull();
+    expect(buildCreateJiraPayload(sliced!, fields).children).toHaveLength(1);
+    expect(buildCreateJiraPayload(sliced!, fields).children[0].parentJiraKey).toBe(
+      'NOVA-18674',
+    );
+  });
+
+  it('returns null when every row already has a Jira key', () => {
+    const group = buildDraftGroups([
+      item({
+        key: 'LOCAL-ab12cd34',
+        source: 'manual',
+        jiraKey: 'NOVA-1',
+        subs: [sub({ id: 'd1' })],
+      }),
+    ])[0];
+    const rowStatus = {
+      [createSubRowId('d1')]: { kind: 'ok' as const, jiraKey: 'NOVA-2' },
+    };
+    expect(sliceDraftGroupForRetry(group, rowStatus)).toBeNull();
+    expect(draftGroupCanRetry(group, rowStatus)).toBe(false);
+  });
+});
+
+describe('draft description cap 2000', () => {
+  it('keeps 2000-character descriptions intact and does not silently clip shorter text', () => {
+    expect(DESCRIPTION_MAX_CHARS).toBe(2000);
+    const exact = 'A'.repeat(2000);
+    expect(clampDescription(exact)).toBe(exact);
+    expect(clampDescription(`${exact}X`)).toBe(exact);
+    expect(truncateEpicDesc(exact)).toBe(exact);
+  });
+
+  it('marks Agent Epic excerpts as truncated instead of dropping the tail silently', () => {
+    const long = `${'风险约束 '.repeat(400)}UNIQUE_TAIL`;
+    const truncated = truncateEpicDesc(long);
+    expect(truncated.length).toBeGreaterThan(2000);
+    expect(truncated).toContain('【父描述已截断至 2000 字，完整内容请读取 Jira】');
+    expect(truncated).not.toContain('UNIQUE_TAIL');
+    const parent = item({
+      key: 'NOVA-1',
+      jiraKey: 'NOVA-1',
+      title: 'Parent',
+      description: long,
+    });
+    const prompt = buildAgentCreatePrompt({
+      userPrompt: 'create',
+      projectKey: 'NOVA',
+      itemType: 'Epic',
+      subType: 'Task',
+      fixVersion: '',
+      sprint: '',
+      map: {},
+      currentUser: 'Tester',
+      members: [],
+      items: [parent],
+      drafts: [{ item: parent, sub: sub({ id: 'd1', title: 'Child' }) }],
+      epicDescriptions: { 'NOVA-1': long },
+    });
+    expect(prompt).toContain('【父描述已截断至 2000 字，完整内容请读取 Jira】');
+    expect(prompt).not.toContain('UNIQUE_TAIL');
   });
 });

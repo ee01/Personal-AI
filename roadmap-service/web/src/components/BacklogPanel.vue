@@ -1,21 +1,32 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoadmapState } from '../composables/useRoadmapState';
 import {
   buildBacklogGroups,
   canDeleteItem,
   formatEstimate,
   isDraftItem,
+  isDoneStatus,
   itemDisplayKey,
+  jiraBrowseUrl,
   typeBadge,
   tooltipHintLine,
   DESCRIPTION_MAX_CHARS,
 } from '../composables/useRoadmapContract';
-import { CURQ, fmtMD } from '../composables/useGeometry';
+import { CURQ, fmtMD, esc } from '../composables/useGeometry';
 import type { RoadmapItem } from '../types';
+import DraftPlanningModal from './modals/DraftPlanningModal.vue';
 
 const state = useRoadmapState();
 const searchQuery = ref('');
+const addMode = ref<'manual' | 'ai'>('manual');
+
+const jiraBase = computed(
+  () => state.snapshot.value?.team.jiraBaseUrl || 'https://jira.ringcentral.com',
+);
+function browseUrl(key: string) {
+  return jiraBrowseUrl(key, jiraBase.value);
+}
 
 function itemMatchesQuery(item: RoadmapItem, raw: string): boolean {
   const q = raw.trim().toLowerCase();
@@ -96,7 +107,7 @@ async function submitAdd() {
       description: form.value.description.trim() || undefined,
     });
     addOpen.value = false;
-    state.toast(`<span class="ok">✓</span> 已新建条目 <b>${title}</b>`);
+    state.toast(`<span class="ok">✓</span> 已新建条目 <b>${esc(title)}</b>`);
     // 新条目排在列表首位，滚回顶部才看得见
     searchQuery.value = '';
     await nextTick();
@@ -118,9 +129,26 @@ async function removeItem(item: RoadmapItem) {
   }
 }
 
+function cardTipHead(item: RoadmapItem) {
+  const bits = [
+    itemDisplayKey(item),
+    `预估 ${formatEstimate(item.estimate)}`,
+    item.targetStart || item.targetEnd ? '' : '无 Target 日期',
+    isDoneStatus(item) ? item.status : '',
+  ].filter(Boolean);
+  return bits.join(' · ');
+}
+
+/** Target 只填了一侧也要能显示（缺的一侧用 — 占位，不能让 fmtMD(null) 崩掉整个 Backlog）。 */
+function targetLabel(item: RoadmapItem) {
+  const from = item.targetStart ? fmtMD(item.targetStart) : '—';
+  const to = item.targetEnd ? fmtMD(item.targetEnd) : '—';
+  return `Target ${from} → ${to}`;
+}
+
 function onCardPointerDown(e: PointerEvent, item: RoadmapItem) {
   if (!state.editable.value) return;
-  if ((e.target as HTMLElement).closest('.card-del')) return;
+  if ((e.target as HTMLElement).closest('.card-del, .bar-link')) return;
   window.dispatchEvent(
     new CustomEvent('roadmap-card-drag-start', {
       detail: { event: e, item },
@@ -131,6 +159,18 @@ function onCardPointerDown(e: PointerEvent, item: RoadmapItem) {
 function clearSearch() {
   searchQuery.value = '';
 }
+
+function onPlanningCommitted() {
+  searchQuery.value = '';
+  addOpen.value = false;
+}
+
+onMounted(() => {
+  window.addEventListener('roadmap-planning-committed', onPlanningCommitted);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('roadmap-planning-committed', onPlanningCommitted);
+});
 </script>
 
 <template>
@@ -149,7 +189,7 @@ function clearSearch() {
         <button
           v-if="state.editable.value"
           class="bl-add"
-          data-tip="手动新建一个 Backlog 条目（不需要 Jira）"
+          data-tip="手动或使用 AI 批量新建 Backlog 条目（不需要 Jira）"
           @click="openAdd"
         >
           <svg width="11" height="11" viewBox="0 0 14 14">
@@ -202,14 +242,32 @@ function clearSearch() {
             v-for="it in items"
             :key="it.key"
             class="card"
-            :class="{ pop: state.popKeys.value.includes(it.key), draft: isDraftItem(it) }"
-            :data-tip="`${itemDisplayKey(it)} · 预估 ${formatEstimate(it.estimate)}${it.targetStart ? '' : ' · 无 Target 日期'}||${it.title}||${tooltipHintLine(it.description, `拖到右侧时间轴排期${it.targetStart ? '（按 Target 日期落位）' : ''}`)}`"
+            :class="{
+              pop: state.popKeys.value.includes(it.key),
+              draft: isDraftItem(it) && !isDoneStatus(it),
+              done: isDoneStatus(it),
+            }"
+            :data-tip="`${cardTipHead(it)}||${it.title}||${tooltipHintLine(it.description, `拖到右侧时间轴排期${it.targetStart || it.targetEnd ? '（按 Target 日期落位）' : ''}`)}`"
             :data-pai-item="it.key"
             :data-pai-team="state.teamId.value"
             :data-pai-target-start="it.targetStart || ''"
             :data-pai-target-end="it.targetEnd || ''"
             @pointerdown="onCardPointerDown($event, it)"
           >
+            <a
+              v-if="it.jiraKey"
+              class="bar-link"
+              :href="browseUrl(it.jiraKey)"
+              target="_blank"
+              rel="noopener"
+              data-tip="在 Jira 打开"
+              @pointerdown.stop
+              @click.stop
+            >
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 3H3.5A1.5 1.5 0 002 4.5v4A1.5 1.5 0 003.5 10h4A1.5 1.5 0 009 8.5V7M7 2h3v3M5.5 6.5L10 2" />
+              </svg>
+            </a>
             <div class="card-top">
               <span class="type-badge" :class="typeBadge(it.type).cls">
                 {{ typeBadge(it.type).label }}
@@ -218,14 +276,14 @@ function clearSearch() {
               <span v-if="isDraftItem(it)" class="card-draft">DRAFT</span>
               <span class="card-est">{{ formatEstimate(it.estimate) }}</span>
             </div>
-            <div class="card-title">{{ it.title }}</div>
-            <span v-if="it.targetStart" class="card-target">
-              Target {{ fmtMD(it.targetStart) }} → {{ fmtMD(it.targetEnd!) }}
+            <div class="card-title">{{ isDoneStatus(it) ? '✓ ' : '' }}{{ it.title }}</div>
+            <span v-if="it.targetStart || it.targetEnd" class="card-target">
+              {{ targetLabel(it) }}
             </span>
             <span
               v-if="it.subs.length"
               class="card-subs"
-              :style="{ marginLeft: it.targetStart ? '' : '0' }"
+              :style="{ marginLeft: it.targetStart || it.targetEnd ? '' : '0' }"
             >
               ↺ {{ it.subs.length }} 个子任务记录
             </span>
@@ -261,14 +319,37 @@ function clearSearch() {
     :class="{ show: addOpen }"
     @click.self="!saving && (addOpen = false)"
   >
-    <div class="modal add-item-modal">
+    <div class="modal add-item-modal" :class="{ 'add-item-ai': addMode === 'ai' }">
       <div class="m-head">
         <div class="m-title">新建 Backlog 条目</div>
+        <div class="add-tabs">
+          <button
+            type="button"
+            class="add-tab"
+            :class="{ on: addMode === 'manual' }"
+            @click="addMode = 'manual'"
+          >
+            手动创建
+          </button>
+          <button
+            type="button"
+            class="add-tab"
+            :class="{ on: addMode === 'ai' }"
+            @click="addMode = 'ai'"
+          >
+            使用 AI 批量创建
+          </button>
+        </div>
         <div class="m-sub">
-          手动条目不需要 Jira，排期后会以 DRAFT 状态参与规划；之后可在时间轴上一键创建为 Jira issue。
+          <template v-if="addMode === 'manual'">
+            手动条目不需要 Jira，排期后会以 DRAFT 状态参与规划；之后可在时间轴上一键创建为 Jira issue。
+          </template>
+          <template v-else>
+            粘贴一段需求，一次生成主任务、子任务和初排甘特，全部保持 Draft。不创建 Jira。
+          </template>
         </div>
       </div>
-      <div class="m-body">
+      <div v-if="addMode === 'manual'" class="m-body">
         <label class="f-label">标题 <span class="req">*</span></label>
         <input
           v-model="form.title"
@@ -326,7 +407,10 @@ function clearSearch() {
           </div>
         </div>
       </div>
-      <div class="m-foot">
+      <div v-show="addMode === 'ai'" class="m-body">
+        <DraftPlanningModal embedded />
+      </div>
+      <div v-if="addMode === 'manual'" class="m-foot">
         <button class="btn btn-ghost" :disabled="saving" @click="addOpen = false">取消</button>
         <button
           class="btn btn-primary"
@@ -335,6 +419,9 @@ function clearSearch() {
         >
           创建条目
         </button>
+      </div>
+      <div v-else class="m-foot">
+        <button class="btn btn-ghost" @click="addOpen = false">关闭</button>
       </div>
     </div>
   </div>

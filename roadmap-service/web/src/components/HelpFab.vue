@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { EXTENSION_STORE_URL } from '../composables/useExtensionGate';
+import {
+  ROADMAP_PLANNING_MCP_URL,
+  ROADMAP_PLANNING_PLUGIN_URL,
+  ROADMAP_PLANNING_SKILL_PATH,
+  ROADMAP_PLANNING_SKILL_URL,
+} from '../composables/usePlanningAgentLinks';
 
 const open = ref(false);
 </script>
@@ -10,6 +16,20 @@ const open = ref(false);
   <div class="help-pop" :class="{ show: open }">
     <h4>使用说明</h4>
     <ul>
+      <li>
+        <b>使用 AI 批量创建</b>：新建条目弹窗可粘贴需求，由 Roadmap 服务端生成 Draft 主任务/子任务并初排甘特；不创建 Jira。默认只预览，勾选「直接创建 Draft」才一次写入。无扩展也能用。创建 Jira 仍走原弹窗，且需要扩展。
+      </li>
+      <li>
+        <b>用自己的 Agent 生成 Draft</b>（Codex / Claude 等，不是「创建 Jira」里的扩展执行器）：需要服务端 <code>ROADMAP_AI_AGENT_ACCESS</code>（默认开）。安装
+        <a class="help-install" :href="ROADMAP_PLANNING_SKILL_URL" target="_blank" rel="noopener">roadmap-planning Skill</a>
+        ，并按
+        <a class="help-install" :href="ROADMAP_PLANNING_MCP_URL" target="_blank" rel="noopener">MCP README</a>
+        或
+        <a class="help-install" :href="ROADMAP_PLANNING_PLUGIN_URL" target="_blank" rel="noopener">Plugin README</a>
+        配置。GitHub 打不开（私有仓库）时，从本仓库
+        <code>{{ ROADMAP_PLANNING_SKILL_PATH }}</code>
+        复制安装。
+      </li>
       <li>
         <b>导入 / 创建 Jira / 读取 ETA / 回写 Jira 需要 Personal AI 扩展</b>：未安装时锁定按钮点击可查看安装指引；拖动排期或改 Owner 会先保存在 Roadmap，并出现一行「没有同步到 Jira」提示
         <a class="help-install" :href="EXTENSION_STORE_URL" target="_blank" rel="noopener">前往安装 ↗</a>

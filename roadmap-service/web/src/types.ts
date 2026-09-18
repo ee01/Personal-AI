@@ -85,6 +85,7 @@ export interface RoadmapSub {
   status?: string | null;
   /** Mirrored Jira Original Estimate, ceiled to man-days; null if empty. */
   originalEstimateDays?: number | null;
+  ownerResolution?: 'explicit' | 'ambiguous' | 'unassigned' | 'legacy';
 }
 
 export interface RoadmapItem {

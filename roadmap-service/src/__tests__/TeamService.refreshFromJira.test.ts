@@ -143,6 +143,26 @@ describe('refresh_from_jira', () => {
     expect(JIRA_REFRESH_TTL_MS).toBe(10 * 60 * 1000);
   });
 
+  it('applies status updates inside TTL when ignoreTtl is set', () => {
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        ignoreTtl: true,
+        issues: [
+          {
+            key: 'NOVA-100',
+            fetchedAt: Date.now() + 3000,
+            fields: {
+              status: 'Closed',
+            },
+          },
+        ],
+      }),
+    );
+    const item = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-100')!;
+    expect(item.status).toBe('Closed');
+  });
+
   it('does not rewrite owner when mapped full name matches assignee', () => {
     const sub = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-100')!.subs[0];
     expect(sub.owner).toBe('esone');

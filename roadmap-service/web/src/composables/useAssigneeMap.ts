@@ -95,9 +95,22 @@ export function suggestFullNamePeople(
 
 export function resolveAssignee(input: {
   map: AssigneeMap | null | undefined;
-  sub: Pick<RoadmapSub, 'owner' | 'createdBy'>;
+  sub: Pick<RoadmapSub, 'owner' | 'createdBy' | 'ownerResolution'>;
   currentUser: string;
 }): ResolvedAssignee {
+  if (
+    input.sub.ownerResolution === 'ambiguous' ||
+    input.sub.ownerResolution === 'unassigned'
+  ) {
+    const name = input.sub.owner || '';
+    const full = name ? effectiveFullName(input.map, name) : null;
+    return {
+      name,
+      fallback: false,
+      full,
+      user: full ? jiraUsernameFromFull(full) : null,
+    };
+  }
   const fallback = !input.sub.owner;
   const name = input.sub.owner || input.sub.createdBy || input.currentUser;
   const full = effectiveFullName(input.map, name);
