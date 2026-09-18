@@ -136,7 +136,7 @@ async function main() {
     );
     await topicPage.evaluate(async () => {
       await chrome.storage.local.set({
-        taskSchedulerStates: {
+        backgroundJobStates: {
           message_analysis: { enabled: false },
         },
       });

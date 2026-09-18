@@ -269,7 +269,7 @@ try {
         return originalTabsQuery(queryInfo, callback);
       };
       const sendMessageOverride = (message, ...args) => {
-        if (message?.type === 'GET_TASK_SCHEDULER_STATUS') {
+        if (message?.type === 'GET_BACKGROUND_JOBS_STATUS') {
           return Promise.resolve({
             success: true,
             tasks: [],

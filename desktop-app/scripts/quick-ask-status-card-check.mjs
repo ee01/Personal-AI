@@ -361,13 +361,8 @@ async function main() {
         ],
       },
     );
-    await newQuestionPage.locator('#resume-new').click();
-    assert.equal(await newQuestionPage.locator('#resume-strip').isHidden(), true);
-    await assertTextIncludes(
-      newQuestionPage.locator('#shortcut-banner'),
-      '本轮不会使用上次 Ask',
-    );
     await newQuestionPage.locator('#composer').fill('Nova Brandy Daily 最近有什么？');
+    assert.equal(await newQuestionPage.locator('#resume-strip').isHidden(), true);
     await newQuestionPage.keyboard.press('Enter');
     await newQuestionPage.waitForFunction(
       () => window.__lastAskPayload?.query === 'Nova Brandy Daily 最近有什么？',
@@ -1251,6 +1246,13 @@ async function main() {
     assert.match(activeAskContext, /Surface: RingCentral chat/);
     assert.match(activeAskContext, /Current chat title: MTR-141852: AI Custom VBG/);
 
+    const evidencePanel = contextPage.locator('.evidence-panel').first();
+    assert.equal(
+      await evidencePanel.evaluate((element) => element.open),
+      false,
+      'evidence panel should start collapsed',
+    );
+    await evidencePanel.locator('summary').click();
     const firstEvidence = contextPage.locator('.evidence-item').first();
     await firstEvidence.waitFor({ state: 'visible' });
     await assertText(

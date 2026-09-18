@@ -25,6 +25,7 @@ import { WebpageMcpHost } from './explorer/transports/WebpageMcpHost.js';
 import { FallbackDoubaoBroadcast } from './transports/FallbackDoubaoBroadcast.js';
 import { WebpageMcpDoubaoBroadcast } from './transports/WebpageMcpDoubaoBroadcast.js';
 import { createBridgeServer } from './server.js';
+import { DeviceApiKeyManager } from './deviceApiKey.js';
 import { BridgeMemoryServiceClient } from './memoryServiceClient.js';
 import { LocalSkillSyncManager } from './skillSync/localSkillSyncManager.js';
 import { BridgeSyncManager } from './syncManager.js';
@@ -77,7 +78,15 @@ async function main(): Promise<void> {
   const version = packageJson.version || '0.0.0';
   const service = new DoubaoBridgeService(config, store, broadcastAdapter, version);
   await service.init();
-  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const deviceKeyManager = new DeviceApiKeyManager({
+    file: path.join(config.dataDir, 'device-key.json'),
+    readSettings: () => settingsStore.get(),
+  });
+  await deviceKeyManager.init();
+  const memoryClient = new BridgeMemoryServiceClient(
+    () => settingsStore.get(),
+    deviceKeyManager,
+  );
   const localSkillSyncManager = new LocalSkillSyncManager(memoryClient);
   const rawMessageStore = new RawMessageStore(explorerDbFile);
   const cursorStore = new CursorStore(explorerCursorFile);
@@ -184,6 +193,7 @@ async function main(): Promise<void> {
   const app = await createBridgeServer(config, service, {
     memoryClient,
     settingsStore,
+    deviceKeyManager,
     syncManager,
     explorerManager,
     localSkillSyncManager,
@@ -209,6 +219,16 @@ async function main(): Promise<void> {
   });
 
   await app.listen({ host: config.host, port: config.port });
+  // Not awaited: a slow memory-service must not hold up the local bridge, and
+  // any request that races ahead will rotate the credential on its own 401.
+  void deviceKeyManager.ensure().then((outcome) => {
+    if (outcome.status !== 'ok') {
+      app.log.warn(
+        { deviceKey: outcome },
+        'Memory Service device key is not available yet',
+      );
+    }
+  });
   syncManager.start();
   backupPuller.start();
   app.log.info(

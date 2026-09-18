@@ -189,8 +189,30 @@
               </label>
               <label class="compact-field">
                 <span>API Key</span>
-                <input id="memory-api-key" type="password" placeholder="可选" />
+                <input
+                  id="memory-api-key"
+                  type="password"
+                  placeholder="服务密钥 / bootstrap key，可选"
+                />
               </label>
+              <div class="compact-field compact-field-wide device-key-field">
+                <span>设备密钥</span>
+                <div class="device-key-row">
+                  <span id="memory-device-key-status" class="device-key-status"
+                    >检查中…</span
+                  >
+                  <button
+                    id="memory-device-key-reissue"
+                    type="button"
+                    class="secondary"
+                  >
+                    重新签发
+                  </button>
+                </div>
+                <small id="memory-device-key-detail" class="device-key-detail">
+                  本机会用上面的 API Key 自动签发一把只属于这台设备的个人密钥，日常请求都走它。
+                </small>
+              </div>
             </fieldset>
 
             <fieldset class="settings-compact-group">

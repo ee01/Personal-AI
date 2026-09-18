@@ -2,6 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const BASE_URL = 'http://127.0.0.1:46321';
 let bridgeToken;
+let pairInFlight = null;
+const bridgeTokenReady = ipcRenderer
+  .invoke('bridge-app:get-bridge-token')
+  .then((token) => {
+    if (typeof token === 'string' && token.trim()) {
+      bridgeToken = token.trim();
+    }
+  })
+  .catch(() => undefined);
 
 function mergeUrl(path) {
   return `${BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
@@ -18,25 +27,50 @@ async function readJson(response) {
 }
 
 async function pair() {
-  const response = await fetch(mergeUrl('/pair'), {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({}),
-  });
-
-  const payload = await readJson(response);
-  if (!response.ok) {
-    throw new Error(payload?.error || 'Failed to pair with Personal AI');
+  await bridgeTokenReady;
+  if (bridgeToken) {
+    return { paired: true, token: bridgeToken };
+  }
+  if (pairInFlight) {
+    return pairInFlight;
   }
 
-  bridgeToken = payload?.token;
-  return payload;
+  pairInFlight = (async () => {
+    try {
+      const mainToken = await ipcRenderer
+        .invoke('bridge-app:get-bridge-token')
+        .catch(() => null);
+      if (typeof mainToken === 'string' && mainToken.trim()) {
+        bridgeToken = mainToken.trim();
+        return { paired: true, token: bridgeToken };
+      }
+
+      const response = await fetch(mergeUrl('/pair'), {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to pair with Personal AI');
+      }
+
+      bridgeToken = payload?.token;
+      return payload;
+    } finally {
+      pairInFlight = null;
+    }
+  })();
+
+  return pairInFlight;
 }
 
 async function request(method, path, body, options = {}) {
+  await bridgeTokenReady;
   const headers = {
     Accept: 'application/json',
   };
@@ -183,6 +217,9 @@ contextBridge.exposeInMainWorld('bridgeApi', {
   getSettings: () => request('GET', '/settings'),
   updateSettings: (payload) => request('PUT', '/settings', payload),
   testMemoryService: () => request('POST', '/settings/test-memory-service', {}),
+  getMemoryCredential: () => request('GET', '/memory/credential'),
+  reissueMemoryCredential: (payload = {}) =>
+    request('POST', '/memory/credential/reissue', payload),
   pullBackupNow: () => request('POST', '/backup/pull-now', {}),
   openLogin: () => request('POST', '/auth/open-login', {}),
   createMemorySyncThread: () =>

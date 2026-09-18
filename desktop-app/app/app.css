@@ -852,6 +852,47 @@ button.source-revoke-button {
   padding-right: 52px;
 }
 
+.device-key-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.device-key-status {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.device-key-status.is-ok {
+  color: var(--success, #2f9e5f);
+}
+
+.device-key-status.is-warn {
+  color: var(--warning, #b8860b);
+}
+
+.device-key-status.is-error {
+  color: var(--danger, #c0392b);
+}
+
+.device-key-row button {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Override the absolutely positioned `.compact-field small` unit hint. */
+.device-key-field small.device-key-detail {
+  position: static;
+  display: block;
+  margin-top: 2px;
+  pointer-events: auto;
+  line-height: 1.5;
+}
+
 .compact-toggle {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);

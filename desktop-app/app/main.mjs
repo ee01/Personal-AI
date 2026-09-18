@@ -132,6 +132,8 @@ let speechHelperProcess = null;
 let speechHelperBuffer = '';
 let pendingShortcutGesture = null;
 let askWindowAnchor = null;
+let cachedBridgeToken = null;
+let bridgePairPromise = null;
 let askWindowStateSaveTimer = null;
 let voiceLocalePreference = 'zh-CN';
 let shortcutStatus = {
@@ -330,6 +332,36 @@ function isCompatibleBridge(payload) {
 
 async function isBridgeReachable() {
   return isCompatibleBridge(await getBridgeHealth());
+}
+
+async function ensureBridgePairToken() {
+  if (cachedBridgeToken) {
+    return cachedBridgeToken;
+  }
+  if (bridgePairPromise) {
+    return bridgePairPromise;
+  }
+
+  bridgePairPromise = (async () => {
+    const response = await fetch(`${bridgeBaseUrl}/pair`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || typeof payload?.token !== 'string' || !payload.token) {
+      throw new Error(payload?.error || 'Failed to pair with Personal AI bridge');
+    }
+    cachedBridgeToken = payload.token;
+    return cachedBridgeToken;
+  })().finally(() => {
+    bridgePairPromise = null;
+  });
+
+  return bridgePairPromise;
 }
 
 async function waitForBridgeReady(timeoutMs = 8_000) {
@@ -605,7 +637,7 @@ async function ensureWorkerProcess() {
 
 async function stopBackgroundProcesses() {
   await stopWorkerProcess();
-  await stopBackgroundProcesses();
+  await stopBridgeProcess();
 }
 
 function showMainWindow() {
@@ -1652,6 +1684,14 @@ function createMemoryListWindow() {
   });
 }
 
+ipcMain.handle('bridge-app:get-bridge-token', async () => {
+  try {
+    return await ensureBridgePairToken();
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle('bridge-app:get-meta', async () => {
   await ensureDirs();
   return {
@@ -1930,6 +1970,7 @@ app.whenReady().then(async () => {
   try {
     await ensureBridgeProcess();
     await ensureWorkerProcess();
+    await ensureBridgePairToken();
   } catch (error) {
     await appendLog(
       appLogFile,

@@ -258,6 +258,10 @@ export class DoubaoBridgeService {
     };
   }
 
+  getPairToken(): string | undefined {
+    return this.state.pairToken;
+  }
+
   async pair(requestToken?: string): Promise<BridgePairResult> {
     if (
       requestToken &&

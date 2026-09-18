@@ -1,4 +1,5 @@
 import { setDesktopLanguage, t } from './i18n.js';
+import { formatInlineMarkdown, markdownToHtml } from './quick-ask-markdown.mjs';
 import {
   clearAskResumeSnapshot,
   createAskResumeSnapshot,
@@ -30,7 +31,6 @@ const elements = {
   resumeMeta: document.getElementById('resume-meta'),
   resumeCandidates: document.getElementById('resume-candidates'),
   resumeContinue: document.getElementById('resume-continue'),
-  resumeNew: document.getElementById('resume-new'),
   resumeDiscard: document.getElementById('resume-discard'),
   composerPanel: document.getElementById('composer-panel'),
   composer: document.getElementById('composer'),
@@ -180,25 +180,6 @@ function escapeHtml(text) {
     if (char === '"') return '&quot;';
     return '&#39;';
   });
-}
-
-function markdownToHtml(text) {
-  if (!text || typeof text !== 'string') return '';
-  let html = escapeHtml(text);
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/_(.+?)_/g, '<em>$1</em>');
-  html = html.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-    (_, label, url) =>
-      `<a href="${escapeHtml(url)}" data-external-link="${escapeHtml(url)}">${escapeHtml(label)}</a>`,
-  );
-  return html
-    .split(/\n\n+/)
-    .filter((item) => item.trim())
-    .map((item) => `<p>${item.replace(/\n/g, '<br>')}</p>`)
-    .join('');
 }
 
 function normalizeRememberText(text) {
@@ -784,10 +765,6 @@ function renderResumeStrip() {
     '继续上次 Ask：把本机保存的问题、答案摘要和证据引用作为下一轮检索提示；不会把快照写入长期记忆，发送后会重新检索。',
   );
   setControlBoundary(
-    elements.resumeNew,
-    '开始新问题：本轮不使用上次 Ask 快照；本机快照仍保留到过期或丢弃。',
-  );
-  setControlBoundary(
     elements.resumeDiscard,
     '丢弃本机 Ask 续聊快照；不会删除 Memory Service 中已有的长期记忆。',
   );
@@ -1233,7 +1210,7 @@ function renderStructuredAnswer(structuredAnswer) {
     sections.push(`
       <section class="message-section">
         <h4>关键发现</h4>
-        <ul>${structuredAnswer.keyFindings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+        <ul>${structuredAnswer.keyFindings.map((item) => `<li>${formatInlineMarkdown(item)}</li>`).join('')}</ul>
       </section>
     `);
   }
@@ -1248,7 +1225,7 @@ function renderStructuredAnswer(structuredAnswer) {
               (item) => `
                 <div class="timeline-item">
                   <span class="timeline-date">${escapeHtml(item.date)}</span>
-                  <span>${escapeHtml(item.event)}</span>
+                  <span>${formatInlineMarkdown(item.event)}</span>
                 </div>
               `,
             )
@@ -1262,7 +1239,7 @@ function renderStructuredAnswer(structuredAnswer) {
     sections.push(`
       <section class="message-section">
         <h4>进一步洞察</h4>
-        <ul>${structuredAnswer.insights.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+        <ul>${structuredAnswer.insights.map((item) => `<li>${formatInlineMarkdown(item)}</li>`).join('')}</ul>
       </section>
     `);
   }
@@ -1275,10 +1252,15 @@ function renderStructuredAnswer(structuredAnswer) {
           ${structuredAnswer.relatedEntities
             .map(
               (item) => `
-                <span class="related-entity">
+                <div class="related-entity">
                   <strong>${escapeHtml(item.name)}</strong>
-                  <span>${escapeHtml(item.type)}</span>
-                </span>
+                  <span>${escapeHtml(formatEntityTypeLabel(item.type))}</span>
+                  ${
+                    item.relevance
+                      ? `<p>${escapeHtml(item.relevance)}</p>`
+                      : ''
+                  }
+                </div>
               `,
             )
             .join('')}
@@ -1363,7 +1345,17 @@ function getEvidenceMetadata(item) {
 
 function getEvidenceTitle(item) {
   const metadata = getEvidenceMetadata(item);
-  return (
+  if (item?.type === 'entity' || item?.entity) {
+    const entityName =
+      item?.entity?.name ||
+      metadata.entityName ||
+      metadata.entity_name;
+    if (typeof entityName === 'string' && entityName.trim()) {
+      const normalized = entityName.trim();
+      if (normalized.toLowerCase() !== 'entity') return normalized;
+    }
+  }
+  const title =
     metadata.sourceTitle ||
     metadata.groupName ||
     metadata.group_name ||
@@ -1371,8 +1363,38 @@ function getEvidenceTitle(item) {
     item?.displayTitle ||
     item?.source ||
     item?.type ||
-    '记忆片段'
-  );
+    '记忆片段';
+  if (String(title).toLowerCase() === 'entity' && item?.entity?.name) {
+    return item.entity.name;
+  }
+  return title;
+}
+
+function getEntityEvidenceSummary(item, cleaned, queryText) {
+  const metadata = getEvidenceMetadata(item);
+  const summary =
+    item?.entity?.description ||
+    metadata.entitySummary ||
+    metadata.entity_summary ||
+    metadata.oneLineSummary ||
+    item?.previewText;
+  if (typeof summary === 'string' && summary.trim()) {
+    const normalized = cleanEvidenceText(summary);
+    if (normalized && normalized.toLowerCase() !== 'entity') {
+      return clipText(normalized, EVIDENCE_LOCATOR_MAX);
+    }
+  }
+  const cue = pickEvidenceCue(cleaned, queryText, EVIDENCE_LOCATOR_MAX - 24);
+  return cue || '';
+}
+
+function formatEntityTypeLabel(entityType) {
+  const normalized = String(entityType || '').toLowerCase();
+  if (normalized === 'person') return '人物';
+  if (normalized === 'project') return '项目';
+  if (normalized === 'topic') return '话题';
+  if (normalized === 'organization') return '组织';
+  return entityType || '实体';
 }
 
 function getEvidenceHost(item) {
@@ -1466,6 +1488,7 @@ function sanitizeEvidenceCue(segment) {
 }
 
 function buildEvidenceTopicPhrase(cleaned, title, queryText) {
+  if (String(title || '').toLowerCase() === 'entity') return '';
   const haystack = `${title} ${cleaned}`.toLowerCase();
   const matchedTerms = getHighlightTerms(queryText)
     .filter((term) => haystack.includes(String(term).toLowerCase()))
@@ -1481,6 +1504,19 @@ function buildEvidenceTopicPhrase(cleaned, title, queryText) {
 
 function buildEvidenceLocatorSummary(item, options) {
   const { cleaned, title, sourceLabel, weak, queryText } = options;
+  if (item?.type === 'entity' || item?.entity) {
+    const name = getEvidenceTitle(item);
+    const summary = getEntityEvidenceSummary(item, cleaned, queryText);
+    const metadata = getEvidenceMetadata(item);
+    const entityType = formatEntityTypeLabel(
+      item?.entity?.type || metadata.entityType || metadata.entity_type,
+    );
+    if (summary) {
+      return clipText(`${entityType} · ${name}：${summary}`, EVIDENCE_LOCATOR_MAX);
+    }
+    return clipText(`${entityType} · ${name}`, EVIDENCE_LOCATOR_MAX);
+  }
+
   const host = getEvidenceHost(item);
   const place = host || sourceLabel || '记忆';
   const issueKey =
@@ -1701,47 +1737,111 @@ function shouldRenderRawEvidence(item, snippet) {
   );
 }
 
-function renderEvidence(evidence, queryText = '') {
-  if (!Array.isArray(evidence) || evidence.length === 0) return '';
-  const displayItems = evidence.slice(0, 3);
+const EVIDENCE_DISPLAY_MAX = 8;
+
+function getAnswerCitedNumbers(answerText) {
+  const cited = new Set();
+  const text = String(answerText || '');
+  if (!text) return cited;
+  // Citation markers look like [3]; skip markdown links of the form [1](url).
+  for (const match of text.matchAll(/\[(\d{1,2})\](?!\()/g)) {
+    const number = Number(match[1]);
+    if (number >= 1 && number <= 20) cited.add(number);
+  }
+  return cited;
+}
+
+function getEvidenceGroupName(item) {
+  const metadata = getEvidenceMetadata(item);
+  const direct = metadata.groupName || metadata.group_name;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+
+  const fallbackKeys = [
+    'conversationTitle',
+    'conversation_title',
+    'chatTitle',
+    'chat_title',
+    'threadTitle',
+    'thread_title',
+    'currentGroup',
+    'current_group',
+  ];
+  for (const key of fallbackKeys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  const source = String(item?.source || '').toLowerCase();
+  const chatLike = source === 'glip' || source === 'ringcentral';
+  const meetingLike = /meeting/i.test(source);
+  const sourceTitle =
+    typeof item?.sourceTitle === 'string' && item.sourceTitle.trim()
+      ? item.sourceTitle.trim()
+      : typeof metadata.sourceTitle === 'string' && metadata.sourceTitle.trim()
+        ? metadata.sourceTitle.trim()
+        : '';
+  const displayTitle =
+    typeof item?.displayTitle === 'string' && item.displayTitle.trim()
+      ? item.displayTitle.trim()
+      : '';
+  const memoTitlePattern = /^(meeting\s+)?memo\b|会议纪要|会议记录|meeting\s+notes?/i;
+
+  if (chatLike) {
+    if (sourceTitle && !memoTitlePattern.test(sourceTitle)) return sourceTitle;
+    if (displayTitle && !memoTitlePattern.test(displayTitle)) return displayTitle;
+    return sourceTitle || displayTitle || '';
+  }
+
+  if (meetingLike) {
+    const title = sourceTitle || displayTitle;
+    return title
+      ? title
+          .replace(/\s+(?:—|-)\s+Meeting Memory$/i, '')
+          .replace(/\s+(?:—|-)\s+Meeting$/i, '')
+          .trim()
+      : '';
+  }
+
+  return '';
+}
+
+function renderEvidenceCard(item, number, queryText, citedNumbers) {
+  const cleaned = cleanEvidenceText(item.content || '');
+  const weak = isNoisyWebEvidence(item, cleaned);
+  const title = getEvidenceTitle(item);
+  const sourceLabel = getEvidenceSourceLabel(item);
+  const groupLabel = getEvidenceGroupName(item);
+  const timeLabel = formatEvidenceTime(item.timestamp);
+  const scoreLabel =
+    typeof item.score === 'number' && Number.isFinite(item.score)
+      ? `${Math.round(item.score * 100)}%`
+      : '';
+  const reason = getEvidenceReason(item, weak);
+  const snippet = buildEvidenceLocatorSummary(item, {
+    cleaned,
+    title,
+    sourceLabel,
+    weak,
+    queryText,
+  });
+  const raw = renderRichEvidenceText(
+    String(item.content || '').slice(0, EVIDENCE_RAW_MAX),
+    queryText,
+  );
+  const cited = citedNumbers.has(number);
   return `
-    <section class="message-section">
-      <h4>证据</h4>
-      <div class="evidence-list">
-        ${displayItems
-          .map((item, index) => {
-            const cleaned = cleanEvidenceText(item.content || '');
-            const weak = isNoisyWebEvidence(item, cleaned);
-            const title = getEvidenceTitle(item);
-            const sourceLabel = getEvidenceSourceLabel(item);
-            const timeLabel = formatEvidenceTime(item.timestamp);
-            const scoreLabel =
-              typeof item.score === 'number' && Number.isFinite(item.score)
-                ? `${Math.round(item.score * 100)}%`
-                : '';
-            const reason = getEvidenceReason(item, weak);
-            const snippet = buildEvidenceLocatorSummary(item, {
-              cleaned,
-              title,
-              sourceLabel,
-              weak,
-              queryText,
-            });
-            const raw = renderRichEvidenceText(
-              String(item.content || '').slice(0, EVIDENCE_RAW_MAX),
-              queryText,
-            );
-            return `
-              <div class="evidence-item ${weak ? 'weak' : ''}">
+              <div class="evidence-item ${weak ? 'weak' : ''} ${cited ? 'cited' : ''}">
                 <div class="evidence-head">
-                  <span class="evidence-rank">${index + 1}</span>
+                  <span class="evidence-rank">${number}</span>
                   <span class="evidence-source">${escapeHtml(sourceLabel)}</span>
                   <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
                 </div>
                 <div class="evidence-meta-row">
+                  ${groupLabel ? `<span class="evidence-group">群组：${escapeHtml(groupLabel)}</span>` : ''}
                   ${timeLabel ? `<span>${escapeHtml(timeLabel)}</span>` : ''}
                   ${scoreLabel ? `<span>${escapeHtml(scoreLabel)}</span>` : ''}
                   ${weak ? '<span>弱相关网页快照</span>' : ''}
+                  ${cited ? `<span class="evidence-cited">答案引用 [${number}]</span>` : ''}
                 </div>
                 <p class="evidence-copy">${renderHighlightedEvidenceText(snippet, queryText)}</p>
                 ${reason ? `<div class="evidence-reason">${escapeHtml(reason)}</div>` : ''}
@@ -1752,9 +1852,52 @@ function renderEvidence(evidence, queryText = '') {
                 }
               </div>
             `;
-          })
-          .join('')}
-      </div>
+}
+
+function renderEvidence(evidence, queryText = '', answerText = '') {
+  if (!Array.isArray(evidence) || evidence.length === 0) return '';
+  const citedNumbers = getAnswerCitedNumbers(answerText);
+  const displayItems = evidence.slice(0, EVIDENCE_DISPLAY_MAX);
+  const overflowItems = evidence.slice(EVIDENCE_DISPLAY_MAX);
+  const citedCount = [...citedNumbers].filter(
+    (number) => number >= 1 && number <= evidence.length,
+  ).length;
+  const summaryMetaParts = [`${evidence.length} 条`];
+  if (citedCount > 0) {
+    summaryMetaParts.push(`答案引用 ${citedCount} 条`);
+  }
+  const summaryMeta = summaryMetaParts.join(' · ');
+  return `
+    <section class="message-section">
+      <details class="evidence-panel">
+        <summary class="evidence-panel-summary">
+          证据
+          <span class="evidence-panel-meta">${escapeHtml(summaryMeta)}</span>
+        </summary>
+        <div class="evidence-panel-body">
+          <div class="evidence-list">
+            ${displayItems
+              .map((item, index) =>
+                renderEvidenceCard(item, index + 1, queryText, citedNumbers),
+              )
+              .join('')}
+          </div>
+          ${
+            overflowItems.length > 0
+              ? `<details class="evidence-more"><summary>还有 ${overflowItems.length} 条证据</summary><div class="evidence-list">${overflowItems
+                  .map((item, offset) =>
+                    renderEvidenceCard(
+                      item,
+                      EVIDENCE_DISPLAY_MAX + offset + 1,
+                      queryText,
+                      citedNumbers,
+                    ),
+                  )
+                  .join('')}</div></details>`
+              : ''
+          }
+        </div>
+      </details>
     </section>
   `;
 }
@@ -2107,7 +2250,7 @@ function renderAssistantMessage(message) {
       ${message.htmlReady ? renderMeetingOutcomeSources(message.meetingOutcomeSources) : ''}
       ${message.htmlReady ? renderAmbiguousContextChoices(message) : ''}
       ${message.htmlReady ? renderStructuredAnswer(message.structuredAnswer) : ''}
-      ${message.htmlReady ? renderEvidence(message.evidence, message.queryText) : ''}
+      ${message.htmlReady ? renderEvidence(message.evidence, message.queryText, message.text) : ''}
       ${message.htmlReady ? renderMobileContextAction(message) : ''}
       ${message.htmlReady ? renderLowMemoryTail(message.runtime?.memoryGrowth) : ''}
     </div>
@@ -3288,11 +3431,6 @@ elements.composer.addEventListener('input', (event) => {
 
 elements.resumeContinue.addEventListener('click', () => {
   activateResumeSnapshot(state.resumeSnapshot);
-});
-
-elements.resumeNew.addEventListener('click', () => {
-  hideResumeForNewQuestion({ showReceipt: true });
-  focusComposer();
 });
 
 elements.resumeDiscard.addEventListener('click', () => {

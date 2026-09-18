@@ -40,6 +40,9 @@ const elements = {
   memoryBaseUrl: document.getElementById('memory-base-url'),
   memoryApiKey: document.getElementById('memory-api-key'),
   memoryUserId: document.getElementById('memory-user-id'),
+  memoryDeviceKeyStatus: document.getElementById('memory-device-key-status'),
+  memoryDeviceKeyDetail: document.getElementById('memory-device-key-detail'),
+  memoryDeviceKeyReissue: document.getElementById('memory-device-key-reissue'),
   pollMinutes: document.getElementById('poll-minutes'),
   stableHours: document.getElementById('stable-hours'),
   briefingHours: document.getElementById('briefing-hours'),
@@ -2572,6 +2575,63 @@ function renderNextStep(status) {
   elements.nextStepCopy.textContent = nextStep[2];
 }
 
+function describeDeviceKey(credential) {
+  if (!credential) {
+    return { text: '不可用（后台服务版本过旧）', tone: 'warn', detail: '' };
+  }
+  const outcome = credential.outcome || {};
+  if (credential.hasToken) {
+    return {
+      text: `已签发 · ${outcome.keyPrefix || credential.label || ''}`,
+      tone: 'ok',
+      detail: `标签 ${credential.label}。日常请求都用这把密钥，被服务端吊销时会自动重新签发。`,
+    };
+  }
+  if (outcome.status === 'needs_verification') {
+    return {
+      text: '需要验证',
+      tone: 'warn',
+      detail: `这个用户命名空间已被认领，需要 Google 验证或管理员批准${
+        outcome.adminContact ? `（联系 ${outcome.adminContact}）` : ''
+      }。`,
+    };
+  }
+  if (outcome.status === 'pending_approval') {
+    return {
+      text: '等待管理员批准',
+      tone: 'warn',
+      detail: `请求 ${outcome.requestId}${
+        outcome.adminContact ? ` · 联系 ${outcome.adminContact}` : ''
+      }。批准后本机会自动领取，无需手动填写。`,
+    };
+  }
+  if (outcome.reason === 'issuer_missing') {
+    return {
+      text: '尚未签发',
+      tone: 'warn',
+      detail:
+        '先在上面的 API Key 填入 bootstrap key 或服务密钥，保存后本机会自动签发自己的设备密钥。',
+    };
+  }
+  return {
+    text: '签发失败',
+    tone: 'error',
+    detail: outcome.message || outcome.reason || '未知错误',
+  };
+}
+
+function renderDeviceKeyStatus(credential) {
+  const node = elements.memoryDeviceKeyStatus;
+  if (!node) return;
+  const { text, tone, detail } = describeDeviceKey(credential);
+  node.textContent = text;
+  node.classList.remove('is-ok', 'is-warn', 'is-error');
+  node.classList.add(`is-${tone}`);
+  if (elements.memoryDeviceKeyDetail && detail) {
+    elements.memoryDeviceKeyDetail.textContent = detail;
+  }
+}
+
 function renderStepStatuses(status) {
   const checklist = status?.setupChecklist || {};
   const stepStates = [
@@ -3664,6 +3724,7 @@ async function refreshStatus() {
   renderNextStep(status);
   renderBlockingReasons(status);
   renderStepStatuses(status);
+  renderDeviceKeyStatus(status?.memoryCredential);
   renderMemoryThreadDetail(status);
   renderMobileThreadDetail(status);
   renderBroadcastTransportStatus(status);
@@ -4286,6 +4347,34 @@ elements.testMemoryButton.addEventListener('click', () => {
     }
   });
 });
+
+if (elements.memoryDeviceKeyReissue) {
+  elements.memoryDeviceKeyReissue.addEventListener('click', () => {
+    void withAction(elements.memoryDeviceKeyReissue, '签发中...', async () => {
+      try {
+        // Save first: the user usually pastes an issuer key and hits this.
+        await saveRuntimeSettings({ silent: true });
+        const credential = await bridgeApi.reissueMemoryCredential();
+        renderDeviceKeyStatus(credential);
+        setMessage(
+          elements.settingsMessage,
+          `设备密钥已签发：${credential.outcome?.keyPrefix || credential.label}`,
+          'success',
+        );
+        await refreshStatus();
+      } catch (error) {
+        const credential = await bridgeApi.getMemoryCredential().catch(() => null);
+        renderDeviceKeyStatus(credential);
+        setMessage(
+          elements.settingsMessage,
+          describeDeviceKey(credential).detail ||
+            (error instanceof Error ? error.message : '设备密钥签发失败'),
+          'error',
+        );
+      }
+    });
+  });
+}
 
 if (elements.backupPullNow) {
   elements.backupPullNow.addEventListener('click', () => {
