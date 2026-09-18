@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { analyzeMessagesInBackground } from '../src/messageDealing.ts';
 import { getEnvConfig } from '../src/utils.ts';
-import { getTaskEnabled } from '../src/services/taskSchedulerDefinitions.ts';
+import { getTaskEnabled } from '../src/services/backgroundJobDefinitions.ts';
 import { loadRuntimeWatchRules } from '../src/watchRules.ts';
 import { MESSAGE_ANALYSIS_RULE_DIAGNOSTICS_KEY } from '../src/messageAnalysisRuleDiagnostics.ts';
 import { MESSAGE_ANALYSIS_DELIVERY_RECEIPT_KEY } from '../src/messageAnalysisDelivery.ts';
@@ -33,7 +33,7 @@ const storage: StorageMap = {
     fullName: 'Current User',
     userEmail: 'current@example.com',
   },
-  taskSchedulerStates: {
+  backgroundJobStates: {
     message_analysis: {
       enabled: true,
     },
@@ -289,6 +289,37 @@ function installFetchMock() {
                   matched_rule_refs: ['manual:delivery-alert'],
                   matched_rule_ids: [],
                   reply_advice: '',
+                  user_relation_type: 'general_interest',
+                  contextMessages: [],
+                },
+              ],
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (prompt.includes('watch follow-up regression')) {
+        return new Response(
+          JSON.stringify({
+            response: JSON.stringify({
+              data: [
+                {
+                  team_name: 'Watch Room',
+                  team_id: 'watch-room',
+                  sender: 'Juan de Bravo',
+                  message_content:
+                    'watch follow-up regression should route to the follow-up push',
+                  summary: '关注后续规则又收到了一条后续讨论',
+                  datetime: '2026-04-15T04:00:00.000Z',
+                  post_id: 'post-watch-follow-up-1',
+                  // 只通过 matched_rule 命中关注后续规则，不返回 follow_thread_info。
+                  // 这正是线上把关注后续推送误判成普通消息分析推送的路径。
+                  matched_rule:
+                    '[RULE_REF:manual:watch-beta] 在 Watch Room 中 关于以下内容的后续讨论："Beta scope"',
+                  matched_rule_refs: ['manual:watch-beta'],
+                  matched_rule_ids: [],
+                  reply_advice: '确认发布计划',
                   user_relation_type: 'general_interest',
                   contextMessages: [],
                 },
@@ -823,6 +854,95 @@ async function main() {
     storage[MESSAGE_ANALYSIS_DELIVERY_RECEIPT_KEY]?.status,
     'partial',
     'stored delivery receipt should match the returned partial result',
+  );
+
+  // 关注后续命中必须走独立的推送目标与独立模板。
+  // 这里模拟线上场景：LLM 只通过 matched_rule 命中关注后续规则（没有
+  // follow_thread_info），且「关注后续推送」配置成另一个群组。
+  storage.envConfig = {
+    ...storage.envConfig,
+    MESSAGE_ANALYSIS_PUSH_TARGET: 'group',
+    MESSAGE_ANALYSIS_PUSH_GROUP_ID: 'analysis-room',
+    FOLLOW_UP_PUSH_TARGET: 'group',
+    FOLLOW_UP_PUSH_GROUP_ID: 'follow-up-room',
+  };
+  storage.concernedItems = [
+    {
+      id: 'watch-beta',
+      text: '关于以下内容的后续讨论："Beta scope"',
+      expiredAt: 0,
+      notifyMethod: 'bot',
+      filterGroup: 'Watch Room',
+      followThread: true,
+      followConfig: {
+        originalMessage: {
+          postId: 'post-watch-original-1',
+          threadId: 'thread-watch-1',
+          teamId: 'watch-room',
+          teamName: 'Watch Room',
+          sender: 'Karan Bhujbal',
+          content: 'Could you help to get the Beta scope finalized?',
+          datetime: '2026-04-14T00:00:00.000Z',
+          messageUrl:
+            'https://app.ringcentral.com/messages/watch-room/post-watch-original-1',
+        },
+        createdAt: '2026-04-14T00:00:00.000Z',
+        relatedMessages: [],
+      },
+    },
+  ];
+  ingests.length = 0;
+  botMessages.length = 0;
+
+  const followUpRun = (await analyzeMessagesInBackground(
+    [
+      {
+        type: 'message',
+        groupName: 'Watch Room',
+        groupId: 'watch-room',
+        standalone: [
+          {
+            creator: 'Juan de Bravo',
+            time: '2026-04-15T04:00:00.000Z',
+            id: 'post-watch-follow-up-1',
+            text: 'watch follow-up regression should route to the follow-up push',
+          },
+        ],
+      },
+    ],
+    'Current User',
+    false,
+  )) as any;
+
+  assert.equal(
+    followUpRun.deliveryReceipt?.counters?.immediateNotificationAttempts,
+    1,
+    'watch rule matched via matched_rule should still push once',
+  );
+  assert.equal(botMessages.length, 1, 'follow-up push should be sent once');
+  const followUpPush = botMessages[0];
+  assert.equal(
+    followUpPush?.teamId,
+    'follow-up-room',
+    'follow-up push must use FOLLOW_UP_PUSH_GROUP_ID, not the message-analysis group',
+  );
+  assert.equal(
+    followUpPush?.teamId === 'analysis-room',
+    false,
+    'follow-up push must not land in the message-analysis group',
+  );
+  assert.match(
+    followUpPush?.message || '',
+    /📌 关注后续更新/,
+    'follow-up push should use the dedicated follow-up template',
+  );
+  assert.match(followUpPush?.message || '', /__关注话题__：/);
+  assert.match(followUpPush?.message || '', /__原消息__（来自 Karan Bhujbal）/);
+  assert.match(followUpPush?.message || '', /监测到的「关注后续」新动态/);
+  assert.doesNotMatch(
+    followUpPush?.message || '',
+    /监测到您可能关注的消息/,
+    'follow-up push must not reuse the message-analysis template footer',
   );
 
   console.log('verify-memory-entry-message-flow: ok');

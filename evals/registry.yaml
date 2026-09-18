@@ -955,6 +955,73 @@ suites:
       validate:
         - npm --prefix memory-service test -- --run src/__tests__/focusProjectContextBuilder.test.ts
 
+  - id: roadmap-ai-draft-planning
+    title: Roadmap AI Draft Planning Eval
+    description: 验证产品内与 MCP 两条入口共用 DraftPlan 契约：E-12 层次保真、Owner 不乱猜、幂等、凭证隔离、不创建 Jira。
+    enabled: true
+    workflow: evals/workflows/roadmap-ai-draft-planning/experience.md
+    cases: evals/cases/roadmap-ai-draft-planning/cases.jsonl
+    runMode: manual
+    schedule:
+      enabled: true
+      every: 7d
+      timezone: Asia/Shanghai
+      action: report
+    readerProof:
+      claims:
+        - id: e12-hierarchy
+          statement: 已有三个主任务时只新增 12 条子任务；无主任务时一次创建 3 个 Draft Epic 与 12 个 Ticket，且不创建 Jira。
+          caseIds:
+            - e12-attach-existing-parents
+            - e12-create-three-epics
+            - facts-links-retained
+            - global-context-in-parent-desc
+        - id: owner-fidelity
+          statement: TBD 与多人候选保持未分配/歧义，不回退到操作人或 createdBy。
+          caseIds:
+            - owner-tbd-unassigned
+            - owner-multi-ambiguous
+            - unassigned-no-createdBy
+        - id: safety-idempotency
+          statement: 禁止字段与假引用被拒绝；同 requestId 只物化一批；预览不写库；MCP 无 Jira/Memory 工具且非本地 HTTP 被拒。
+          caseIds:
+            - empty-requirement
+            - description-overflow
+            - long-description-2000
+            - idempotent-same-request
+            - commit-then-replay-same-plan
+            - token-stripped-from-events
+            - mcp-has-no-jira-create
+            - https-required-for-mcp
+            - forbidden-plan-keys
+            - injection-sql-ignored
+            - evidence-quote-mismatch
+            - preview-does-not-write
+            - unknown-parent-rejected
+            - no-memory-import
+            - agent-tools-contract-version
+            - relative-date-uses-reference
+            - reference-date-locked-e12
+      boundaries:
+        - Uses synthetic E-12 fixtures and structured plans, not live model quality
+        - Does not create Jira issues
+        - Does not call Memory Service
+        - Does not prove production LLM paraphrase fidelity
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/judges/roadmap-ai-draft-planning.md
+    repair:
+      mode: suggest
+      agent: codex
+      allowedPaths:
+        - roadmap-service/src/planning/**
+        - roadmap-service/mcp/**
+        - roadmap-service/web/src/**
+        - docs/features/personal_roadmap.md
+      validate:
+        - npm --prefix roadmap-service test -- --run src/__tests__/draftPlanning.test.ts mcp/src/http.test.ts
+
   - id: recall-synthesis-contract
     title: Recall Synthesis Contract Eval
     description: 确定性验证普通 Recall 零 LLM、主动总结证据门槛、grounding 拦截、相同快照缓存和跨用户数据库隔离。

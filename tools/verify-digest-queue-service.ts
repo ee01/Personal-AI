@@ -77,10 +77,10 @@ const { mergeMatchedRuleDisplay } = await import(
   '../src/utils/matchedRuleDisplay.ts'
 );
 const { summarizeDigestQueueProcessResults } = await import(
-  '../src/services/TaskScheduler.ts'
+  '../src/services/BackgroundJobs.ts'
 );
 const { summarizeDigestQueueStatusSummary } = await import(
-  '../src/services/TaskScheduler.ts'
+  '../src/services/BackgroundJobs.ts'
 );
 
 function makeDigestItem(
@@ -275,7 +275,7 @@ async function verifyNotificationFailureKeepsItems() {
   }
 }
 
-function verifyTaskSchedulerSurfacesDigestFailures() {
+function verifyBackgroundJobsSurfacesDigestFailures() {
   const successResult = summarizeDigestQueueProcessResults([
     {
       taskId: 'follow_thread_merged',
@@ -711,7 +711,7 @@ async function verifyDueAndFutureDigestQueueStatusIsExplainable() {
   assert.match(currentSummary, /每日 10:00/);
   assert.match(currentSummary, /释放窗口回执/);
   assert.match(currentSummary, /1 条已具备发送资格/);
-  assert.match(currentSummary, /等待 digest_queue_process 后台任务推送/);
+  assert.match(currentSummary, /等待 digest_queue_process 后台作业推送/);
   assert.match(currentSummary, /查看或刷新状态不会立即发送摘要/);
 
   const processSummary = summarizeDigestQueueProcessResults([
@@ -735,7 +735,7 @@ async function main() {
   await verifyDuplicateIdsAreIdempotent();
   verifyPerRuleDigestReleaseSchedule();
   await verifyNotificationFailureKeepsItems();
-  verifyTaskSchedulerSurfacesDigestFailures();
+  verifyBackgroundJobsSurfacesDigestFailures();
   verifyDigestBotMessageHasNoBrokenSourceLink();
   verifyMatchedRuleDisplayKeepsMentionAttribution();
   await verifyProcessTaskRemovesOnlyCollectedItems();

@@ -28,6 +28,13 @@ const contextAssistSource = readFileSync(
   ),
   'utf8',
 );
+const meetingPrepServiceSource = readFileSync(
+  new URL(
+    '../memory-service/src/core/TodayPilotMeetingPrepService.ts',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 function assertContains(source: string, pattern: RegExp, label: string) {
   assert.match(source, pattern, `${label} should be present`);
@@ -78,10 +85,35 @@ function verifyVideoHomeUsesTodayPilot() {
     /高置信记忆 0 条/,
     'Video Home calendar-only prep subtitle boundary',
   );
-  assertContains(
+  assertNotContains(
     videoHomeSource,
     /仅命中日历\/基础信息/,
-    'Video Home calendar-only prep receipt boundary',
+    'Video Home calendar-only restatement receipt copy',
+  );
+  assertContains(
+    videoHomeSource,
+    /shouldDisplayMeetingPrepSummary/,
+    'Video Home hides calendar-restating summaries',
+  );
+  assertContains(
+    videoHomeSource,
+    /renderMeetingPrepCueCard/,
+    'Video Home cue card renderer',
+  );
+  assertContains(
+    videoHomeSource,
+    /pai-cue-questions/,
+    'Video Home suggested questions list styling',
+  );
+  assertNotContains(
+    videoHomeSource,
+    /pai-meeting-title/,
+    'Video Home duplicated calendar title block',
+  );
+  assertNotContains(
+    videoHomeSource,
+    /Organizer: \$\{organizer\}/,
+    'Video Home duplicated organizer meta',
   );
   assertContains(
     videoHomeSource,
@@ -404,6 +436,21 @@ function verifyClientAndApi() {
     contextAssistSource,
     /resolveFromContextAssist/,
     'Context Assist meeting prep delegation',
+  );
+  assertContains(
+    meetingPrepServiceSource,
+    /user's Options UI language/,
+    'Meeting prep LLM uses Options language',
+  );
+  assertContains(
+    meetingPrepServiceSource,
+    /one question per item/,
+    'Meeting prep LLM returns distinct suggested questions',
+  );
+  assertContains(
+    meetingPrepServiceSource,
+    /questions\.slice\(0, 6\)\.join\('\\n'\)/,
+    'Meeting prep stores suggested questions as a list body',
   );
 }
 

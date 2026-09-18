@@ -99,6 +99,10 @@ wait_for_health() {
   return 1
 }
 
+public_memory_ok() {
+  curl -fsS -m 5 -H "Host: ${MEMORY_HOST}" "http://127.0.0.1:${MEMORY_PORT}/health" >/dev/null 2>&1
+}
+
 public_roadmap_ok() {
   curl -fsS -m 5 -H "Host: ${ROADMAP_HOST}" "$ROADMAP_URL" >/dev/null 2>&1
 }
@@ -133,14 +137,24 @@ main() {
     wait_for_health "http://127.0.0.1:${ROADMAP_PORT}/health" 30 || true
   fi
 
+  if ! wait_for_health "http://127.0.0.1:${MEMORY_PORT}/health" 15; then
+    log "memory-service direct health failed; force-recreating (no OrbStack restart)"
+    (cd "$PERSONAL_AI_DIR" && docker compose up -d --force-recreate memory-service)
+    wait_for_health "http://127.0.0.1:${MEMORY_PORT}/health" 30 || true
+  fi
+
   if ! public_roadmap_ok; then
     log "public roadmap probe failed; restarting NPM"
     (cd "$NPM_DIR" && docker compose restart)
     sleep 3
     reload_npm
     public_roadmap_ok || log "public roadmap still failing after NPM restart"
+  elif ! public_memory_ok; then
+    log "public memory probe failed; reloading NPM upstream"
+    reload_npm
+    public_memory_ok || log "public memory still failing after NPM reload"
   else
-    log "ok gateway=${gateway} roadmap public probe passed"
+    log "ok gateway=${gateway} roadmap+memory public probes passed"
   fi
 }
 

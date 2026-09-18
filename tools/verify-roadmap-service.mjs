@@ -19,6 +19,8 @@ const FRONTEND_NEEDLES = [
   '未刷新',
   '安装插件开启同步',
   '没有同步到 Jira',
+  '重试失败项',
+  '不是硬约束',
 ];
 
 const failures = [];

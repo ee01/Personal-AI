@@ -311,6 +311,10 @@ async function installChromeMock(page) {
                   status: 'ready',
                   generatedMode: 'nightly_llm',
                   evidenceRefs: preparedAssist.evidence,
+                  questions: [
+                    '依赖或风险现在卡在哪里，owner 和下一步时间点是谁来确认？',
+                    '交接进度是否需要同步给参会人？',
+                  ],
                   storylineOpportunity: null,
                   outcomeBinder,
                 },
@@ -472,8 +476,6 @@ async function main() {
         initialText.includes('提前准备') &&
         initialText.includes('高置信 1 条') &&
         initialText.includes('基础背景 1 条') &&
-        initialText.includes('1 条高置信来源可展开') &&
-        initialText.includes('1 条日历或低信号来源只作为准备背景保留') &&
         initialText.includes('本机会写入 Meeting Pilot handoff') &&
         initialText.includes('不会加入会议、录音、发消息、审批或写回日历/外部系统') &&
         initialText.includes('会中核对 owner / 下一步 / 风险') &&
@@ -481,8 +483,28 @@ async function main() {
         initialText.includes('确认 Rooms 依赖 owner 和下一步') &&
         initialText.includes('会前目标') &&
         initialText.includes('会议结束后由 Meeting Pilot 用 transcript、决议和行动项装订结果') &&
-        initialText.includes('Rooms dependency'),
+        initialText.includes('Rooms dependency') &&
+        initialText.includes('依赖或风险现在卡在哪里') &&
+        initialText.includes('交接进度是否需要同步给参会人'),
       'Today Pilot meeting prep card did not render expected cached output',
+    );
+    assert(
+      !initialText.includes('1 条高置信来源可展开') &&
+        !initialText.includes('仅命中日历/基础信息') &&
+        !/Organizer:\s/.test(initialText) &&
+        !/Sep \d+.+\d+:\d+ AM - Sep/.test(initialText),
+      'Today Pilot meeting prep should not repeat calendar meta or restating hit copy',
+    );
+    const questionItems = await page.evaluate(() => {
+      const host = document.querySelector('#pai-meeting-prep-host');
+      const items = host?.shadowRoot?.querySelectorAll('.pai-cue-questions li');
+      return Array.from(items || []).map((item) => item.textContent || '');
+    });
+    assert(
+      questionItems.length === 2 &&
+        questionItems[0].includes('依赖或风险现在卡在哪里') &&
+        questionItems[1].includes('交接进度是否需要同步给参会人'),
+      'Suggested meeting questions should render as a list',
     );
 
     await page.waitForFunction(() => {

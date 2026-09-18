@@ -72,7 +72,7 @@ try {
         username: 'auto.reply.verify',
         fullName: 'Auto Reply Verify',
       },
-      taskSchedulerStates: {
+      backgroundJobStates: {
         message_analysis: { enabled: true },
       },
       concernedItems: [

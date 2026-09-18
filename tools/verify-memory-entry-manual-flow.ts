@@ -27,7 +27,7 @@ const storage: Record<string, any> = {
     fullName: 'Current User',
     userEmail: 'current@example.com',
   },
-  taskSchedulerStates: {
+  backgroundJobStates: {
     message_analysis: { enabled: true },
   },
   digestQueues: {},

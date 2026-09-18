@@ -301,6 +301,10 @@ async function runCase({ suite, caseItem, runDir }) {
     return runMemoryClaimAttributionCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'roadmap-ai-draft-planning') {
+    return runRoadmapAiDraftPlanningCase({ suite, caseItem, runDir, collected });
+  }
+
   if (suite.id === 'change-memory-ledger') {
     return runChangeMemoryLedgerCase({ suite, caseItem, runDir, collected });
   }
@@ -2408,6 +2412,80 @@ async function runSourceMemoryDistillerCase({
       heuristic: response,
       llm: null,
     },
+    error: status === 'error' ? responseEnvelope.error : undefined,
+  };
+  await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
+  return result;
+}
+
+async function runRoadmapAiDraftPlanningCase({
+  suite,
+  caseItem,
+  runDir,
+  collected,
+}) {
+  const casePath = path.join(runDir, `${caseItem.id}.case.json`);
+  await fs.writeFile(resolveRepoPath(casePath), JSON.stringify(caseItem, null, 2));
+  await appendJsonl(path.join(runDir, 'requests.jsonl'), {
+    caseId: caseItem.id,
+    request: {
+      kind: caseItem.kind,
+      title: caseItem.title,
+      action: caseItem.query?.action || caseItem.id,
+      expectedBehavior: caseItem.expectedBehavior,
+    },
+  });
+  const commandResult = await runProcess(
+    './node_modules/.bin/tsx',
+    ['../tools/eval-roadmap-ai-draft-planning.ts', resolveRepoPath(casePath)],
+    {
+      cwd: resolveRepoPath('roadmap-service'),
+      timeoutMs: 60_000,
+    },
+  );
+  const responseEnvelope = parseCommandJsonOutput(
+    commandResult,
+    'roadmap_ai_draft_planning_eval',
+  );
+  await appendJsonl(path.join(runDir, 'responses.jsonl'), {
+    caseId: caseItem.id,
+    command: [commandResult.command, ...commandResult.args].join(' '),
+    exitCode: commandResult.code,
+    stdout: commandResult.stdout.slice(-6000),
+    stderr: commandResult.stderr.slice(-6000),
+    ...responseEnvelope,
+  });
+  const status =
+    commandResult.code === 0 && responseEnvelope.response
+      ? responseEnvelope.response.status
+      : 'error';
+  const response = responseEnvelope.response || {};
+  const result = {
+    caseId: caseItem.id,
+    suiteId: suite.id,
+    caseKind: caseItem.kind,
+    caseTitle: caseItem.title,
+    expectedBehavior: caseItem.expectedBehavior,
+    sampleSummary: summarizeSampleText(caseItem.title),
+    status,
+    verdict: status,
+    scores: response.scores || {},
+    overallScore: response.overallScore ?? computeOverallScore(response.scores || {}, status),
+    userConclusion:
+      response.userConclusion ||
+      (status === 'error'
+        ? '运行 Roadmap AI Draft Planning eval 时出错。'
+        : 'Roadmap AI Draft Planning eval completed.'),
+    improvementSuggestions: response.improvementSuggestions || [
+      '检查 eval stderr，确认 roadmap-service 结构化计划与 MCP 工具面。',
+    ],
+    why: response.why || responseEnvelope.error,
+    actualOutput: response.actualOutput || {
+      ok: false,
+      exitCode: commandResult.code,
+      error: responseEnvelope.error,
+    },
+    judge: { heuristic: response, llm: null },
     error: status === 'error' ? responseEnvelope.error : undefined,
   };
   await appendJsonl(path.join(runDir, 'judge-results.jsonl'), result);
