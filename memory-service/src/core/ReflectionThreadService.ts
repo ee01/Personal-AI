@@ -1059,6 +1059,13 @@ export class ReflectionThreadService {
         scheduledAt: proposal.scheduledAt,
         sourceKind: 'reflection_run',
         sourceRefId: run.id,
+        taskKind:
+          proposal.actionType === 'create_confirm_request' ||
+          proposal.actionType === 'update_truth_property'
+            ? 'reflection'
+            : proposal.actionType === 'ask_external_user'
+              ? 'outreach'
+              : 'agent',
         queueStatus: 'queued',
         utilityScore: proposal.utilityScore,
         urgencyScore: proposal.urgencyScore,

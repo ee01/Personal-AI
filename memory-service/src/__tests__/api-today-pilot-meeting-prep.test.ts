@@ -594,10 +594,56 @@ describe('Today Pilot meeting prep API', () => {
     expect(body.prep.storylineOpportunity).toBeUndefined();
     expect(body.assist.storylineOpportunity).toBeUndefined();
     expect(body.prep.error).toContain('llm unavailable');
+    expect(body.prep.questions).toEqual([
+      '这场会今天最需要确认的 owner、下一步和时间点是什么？',
+      '历史上下文里是否有未关闭风险或依赖需要在会中重新校准？',
+    ]);
+    expect(
+      body.prep.cueCards.find((card: { id: string }) => card.id === 'suggested-questions')
+        ?.body,
+    ).toContain('\n');
     const serializedBinder = JSON.stringify(body.prep.outcomeBinder);
     expect(serializedBinder).not.toContain('123 456 789');
     expect(serializedBinder).not.toContain('private-value-123');
     expect(serializedBinder).toContain('[redacted]');
+  });
+
+  it('asks the meeting-prep LLM to write questions in the Options language', async () => {
+    const event = seedCalendarEvent({
+      id: 'cal-language-en',
+      externalId: 'event-language-en',
+      seriesKey: 'series-language-en',
+      contentHash: 'hash-language-en',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/today-pilot/meeting-prep/resolve',
+      headers: {
+        'x-personal-ai-language': 'en-US',
+      },
+      payload: {
+        event: {
+          externalId: event.externalId,
+          seriesKey: event.seriesKey,
+          title: event.title,
+          descriptionPreview: event.descriptionPreview,
+          startTime: event.startAt,
+        },
+        timezone: 'Asia/Shanghai',
+        autoGenerate: true,
+        forceGenerate: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockGenerateJSON).toHaveBeenCalled();
+    const prompt = String(mockGenerateJSON.mock.calls[0]?.[0] || '');
+    expect(prompt).toContain("user's Options UI language");
+    expect(prompt).toContain('English');
+    expect(prompt).toContain('one question per item');
+    expect(prompt).toContain('Do not restate calendar title');
+    expect(res.json().prep.llmUsage.outputLanguage).toBe('en-US');
   });
 
   it('skips recurring daily noise without fresh prep signal', async () => {

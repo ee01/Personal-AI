@@ -240,7 +240,9 @@ export async function confirmRequestRoutes(
           ?.slice('action:'.length);
 
       if (actionId) {
-        if (answer === 'retry') {
+        const resumeAnswers = new Set(['retry', 'continue', 'approve', 'yes']);
+        const stopAnswers = new Set(['stop', 'cancel', 'reject', 'no']);
+        if (resumeAnswers.has(answer)) {
           const repo = new ActionRepository(db);
           const retried = repo.retry(actionId);
           if (retried) {
@@ -254,7 +256,7 @@ export async function confirmRequestRoutes(
           }
         } else if (answer === 'skip_once') {
           skippedActionId = actionId;
-        } else if (answer === 'stop') {
+        } else if (stopAnswers.has(answer)) {
           const repo = new ActionRepository(db);
           const stopped = repo.cancel(
             actionId,

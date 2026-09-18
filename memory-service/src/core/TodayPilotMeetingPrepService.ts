@@ -7,6 +7,7 @@ import {
   TodayPilotMeetingPrepRepository,
   type TodayPilotMeetingPrepRecord,
 } from '../repositories/TodayPilotMeetingPrepRepository.js';
+import { normalizeUiLanguage, type UiLanguage } from '../i18n.js';
 import { contentHash } from '../utils/hashing.js';
 import { redactMeetingCredentials } from '../utils/meetingCredentialRedaction.js';
 import { normalizeStorylineOpportunity } from '../utils/storyline.js';
@@ -33,6 +34,7 @@ export interface TodayPilotMeetingPrepPrepareOptions {
   horizonHours?: number;
   maxMeetings?: number;
   mode?: MeetingPrepMode;
+  language?: UiLanguage;
 }
 
 export interface TodayPilotMeetingPrepPrepareResponse {
@@ -50,6 +52,7 @@ export interface TodayPilotMeetingPrepResolveOptions {
   autoGenerate?: boolean;
   forceGenerate?: boolean;
   sourceTypes?: RecallSourceType[];
+  language?: UiLanguage;
 }
 
 export interface TodayPilotMeetingPrepResolveResponse {
@@ -160,6 +163,50 @@ function eventAttendeeNames(event: ContextAssistMeetingEvent): string[] {
 function goalHashFor(userGoal?: string): string {
   const goal = String(userGoal || '').trim();
   return goal ? contentHash(goal).slice(0, 20) : '';
+}
+
+function resolveMeetingPrepOutputLanguage(
+  db: Database.Database,
+  requested?: string,
+): UiLanguage {
+  if (requested) {
+    return normalizeUiLanguage(requested);
+  }
+  const row = db
+    .prepare(
+      `SELECT item_value
+       FROM user_profile_items
+       WHERE status = 'active' AND item_key = 'language_preference'
+       ORDER BY user_confirmed DESC, updated_at DESC
+       LIMIT 1`,
+    )
+    .get() as { item_value: string } | undefined;
+  return /english|英文|en-us|\ben\b/i.test(row?.item_value || '')
+    ? 'en-US'
+    : 'zh-CN';
+}
+
+function meetingPrepLanguageLabel(language: UiLanguage): string {
+  return language === 'en-US' ? 'English' : 'Simplified Chinese';
+}
+
+function meetingPrepQuestionsTitle(language: UiLanguage): string {
+  return language === 'en-US'
+    ? 'Questions to bring into the meeting'
+    : '建议带进会议的问题';
+}
+
+function fallbackMeetingPrepQuestions(language: UiLanguage): string[] {
+  if (language === 'en-US') {
+    return [
+      'What owner, next step, and timing does this meeting need to confirm today?',
+      'Are there still-open risks or dependencies from prior context that need recalibration?',
+    ];
+  }
+  return [
+    '这场会今天最需要确认的 owner、下一步和时间点是什么？',
+    '历史上下文里是否有未关闭风险或依赖需要在会中重新校准？',
+  ];
 }
 
 function buildLocalDate(date: Date, timezone: string): string {
@@ -286,6 +333,7 @@ export class TodayPilotMeetingPrepService {
     const horizonHours = Math.max(1, Math.min(options.horizonHours ?? 36, 96));
     const maxMeetings = Math.max(1, Math.min(options.maxMeetings ?? 5, 20));
     const mode = options.mode ?? 'nightly_llm';
+    const language = resolveMeetingPrepOutputLanguage(this.db, options.language);
     const startAt = Math.max(
       now() - 15 * 60,
       localDateStartApprox(localDate, timezone),
@@ -330,6 +378,7 @@ export class TodayPilotMeetingPrepService {
           localDate: eventLocalDate,
           userGoal: '',
           mode,
+          language,
         });
         items.push(prep);
       } catch (error) {
@@ -412,6 +461,7 @@ export class TodayPilotMeetingPrepService {
       userGoal: options.userGoal,
       mode: goalHash ? 'on_demand_llm' : 'nightly_llm',
       sourceTypes: options.sourceTypes,
+      language: resolveMeetingPrepOutputLanguage(this.db, options.language),
     });
     return {
       prep,
@@ -528,6 +578,7 @@ export class TodayPilotMeetingPrepService {
     userGoal?: string;
     mode: MeetingPrepMode;
     sourceTypes?: RecallSourceType[];
+    language: UiLanguage;
   }): Promise<TodayPilotMeetingPrepRecord> {
     const event = this.normalizeEvent(input.event)!;
     const startAt = normalizeTimestamp(event.startTime);
@@ -545,6 +596,7 @@ export class TodayPilotMeetingPrepService {
         eventTitle: event.title,
         startAt,
         goalHash,
+        language: input.language,
         evidence: evidence.map((item) => item.id),
       }),
     );
@@ -553,7 +605,7 @@ export class TodayPilotMeetingPrepService {
     try {
       const generated =
         await this.llmClient.generateJSON<TodayPilotMeetingPrepLlmResponse>(
-          this.buildLlmPrompt(event, input.userGoal, evidence),
+          this.buildLlmPrompt(event, input.userGoal, evidence, input.language),
           {
             temperature: 0.2,
             maxTokens: 1400,
@@ -566,6 +618,7 @@ export class TodayPilotMeetingPrepService {
         input.userGoal,
         evidence,
         generated,
+        input.language,
       );
       const { outcomeSlots, ...prepFields } = normalized;
       const prep = this.repo.upsert({
@@ -589,6 +642,7 @@ export class TodayPilotMeetingPrepService {
         event,
         input.userGoal,
         evidence,
+        input.language,
       );
       const { outcomeSlots, ...prepFields } = fallback;
       const prep = this.repo.upsert({
@@ -712,6 +766,7 @@ export class TodayPilotMeetingPrepService {
     event: ContextAssistMeetingEvent,
     userGoal: string | undefined,
     evidence: ComposerAssistEvidence[],
+    language: UiLanguage,
   ): string {
     const evidenceText = evidence
       .slice(0, MAX_LLM_EVIDENCE)
@@ -797,6 +852,12 @@ export class TodayPilotMeetingPrepService {
       '- Prefer explicit calendar agenda, user goal, decision, owner, estimate, risk, dependency, or open-question language.',
       '- Do not turn generic background, meeting links, introductions, or broad summaries into slots.',
       '- A slot is a planned target only; do not claim it is resolved before meeting evidence exists.',
+      '',
+      'Language and summary rules:',
+      `- Write suggestedQuestions, question cue cards, summaryMd, and other user-facing meeting-prep prose in ${meetingPrepLanguageLabel(language)}. This is the user's Options UI language.`,
+      '- Keep names, product names, Jira keys, URLs, IDs, and quoted source terms in their original form.',
+      '- suggestedQuestions must be an array of distinct questions, one question per item. Never concatenate multiple questions into one string.',
+      '- Do not restate calendar title, time, organizer, attendee list, or calendar description in summaryMd. The calendar UI already shows those. If there is no non-calendar insight, leave summaryMd empty or omit it.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -807,6 +868,7 @@ export class TodayPilotMeetingPrepService {
     userGoal: string | undefined,
     evidence: ComposerAssistEvidence[],
     response: TodayPilotMeetingPrepLlmResponse,
+    language: UiLanguage,
   ): Pick<
     Parameters<TodayPilotMeetingPrepRepository['upsert']>[0],
     | 'summaryMd'
@@ -817,7 +879,12 @@ export class TodayPilotMeetingPrepService {
     | 'redaction'
     | 'llmUsage'
   > & { outcomeSlots: MeetingOutcomeCandidateSlot[] } {
-    const fallback = this.buildDeterministicFallback(event, userGoal, evidence);
+    const fallback = this.buildDeterministicFallback(
+      event,
+      userGoal,
+      evidence,
+      language,
+    );
     const questions = Array.isArray(response.suggestedQuestions)
       ? response.suggestedQuestions
           .map((item) => compactText(String(item || ''), 320))
@@ -828,6 +895,7 @@ export class TodayPilotMeetingPrepService {
       response.cueCards,
       questions,
       evidence,
+      language,
     );
     const contextPackMd = redactMeetingCredentials(firstNonEmpty(
       response.contextPackMd,
@@ -837,7 +905,10 @@ export class TodayPilotMeetingPrepService {
       response.storylineOpportunity,
       { evidenceRefs: evidence },
     );
-    const llmUsage: Record<string, unknown> = { ...(response.usage ?? {}) };
+    const llmUsage: Record<string, unknown> = {
+      ...(response.usage ?? {}),
+      outputLanguage: language,
+    };
     if (storylineOpportunity) {
       llmUsage.storylineOpportunity = storylineOpportunity;
     }
@@ -899,6 +970,7 @@ export class TodayPilotMeetingPrepService {
     cards: TodayPilotMeetingPrepLlmResponse['cueCards'],
     questions: string[],
     evidence: ComposerAssistEvidence[],
+    language: UiLanguage,
   ): ContextAssistCueCard[] {
     const normalized = Array.isArray(cards)
       ? cards
@@ -931,8 +1003,8 @@ export class TodayPilotMeetingPrepService {
       normalized.push({
         id: 'suggested-questions',
         kind: 'question',
-        title: '建议带进会议的问题',
-        body: questions.slice(0, 3).join(' '),
+        title: meetingPrepQuestionsTitle(language),
+        body: questions.slice(0, 6).join('\n'),
         evidenceIds: evidence.slice(0, 3).map((item) => item.id),
       });
     }
@@ -943,6 +1015,7 @@ export class TodayPilotMeetingPrepService {
     event: ContextAssistMeetingEvent,
     userGoal: string | undefined,
     evidence: ComposerAssistEvidence[],
+    language: UiLanguage,
   ): Pick<
     Parameters<TodayPilotMeetingPrepRepository['upsert']>[0],
     | 'summaryMd'
@@ -959,25 +1032,26 @@ export class TodayPilotMeetingPrepService {
       .map(
         (item, index) => `- [E${index + 1}] ${compactText(item.snippet, 220)}`,
       );
-    const questions = [
-      '这场会今天最需要确认的 owner、下一步和时间点是什么？',
-      '历史上下文里是否有未关闭风险或依赖需要在会中重新校准？',
-    ];
+    const questions = fallbackMeetingPrepQuestions(language);
     const cueCards: ContextAssistCueCard[] = [
       {
         id: 'meeting-context',
         kind: 'brief',
-        title: '会前背景',
+        title: language === 'en-US' ? 'Meeting context' : '会前背景',
         body: evidence.length
-          ? `Today Pilot 命中 ${evidence.length} 条相关记忆，先核对最近变更和未关闭事项。`
-          : '暂未命中强相关记忆，先明确本次会议目标和需要输出的决定。',
+          ? language === 'en-US'
+            ? `Today Pilot matched ${evidence.length} related memories. Check recent changes and still-open items first.`
+            : `Today Pilot 命中 ${evidence.length} 条相关记忆，先核对最近变更和未关闭事项。`
+          : language === 'en-US'
+            ? 'No strong related memories yet. Confirm the meeting goal and the decision this meeting should produce.'
+            : '暂未命中强相关记忆，先明确本次会议目标和需要输出的决定。',
         evidenceIds: evidence.slice(0, 3).map((item) => item.id),
       },
       {
         id: 'suggested-questions',
         kind: 'question',
-        title: '建议带进会议的问题',
-        body: questions.join(' '),
+        title: meetingPrepQuestionsTitle(language),
+        body: questions.join('\n'),
         evidenceIds: evidence.slice(0, 3).map((item) => item.id),
       },
     ];
@@ -1007,9 +1081,19 @@ export class TodayPilotMeetingPrepService {
         `## ${title}`,
         '',
         evidence.length
-          ? `- 已召回 ${evidence.length} 条相关记忆，优先检查最近承诺、风险和 owner。`
-          : '- 暂无强相关记忆，建议先明确会议目标。',
-        userGoal ? `- 本次目标：${userGoal}` : '- 使用默认离线会前准备。',
+          ? language === 'en-US'
+            ? `- Recalled ${evidence.length} related memories. Check recent commitments, risks, and owners first.`
+            : `- 已召回 ${evidence.length} 条相关记忆，优先检查最近承诺、风险和 owner。`
+          : language === 'en-US'
+            ? '- No strong related memories yet. Confirm the meeting goal first.'
+            : '- 暂无强相关记忆，建议先明确会议目标。',
+        userGoal
+          ? language === 'en-US'
+            ? `- Goal for this meeting: ${userGoal}`
+            : `- 本次目标：${userGoal}`
+          : language === 'en-US'
+            ? '- Using the default offline meeting prep.'
+            : '- 使用默认离线会前准备。',
       ].join('\n'),
       cueCards,
       questions,
@@ -1024,7 +1108,7 @@ export class TodayPilotMeetingPrepService {
           .map((item) => item.sourceUrl)
           .slice(0, 5),
       },
-      llmUsage: { fallback: true },
+      llmUsage: { fallback: true, outputLanguage: language },
       outcomeSlots: [],
     };
   }

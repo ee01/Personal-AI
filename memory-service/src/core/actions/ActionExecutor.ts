@@ -82,6 +82,8 @@ interface DispatchOutcome {
     ActionQueueStatus,
     'failed' | 'dead_letter' | 'running' | 'input_required' | 'awaiting_claim'
   >;
+  /** True when input_required means a human gate, not a still-running remote poll. */
+  humanGate?: boolean;
   errorMessage?: string;
   delegationOutcome?: DelegationOutcome;
 }
@@ -577,6 +579,21 @@ export class ActionExecutor {
     const attemptId = this.actionRepo.markRunning(action.id);
     try {
       const outcome = await this.dispatch(action);
+      if (outcome.humanGate && outcome.queueStatus === 'input_required') {
+        const updated =
+          this.actionRepo.markInputRequired(
+            action.id,
+            attemptId,
+            outcome.result,
+            outcome.errorMessage,
+          ) ?? action;
+        return this.finishWithLedgerNotify(updated, {
+          actionId: updated.id,
+          actionType: updated.actionType,
+          queueStatus: 'input_required',
+          result: outcome.result,
+        });
+      }
       if (
         outcome.queueStatus === 'running' ||
         outcome.queueStatus === 'input_required'
@@ -1176,6 +1193,21 @@ export class ActionExecutor {
       .get(actionId) as { id: string } | undefined;
     const attemptId = attemptRow?.id || this.actionRepo.markRunning(actionId);
 
+    if (outcome.humanGate && outcome.queueStatus === 'input_required') {
+      const updated =
+        this.actionRepo.markInputRequired(
+          action.id,
+          attemptId,
+          outcome.result,
+          outcome.errorMessage,
+        ) ?? action;
+      return this.finishWithLedgerNotify(updated, {
+        actionId: updated.id,
+        actionType: updated.actionType,
+        queueStatus: 'input_required',
+        result: outcome.result,
+      });
+    }
     if (
       outcome.queueStatus === 'running' ||
       outcome.queueStatus === 'input_required'
@@ -1451,7 +1483,8 @@ export class ActionExecutor {
           payload: outcome.payload,
         },
         delegationOutcome: outcome,
-        queueStatus: 'failed',
+        queueStatus: 'input_required',
+        humanGate: true,
         errorMessage: outcome.summary,
       };
     }
@@ -1655,7 +1688,7 @@ export class ActionExecutor {
             : `处理「${action.title}」前需要你的判断。`,
         context: outcome.summary,
         options,
-        category: 'openclaw_delegation',
+        category: 'task_center_plan_gate',
         priority: action.priority >= 8 ? 'high' : 'normal',
         evidenceRefs: [`action:${action.id}`],
         resumeActionId: action.id,

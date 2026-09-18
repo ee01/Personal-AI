@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { OutreachEngine } from '../core/OutreachEngine.js';
+import { EvidenceResolutionPlanner } from '../core/EvidenceResolutionPlanner.js';
 import { NotificationCenterService } from '../core/NotificationCenterService.js';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
@@ -1460,6 +1461,111 @@ describe('OutreachEngine', () => {
       .listEventsBySession(session.id, 20)
       .map((event) => event.eventType);
     expect(eventTypes).toContain('result_notified');
+  });
+
+  it('pushes the result receipt when an external verification resolves the session', async () => {
+    // 回归：外部查证（delegate_openclaw）得出结论时，session 由
+    // syncDelegationResultToSession 直接写成 resolved，绕过了 markTerminal。
+    // 这里必须仍然补发结果推送，否则「追问到信息」的终态从来没有回执。
+    userDataManager.writeFile(
+      'config.json',
+      JSON.stringify({
+        outreachEnabled: true,
+        outreachIntervalMs: 60000,
+        outreachRequireApprovalForReflection: false,
+        outreachRequireApprovalForManual: false,
+        outreachResultPushTarget: 'me',
+        reflectionEnabled: false,
+        ringCentralServerUrl: 'https://platform.ringcentral.example.com',
+        ringCentralClientId: 'client-id',
+        ringCentralClientSecret: 'client-secret',
+        ringCentralJwt: 'jwt-token',
+      }),
+    );
+
+    const currentTs = Math.floor(Date.now() / 1000);
+    const session = outreachRepo.createSession({
+      originKind: 'message_reaction',
+      targetType: 'group',
+      targetRef: 'qa-room',
+      targetResolutionStatus: 'resolved',
+      targetResolvedType: 'chat',
+      targetResolvedLabel: 'QA Room',
+      targetResolvedChatId: 'chat-delegated-result',
+      renderedQuestion: 'Beta scope 定了么？',
+      renderedContext: '需要确认 Beta scope 是否已经定稿。',
+      status: 'waiting_reply',
+      requiresApproval: false,
+      maxFollowup: 1,
+      followupIntervalSeconds: 3600,
+      sentChatId: 'chat-delegated-result',
+      sentPostId: 'post-original',
+      createdAt: currentTs - 3600,
+      nextCheckAt: currentTs - 5,
+    });
+    outreachRepo.updateSession(session.id, {
+      replyPostId: 'post-reply-1',
+      replySender: 'Juan de Bravo',
+      replyRawText: '在 Jira 上有，我贴个链接',
+    });
+
+    vi.spyOn(EvidenceResolutionPlanner.prototype, 'resolve').mockResolvedValue({
+      resolutionState: 'complete',
+      directFindings: ['Beta scope 已在 JIRA-123 定稿'],
+      resolvedConclusion: 'Beta scope 已在 JIRA-123 定稿',
+      remainingQuestions: [],
+      candidateArtifacts: [],
+      disposition: 'decision',
+      recommendedAction: 'none',
+      confidence: 0.9,
+      legacyClassification: 'answer',
+      goalSatisfied: true,
+      goalGaps: [],
+      summary: 'Beta scope 已在 JIRA-123 定稿',
+    });
+
+    const deliverSpy = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({
+        sent: true,
+        messageId: 'bot-delegated-1',
+      });
+
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await engine.syncDelegationResultToSession(
+      {
+        id: 'action-delegated-1',
+        title: 'Check JIRA for Beta scope',
+        sourceKind: 'outreach_session',
+        sourceRefId: session.id,
+        params: { targetSystem: 'jira' },
+      } as any,
+      {
+        status: 'succeeded',
+        summary: 'JIRA-123 显示 Beta scope 已定稿',
+        artifacts: [],
+        payload: { issueKey: 'JIRA-123' },
+      } as any,
+    );
+
+    expect(outreachRepo.getSessionById(session.id)?.status).toBe('resolved');
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    expect(deliverSpy.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        sourceRef: `outreach:${session.id}:result`,
+        title: '主动询问结果',
+        targetUserId: 'test-user',
+        mention: false,
+      }),
+    );
+    expect(deliverSpy.mock.calls[0]?.[0]?.body).toContain(
+      '结果：Beta scope 已在 JIRA-123 定稿',
+    );
+    expect(
+      outreachRepo
+        .listEventsBySession(session.id, 50)
+        .map((event) => event.eventType),
+    ).toContain('result_notified');
   });
 
   it('pushes a timeout outreach receipt with the follow-up jump link', async () => {

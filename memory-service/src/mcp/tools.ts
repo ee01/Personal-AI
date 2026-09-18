@@ -131,12 +131,38 @@ export const MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
-    name: 'memory_profile_hint',
+    name: 'create_ledger_task',
     description:
-      "Ask how the user tends to think / prefer about an aspect — returns an insight (not raw profile rows).",
+      'Handoff a well-scoped work item into the Task Center ledger (title + spec + optional acceptance). Use after a plan is agreed in conversation — not for open-ended chat. Does not write Google Sheets; cloud-lane mirroring is done by the extension.',
     inputSchema: {
       type: 'object',
-      properties: { aspect: { type: 'string' } },
+      properties: {
+        title: { type: 'string', description: 'Short work-item title' },
+        taskKind: {
+          type: 'string',
+          enum: ['push', 'agent', 'remind', 'dev', 'reflection', 'outreach'],
+        },
+        description: { type: 'string' },
+        acceptance: {
+          type: 'string',
+          description: 'How to verify the work is done. Required for taskKind=dev.',
+        },
+        scheduledAt: {
+          type: 'number',
+          description: 'Unix seconds. Omit for as-soon-as-dependencies-allow.',
+        },
+        dependsOn: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ledger task ids that must succeed first',
+        },
+        parentActionId: { type: 'string' },
+        planGate: {
+          type: 'boolean',
+          description: 'For dev tasks, park at a human plan gate before execution (default true)',
+        },
+      },
+      required: ['title'],
     },
   },
 ];
@@ -571,6 +597,52 @@ export async function callMcpTool(
         insight: data?.insight ?? data?.answer ?? '',
         confidence: data?.confidence,
         evidenceCount: data?.evidenceCount,
+      };
+    }
+
+    if (name === 'create_ledger_task') {
+      const title = String(args.title ?? '').trim();
+      if (!title) {
+        emit({ tool: name, clientInfo: ctx.clientInfo, itemCount: 0, status: 'error' });
+        return { error: 'title_required' };
+      }
+      const taskKind = String(args.taskKind ?? 'dev').trim() || 'dev';
+      const acceptance =
+        typeof args.acceptance === 'string' ? args.acceptance.trim() : '';
+      if (taskKind === 'dev' && !acceptance) {
+        emit({ tool: name, clientInfo: ctx.clientInfo, itemCount: 0, status: 'error' });
+        return {
+          error: 'acceptance_required',
+          detail: 'Dev handoff needs a one-line acceptance check. Keep chatting if the spec is not settled.',
+        };
+      }
+      const data = await httpPost(ctx, '/api/v1/task-center/tasks', {
+        taskKind,
+        title,
+        description: typeof args.description === 'string' ? args.description : undefined,
+        payload: {
+          content: typeof args.description === 'string' ? args.description : undefined,
+          acceptance: acceptance || undefined,
+          planGate: args.planGate !== false,
+        },
+        scheduledAt: typeof args.scheduledAt === 'number' ? args.scheduledAt : undefined,
+        dependsOn: Array.isArray(args.dependsOn) ? args.dependsOn : undefined,
+        parentActionId:
+          typeof args.parentActionId === 'string' ? args.parentActionId : undefined,
+        sourceKind: 'mcp_create_ledger_task',
+        cloudLaneAvailable: false,
+      });
+      emit({
+        tool: name,
+        clientInfo: ctx.clientInfo,
+        itemCount: 1,
+        status: 'ok',
+      });
+      return {
+        created: true,
+        task: data?.task,
+        lane: data?.lane,
+        mirrorRequired: data?.mirrorRequired === true,
       };
     }
 

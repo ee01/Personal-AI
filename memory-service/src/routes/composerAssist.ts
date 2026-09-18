@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { ComposerAssistService } from '../core/ComposerAssistService.js';
+import { isV3ReadShadowEnabled } from '../core/v3/v3ReadShadow.js';
 import type {
   ComposerAssistRequest,
   ComposerAssistResponse,
@@ -293,7 +294,7 @@ export async function composerAssistRoutes(
       const servicePromise = service.assist(request.body);
 
       // P2 §11.7 dual-read shadow for the Compose surface (fire-and-forget, I11).
-      {
+      if (isV3ReadShadowEnabled()) {
         const { UnitRecallReader, shadowRequestId } = await import(
           '../core/v3/UnitRecallReader.js'
         );

@@ -522,14 +522,19 @@ export class AnalyticsStore {
     sinceTsMs: number,
   ): Array<{ capability: string | null; estCostUsd: number }> {
     try {
-      return this.db
+      const rows = this.db
         .prepare(
           `SELECT capability, SUM(est_cost_usd) AS est_cost_usd
            FROM usage_events
            WHERE side = 'backend' AND ts >= ?
            GROUP BY capability`,
         )
-        .all(sinceTsMs) as Array<{ capability: string | null; estCostUsd: number }>;
+        .all(sinceTsMs) as Array<{ capability: string | null; est_cost_usd: number }>;
+      // Map snake_case columns to the declared camelCase interface — the raw
+      // rows carry `est_cost_usd`, and reading `estCostUsd` off them yields
+      // undefined → NaN in every downstream comparison (budget gate would
+      // reject everything).
+      return rows.map((r) => ({ capability: r.capability, estCostUsd: r.est_cost_usd }));
     } catch {
       return [];
     }

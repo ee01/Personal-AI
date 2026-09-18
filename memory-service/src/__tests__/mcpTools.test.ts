@@ -198,5 +198,40 @@ describe('streamable HTTP helpers', () => {
     );
     expect(names).toContain('memory_evidence_get');
     expect(names).toContain('memory_search');
+    expect(names).toContain('create_ledger_task');
+  });
+
+  it('create_ledger_task POSTs a Task Center handoff', async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    const { ctx } = makeCtx({
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input).replace('http://localhost:3210', '');
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        calls.push({ path, body });
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            task: { id: 'task-1', title: body.title, taskKind: body.taskKind },
+            lane: { lane: 'memory_cron', honoredRequest: true },
+            mirrorRequired: false,
+          }),
+        };
+      }) as unknown as typeof fetch,
+    });
+    const res = (await callMcpTool(
+      'create_ledger_task',
+      {
+        title: 'lease 心跳续租',
+        taskKind: 'dev',
+        description: 'worker 续租',
+        acceptance: 'lease 在过期前续上',
+      },
+      ctx,
+    )) as { created?: boolean; task?: { id: string } };
+    expect(res.created).toBe(true);
+    expect(res.task?.id).toBe('task-1');
+    expect(calls[0]?.path).toBe('/api/v1/task-center/tasks');
+    expect((calls[0]?.body as { payload?: { planGate?: boolean } }).payload?.planGate).toBe(true);
   });
 });

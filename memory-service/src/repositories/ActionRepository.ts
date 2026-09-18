@@ -353,7 +353,10 @@ export class ActionRepository {
         `SELECT *
          FROM proposed_actions
          WHERE idempotency_key = ?
-           AND queue_status IN ('queued', 'running', 'failed', 'succeeded', 'dead_letter')
+           AND queue_status IN (
+             'queued', 'running', 'failed', 'succeeded', 'dead_letter',
+             'paused', 'input_required', 'awaiting_claim'
+           )
          ORDER BY created_at DESC
          LIMIT 1`,
       )
@@ -843,6 +846,53 @@ export class ActionRepository {
     return this.getById(id);
   }
 
+  /**
+   * Park a running task at a human gate. Unlike remote `input_required`
+   * (which stays `running` so poll can continue), this is a real stop.
+   */
+  markInputRequired(
+    id: string,
+    attemptId: string,
+    result?: Record<string, unknown>,
+    errorMessage?: string,
+  ): QueuedActionRecord | null {
+    const currentTime = now();
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET queue_status = 'input_required',
+             state = 'pending',
+             finished_at = ?,
+             last_error = ?,
+             result_json = ?
+         WHERE id = ?`,
+      )
+      .run(
+        currentTime,
+        errorMessage ?? null,
+        result ? JSON.stringify(result) : null,
+        id,
+      );
+
+    this.db
+      .prepare(
+        `UPDATE proposed_action_attempts
+         SET status = 'input_required',
+             result_json = ?,
+             error_message = ?,
+             finished_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        result ? JSON.stringify(result) : null,
+        errorMessage ?? null,
+        currentTime,
+        attemptId,
+      );
+
+    return this.getById(id);
+  }
+
   retry(id: string, scheduledAt = now()): QueuedActionRecord | null {
     this.db
       .prepare(
@@ -1175,11 +1225,16 @@ export class ActionRepository {
       requiresApproval?: boolean;
       actionType?: string;
       requeue?: boolean;
+      dependsOn?: string[];
+      parentActionId?: string | null;
     },
   ): QueuedActionRecord | null {
     const existing = this.getById(id);
     if (!existing) return null;
-    const requeue = input.requeue !== false && existing.queueStatus !== 'running';
+    const requeue =
+      input.requeue !== false &&
+      existing.queueStatus !== 'running' &&
+      existing.queueStatus !== 'input_required';
     this.db
       .prepare(
         `UPDATE proposed_actions
@@ -1193,6 +1248,8 @@ export class ActionRepository {
              requires_approval = COALESCE(?, requires_approval),
              action_type = COALESCE(?, action_type),
              type = COALESCE(?, type),
+             depends_on_json = COALESCE(?, depends_on_json),
+             parent_action_id = CASE WHEN ? = 1 THEN ? ELSE parent_action_id END,
              queue_status = CASE WHEN ? = 1 THEN 'queued' ELSE queue_status END,
              state = CASE WHEN ? = 1 THEN 'pending' ELSE state END,
              started_at = CASE WHEN ? = 1 THEN NULL ELSE started_at END,
@@ -1217,6 +1274,9 @@ export class ActionRepository {
         input.requiresApproval === undefined ? null : input.requiresApproval ? 1 : 0,
         input.actionType ?? null,
         input.actionType ?? null,
+        input.dependsOn ? JSON.stringify(input.dependsOn) : null,
+        input.parentActionId !== undefined ? 1 : 0,
+        input.parentActionId ?? null,
         requeue ? 1 : 0,
         requeue ? 1 : 0,
         requeue ? 1 : 0,
@@ -1224,6 +1284,32 @@ export class ActionRepository {
         requeue ? 1 : 0,
         id,
       );
+    return this.getById(id);
+  }
+
+  /**
+   * Record the Sheet row the extension wrote for a jira_sheet task.
+   * Does not requeue: this is bookkeeping after an already-saved ledger row.
+   */
+  updateMirrorRef(
+    id: string,
+    mirrorRef: Record<string, unknown>,
+    sourceRefId?: string,
+  ): QueuedActionRecord | null {
+    if (!this.getById(id)) return null;
+    const sheetMessageId =
+      typeof mirrorRef.sheetMessageId === 'string' ? mirrorRef.sheetMessageId.trim() : '';
+    const ledgerKey = sheetMessageId ? `jira_sheet:${sheetMessageId}` : null;
+    this.db
+      .prepare(
+        `UPDATE proposed_actions
+         SET mirror_ref_json = ?,
+             source_ref_id = COALESCE(?, source_ref_id),
+             source_kind = COALESCE(source_kind, 'scheduled_messages'),
+             idempotency_key = COALESCE(idempotency_key, ?)
+         WHERE id = ?`,
+      )
+      .run(JSON.stringify(mirrorRef), sourceRefId ?? null, ledgerKey, id);
     return this.getById(id);
   }
 

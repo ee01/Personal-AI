@@ -3,11 +3,22 @@ import type { FastifyInstance } from 'fastify';
 import { DayPilotService } from '../core/DayPilotService.js';
 import { TodayPilotMeetingPrepService } from '../core/TodayPilotMeetingPrepService.js';
 import { CatchUpService } from '../core/CatchUpService.js';
+import { normalizeUiLanguage, type UiLanguage } from '../i18n.js';
 import type { DayPilotFeedbackAction } from '../repositories/DayPilotRepository.js';
 import type {
   ContextAssistMeetingEvent,
   RecallSourceType,
 } from '../types/index.js';
+
+function readOptionalUiLanguage(
+  headers: Record<string, unknown>,
+): UiLanguage | undefined {
+  const raw = headers['x-personal-ai-language'] || headers['accept-language'];
+  if (!raw) return undefined;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return undefined;
+  return normalizeUiLanguage(value);
+}
 
 const feedbackActions = new Set<DayPilotFeedbackAction>([
   'done',
@@ -161,6 +172,9 @@ export async function dayPilotRoutes(app: FastifyInstance): Promise<void> {
         request.body?.mode === 'on_demand_llm'
           ? 'on_demand_llm'
           : 'nightly_llm',
+      language: readOptionalUiLanguage(
+        request.headers as Record<string, unknown>,
+      ),
     });
     return reply.status(200).send(result);
   });
@@ -184,6 +198,9 @@ export async function dayPilotRoutes(app: FastifyInstance): Promise<void> {
       autoGenerate: request.body?.autoGenerate,
       forceGenerate: request.body?.forceGenerate,
       sourceTypes: request.body?.sourceTypes,
+      language: readOptionalUiLanguage(
+        request.headers as Record<string, unknown>,
+      ),
     });
     return reply.status(200).send(result);
   });

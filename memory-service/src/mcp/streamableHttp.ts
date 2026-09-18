@@ -22,7 +22,7 @@ export interface McpJsonRpcResponse {
 }
 
 const PROTOCOL_VERSION = '2024-11-05';
-const SERVER_INFO = { name: 'personal-memory', version: '1.1.0' };
+const SERVER_INFO = { name: 'personal-memory', version: '1.2.0' };
 
 function isNotification(req: McpJsonRpcRequest): boolean {
   return req.id === undefined;

@@ -1396,6 +1396,16 @@ export class OutreachEngine {
       shouldResolveSession ? 'resolved' : 'reply_resolution_pending',
       mergedOutcome,
     );
+
+    // 结案回执：外部查证（delegate_openclaw）得出结果时这里直接写 resolved，
+    // 绕过了 markTerminal；不在这里补发就会导致「追问到信息」的 session 永远不推结果。
+    if (shouldResolveSession) {
+      await this.notifyTerminalSessionIfNeeded(
+        session.id,
+        'resolved',
+        mergedOutcome,
+      );
+    }
   }
 
   async syncDelegationFailureToSession(
@@ -1498,6 +1508,10 @@ export class OutreachEngine {
       resolvedAt: now(),
     });
     this.repo.createEvent(session.id, 'resolved', mergedOutcome);
+
+    // 同上：外部查证失败也会把 session 写成 resolved，必须补发结案回执，
+    // 否则这条带「外部查证暂未成功」结论的结果只能留在会话详情里。
+    await this.notifyTerminalSessionIfNeeded(session.id, 'resolved', mergedOutcome);
   }
 
   updateSessionDraft(

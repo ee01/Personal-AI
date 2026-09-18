@@ -38,6 +38,7 @@ import type { ParsedQueryIntent } from '../core/QueryIntentParser.js';
 import type { ProfileManager } from '../core/ProfileManager.js';
 import { buildRecentFocusBlock } from '../core/RecentFocusService.js';
 import { classifyTrust } from '../core/injectionScreen.js';
+import { isV3ReadShadowEnabled } from '../core/v3/v3ReadShadow.js';
 import { buildWeaveStats, type WeaveStats } from '../core/weaveStats.js';
 import { OnlineReflection } from '../core/OnlineReflection.js';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
@@ -78,6 +79,13 @@ import {
   claimAttributionReceiptItemSchema,
   claimAttributionReceiptSchema,
 } from './claimAttributionSchemas.js';
+import {
+  enrichRecallItemsEntityProvenance,
+} from '../utils/recallEntityProvenance.js';
+import {
+  enrichRecallItemsGroupProvenance,
+  resolveRecallGroupProvenance,
+} from '../utils/recallGroupProvenance.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -290,7 +298,7 @@ Return a JSON object with this shape:
   "timeline": [{ "date": "YYYY-MM-DD or relative time", "event": "what happened" }],
   "keyFindings": ["important finding"],
   "insights": ["higher-level insight"],
-  "relatedEntities": [{ "name": "entity", "type": "Person|Project|Topic|Other", "relevance": "why it matters" }],
+  "relatedEntities": [{ "name": "Karan Bhujbal", "type": "Person", "relevance": "owner of the AVA delegate beta scope follow-up" }],
   "confidence": 0.0
 }
 
@@ -693,9 +701,19 @@ function loadUserPreferences(db: Database.Database): string {
 /**
  * Format recalled items as bullet-point context for the LLM prompt.
  */
-/** Header common to all tiers: index, source, date, title. Cheap, high-signal. */
-function evidenceHeaderParts(item: RecallItem, index: number): string[] {
-  const parts: string[] = [`[${index + 1}]`];
+/**
+ * Group/chat provenance for a recalled item, when the underlying message
+ * carries it. Citations must be able to say WHICH group a statement came
+ * from — this is the field the evidence UI also renders.
+ */
+function getRecallGroupName(item: RecallItem): string | undefined {
+  const group = resolveRecallGroupProvenance(item);
+  return group ? compactText(group, 80) : undefined;
+}
+
+/** Header common to all tiers: index, source, date, title, group. Cheap, high-signal. */
+function evidenceHeaderParts(item: RecallItem, displayNumber: number): string[] {
+  const parts: string[] = [`[${displayNumber}]`];
   if (item.source) parts.push(`(${item.source})`);
   if (item.timestamp) {
     const date = new Date(item.timestamp * 1000).toISOString().slice(0, 10);
@@ -703,6 +721,13 @@ function evidenceHeaderParts(item: RecallItem, index: number): string[] {
   }
   const title = compactText(getRecallTitle(item), 120);
   if (title) parts.push(`[title: ${title}]`);
+  // Surface the originating group explicitly so answers can attribute a
+  // statement to its group even when the title is something else (e.g. a
+  // meeting memo whose source_title is the meeting name).
+  const groupName = getRecallGroupName(item);
+  if (groupName) {
+    parts.push(`[group: ${compactText(groupName, 80)}]`);
+  }
   return parts;
 }
 
@@ -751,6 +776,13 @@ export interface EvidenceBudgetResult {
 export function assembleEvidenceContext(
   items: RecallItem[],
   opts: EvidenceBudgetOptions,
+  /**
+   * Optional global citation numbering: maps an item to the 1-based index it
+   * occupies in the FULL recalled list. Used by formatRecalledContext so the
+   * model's [n] citations line up with response.evidence[n - 1] even when the
+   * list is split into trusted / untrusted render blocks.
+   */
+  numberByItem?: Map<RecallItem, number>,
 ): EvidenceBudgetResult {
   const maxChars = Math.max(800, opts.tokenBudget * 4);
   const tiers = { l2: 0, l1: 0, l0: 0, omitted: 0 };
@@ -758,7 +790,7 @@ export function assembleEvidenceContext(
   let used = 0;
 
   const renderAt = (item: RecallItem, index: number, tier: 'l2' | 'l1' | 'l0'): string => {
-    const parts = evidenceHeaderParts(item, index);
+    const parts = evidenceHeaderParts(item, numberByItem?.get(item) ?? index + 1);
     if (tier === 'l2') {
       parts.push(sourceMemoryEvidenceText(item, 500));
     } else if (tier === 'l1') {
@@ -804,19 +836,24 @@ export function assembleEvidenceContext(
 }
 
 /** Render a list of items as evidence lines (progressive or legacy full). */
-function renderEvidenceLines(items: RecallItem[], tokenBudget: number, fullCount: number): string {
+function renderEvidenceLines(
+  items: RecallItem[],
+  tokenBudget: number,
+  fullCount: number,
+  numberByItem?: Map<RecallItem, number>,
+): string {
   const config = getConfig();
   if (!config.evidenceProgressiveEnabled) {
     return items
       .map((item, index) =>
         `- ${[
-          ...evidenceHeaderParts(item, index),
+          ...evidenceHeaderParts(item, numberByItem?.get(item) ?? index + 1),
           sourceMemoryEvidenceText(item, 500),
         ].join(' ')}`,
       )
       .join('\n');
   }
-  return assembleEvidenceContext(items, { tokenBudget, fullCount }).text;
+  return assembleEvidenceContext(items, { tokenBudget, fullCount }, numberByItem).text;
 }
 
 const UNTRUSTED_FRAME_NOTE =
@@ -844,14 +881,23 @@ export function formatRecalledContext(items: RecallItem[]): string {
     return renderEvidenceLines(items, budget, fullCount);
   }
 
+  // Keep the ORIGINAL recalled-list numbering inside both render blocks.
+  // The model cites [n] and the desktop evidence panel renders
+  // response.evidence in the same order, so [n] must mean evidence[n - 1].
+  // Re-numbering each block from 1 (the old behavior) made answer citations
+  // point at the wrong panel items.
+  const numberByItem = new Map<RecallItem, number>(
+    items.map((item, index) => [item, index + 1] as const),
+  );
   const parts: string[] = [];
   if (rest.length > 0) {
-    parts.push(renderEvidenceLines(rest, budget, fullCount));
+    parts.push(renderEvidenceLines(rest, budget, fullCount, numberByItem));
   }
   const untrustedText = renderEvidenceLines(
     untrusted,
     Math.max(200, Math.floor(budget / 2)),
     Math.min(fullCount, 2),
+    numberByItem,
   );
   parts.push(
     `<user_materials note="${UNTRUSTED_FRAME_NOTE}">\n${untrustedText}\n</user_materials>`,
@@ -990,7 +1036,13 @@ function parseStructuredAnswer(raw: string): {
           type: String(item.type ?? ''),
           relevance: String(item.relevance ?? ''),
         }))
-        .filter((item) => item.name && item.type && item.relevance);
+        .filter(
+          (item) =>
+            item.name &&
+            item.type &&
+            item.relevance &&
+            item.name.toLowerCase() !== 'entity',
+        );
       if (relatedEntities.length > 0)
         structuredAnswer.relatedEntities = relatedEntities;
     }
@@ -1547,7 +1599,7 @@ async function recallForAsk(
 
   // P2 §11.7 dual-read shadow for the Ask surface (fire-and-forget, I11:
   // no reinforcement, no exposure records, nothing user-visible).
-  {
+  if (isV3ReadShadowEnabled()) {
     const { UnitRecallReader } = await import('../core/v3/UnitRecallReader.js');
     const { shadowRequestId } = await import('../core/v3/UnitRecallReader.js');
     const reader = new UnitRecallReader(db);
@@ -1633,7 +1685,9 @@ async function recallForAsk(
       )
     : attributedCandidates.items;
   const finalAttribution = claimAttribution.filterRecallItems(cohesionItems);
-  const recalledItems = finalAttribution.items;
+  const recalledItems = enrichRecallItemsEntityProvenance(
+    enrichRecallItemsGroupProvenance(finalAttribution.items),
+  );
   const recallBlocks = filterAskRecallBlocksForCohesion(
     recallResult.blocks,
     cohesionResult,
