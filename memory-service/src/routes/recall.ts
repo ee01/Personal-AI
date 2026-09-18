@@ -20,6 +20,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { RecallQuery, RecallResult } from '../types/index.js';
 import { ActiveRecallService } from '../core/ActiveRecallService.js';
+import { isV3ReadShadowEnabled } from '../core/v3/v3ReadShadow.js';
 
 const SAFE_EVIDENCE_CHANNELS: RecallQuery['channels'] = ['fts'];
 const DEFAULT_SAFE_TOP_K = 10;
@@ -178,7 +179,7 @@ export async function recallRoutes(app: FastifyInstance): Promise<void> {
         // alongside legacy recall and log the diff. I11: no reinforcement, no
         // exposure records, nothing user-visible. MEMORY_READ_V3_RECALL_SHADOW
         // gates it (default off).
-        if (isV3RecallShadowEnabled()) {
+        if (isV3ReadShadowEnabled()) {
           void runV3RecallShadow(db, request.body, result)
             .catch((err) =>
               request.log.warn({ err }, 'v3 recall shadow failed'),
@@ -304,11 +305,6 @@ async function runSafeModeShadow(
  * P2 §11.7 dual-read shadow: legacy vs v3 unit-plane candidates diff.
  * Shadow-only (I11): logged, never displayed, never reinforcing.
  */
-function isV3RecallShadowEnabled(): boolean {
-  const raw = process.env.MEMORY_READ_V3_RECALL_SHADOW?.trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
-}
-
 async function runV3RecallShadow(
   db: import('better-sqlite3').Database,
   originalQuery: RecallQuery,

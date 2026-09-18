@@ -13,6 +13,7 @@ import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from '../core/ContextRecallService.js';
 import { KeystoneBriefService } from '../core/KeystoneBriefService.js';
+import { isV3ReadShadowEnabled } from '../core/v3/v3ReadShadow.js';
 import { buildWeaveStats } from '../core/weaveStats.js';
 import { getUiLanguageFromHeaders, type UiLanguage } from '../i18n.js';
 import type {
@@ -556,7 +557,7 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
       const servicePromise = service.recall(request.body);
 
       // P2 §11.7 dual-read shadow for Passive surfaces (fire-and-forget, I11).
-      {
+      if (isV3ReadShadowEnabled()) {
         const { UnitRecallReader, shadowRequestId } = await import(
           '../core/v3/UnitRecallReader.js'
         );

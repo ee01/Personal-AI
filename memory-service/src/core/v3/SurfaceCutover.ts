@@ -4,8 +4,8 @@
  * flipping one routes that surface's retrieval through the v3 unit-plane
  * reader while STILL logging the dual-read shadow for comparison.
  *
- * The dual-read shadow (MEMORY_READ_V3_RECALL_SHADOW) runs regardless of
- * cutover state — it is the measurement harness, not the switch.
+ * Dual-read shadow (MEMORY_READ_V3_RECALL_SHADOW) is off by default; enable
+ * only when running v3 eval harnesses — passive recall volume makes it costly.
  */
 
 export type SurfaceName = 'ask' | 'compose' | 'passive';

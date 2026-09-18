@@ -892,13 +892,22 @@ export class RecallEngine {
         type: c.type,
         content: c.content,
         scope: c.metadata?.scope as MemoryScope | undefined,
-        displayTitle: presentation.displayTitle,
+        displayTitle:
+          c.type === 'entity' && c.entity?.name
+            ? c.entity.name
+            : presentation.displayTitle,
         displayText: presentation.displayText,
-        previewText: presentation.previewText,
+        previewText:
+          c.type === 'entity' && c.entity?.description
+            ? c.entity.description.slice(0, 220)
+            : presentation.previewText,
         score: c.score,
-        source: c.source,
+        source: c.type === 'entity' ? c.source ?? 'entity' : c.source,
         sourceUrl: c.sourceUrl,
-        sourceTitle: c.sourceTitle,
+        sourceTitle:
+          c.type === 'entity' && c.entity?.name
+            ? c.entity.name
+            : c.sourceTitle,
         exploreLink,
         timestamp: c.timestamp,
         entity: c.entity,
@@ -915,6 +924,14 @@ export class RecallEngine {
           lifecycleWeight: c.lifecycleWeight,
           lifecycleReason: c.lifecycleReason,
         };
+        if (c.type === 'entity' && c.entity) {
+          item.metadata.entityName = item.metadata.entityName ?? c.entity.name;
+          item.metadata.entityType = item.metadata.entityType ?? c.entity.type;
+          if (c.entity.description) {
+            item.metadata.entitySummary =
+              item.metadata.entitySummary ?? c.entity.description;
+          }
+        }
         if (recallFeedback) {
           item.metadata.recallFeedback = recallFeedback;
         }
