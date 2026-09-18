@@ -10,6 +10,7 @@ export type AgentMappingRow = {
   draftId: string;
   jiraKey?: string;
   error?: string;
+  warnings?: string[];
 };
 
 export type AgentCreateArtifact = {
@@ -21,7 +22,25 @@ export type AssignedCreateRow = {
   draftId: string;
   jiraKey?: string;
   error?: string;
+  warnings?: string[];
 };
+
+function collectWarnings(row: {
+  warning?: unknown;
+  warnings?: unknown;
+  error?: unknown;
+  jiraKey?: string;
+}): string[] {
+  const fromArray = Array.isArray(row.warnings)
+    ? row.warnings.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const single = String(row.warning || '').trim();
+  const foldedError =
+    row.jiraKey && String(row.error || '').trim()
+      ? [String(row.error).trim()]
+      : [];
+  return [...fromArray, ...(single ? [single] : []), ...foldedError];
+}
 
 export function extractJsonObject(text: string): unknown {
   const raw = String(text || '').trim();
@@ -53,12 +72,37 @@ export function extractJsonObject(text: string): unknown {
 
 function mappingFromRow(row: unknown): AgentMappingRow | null {
   if (!row || typeof row !== 'object') return null;
-  const draftId = String((row as { draftId?: unknown }).draftId || '').trim();
+  const raw = row as {
+    draftId?: unknown;
+    jiraKey?: unknown;
+    error?: unknown;
+    warning?: unknown;
+    warnings?: unknown;
+  };
+  const draftId = String(raw.draftId || '').trim();
   if (!draftId) return null;
-  const jiraKey = String((row as { jiraKey?: unknown }).jiraKey || '').trim();
-  const error = String((row as { error?: unknown }).error || '').trim();
-  if (jiraKey) return { draftId, jiraKey, ...(error ? { error } : {}) };
-  if (error) return { draftId, error };
+  const jiraKey = String(raw.jiraKey || '').trim();
+  const error = String(raw.error || '').trim();
+  const warnings = collectWarnings({
+    warning: raw.warning,
+    warnings: raw.warnings,
+    error: raw.error,
+    jiraKey,
+  });
+  if (jiraKey) {
+    return {
+      draftId,
+      jiraKey,
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+  if (error) {
+    return {
+      draftId,
+      error,
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
   return null;
 }
 
@@ -99,6 +143,27 @@ export function mappingIndex(
   return byId;
 }
 
+function assignedFromHit(
+  hit: AgentMappingRow | undefined,
+  fallback: string,
+): Pick<AssignedCreateRow, 'jiraKey' | 'error' | 'warnings'> {
+  if (hit?.jiraKey) {
+    const warnings = collectWarnings({
+      warnings: hit.warnings,
+      error: hit.error,
+      jiraKey: hit.jiraKey,
+    });
+    return {
+      jiraKey: hit.jiraKey,
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+  return {
+    error: hit?.error || fallback,
+    ...(hit?.warnings?.length ? { warnings: hit.warnings } : {}),
+  };
+}
+
 /**
  * Assign parsed mappings onto the requested parent/children. Missing rows get
  * fallbackError so the UI never treats "Agent failed" as wiping already-known keys.
@@ -109,7 +174,12 @@ export function assignMappingsToRows(input: {
   mappings: AgentMappingRow[];
   fallbackError: string;
 }): {
-  parent?: { itemKey: string; jiraKey?: string; error?: string };
+  parent?: {
+    itemKey: string;
+    jiraKey?: string;
+    error?: string;
+    warnings?: string[];
+  };
   children: AssignedCreateRow[];
 } {
   const byId = mappingIndex(input.mappings);
@@ -118,23 +188,16 @@ export function assignMappingsToRows(input: {
     'Agent 结果未包含该草稿的 mapping';
 
   const children: AssignedCreateRow[] = input.childDraftIds.map((draftId) => {
-    const hit = byId.get(draftId);
-    if (hit?.jiraKey) return { draftId, jiraKey: hit.jiraKey };
-    return { draftId, error: hit?.error || fallback };
+    const assigned = assignedFromHit(byId.get(draftId), fallback);
+    return { draftId, ...assigned };
   });
 
   const parentKey = String(input.parentItemKey || '').trim();
   if (!parentKey) return { children };
 
-  const hit = byId.get(parentKey);
-  if (hit?.jiraKey) {
-    return {
-      parent: { itemKey: parentKey, jiraKey: hit.jiraKey },
-      children,
-    };
-  }
+  const assigned = assignedFromHit(byId.get(parentKey), fallback);
   return {
-    parent: { itemKey: parentKey, error: hit?.error || fallback },
+    parent: { itemKey: parentKey, ...assigned },
     children,
   };
 }

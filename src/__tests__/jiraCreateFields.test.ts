@@ -18,6 +18,8 @@ import {
   JIRA_FIELD_QUARTER,
   JIRA_FIELD_TARGET_END,
   JIRA_FIELD_TARGET_START,
+  scrubOmittedFixVersionsFromPrompt,
+  softenFixVersionName,
   type JiraFieldMeta,
   type JiraIssueTypeMeta,
 } from '../jiraCreateMeta.js';
@@ -313,6 +315,48 @@ test('fixVersions drops the field with a warning when nothing matches', () => {
 
   assert.equal(JIRA_FIELD_FIX_VERSIONS in fields, false);
   assert.match(warnings[0] || '', /找不到匹配版本/);
+});
+
+test('softenFixVersionName drops unmatched Agent-path versions before the run', () => {
+  const task = issueType('Task', [JIRA_FIELD_FIX_VERSIONS]);
+  task.fields[JIRA_FIELD_FIX_VERSIONS] = field(JIRA_FIELD_FIX_VERSIONS, {
+    name: 'Fix Version/s',
+    schemaType: 'array',
+    schemaItems: 'version',
+    allowedValues: [{ id: '410', name: 'Nova 26.4.110' }],
+  });
+
+  assert.deepEqual(softenFixVersionName(task, '26.4.110'), {
+    name: '26.4.110',
+  });
+  assert.equal(softenFixVersionName(task, 'Nova 26.4.120').name, null);
+  assert.match(
+    softenFixVersionName(task, 'Nova 26.4.120').warning || '',
+    /找不到匹配版本/,
+  );
+  assert.deepEqual(softenFixVersionName(null, 'Nova 26.4.120'), {
+    name: 'Nova 26.4.120',
+  });
+  assert.equal(softenFixVersionName(task, '  ').name, null);
+});
+
+test('softenFixVersionName uses project versions when createmeta has no allowedValues', () => {
+  const task = issueType('Task', [JIRA_FIELD_FIX_VERSIONS]);
+  const catalog = [{ id: '410', name: 'Nova 26.4.110' }];
+  assert.equal(softenFixVersionName(task, '26.4.110', catalog).name, '26.4.110');
+  assert.equal(softenFixVersionName(task, '26.4.120', catalog).name, null);
+  assert.equal(softenFixVersionName(null, '26.4.120', catalog).name, null);
+});
+
+test('scrubOmittedFixVersionsFromPrompt removes hard-constraint version names', () => {
+  const prompt = [
+    '- fixVersion: 26.4.120（优先写入；缺失则留空）',
+    '1. [父 X] child · suggestedFixVersion: 26.4.120 · description: required',
+    '各任务 Target End 落点均为 26.4.120，优先按此填写',
+  ].join('\n');
+  const scrubbed = scrubOmittedFixVersionsFromPrompt(prompt, ['26.4.120']);
+  assert.equal(scrubbed.includes('26.4.120'), false);
+  assert.match(scrubbed, /必须省略 fixVersions 并仍创建/);
 });
 
 test('description is passed through as a system field', () => {

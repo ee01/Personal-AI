@@ -34,7 +34,10 @@ import {
   listIssueTypeNames,
   listMissingRequiredFields,
   looksLikeSubtaskName,
+  softenFixVersionName,
+  scrubOmittedFixVersionsFromPrompt,
   supportsField,
+  getJiraProjectVersions,
   type ChildLink,
   type JiraIssueTypeMeta,
 } from './jiraCreateMeta';
@@ -692,6 +695,44 @@ function jiraStatusName(raw: unknown): string | null {
   return null;
 }
 
+function mapIssueToRefreshPayload(
+  issue: any,
+  lookupKey: string,
+  fetchedAt: number,
+): JiraRefreshIssue {
+  const f = issue?.fields || {};
+  return {
+    // Roadmap rows are keyed by the jira_key we asked for (e.g. MILO-29), even when
+    // Jira search returns the issue under a moved canonical key (e.g. RCV-154327).
+    key: lookupKey,
+    summary: String(f.summary || '').trim() || null,
+    description: jiraDescriptionToPlain(f.description) || null,
+    targetStart: toIsoDate(f[JIRA_FIELD_TARGET_START]) || null,
+    targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]) || null,
+    assignee: jiraAssigneeDisplay(f.assignee),
+    status: jiraStatusName(f.status),
+    originalEstimateDays: originalEstimateToManDays(f),
+    fetchedAt,
+  };
+}
+
+async function fetchIssueForRefresh(
+  baseUrl: string,
+  key: string,
+  fields: string[],
+): Promise<any | null> {
+  const response = await jiraFetchViaBackground(
+    `${baseUrl}/rest/api/2/issue/${encodeURIComponent(key)}?fields=${fields.join(',')}`,
+    {
+      method: 'GET',
+      authMode: 'token-only',
+      requestLabel: 'roadmap refresh jira issue',
+    },
+  );
+  if (!response.ok) return null;
+  return await response.json();
+}
+
 async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue[]> {
   const unique = [
     ...new Set(keys.map((k) => String(k || '').trim()).filter(Boolean)),
@@ -737,21 +778,24 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     }
     const data = await response.json();
     const page = Array.isArray(data?.issues) ? data.issues : [];
-    for (const issue of page) {
-      const key = String(issue?.key || '').trim();
-      if (!key) continue;
-      const f = issue?.fields || {};
-      out.push({
-        key,
-        summary: String(f.summary || '').trim() || null,
-        description: jiraDescriptionToPlain(f.description) || null,
-        targetStart: toIsoDate(f[JIRA_FIELD_TARGET_START]) || null,
-        targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]) || null,
-        assignee: jiraAssigneeDisplay(f.assignee),
-        status: jiraStatusName(f.status),
-        originalEstimateDays: originalEstimateToManDays(f),
-        fetchedAt,
-      });
+    const pageByKey = new Map(
+      page
+        .map((issue: any) => {
+          const key = String(issue?.key || '').trim();
+          return key ? [key, issue] as const : null;
+        })
+        .filter(Boolean) as Array<[string, any]>,
+    );
+    for (const requestedKey of batch) {
+      const direct = pageByKey.get(requestedKey);
+      if (direct) {
+        out.push(mapIssueToRefreshPayload(direct, requestedKey, fetchedAt));
+        continue;
+      }
+      const solo = await fetchIssueForRefresh(baseUrl, requestedKey, fields);
+      if (solo) {
+        out.push(mapIssueToRefreshPayload(solo, requestedKey, fetchedAt));
+      }
     }
   }
   return out;
@@ -931,6 +975,7 @@ type AgentCreateJiraPayload = {
   constraints: AgentCreateConstraints;
   parent: CreateJiraParentInput | null;
   children: CreateJiraChildInput[];
+  retryAttempt?: number | null;
 };
 
 type LegacyCreateJiraPayload = {
@@ -1451,6 +1496,13 @@ const ROADMAP_CREATE_JIRA_SYSTEM_PROMPT = [
   '你是 Personal Roadmap 的 Jira 创建助手。按用户 Prompt 与下方硬性约束在 Jira 中创建 issue，并把结果回写成可验证 artifact。',
   '不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建与检索。',
   '',
+  '【fixVersion 规则 — 必须遵守】',
+  '1. suggestedFixVersion 与字段约束中的 fixVersion 不是硬约束，只是优先写入的目标，不是创建门禁。',
+  '2. 创建前在目标项目检索版本目录；能唯一匹配（含 Nova 26.4.110 ↔ 26.4.110 这种后缀）则写入。',
+  '3. Jira 中不存在（或匹配不唯一）时省略 fixVersions、仍创建该 issue，并在 mapping.warning 说明；禁止因此拒绝整行或整单，禁止向用户提问「改用已有版本还是先创建版本」——Roadmap 收不到这次提问。禁止输出「未创建任何 issue，以免写入错误版本」。不要擅自改写成邻近版本，除非用户在共享字段给了统一覆盖值。',
+  '4. 省略时在该行 mapping 增加 warning，例如："fixVersion Nova 26.4.120 在项目中不存在，已留空创建"。warning 可与 jiraKey 同时出现。',
+  '5. 即使 Jira 技能返回版本不存在，也要去掉 fixVersions 后重新提交创建，不要停在拒单。',
+  '',
   '【子任务 Description 生成规则 — 必须遵守】',
   '1. 每条新建的子任务必须填写 Jira description 字段，不能留空。',
   '2. Description 综合三类输入生成：「父 Epic 的 description」「本子任务的标题」以及「该子任务用户填写的描述」（如有）。理解 Epic 目标/范围后写出交付内容与验收要点；不要整段复制任何一段输入，不要编造事实。',
@@ -1477,7 +1529,11 @@ async function enrichAgentPromptWithEpicDescriptions(
     const desc = await fetchJiraIssueDescription(key);
     lines.push(
       desc
-        ? `- ${key}: ${desc.length > 1200 ? `${desc.slice(0, 1200)}…` : desc}`
+        ? `- ${key}: ${
+            desc.length > 2000
+              ? `${desc.slice(0, 2000)}…【父描述已截断至 2000 字，完整内容请再读该 issue】`
+              : desc
+          }`
         : `- ${key}: （空或读取失败，请自行再读该 issue 的 description）`,
     );
   }
@@ -1489,24 +1545,215 @@ async function enrichAgentPromptWithEpicDescriptions(
   return `【System Prompt】\n${ROADMAP_CREATE_JIRA_SYSTEM_PROMPT}\n\n${body}\n${lines.join('\n')}`;
 }
 
-function buildAgentCreateTaskText(payload: AgentCreateJiraPayload): string {
+type OmittedFixVersion = {
+  draftId: string;
+  version: string;
+  warning: string;
+};
+
+function formatFixVersionPreflight(omitted: OmittedFixVersion[]): string[] {
+  if (!omitted.length) return [];
+  return [
+    '',
+    '## fixVersion 预检（覆盖上方字段约束与任务清单）',
+    '扩展已用 Jira 项目版本目录预检。下列值不存在或匹配不唯一，已从本任务的字段、约束和 Prompt 中删除。省略 fixVersions 并仍创建；禁止提问、禁止拒绝整行或整单、禁止新建或改写 Jira 版本。禁止输出「未创建任何 issue，以免写入错误版本」：',
+    ...omitted.map((row) => `- ${row.draftId}: ${row.warning}`),
+  ];
+}
+
+function mergePreflightWarnings(
+  result: CreateJiraResult,
+  omitted: OmittedFixVersion[],
+): CreateJiraResult {
+  if (!omitted.length) return result;
+  const extraById = new Map<string, string[]>();
+  for (const row of omitted) {
+    const list = extraById.get(row.draftId) || [];
+    if (!list.includes(row.warning)) list.push(row.warning);
+    extraById.set(row.draftId, list);
+  }
+  const attach = (
+    draftId: string,
+    warnings?: string[],
+  ): string[] | undefined => {
+    const merged = [
+      ...new Set([...(warnings || []), ...(extraById.get(draftId) || [])]),
+    ];
+    return merged.length ? merged : undefined;
+  };
+  return {
+    parent: result.parent
+      ? {
+          ...result.parent,
+          warnings: attach(result.parent.itemKey, result.parent.warnings),
+        }
+      : result.parent,
+    children: result.children.map((row) => ({
+      ...row,
+      warnings: attach(row.draftId, row.warnings),
+    })),
+  };
+}
+
+async function softenDraftFixVersion(input: {
+  projectKey: string;
+  issueType: string;
+  wantsSubtask?: boolean;
+  draftId: string;
+  names: Array<string | null | undefined>;
+}): Promise<{ name: string | null; omitted?: OmittedFixVersion }> {
+  const wanted =
+    input.names.map((name) => String(name || '').trim()).find(Boolean) || '';
+  if (!wanted) return { name: null };
+  let typeMeta = null;
+  try {
+    const resolved = await resolveIssueTypeForCreate(
+      input.projectKey,
+      input.issueType,
+      { wantsSubtask: input.wantsSubtask },
+    );
+    typeMeta = resolved.typeMeta;
+  } catch (error) {
+    console.warn(
+      '[pai-roadmap] fixVersion preflight createmeta skipped',
+      input.draftId,
+      error,
+    );
+  }
+  let projectVersions = null;
+  try {
+    projectVersions = await getJiraProjectVersions(input.projectKey);
+  } catch (error) {
+    console.warn(
+      '[pai-roadmap] fixVersion preflight versions skipped',
+      input.draftId,
+      error,
+    );
+  }
+  const result = softenFixVersionName(typeMeta, wanted, projectVersions);
+  if (result.warning) {
+    return {
+      name: null,
+      omitted: {
+        draftId: input.draftId,
+        version: wanted,
+        warning: result.warning,
+      },
+    };
+  }
+  return { name: result.name };
+}
+
+async function applyFixVersionPreflight(
+  payload: AgentCreateJiraPayload,
+): Promise<{ payload: AgentCreateJiraPayload; omitted: OmittedFixVersion[] }> {
+  const omitted: OmittedFixVersion[] = [];
+  const parent = payload.parent ? { ...payload.parent } : null;
+  const children = (payload.children || []).map((child) => ({ ...child }));
+  const constraints = { ...(payload.constraints || {}) };
+
+  if (parent) {
+    const result = await softenDraftFixVersion({
+      projectKey: parent.projectKey,
+      issueType: parent.issueType,
+      draftId: parent.itemKey,
+      names: [parent.fixVersion, parent.suggestedFixVersion],
+    });
+    if (result.omitted) {
+      omitted.push(result.omitted);
+      parent.fixVersion = null;
+      parent.suggestedFixVersion = null;
+    }
+  }
+
+  for (const child of children) {
+    const result = await softenDraftFixVersion({
+      projectKey:
+        child.projectKey ||
+        parent?.projectKey ||
+        String(constraints.projectKey || ''),
+      issueType: child.issueType,
+      wantsSubtask: !String(child.issueType || '').trim(),
+      draftId: child.draftId,
+      names: [child.fixVersion, child.suggestedFixVersion],
+    });
+    if (result.omitted) {
+      omitted.push(result.omitted);
+      child.fixVersion = null;
+      child.suggestedFixVersion = null;
+    }
+  }
+
+  const constraintVersion = String(constraints.fixVersion || '').trim();
+  if (constraintVersion && (parent || children[0])) {
+    const result = await softenDraftFixVersion({
+      projectKey:
+        parent?.projectKey ||
+        children[0]?.projectKey ||
+        String(constraints.projectKey || ''),
+      issueType:
+        parent?.issueType ||
+        children[0]?.issueType ||
+        String(constraints.issueType || ''),
+      draftId: parent?.itemKey || children[0]?.draftId || 'constraint',
+      names: [constraintVersion],
+    });
+    const omittedRow = result.omitted;
+    if (omittedRow) {
+      constraints.fixVersion = null;
+      if (
+        !omitted.some(
+          (row) =>
+            row.draftId === omittedRow.draftId &&
+            row.version === omittedRow.version,
+        )
+      ) {
+        omitted.push(omittedRow);
+      }
+    }
+  }
+
+  return {
+    payload: {
+      ...payload,
+      parent,
+      children,
+      constraints,
+      prompt: scrubOmittedFixVersionsFromPrompt(
+        payload.prompt,
+        omitted.map((row) => row.version),
+      ),
+    },
+    omitted,
+  };
+}
+
+function buildAgentCreateTaskText(
+  payload: AgentCreateJiraPayload,
+  omittedFixVersions: OmittedFixVersion[] = [],
+): string {
   // Frontend already assembles System Prompt + user prompt + constraints +
   // assignee map + task list; extension appends the result contract.
   const body = String(payload.prompt || '').trim();
   return [
+    '【最高优先级 — 覆盖上方所有字段约束】',
+    'fixVersion 不是硬约束。找不到版本时必须省略 fixVersions 并仍创建 issue。',
+    '禁止因此拒绝整单，禁止输出「未创建任何 issue，以免写入错误版本」。Sprint 仍可照常填写。',
+    '',
     body || '（空 Prompt）',
     '',
     '## 结果契约（必须遵守）',
     '1. 只为下方「draftId 索引」里列出的 draft 创建 Jira issue（parent 的 draftId 就是 itemKey）。不要创建索引以外的任务。',
     '2. 若 parentJiraKey 已存在，子任务必须 link 到该父 issue。',
-    '3. 未填 Sprint 时查询并填入当前 active sprint。constraints.fixVersion 已填则为硬约束（全部行同一值）。未填时按各任务 suggestedFixVersion（Target End 在发布时间表上的落点列）分别填写；没有建议则自行判断。不要把落在不同 release 的任务写成同一个 fixVersion。',
+    '3. 未填 Sprint 时查询并填入当前 active sprint。constraints.fixVersion 已填则优先全部行同一值。未填时按各任务 suggestedFixVersion（Target End 在发布时间表上的落点列）分别填写；没有建议则自行判断。无论覆盖还是建议：Jira 项目中不存在该版本时省略 fixVersions、仍创建，并在 mapping 写 warning（可与 jiraKey 同时出现）。禁止因缺版本拒绝整行或整单或向用户提问。禁止输出「未创建任何 issue，以免写入错误版本」。不要把落在不同 release 的任务写成同一个 fixVersion。',
     '4. Assignee 按 Prompt 中的映射表检索 Jira 用户后填写；未映射可留空。',
     '5. 新建子任务必须填写 description：按 System Prompt，用父 Epic description + 子任务标题生成。',
-    '6. 最终必须返回可验证 artifact：content 为 JSON 字符串。允许部分成功：',
-    '{"partial":true,"mappings":[{"draftId":"...","jiraKey":"PROJ-123"},{"draftId":"...","error":"..."}]}',
+    '6. 最终必须返回可验证 artifact：content 为 JSON 字符串。允许部分成功，warning 可与 jiraKey 并存：',
+    '{"partial":true,"mappings":[{"draftId":"...","jiraKey":"PROJ-123","warning":"fixVersion 26.4.120 不存在，已留空"},{"draftId":"...","error":"..."}]}',
     '7. 即使后面某行失败、整单失败或超时，也必须把已经创建成功的 jiraKey 写进 mappings；禁止因为失败而省略成功行。没有 jiraKey 的行用 error 说明原因。',
     '8. artifact metadata 至少带一个 entityKey（任意一个新建的 Jira key；若完全失败可省略）。',
     '9. 不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建。',
+    '10. 若 Jira 工具因版本不存在而失败，去掉 fixVersions 后立即重试创建，不要把整组标成失败。',
     '',
     '## draftId 索引（便于核对）',
     payload.parent
@@ -1516,6 +1763,7 @@ function buildAgentCreateTaskText(payload: AgentCreateJiraPayload): string {
       (c) =>
         `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} suggestedFixVersion=${c.suggestedFixVersion || c.fixVersion || ''} description=required`,
     ),
+    ...formatFixVersionPreflight(omittedFixVersions),
   ].join('\n');
 }
 
@@ -1557,6 +1805,30 @@ const AGENT_TERMINAL_STATUSES = [
 
 function isAgentTerminalStatus(status: string): boolean {
   return AGENT_TERMINAL_STATUSES.includes(status);
+}
+
+function describeAgentCreateFallback(input: {
+  lastError?: string | null;
+  summary?: string | null;
+  queueStatus?: string | null;
+}): string {
+  const queueStatus = String(input.queueStatus || '').trim();
+  const lastError = String(input.lastError || '').trim();
+  const summary = String(input.summary || '').trim();
+  if (queueStatus === 'input_required') {
+    const question = summary || lastError;
+    return (
+      'Agent 停在人工确认，这个问题不会回到 Roadmap 弹窗。请在本窗口改字段（或按缺版本留空策略）后点组上的重试。' +
+      (question ? ` Agent 问：${question}` : '')
+    );
+  }
+  return (
+    lastError ||
+    summary ||
+    (queueStatus === 'succeeded'
+      ? 'Agent 已完成但未返回 mappings artifact（需要 JSON {mappings:[{draftId,jiraKey|error}]}）'
+      : `Agent 创建失败（${queueStatus || 'unknown'}）`)
+  );
 }
 
 type AgentTaskPoll = {
@@ -1708,11 +1980,11 @@ async function handleAgentCreateJira(
   const teamId = String(payload.teamId || '').trim();
   const prompt = String(payload.prompt || '').trim();
   const executor = String(payload.executor || '').trim() || 'openclaw';
-  const parent = payload.parent || null;
-  const children = Array.isArray(payload.children) ? payload.children : [];
   if (!teamId) throw new Error('缺少 teamId，无法把创建结果写回 Roadmap');
   if (!prompt) throw new Error('Agent 模式需要填写 Prompt');
-  if (!parent && !children.length) return { children: [] };
+  if (!payload.parent && !(payload.children || []).length) {
+    return { children: [] };
+  }
 
   const executors = await listAgentExecutors();
   if (!executors.some((e) => e.id === executor)) {
@@ -1721,14 +1993,22 @@ async function handleAgentCreateJira(
     );
   }
 
+  const preflight = await applyFixVersionPreflight(payload);
+  payload = preflight.payload;
+  const parent = payload.parent || null;
+  const children = Array.isArray(payload.children) ? payload.children : [];
+
   const draftIds = [
     ...(parent ? [parent.itemKey] : []),
     ...children.map((c) => c.draftId),
   ];
-  const taskId = `roadmap:${teamId}:${stableIdempotencySuffix(draftIds)}`;
-  const idempotencyKey = `roadmap_create:${teamId}:${stableIdempotencySuffix(draftIds)}`;
+  const retryAttempt = Math.max(0, Number(payload.retryAttempt) || 0);
+  const suffix = stableIdempotencySuffix(draftIds);
+  const attemptTag = retryAttempt > 0 ? `:retry-${retryAttempt}` : '';
+  const taskId = `roadmap:${teamId}:${suffix}${attemptTag}`;
+  const idempotencyKey = `roadmap_create:${teamId}:${suffix}${attemptTag}`;
   const enrichedPrompt = await enrichAgentPromptWithEpicDescriptions(
-    prompt,
+    String(payload.prompt || prompt).trim(),
     children,
   );
   const execute = await roadmapMemoryCall<{
@@ -1741,11 +2021,14 @@ async function handleAgentCreateJira(
   }>('executeAgentTask', {
     taskId,
     title: `Roadmap 创建 Jira · ${teamId}`,
-    task: buildAgentCreateTaskText({
-      ...payload,
-      prompt: enrichedPrompt,
-      executor,
-    }),
+    task: buildAgentCreateTaskText(
+      {
+        ...payload,
+        prompt: enrichedPrompt,
+        executor,
+      },
+      preflight.omitted,
+    ),
     // This flow creates Jira issues, not merely a draft or report.
     mode: 'write',
     executor,
@@ -1799,12 +2082,11 @@ async function handleAgentCreateJira(
     artifact = parseAgentCreateArtifact(evidenceContent, summary);
   }
 
-  const fallbackError =
-    lastError ||
-    summary ||
-    (queueStatus === 'succeeded'
-      ? 'Agent 已完成但未返回 mappings artifact（需要 JSON {mappings:[{draftId,jiraKey|error}]}）'
-      : `Agent 创建失败（${queueStatus || 'unknown'}）`);
+  const fallbackError = describeAgentCreateFallback({
+    lastError,
+    summary,
+    queueStatus,
+  });
 
   const result = await writebackAgentCreateResult({
     teamId,
@@ -1821,7 +2103,7 @@ async function handleAgentCreateJira(
       console.warn('[pai-roadmap] clear pending agent create failed', error);
     }
   }
-  return result;
+  return mergePreflightWarnings(result, preflight.omitted);
 }
 
 function countWritebackKeys(result: CreateJiraResult): {
@@ -1859,12 +2141,11 @@ async function settlePendingAgentCreateRun(
     terminal.summary,
   );
   const queueStatus = terminal.queueStatus;
-  const fallbackError =
-    terminal.lastError ||
-    terminal.summary ||
-    (queueStatus === 'succeeded'
-      ? 'Agent 已完成但未返回 mappings artifact'
-      : `Agent 创建失败（${queueStatus || 'unknown'}）`);
+  const fallbackError = describeAgentCreateFallback({
+    lastError: terminal.lastError,
+    summary: terminal.summary,
+    queueStatus,
+  });
   const result = await writebackAgentCreateResult({
     teamId: run.teamId,
     token: run.token,

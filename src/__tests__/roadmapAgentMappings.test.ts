@@ -50,3 +50,45 @@ test('assignMappingsToRows writes back successes and isolates failures', () => {
   assert.equal(assigned.children[1]?.error, 'sprint 查询失败');
   assert.equal(assigned.children[2]?.error, '整单 failed：网关超时');
 });
+
+test('parseAgentCreateArtifact keeps warning next to a created jiraKey', () => {
+  const parsed = parseAgentCreateArtifact(`
+    {"partial":true,"mappings":[
+      {"draftId":"ok","jiraKey":"NOVA-18675","warning":"fixVersion Nova 26.4.120 不存在，已留空创建"},
+      {"draftId":"bad","error":"assignee 找不到"}
+    ]}
+  `);
+  assert.equal(parsed.mappings[0]?.jiraKey, 'NOVA-18675');
+  assert.deepEqual(parsed.mappings[0]?.warnings, [
+    'fixVersion Nova 26.4.120 不存在，已留空创建',
+  ]);
+  assert.equal(parsed.mappings[1]?.error, 'assignee 找不到');
+});
+
+test('assignMappingsToRows folds jiraKey+error into warnings instead of failing the row', () => {
+  const assigned = assignMappingsToRows({
+    parentItemKey: 'draft-parent',
+    childDraftIds: ['c1'],
+    mappings: [
+      {
+        draftId: 'draft-parent',
+        jiraKey: 'NOVA-18674',
+        error: '已创建 NOVA-18674，但回写 Roadmap 失败',
+      },
+      {
+        draftId: 'c1',
+        jiraKey: 'NOVA-18675',
+        warnings: ['fixVersion 26.4.120 不存在，已留空'],
+      },
+    ],
+    fallbackError: 'unused',
+  });
+  assert.equal(assigned.parent?.jiraKey, 'NOVA-18674');
+  assert.equal(assigned.parent?.error, undefined);
+  assert.match(assigned.parent?.warnings?.[0] || '', /回写 Roadmap 失败/);
+  assert.equal(assigned.children[0]?.jiraKey, 'NOVA-18675');
+  assert.equal(
+    assigned.children[0]?.warnings?.[0],
+    'fixVersion 26.4.120 不存在，已留空',
+  );
+});

@@ -52,9 +52,14 @@ export interface JiraProjectCreateMeta {
 
 /** Per page session, keyed by upper-cased project key. */
 const projectMetaCache = new Map<string, Promise<JiraProjectCreateMeta | null>>();
+const projectVersionCache = new Map<
+  string,
+  Promise<JiraAllowedValue[] | null>
+>();
 
 export function clearJiraCreateMetaCache(): void {
   projectMetaCache.clear();
+  projectVersionCache.clear();
 }
 
 function mapFields(raw: unknown): Record<string, JiraFieldMeta> {
@@ -139,6 +144,53 @@ export async function getJiraProjectCreateMeta(
   return pending;
 }
 
+async function fetchProjectVersions(
+  _projectKey: string,
+  requestKey: string,
+): Promise<JiraAllowedValue[]> {
+  const { getJiraBaseUrl, jiraFetchViaBackground } = await import('./jira.js');
+  const baseUrl = await getJiraBaseUrl();
+  const url = `${baseUrl}/rest/api/2/project/${encodeURIComponent(requestKey)}/versions`;
+  const response = await jiraFetchViaBackground(url, {
+    method: 'GET',
+    requestLabel: 'roadmap project versions',
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`project versions ${response.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await response.json();
+  const rows = Array.isArray(data) ? data : [];
+  return rows
+    .map((row: { id?: unknown; name?: unknown }) => ({
+      id: row?.id != null ? String(row.id) : undefined,
+      name: String(row?.name || '').trim(),
+    }))
+    .filter((row) => row.name);
+}
+
+/**
+ * Project version catalog (`/project/{key}/versions`). Distinct from createmeta
+ * allowedValues, which is often empty even when the project has releases.
+ * `null` means the lookup failed; `[]` means Jira answered and the list is empty.
+ */
+export async function getJiraProjectVersions(
+  projectKey: string,
+): Promise<JiraAllowedValue[] | null> {
+  const requestKey = String(projectKey || '').trim();
+  const key = requestKey.toUpperCase();
+  if (!key) return null;
+  const cached = projectVersionCache.get(key);
+  if (cached) return cached;
+  const pending = fetchProjectVersions(key, requestKey).catch((error) => {
+    projectVersionCache.delete(key);
+    console.warn('[pai-roadmap] project versions lookup failed', key, error);
+    return null;
+  });
+  projectVersionCache.set(key, pending);
+  return pending;
+}
+
 function normalizeName(value: string): string {
   return String(value || '')
     .replace(/[\s_-]+/g, '')
@@ -191,6 +243,74 @@ export function supportsField(
   fieldId: string,
 ): boolean {
   return Boolean(type?.fields?.[fieldId]);
+}
+
+/**
+ * Agent-path counterpart of `buildFixVersionsValue`: drop the name when a known
+ * catalog (createmeta allowedValues and/or `/project/versions`) has no unique
+ * match, so the Agent never sees a missing version as a hard gate.
+ * Unknown catalog (lookup failed) keeps the original name.
+ */
+export function softenFixVersionName(
+  typeMeta: JiraIssueTypeMeta | null | undefined,
+  releaseName: string | null | undefined,
+  projectVersions?: JiraAllowedValue[] | null,
+): { name: string | null; warning?: string } {
+  const text = String(releaseName || '').trim();
+  if (!text) return { name: null };
+  const metaAllowed =
+    typeMeta && supportsField(typeMeta, JIRA_FIELD_FIX_VERSIONS)
+      ? typeMeta.fields[JIRA_FIELD_FIX_VERSIONS].allowedValues || []
+      : [];
+  const extra = Array.isArray(projectVersions) ? projectVersions : [];
+  const catalogKnown = metaAllowed.length > 0 || Array.isArray(projectVersions);
+  if (!catalogKnown) return { name: text };
+  const catalog = [...metaAllowed, ...extra];
+  if (!catalog.length) {
+    return {
+      name: null,
+      warning: `fixVersion「${text}」在 Jira 中找不到匹配版本，已跳过该字段`,
+    };
+  }
+  const matched = matchFixVersionInCatalog(catalog, text);
+  if (matched.hit) return { name: text };
+  return {
+    name: null,
+    warning:
+      matched.warning ||
+      `fixVersion「${text}」在 Jira 中找不到匹配版本，已跳过该字段`,
+  };
+}
+
+const FIX_VERSION_OMIT_PLACEHOLDER =
+  '（已预检不存在，必须省略 fixVersions 并仍创建）';
+
+/**
+ * Strip omitted version names out of the already-assembled Agent prompt so
+ * OpenClaw's Jira skill cannot treat them as a hard constraint.
+ */
+export function scrubOmittedFixVersionsFromPrompt(
+  prompt: string,
+  omittedVersions: string[],
+): string {
+  let next = String(prompt || '');
+  const unique = Array.from(
+    new Set(
+      omittedVersions.map((value) => String(value || '').trim()).filter(Boolean),
+    ),
+  );
+  for (const version of unique) {
+    next = next.split(`suggestedFixVersion: ${version}`).join(
+      `suggestedFixVersion: ${FIX_VERSION_OMIT_PLACEHOLDER}`,
+    );
+    next = next.split(`- fixVersion: ${version}`).join(
+      `- fixVersion: ${FIX_VERSION_OMIT_PLACEHOLDER}`,
+    );
+    next = next.split(`落点均为 ${version}`).join(
+      `落点均为 ${FIX_VERSION_OMIT_PLACEHOLDER}`,
+    );
+  }
+  return next;
 }
 
 /**
@@ -358,6 +478,40 @@ export function buildFieldValue(
 }
 
 /**
+ * Match a release-sheet name onto a Jira version catalog.
+ * Order: exact (case-insensitive) → unique suffix match.
+ */
+export function matchFixVersionInCatalog(
+  allowed: JiraAllowedValue[],
+  releaseName: string,
+): { hit?: JiraAllowedValue; warning?: string } {
+  const text = String(releaseName || '').trim();
+  if (!text || !allowed.length) return {};
+
+  const exact = allowed.find(
+    (option) =>
+      String(option.name ?? option.value ?? '').trim().toLowerCase() ===
+      text.toLowerCase(),
+  );
+  if (exact) return { hit: exact };
+
+  const lowered = text.toLowerCase();
+  const suffixHits = allowed.filter((option) => {
+    const name = String(option.name ?? option.value ?? '').trim().toLowerCase();
+    return name === lowered || name.endsWith(lowered) || name.endsWith(` ${lowered}`);
+  });
+  if (suffixHits.length === 1) return { hit: suffixHits[0] };
+  if (suffixHits.length > 1) {
+    return {
+      warning: `fixVersion「${text}」匹配到多个 Jira 版本，已跳过该字段`,
+    };
+  }
+  return {
+    warning: `fixVersion「${text}」在 Jira 中找不到匹配版本，已跳过该字段`,
+  };
+}
+
+/**
  * Match a release-sheet name onto Jira Fix Version/s.
  * Order: exact (case-insensitive) → unique suffix match → drop with warning.
  * Suffix matching covers "26.3.220" ↔ "Nova 26.3.220" without per-team templates.
@@ -375,36 +529,17 @@ export function buildFixVersionsValue(
     return { value: [{ name: text }] };
   }
 
-  const exact = allowed.find(
-    (option) =>
-      String(option.name ?? option.value ?? '').trim().toLowerCase() ===
-      text.toLowerCase(),
-  );
-  if (exact) {
-    const single = exact.id
-      ? { id: exact.id }
-      : { name: exact.name ?? exact.value ?? text };
-    return { value: [single] };
-  }
-
-  const lowered = text.toLowerCase();
-  const suffixHits = allowed.filter((option) => {
-    const name = String(option.name ?? option.value ?? '').trim().toLowerCase();
-    return name === lowered || name.endsWith(lowered) || name.endsWith(` ${lowered}`);
-  });
-  if (suffixHits.length === 1) {
-    const hit = suffixHits[0];
+  const matched = matchFixVersionInCatalog(allowed, text);
+  if (matched.hit) {
+    const hit = matched.hit;
     const single = hit.id
       ? { id: hit.id }
       : { name: hit.name ?? hit.value ?? text };
     return { value: [single] };
   }
-  if (suffixHits.length > 1) {
-    return {
-      warning: `fixVersion「${text}」匹配到多个 Jira 版本，已跳过该字段`,
-    };
-  }
   return {
-    warning: `fixVersion「${text}」在 Jira 中找不到匹配版本，已跳过该字段`,
+    warning:
+      matched.warning ||
+      `fixVersion「${text}」在 Jira 中找不到匹配版本，已跳过该字段`,
   };
 }
