@@ -105,6 +105,13 @@ export async function readStoredDeviceKey(
   );
 }
 
+export async function readAnyStoredDeviceKey(): Promise<StoredDeviceApiKey | null> {
+  const stored = await chrome.storage.local.get([DEVICE_KEY_STORAGE]);
+  const raw = stored[DEVICE_KEY_STORAGE] as Partial<StoredDeviceApiKey> | undefined;
+  if (!raw?.token || !raw?.userId) return null;
+  return normalizeStoredKey(raw, raw.userId);
+}
+
 export async function readStoredHelpCenterKey(
   userId: string,
 ): Promise<StoredDeviceApiKey | null> {
@@ -113,6 +120,15 @@ export async function readStoredHelpCenterKey(
     stored[USER_API_KEY_STORAGE] as Partial<StoredDeviceApiKey> | undefined,
     userId,
   );
+}
+
+export async function readAnyStoredHelpCenterKey(): Promise<StoredDeviceApiKey | null> {
+  const stored = await chrome.storage.local.get([USER_API_KEY_STORAGE]);
+  const raw = stored[USER_API_KEY_STORAGE] as
+    | Partial<StoredDeviceApiKey>
+    | undefined;
+  if (!raw?.token || !raw?.userId) return null;
+  return normalizeStoredKey(raw, raw.userId);
 }
 
 export async function saveStoredDeviceKey(
@@ -185,6 +201,15 @@ export async function ensureDeviceApiKeyOutcome(options: {
 }): Promise<DeviceKeyOutcome> {
   const userId = String(options.userId || '').trim();
   if (!userId || userId === 'default') {
+    if (!options.forceReissue && !options.requestId && !options.googleAccessToken) {
+      const existing =
+        (await readAnyStoredDeviceKey()) || (await readAnyStoredHelpCenterKey());
+      if (existing?.token) {
+        const ok: DeviceKeyOutcome = { status: 'ok', token: existing.token };
+        await saveDeviceKeyState(ok);
+        return ok;
+      }
+    }
     const outcome: DeviceKeyOutcome = {
       status: 'unavailable',
       reason: 'user_id_missing',
@@ -262,6 +287,15 @@ export async function ensureDeviceApiKeyOutcome(options: {
       });
       await saveDeviceKeyState(retried);
       return retried;
+    }
+  }
+
+  if (!options.forceReissue && issued.status === 'unavailable') {
+    const helpCenter = await readStoredHelpCenterKey(userId);
+    if (helpCenter?.token) {
+      const ok: DeviceKeyOutcome = { status: 'ok', token: helpCenter.token };
+      await saveDeviceKeyState(ok);
+      return ok;
     }
   }
 

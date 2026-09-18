@@ -40,6 +40,64 @@ class FakeBrowser {
   }
 }
 
+test('protected endpoints reject missing tokens without probing browser auth', async () => {
+  const tempDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'personal-ai-whisper-auth-probe-'),
+  );
+  const config = loadConfig({
+    DOUBAO_BRIDGE_DATA_DIR: tempDir,
+    DOUBAO_BRIDGE_PROFILE_DIR: path.join(tempDir, 'profile'),
+    DOUBAO_BRIDGE_HEADLESS: 'true',
+  });
+
+  const store = new StateStore(path.join(tempDir, 'bridge-state.json'));
+  const settingsStore = new BridgeSettingsStore(
+    config,
+    path.join(tempDir, 'bridge-settings.json'),
+  );
+  await settingsStore.init();
+  applyBridgeSettingsToConfig(config, settingsStore.get());
+
+  class SlowProbeBrowser extends FakeBrowser {
+    async probeAuthStatus(): Promise<'connected'> {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      return 'connected';
+    }
+  }
+
+  const browser = new SlowProbeBrowser();
+  const service = new DoubaoBridgeService(config, store, browser as never);
+  await service.init();
+
+  const memoryClient = new BridgeMemoryServiceClient(() => settingsStore.get());
+  const syncManager = new BridgeSyncManager(
+    config,
+    settingsStore,
+    memoryClient,
+    service,
+  );
+
+  const app = await createBridgeServer(config, service, {
+    memoryClient,
+    settingsStore,
+    syncManager,
+    version: '2.0.0-test',
+  });
+
+  try {
+    const startedAt = Date.now();
+    const unauthorized = await app.inject({
+      method: 'GET',
+      url: '/settings',
+    });
+    assert.equal(unauthorized.statusCode, 401);
+    assert.ok(Date.now() - startedAt < 500);
+  } finally {
+    syncManager.stop();
+    await app.close();
+  }
+});
+
 test('whisper status endpoint requires pair token on full desktop server', async () => {
   const tempDir = await fs.mkdtemp(
     path.join(os.tmpdir(), 'personal-ai-whisper-auth-'),

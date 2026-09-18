@@ -617,8 +617,24 @@ export interface LocalSkillSyncResponse {
   packagesToInstall: LocalSkillSyncPackage[];
 }
 
+/**
+ * Supplies the per-device key and rotates it when the server rejects it.
+ * Implemented by {@link DeviceApiKeyManager}; omitted in tests.
+ */
+export interface BridgeMemoryCredentialProvider {
+  getToken(): string | undefined;
+  /** Returns true when a different credential is available and a retry is worth it. */
+  handleAuthFailure(
+    usedToken: string | undefined,
+    payload: unknown,
+  ): Promise<boolean>;
+}
+
 export class BridgeMemoryServiceClient {
-  constructor(private readonly readSettings: () => BridgeRuntimeSettings) {}
+  constructor(
+    private readonly readSettings: () => BridgeRuntimeSettings,
+    private readonly credentials?: BridgeMemoryCredentialProvider,
+  ) {}
 
   private getSettings(): BridgeRuntimeSettings {
     return this.readSettings();
@@ -632,6 +648,19 @@ export class BridgeMemoryServiceClient {
     );
   }
 
+  /**
+   * The device key wins over the configured key: the latter is often a
+   * full-privilege service key or a bootstrap key that only works on
+   * `/users/me/keys`.
+   */
+  private activeToken(): string | undefined {
+    return (
+      this.credentials?.getToken() ||
+      this.getSettings().memoryServiceApiKey ||
+      undefined
+    );
+  }
+
   private buildHeaders(): Record<string, string> {
     const settings = this.getSettings();
     const headers: Record<string, string> = {
@@ -642,11 +671,29 @@ export class BridgeMemoryServiceClient {
     if (settings.memoryServiceUserId) {
       headers['X-User-Id'] = settings.memoryServiceUserId;
     }
-    if (settings.memoryServiceApiKey) {
-      headers.Authorization = `Bearer ${settings.memoryServiceApiKey}`;
+    const token = this.activeToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
     }
 
     return headers;
+  }
+
+  /**
+   * Ask the credential provider to rotate after a 401. Returns true when the
+   * request should be replayed with the new credential.
+   */
+  private async shouldRetryAfterAuthFailure(
+    status: number,
+    usedToken: string | undefined,
+    payload: unknown,
+  ): Promise<boolean> {
+    if (status !== 401 || !this.credentials) return false;
+    try {
+      return await this.credentials.handleAuthFailure(usedToken, payload);
+    } catch {
+      return false;
+    }
   }
 
   private ensureWriteIdentity(): void {
@@ -661,6 +708,7 @@ export class BridgeMemoryServiceClient {
     method: string,
     path: string,
     body?: unknown,
+    allowAuthRetry = true,
   ): Promise<T> {
     const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
     if (!baseUrl) {
@@ -669,6 +717,7 @@ export class BridgeMemoryServiceClient {
       );
     }
 
+    const usedToken = this.activeToken();
     const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: this.buildHeaders(),
@@ -679,6 +728,16 @@ export class BridgeMemoryServiceClient {
       const payload = await readResponsePayload(response);
       if (response.status === 404 && isProviderApiPath(path)) {
         throw buildProviderApiCompatibilityError(baseUrl, path);
+      }
+      if (
+        allowAuthRetry &&
+        (await this.shouldRetryAfterAuthFailure(
+          response.status,
+          usedToken,
+          payload,
+        ))
+      ) {
+        return this.request<T>(method, path, body, false);
       }
       const errorMessage =
         (payload &&
@@ -750,6 +809,7 @@ export class BridgeMemoryServiceClient {
     path: string,
     body: unknown,
     onEvent: (event: AskStreamEvent) => void | Promise<void>,
+    allowAuthRetry = true,
   ): Promise<void> {
     const baseUrl = normalizeBaseUrl(this.getSettings().memoryServiceBaseUrl);
     if (!baseUrl) {
@@ -758,6 +818,7 @@ export class BridgeMemoryServiceClient {
       );
     }
 
+    const usedToken = this.activeToken();
     const response = await fetch(`${baseUrl}${path}`, {
       method: 'POST',
       headers: {
@@ -769,6 +830,16 @@ export class BridgeMemoryServiceClient {
 
     if (!response.ok) {
       const payload = await readResponsePayload(response);
+      if (
+        allowAuthRetry &&
+        (await this.shouldRetryAfterAuthFailure(
+          response.status,
+          usedToken,
+          payload,
+        ))
+      ) {
+        return this.streamRequest(path, body, onEvent, false);
+      }
       const errorMessage =
         (payload &&
         typeof payload === 'object' &&
@@ -1085,6 +1156,22 @@ export class BridgeMemoryServiceClient {
       '/api/v1/skills/sync/local-platform',
       input,
     );
+  }
+
+  async createProfileItem(body: {
+    itemType: string;
+    itemKey: string;
+    itemValue: string;
+    evidenceRefs?: unknown[];
+    confidence?: number;
+  }): Promise<{
+    id?: string;
+    itemType?: string;
+    itemKey?: string;
+    itemValue?: string;
+  }> {
+    this.ensureWriteIdentity();
+    return this.request('POST', '/api/v1/profile/items', body);
   }
 
   async createExportJob(body: {

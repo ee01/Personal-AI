@@ -258,6 +258,97 @@ test('ask forwards explicit scope and local resume hints to the memory service a
   }
 });
 
+test('replays a request once after the credential provider rotates the key', async () => {
+  let token: string | undefined = 'stale-key';
+  const rotations: unknown[] = [];
+  const client = new BridgeMemoryServiceClient(
+    () => ({
+      memoryServiceBaseUrl: 'http://127.0.0.1:3210',
+      memoryServiceUserId: 'tester',
+      autoSync: true,
+      pollIntervalMs: 300_000,
+      stableMemoryIntervalMs: 43_200_000,
+      mobileBriefingIntervalMs: 14_400_000,
+      reminderSyncIntervalMs: 900_000,
+      reminderDailyDigestEnabled: true,
+      reminderDailyDigestTime: '09:00',
+      reminderDedupSameDay: true,
+    }),
+    {
+      getToken: () => token,
+      handleAuthFailure: async (_usedToken, payload) => {
+        rotations.push(payload);
+        token = 'fresh-key';
+        return true;
+      },
+    },
+  );
+
+  const sent: Array<string | undefined> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const headers = (init?.headers || {}) as Record<string, string>;
+    sent.push(headers.Authorization);
+    if (sent.length === 1) {
+      return new Response(JSON.stringify({ error: 'invalid_user_api_key' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ messages: { total: 1 } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const stats = await client.getStats();
+    assert.equal(stats.messages.total, 1);
+    assert.deepEqual(sent, ['Bearer stale-key', 'Bearer fresh-key']);
+    assert.deepEqual(rotations, [{ error: 'invalid_user_api_key' }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('gives up after one replay so a broken credential cannot loop', async () => {
+  let attempts = 0;
+  const client = new BridgeMemoryServiceClient(
+    () => ({
+      memoryServiceBaseUrl: 'http://127.0.0.1:3210',
+      memoryServiceUserId: 'tester',
+      autoSync: true,
+      pollIntervalMs: 300_000,
+      stableMemoryIntervalMs: 43_200_000,
+      mobileBriefingIntervalMs: 14_400_000,
+      reminderSyncIntervalMs: 900_000,
+      reminderDailyDigestEnabled: true,
+      reminderDailyDigestTime: '09:00',
+      reminderDedupSameDay: true,
+    }),
+    {
+      getToken: () => 'always-rejected',
+      handleAuthFailure: async () => true,
+    },
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    attempts += 1;
+    return new Response(JSON.stringify({ error: 'invalid_user_api_key' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(() => client.getStats(), /invalid_user_api_key/);
+    assert.equal(attempts, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('deleteMemoriesBySourceScope deletes memories by source and scope', async () => {
   const client = createClient();
   const calls: Array<{ url: string; method: string }> = [];

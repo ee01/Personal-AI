@@ -6,6 +6,7 @@ import {
   classifyRememberText,
 } from './assistantRuntime.js';
 import type { BridgeConfig } from './config.js';
+import type { DeviceApiKeyManager, DeviceKeyStatus } from './deviceApiKey.js';
 import type { ExplorerManager } from './explorer/index.js';
 import type { SourceId } from './explorer/types.js';
 import { WebpageMcpHost } from './explorer/transports/WebpageMcpHost.js';
@@ -69,15 +70,16 @@ function createAuthHook(service: DoubaoBridgeService) {
       return;
     }
 
-    const status = await service.getStatus();
-    if (!status.pairToken) {
+    const expectedToken = service.getPairToken();
+    if (!expectedToken) {
       await reply.code(401).send({ error: 'Bridge is not paired' });
       return;
     }
 
     const token = readToken(request);
-    if (token !== status.pairToken) {
+    if (token !== expectedToken) {
       await reply.code(401).send({ error: 'Missing or invalid bridge token' });
+      return;
     }
   };
 }
@@ -125,6 +127,7 @@ async function loadActiveBrowserContext(): Promise<{
 interface BridgeServerDependencies {
   memoryClient: BridgeMemoryServiceClient;
   settingsStore: BridgeSettingsStore;
+  deviceKeyManager?: DeviceApiKeyManager;
   syncManager: BridgeSyncManager;
   explorerManager?: ExplorerManager;
   localSkillSyncManager?: LocalSkillSyncManager;
@@ -227,9 +230,28 @@ function bindingHasUsableThreadUrl(
   );
 }
 
+/** Turn a device-key outcome into something the setup card can show verbatim. */
+function describeCredentialGap(credential: DeviceKeyStatus): string {
+  const outcome = credential.outcome;
+  if (outcome.status === 'needs_verification') {
+    return '这台设备的 Memory Service 密钥需要验证：该用户命名空间已被认领，请用 Google 验证或联系管理员批准。';
+  }
+  if (outcome.status === 'pending_approval') {
+    return `这台设备的 Memory Service 密钥正在等待管理员批准（请求 ${outcome.requestId}）。`;
+  }
+  if (outcome.status === 'unavailable' && outcome.reason === 'issuer_missing') {
+    return 'Memory Service 还没有可用密钥。请在设置里填入 bootstrap key 或服务密钥，之后本机会自动签发自己的设备密钥。';
+  }
+  if (outcome.status === 'unavailable') {
+    return `Memory Service 设备密钥签发失败：${outcome.message || outcome.reason}`;
+  }
+  return 'Memory Service 尚未拿到可用密钥';
+}
+
 function buildBlockingReasons(
   settings: BridgeSettingsPayload['effective'],
   status: Awaited<ReturnType<DoubaoBridgeService['getStatus']>>,
+  credential?: DeviceKeyStatus,
 ) {
   const reasons: BridgeBlockingReason[] = [];
 
@@ -251,6 +273,16 @@ function buildBlockingReasons(
     reasons.push({
       code: 'memory_service_user_missing',
       message: 'Memory Service User ID 尚未配置',
+      syncKinds: ['stableMemory', 'mobileBriefing', 'reminderSync'],
+    });
+  } else if (
+    credential &&
+    !credential.hasToken &&
+    !settings.memoryServiceApiKey
+  ) {
+    reasons.push({
+      code: 'memory_service_credential_missing',
+      message: describeCredentialGap(credential),
       syncKinds: ['stableMemory', 'mobileBriefing', 'reminderSync'],
     });
   }
@@ -336,9 +368,11 @@ async function buildStatus(
   const baseStatus = await service.getStatus();
   const syncSnapshot = deps.syncManager.getSnapshot();
   const settingsPayload = deps.settingsStore.getPayload();
+  const memoryCredential = deps.deviceKeyManager?.getStatus();
   const blockingReasons = buildBlockingReasons(
     settingsPayload.effective,
     baseStatus,
+    memoryCredential,
   );
   const memoryGrowth = await loadMemoryGrowthSummary(deps.memoryClient);
 
@@ -349,6 +383,7 @@ async function buildStatus(
       settingsPayload.effective.memoryServiceBaseUrl &&
       settingsPayload.effective.memoryServiceUserId,
     ),
+    memoryCredential,
     autoSyncEnabled: settingsPayload.effective.autoSync,
     memoryGrowth,
     blockingReasons,
@@ -542,6 +577,11 @@ export async function createBridgeServer(
     const payload = await deps.settingsStore.update(request.body || {});
     applyBridgeSettingsToConfig(config, payload.effective);
     deps.syncManager.reload();
+    // A freshly pasted issuer credential or a changed user id should be picked
+    // up right away rather than waiting out the previous failure's backoff.
+    void deps.deviceKeyManager
+      ?.ensure({ ignoreBackoff: true })
+      .catch(() => undefined);
     return payload;
   });
 
@@ -553,6 +593,35 @@ export async function createBridgeServer(
         error instanceof Error ? error.message : 'Memory Service test failed';
       return reply.code(400).send({ ok: false, error: message });
     }
+  });
+
+  app.get('/memory/credential', async (_request, reply) => {
+    if (!deps.deviceKeyManager) {
+      return reply
+        .code(501)
+        .send({ error: 'Device key manager is not available.' });
+    }
+    return deps.deviceKeyManager.getStatus();
+  });
+
+  app.post<{
+    Body?: { requestId?: string; googleAccessToken?: string };
+  }>('/memory/credential/reissue', async (request, reply) => {
+    if (!deps.deviceKeyManager) {
+      return reply
+        .code(501)
+        .send({ error: 'Device key manager is not available.' });
+    }
+    const outcome = await deps.deviceKeyManager.ensure({
+      forceReissue: true,
+      ignoreBackoff: true,
+      requestId: request.body?.requestId,
+      googleAccessToken: request.body?.googleAccessToken,
+    });
+    if (outcome.status !== 'ok') {
+      return reply.code(400).send(deps.deviceKeyManager.getStatus());
+    }
+    return deps.deviceKeyManager.getStatus();
   });
 
   app.post('/backup/pull-now', async (_request, reply) => {

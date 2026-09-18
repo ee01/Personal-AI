@@ -66,6 +66,8 @@ export interface BridgeUserSettings {
   uiLanguage?: UiLanguage;
   memoryServiceBaseUrl?: string;
   memoryServiceApiKey?: string;
+  /** Only used to mint this device's personal key on an unclaimed namespace. */
+  memoryServiceBootstrapKey?: string;
   memoryServiceUserId?: string;
   autoSync: boolean;
   pollIntervalMs: number;
@@ -312,6 +314,12 @@ function normalizeSettings(
     memoryServiceApiKey: Object.hasOwn(input, 'memoryServiceApiKey')
       ? cleanOptional(input.memoryServiceApiKey)
       : defaults.memoryServiceApiKey,
+    memoryServiceBootstrapKey: Object.hasOwn(
+      input,
+      'memoryServiceBootstrapKey',
+    )
+      ? cleanOptional(input.memoryServiceBootstrapKey)
+      : defaults.memoryServiceBootstrapKey,
     memoryServiceUserId: Object.hasOwn(input, 'memoryServiceUserId')
       ? cleanOptional(input.memoryServiceUserId)
       : defaults.memoryServiceUserId,
@@ -402,6 +410,7 @@ export function createDefaultBridgeUserSettings(
     uiLanguage: 'zh-CN',
     memoryServiceBaseUrl: config.memoryServiceBaseUrl,
     memoryServiceApiKey: config.memoryServiceApiKey,
+    memoryServiceBootstrapKey: config.memoryServiceBootstrapKey,
     memoryServiceUserId: config.memoryServiceUserId,
     autoSync: config.autoSync,
     pollIntervalMs: config.pollIntervalMs,
@@ -475,6 +484,7 @@ export function applyBridgeSettingsToConfig(
 ): void {
   config.memoryServiceBaseUrl = settings.memoryServiceBaseUrl;
   config.memoryServiceApiKey = settings.memoryServiceApiKey;
+  config.memoryServiceBootstrapKey = settings.memoryServiceBootstrapKey;
   config.memoryServiceUserId = settings.memoryServiceUserId;
   config.autoSync = settings.autoSync;
   config.pollIntervalMs = settings.pollIntervalMs;

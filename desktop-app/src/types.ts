@@ -1,3 +1,5 @@
+import type { DeviceKeyStatus } from './deviceApiKey.js';
+
 export type BridgeAuthStatus =
   | 'unknown'
   | 'needs_login'
@@ -35,6 +37,7 @@ export type BridgeBlockingReasonCode =
   | 'auto_sync_disabled'
   | 'memory_service_not_configured'
   | 'memory_service_user_missing'
+  | 'memory_service_credential_missing'
   | 'auth_required'
   | 'memory_sync_not_bound'
   | 'mobile_context_not_bound';
@@ -101,6 +104,7 @@ export interface BridgeServiceStatus {
 export interface BridgeStatus extends BridgeServiceStatus {
   appVersion: string;
   memoryServiceConfigured: boolean;
+  memoryCredential?: DeviceKeyStatus;
   autoSyncEnabled: boolean;
   memoryGrowth?: BridgeMemoryGrowthSummary;
   blockingReasons: BridgeBlockingReason[];

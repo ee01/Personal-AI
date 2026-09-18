@@ -5,6 +5,8 @@ const warnedDeprecatedEnvVars = new Set<string>();
 export interface BridgeRuntimeSettings {
   memoryServiceBaseUrl?: string;
   memoryServiceApiKey?: string;
+  /** Only used to mint this device's personal key on an unclaimed namespace. */
+  memoryServiceBootstrapKey?: string;
   memoryServiceUserId?: string;
   autoSync: boolean;
   pollIntervalMs: number;
@@ -27,6 +29,7 @@ export interface BridgeConfig {
   provider: string;
   memoryServiceBaseUrl?: string;
   memoryServiceApiKey?: string;
+  memoryServiceBootstrapKey?: string;
   memoryServiceUserId?: string;
   autoSync: boolean;
   pollIntervalMs: number;
@@ -95,6 +98,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   const defaultSettings: BridgeRuntimeSettings = {
     memoryServiceBaseUrl: memoryServiceBaseUrl || undefined,
     memoryServiceApiKey: env.MEMORY_SERVICE_API_KEY || undefined,
+    memoryServiceBootstrapKey:
+      env.MEMORY_SERVICE_BOOTSTRAP_KEY || undefined,
     memoryServiceUserId:
       readDesktopEnv(env, 'DESKTOP_APP_USER_ID', 'DOUBAO_BRIDGE_USER_ID') ||
       env.MEMORY_SERVICE_USER_ID ||
@@ -171,6 +176,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     provider: env.DOUBAO_BRIDGE_PROVIDER || 'doubao',
     memoryServiceBaseUrl: defaultSettings.memoryServiceBaseUrl,
     memoryServiceApiKey: defaultSettings.memoryServiceApiKey,
+    memoryServiceBootstrapKey: defaultSettings.memoryServiceBootstrapKey,
     memoryServiceUserId: defaultSettings.memoryServiceUserId,
     autoSync: defaultSettings.autoSync,
     pollIntervalMs: defaultSettings.pollIntervalMs,
