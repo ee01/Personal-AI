@@ -503,6 +503,37 @@ try {
   assert.match(editBoundary ?? '', /当前: ID existing-1，状态 Active，下次执行 2026-05-04 09:15/);
   await editExistingButton.click();
   await page.getByRole('heading', { name: /编辑定时消息/ }).waitFor({ timeout: 15000 });
+
+  // 编辑弹窗的关闭键固定在头部：滚动表单内容后仍应在视口内可见可点
+  const editDialogForm = page.locator('form').first();
+  const editDialogCloseButton = page.getByRole('button', { name: '关闭' });
+  await editDialogCloseButton.waitFor({ timeout: 15000 });
+  const isFormScrollable = await editDialogForm.evaluate((form) => form.scrollHeight > form.clientHeight + 20);
+  assert.equal(isFormScrollable, true, 'edit dialog form should scroll internally so the header can stay fixed');
+  const closeBoxBeforeScroll = await editDialogCloseButton.boundingBox();
+  assert.ok(closeBoxBeforeScroll, 'edit dialog close button should be visible before scrolling');
+  await editDialogForm.evaluate((form) => {
+    form.scrollTop = form.scrollHeight;
+  });
+  await page.waitForTimeout(100);
+  const closeBoxAfterScroll = await editDialogCloseButton.boundingBox();
+  assert.ok(closeBoxAfterScroll, 'edit dialog close button should stay visible after scrolling the form');
+  assert.ok(
+    Math.abs(closeBoxAfterScroll.y - closeBoxBeforeScroll.y) < 2,
+    'edit dialog close button should not move when the form content scrolls',
+  );
+  assert.equal(
+    await editDialogCloseButton.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    }),
+    true,
+    'edit dialog close button should remain inside the viewport after scrolling',
+  );
+  await editDialogForm.evaluate((form) => {
+    form.scrollTop = 0;
+  });
+
   await page.getByPlaceholder('输入消息主题').fill('Existing Topic Edited');
 
   await page.getByRole('button', { name: /保存修改/ }).click();

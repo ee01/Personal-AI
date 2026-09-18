@@ -167,5 +167,16 @@ assert.ok(
   cacheStatusSource.includes('不会写 Timeline 缓存、不会保存或发送消息'),
   'Timeline cache scope receipt should separate dry-run from writes and sends'
 );
+assert.equal(
+  /isAgentTaskMode && \(\s*<div style=\{dialogStyles\.formGroup\}>\s*<label style=\{dialogStyles\.label\}>触发方式/.test(
+    managerSource,
+  ),
+  false,
+  '帮我做应能选择 Timeline 触发，不能再按 isAgentTaskMode 藏起触发方式',
+);
+assert.ok(
+  managerSource.includes('每个新版本的该 Milestone 都会再执行一次，不会在第一次成功后标完成。'),
+  '帮我做 Timeline 应说明每个版本再执行一次',
+);
 
 console.log('scheduled messages timeline cache verification passed');

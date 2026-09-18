@@ -95,6 +95,10 @@ import {
   type AgentTaskRuntimeStatusItem,
 } from '../services/MemoryServiceClient';
 import {
+  registerSheetMessageInLedgerSafe,
+  unregisterSheetMessageFromLedgerSafe,
+} from '../services/TaskCenterLedgerSync';
+import {
   agentTaskExecutorMissingReason,
   listAgentExecutorOptions,
   resolveAgentTaskExecutorSelection,
@@ -361,7 +365,7 @@ function buildManualConfigSyncActionBoundary(isSyncing: boolean): string {
     return 'Config 同步正在进行中；当前任务仍在读取 Sheet Config 或刷新 Messages / Logs，完成前不会启动第二个 Config 读取、Messages 刷新、Config 写回、消息发送或队列执行。';
   }
 
-  return '手动同步 Config 与 Messages；会读取 Sheet Config，只有 Sheet 明确更新时才刷新本机缓存，只有缺少子表定位时才写回 Config Sheet，随后读取 Messages / Logs；不会发送消息、执行队列、改 Logs、批准或删除计划。';
+  return '页面打开时已自动从 Sheet 刷新 Messages 列表，但不会读取 Sheet Config；手动同步 Config 与 Messages；会读取 Sheet Config，只有 Sheet 明确更新时才刷新本机缓存，只有缺少子表定位时才写回 Config Sheet，随后读取 Messages / Logs；不会发送消息、执行队列、改 Logs、批准或删除计划。';
 }
 
 function buildAgentTaskWebhookReadOnlyNotice(
@@ -571,7 +575,7 @@ function buildAppScriptUpdateActionBoundary(input: {
 
   switch (input.action) {
     case 'check':
-      return `手动检查 App Script 版本；需要授权时会显示 Google 授权窗口。${readOnlyCheck}；${noRuntimeEffects}。${stateText}`;
+      return `页面打开时已自动静默检查一次；这里是手动重试入口。手动检查 App Script 版本；需要授权时会显示 Google 授权窗口。${readOnlyCheck}；${noRuntimeEffects}。${stateText}`;
     case 'recheck':
       return `重新读取 App Script 版本和 Project History 额度；适合清理旧版本后刷新判断。${readOnlyCheck}；不会升级 deployment 或标记配置为最新。${stateText}`;
     case 'upgrade':
@@ -1719,13 +1723,21 @@ const ScheduledMessagesManager: React.FC = () => {
         throw new Error('MEMORY_SERVICE_BASE_URL is empty');
       }
 
+      const client = getMemoryServiceClient({
+        baseUrl: runtimeBaseUrl,
+        timeout: envConfig.MEMORY_SERVICE_TIMEOUT || undefined,
+      });
       const userinfo = await getUserInfo().catch(() => null);
       const runtimeUserId =
         normalizeAgentTaskUserId(currentUsername) ||
         normalizeAgentTaskUserId(userinfo?.username) ||
+        normalizeAgentTaskUserId(userinfo?.userEmail) ||
         normalizeAgentTaskUserId(userinfo?.email);
-      const client = getMemoryServiceClient();
-      if (runtimeUserId) {
+      // The client already loads userinfo + the issued device pak via its
+      // shared request() wrapper. Only fill identity when storage still has
+      // `default`; overwriting a resolved id would miss the stored key and
+      // send unauthenticated GET /config (401 authentication_required).
+      if (runtimeUserId && client.getUserId() === 'default') {
         client.setUserId(runtimeUserId);
       }
       const runtime = await client.getRuntimeConfig();
@@ -3263,6 +3275,7 @@ const ScheduledMessagesManager: React.FC = () => {
         
         // 只有在恢复成功后才删除消息
         await service.deleteMessage(id);
+        void unregisterSheetMessageFromLedgerSafe(id);
         let cancelledOutreachTemplate = false;
         if (shouldCancelOutreachMirror) {
           cancelledOutreachTemplate = await cancelOutreachTemplateMirror(message.ID);
@@ -3294,6 +3307,7 @@ const ScheduledMessagesManager: React.FC = () => {
       setIsLoading(true);
       try {
         await service.deleteMessage(id);
+        void unregisterSheetMessageFromLedgerSafe(id);
         let cancelledOutreachTemplate = false;
         if (shouldCancelOutreachMirror) {
           cancelledOutreachTemplate = await cancelOutreachTemplateMirror(message.ID);
@@ -3424,6 +3438,7 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       const updatedMessage = await service.toggleMessageStatus(message.ID);
+      void registerSheetMessageInLedgerSafe(updatedMessage);
       let outreachMirrorDetail = '';
       let outreachMirrorWarning = false;
       if (isOutreachMessage(updatedMessage)) {
@@ -3482,6 +3497,7 @@ const ScheduledMessagesManager: React.FC = () => {
       if (editingMessage) {
         // 编辑模式：更新消息
         const savedMessage = await service.updateMessage(editingMessage.ID, formData);
+        void registerSheetMessageInLedgerSafe(savedMessage);
         let outreachSyncError: Error | null = null;
         
         // 如果是 JiraAutomation 类型且 Topic 发生变化，同步更新 Jira Rule 名称
@@ -3541,6 +3557,7 @@ const ScheduledMessagesManager: React.FC = () => {
       } else {
         // 新建模式：创建消息
         const savedMessage = await service.createMessage(formData);
+        void registerSheetMessageInLedgerSafe(savedMessage);
         let outreachSyncError: Error | null = null;
 
         try {
@@ -4558,30 +4575,6 @@ const ScheduledMessagesManager: React.FC = () => {
           <button style={styles.addButton} onClick={handleAddMessage} title="新增消息">
             ➕ 新增
           </button>
-          <button
-            style={{
-              ...styles.syncButton,
-              opacity: isSyncingConfig ? 0.7 : 1,
-              cursor: isSyncingConfig ? 'not-allowed' : 'pointer',
-            }}
-            onClick={handleSync}
-            title={manualConfigSyncActionBoundary}
-            aria-label={manualConfigSyncActionBoundary}
-            disabled={isSyncingConfig}
-          >
-            {isSyncingConfig ? '⏳ 同步中...' : '🔄 同步'}
-          </button>
-          {!updateAvailable && (
-            <button
-              style={styles.checkUpdateButton}
-              onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
-              disabled={isCheckingUpdates || isUpdating}
-              title={appScriptCheckActionBoundary}
-              aria-label={appScriptCheckActionBoundary}
-            >
-              {isCheckingUpdates ? '⏳ 检查中...' : '🔎 检查脚本'}
-            </button>
-          )}
           <button style={styles.configButton} onClick={handleOpenLogsSheet} title="查看推送记录">
             📊 推送记录
           </button>
@@ -5139,7 +5132,35 @@ const ScheduledMessagesManager: React.FC = () => {
             <span style={styles.statusItem}>后台补充状态中...</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {/* 🔧 维护操作：页面打开时已自动执行一次，这里只保留手动重试 / 跨设备恢复入口 */}
+          <span style={styles.statusMaintenanceLabel} title="维护操作：页面打开时会自动检查 App Script 版本并刷新 Messages 列表，这里只保留手动重试与跨设备恢复入口">
+            维护
+          </span>
+          <button
+            style={{
+              ...styles.statusMaintenanceButton,
+              opacity: isSyncingConfig ? 0.7 : 1,
+              cursor: isSyncingConfig ? 'not-allowed' : 'pointer',
+            }}
+            onClick={handleSync}
+            title={manualConfigSyncActionBoundary}
+            aria-label={manualConfigSyncActionBoundary}
+            disabled={isSyncingConfig}
+          >
+            {isSyncingConfig ? '⏳ 同步中...' : '🔄 同步'}
+          </button>
+          {!updateAvailable && (
+            <button
+              style={styles.statusMaintenanceButton}
+              onClick={() => checkForUpdates({ interactive: true, showCurrentAlert: true })}
+              disabled={isCheckingUpdates || isUpdating}
+              title={appScriptCheckActionBoundary}
+              aria-label={appScriptCheckActionBoundary}
+            >
+              {isCheckingUpdates ? '⏳ 检查中...' : '🔎 检查脚本'}
+            </button>
+          )}
           {/* 只看待审核推送 */}
           {statistics.pendingReview > 0 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer' }}>
@@ -8374,7 +8395,7 @@ ${content}
               <span style={dialogStyles.titleHint}>{dialogTitleHint}</span>
             )}
           </div>
-          <button style={dialogStyles.closeButton} onClick={onCancel}>✕</button>
+          <button style={dialogStyles.closeButton} onClick={onCancel} aria-label="关闭" title="关闭">✕</button>
         </div>
         
         <form onSubmit={handleSubmit} style={dialogStyles.form}>
@@ -9110,7 +9131,6 @@ ${content}
               </div>
               
               {/* 触发类型选择 */}
-              {!isAgentTaskMode && (
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>触发方式 *</label>
                 <div style={dialogStyles.buttonGroup}>
@@ -9142,7 +9162,6 @@ ${content}
                   </button>
                 </div>
               </div>
-              )}
               
               {/* 是否重复推送（仅时间触发） */}
               {!isTimelineTrigger && (
@@ -9199,7 +9218,6 @@ ${content}
               )}
               
               {/* 触发类型选择 */}
-              {!isAgentTaskMode && (
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>触发方式 *</label>
                 <div style={dialogStyles.buttonGroup}>
@@ -9231,7 +9249,6 @@ ${content}
                   </button>
                 </div>
               </div>
-              )}
             </>
           )}
           
@@ -9511,11 +9528,16 @@ ${content}
                     disabled={!botConfigured || !timelineBotConfigured}
                   />
                   <small style={dialogStyles.hint}>{emptyScheduleTimeHint}</small>
-                  {scheduleTimeError && (
+                    {scheduleTimeError && (
                     <small style={dialogStyles.fieldError}>{scheduleTimeError}</small>
                   )}
                 </div>
               </div>
+              {isAgentTaskMode && (
+                <small style={dialogStyles.hint}>
+                  每个新版本的该 Milestone 都会再执行一次，不会在第一次成功后标完成。
+                </small>
+              )}
             </div>
           )}
           
@@ -10957,15 +10979,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     cursor: 'pointer',
     fontSize: '14px',
   },
-  syncButton: {
-    padding: '8px 16px',
-    backgroundColor: '#007bff',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
   updateButton: {
     padding: '8px 16px',
     backgroundColor: '#ff5722',
@@ -10977,14 +10990,22 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontWeight: 'bold',
     animation: 'pulse 2s infinite',
   },
-  checkUpdateButton: {
-    padding: '8px 16px',
-    backgroundColor: '#f8f9fa',
+  statusMaintenanceLabel: {
+    fontSize: '12px',
+    color: '#878787',
+    padding: '2px 8px',
+    backgroundColor: '#f1f3f5',
+    borderRadius: '12px',
+  },
+  statusMaintenanceButton: {
+    padding: '6px 12px',
+    backgroundColor: '#fff',
     color: '#495057',
     border: '1px solid #ced4da',
     borderRadius: '6px',
     cursor: 'pointer',
-    fontSize: '14px',
+    fontSize: '13px',
+    fontWeight: 500,
   },
   configButton: {
     padding: '8px 16px',
@@ -11603,6 +11624,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderBottom: '1px solid #e0e0e0',
     display: 'flex',
     gap: '20px',
+    flexWrap: 'wrap',
+    alignItems: 'center',
   },
   statusItem: {
     fontSize: '14px',
@@ -11889,15 +11912,20 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     maxWidth: 'calc(100vw - 48px)',
     width: '1415px',
     maxHeight: '90vh',
-    overflow: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
     boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)',
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
+    flexShrink: 0,
     padding: '20px',
+    backgroundColor: '#fff',
     borderBottom: '1px solid #e0e0e0',
+    zIndex: 1,
   },
   title: {
     margin: 0,
@@ -11929,7 +11957,10 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     height: '30px',
   },
   form: {
+    flex: '1 1 auto',
+    minHeight: 0,
     padding: '20px',
+    overflow: 'auto',
   },
   formGroup: {
     marginBottom: '16px',
@@ -12344,9 +12375,14 @@ const dialogStyles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     justifyContent: 'flex-end',
     gap: '10px',
+    position: 'sticky',
+    bottom: 0,
     marginTop: '24px',
     paddingTop: '20px',
+    paddingBottom: '4px',
+    backgroundColor: '#fff',
     borderTop: '1px solid #e0e0e0',
+    zIndex: 1,
   },
   cancelButton: {
     padding: '10px 20px',

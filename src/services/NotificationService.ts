@@ -15,6 +15,7 @@ import { TopicItemWithAutoReply } from '../message-reaction/AutoReplyHandler';
 import { buildLLMReviewPrompt } from '../prompts';
 import { sendPlainBotMessage } from '../bot';
 import { buildScheduledMessagesReviewUrl } from '../scheduled-messages/scheduledMessagesFilters';
+import { FOLLOW_THREAD_PUSH_SCENARIO } from '../messageAnalysisDelivery';
 import {
   formatMatchedRuleForDisplay,
   mergeMatchedRuleDisplay,
@@ -54,6 +55,20 @@ export interface AutoReplyInfo {
 }
 
 /**
+ * Bot 推文模板。
+ *
+ * - `default`：普通「消息分析推送」模板（关注项命中）。
+ * - `follow_thread`：关注后续即时命中模板。
+ * - `follow_thread_digest`：关注后续汇总模板。
+ *
+ * 三种模板互相独立，不共用文案结构；推送目标仍由 `pushScenario` 决定。
+ */
+export type BotMessageTemplate =
+  | 'default'
+  | 'follow_thread'
+  | 'follow_thread_digest';
+
+/**
  * 通知数据接口
  */
 export interface NotificationData {
@@ -75,6 +90,9 @@ export interface NotificationData {
 
   // 推送场景，用于选择独立的 Bot 目标
   pushScenario?: import('../utils').BotPushScenario;
+
+  // 推送模板，用于选择独立的 Bot 文案结构
+  botMessageTemplate?: BotMessageTemplate;
   
   // 自动答复信息
   autoReplyInfo?: AutoReplyInfo;
@@ -114,11 +132,7 @@ export interface NotificationResult {
 }
 
 export function buildBotNotificationMessage(data: NotificationData): string {
-  const messageLink = data.teamId
-    ? data.postId
-      ? `https://app.ringcentral.com/messages/${data.teamId}/${data.postId}`
-      : `https://app.ringcentral.com/messages/${data.teamId}`
-    : '';
+  const messageLink = buildNotificationMessageLink(data);
 
   let originalMessageSection = '';
   if (data.originalMessageInfo) {
@@ -130,27 +144,9 @@ __后续回复__：
 `;
   }
 
-  let replySection: string;
-  if (data.autoReplyInfo?.hasAutoReply) {
-    const scheduledMessagesUrl = buildScheduledMessagesReviewUrl(
-      data.autoReplyInfo.messageId,
-    );
-    replySection = `__自动答复__：✅ 已配置自动答复，将于 ${data.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl})
-> ${data.autoReplyInfo.replyContent?.substring(0, 100)}${(data.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
-  } else if (data.replyAdvice) {
-    replySection = `__回复建议__：${data.replyAdvice}`;
-  } else {
-    replySection = '';
-  }
+  const replySection = buildNotificationReplySection(data);
 
-  const groupSection =
-    data.teamId && data.teamName
-      ? `__在群__：<a class='at_mention_compose' rel='{"id":${data.teamId}}'>@${data.teamName}</a>
-`
-      : data.teamName
-      ? `__来源__：${data.teamName}
-`
-      : '';
+  const groupSection = buildNotificationGroupSection(data);
   const messageLabel = messageLink ? '__原文__' : '__内容__';
   const linkSection = messageLink ? `🔗 [点击查看原消息](${messageLink})` : '';
 
@@ -163,6 +159,134 @@ ${replySection}
 ${linkSection}
 *以上是 Personal AI 监测到您可能关注的消息* (AI可能幻觉 仅供参考)
 `;
+}
+
+/**
+ * 关注后续（Watch）命中专用模板。
+ *
+ * 关注后续推送与普通「消息分析推送」共用一套关注项匹配逻辑，但两者是不同
+ * 的产品动作：普通推送回答“这条消息命中了哪条关注项”，关注后续推送回答
+ * “我关注的那条原消息又有了新讨论”。因此这里使用独立模板，显式区分
+ * 「关注话题 / 后续回复 / 原消息锚点」，避免用户把后续讨论回执读成普通命中。
+ * 该模板只改变文案结构，推送目标仍由 `pushScenario: 'follow_up'` 对应的
+ * 「关注后续推送」配置决定。
+ */
+export function buildFollowThreadBotNotificationMessage(
+  data: NotificationData,
+): string {
+  const messageLink = buildNotificationMessageLink(data);
+
+  let originalMessageSection = '';
+  if (data.originalMessageInfo) {
+    originalMessageSection = `__原消息__（来自 ${data.originalMessageInfo.sender}）：
+> ${data.originalMessageInfo.content.substring(0, 150)}${data.originalMessageInfo.content.length > 150 ? '...' : ''}
+🔗 [查看原消息](${data.originalMessageInfo.messageUrl})
+
+`;
+  }
+
+  const replySection = buildNotificationReplySection(data);
+
+  const groupSection = buildNotificationGroupSection(data);
+  const messageLabel = messageLink ? '__原文__' : '__内容__';
+  const linkSection = messageLink ? `🔗 [点击查看原消息](${messageLink})` : '';
+
+  return `📌 关注后续更新
+\`${data.summary}\`
+
+${originalMessageSection}__关注话题__：${formatMatchedRuleForDisplay(data.matchedRule)}
+
+__后续回复__：
+${groupSection}__发送者__：${data.sender}
+__时间__：${data.datetime}
+${messageLabel}：${data.messageContent}
+${replySection}
+${linkSection}
+*以上是 Personal AI 监测到的「关注后续」新动态* (AI可能幻觉 仅供参考)
+`;
+}
+
+/**
+ * 关注后续汇总（每小时合并通知）专用模板。
+ *
+ * 汇总正文已经由 FollowThreadDigestProcessor 自带排版，这里只提供与「消息
+ * 分析推送」不同的外框，避免把汇总新闻读成普通关注项命中。
+ */
+export function buildFollowThreadDigestBotNotificationMessage(
+  data: NotificationData,
+): string {
+  return `📌 关注后续汇总
+\`${data.summary}\`
+
+${data.messageContent}
+*以上是 Personal AI 汇总的「关注后续」新动态* (AI可能幻觉 仅供参考)
+`;
+}
+
+function buildNotificationMessageLink(data: NotificationData): string {
+  if (!data.teamId) {
+    return '';
+  }
+
+  return data.postId
+    ? `https://app.ringcentral.com/messages/${data.teamId}/${data.postId}`
+    : `https://app.ringcentral.com/messages/${data.teamId}`;
+}
+
+function buildNotificationReplySection(data: NotificationData): string {
+  if (data.autoReplyInfo?.hasAutoReply) {
+    const scheduledMessagesUrl = buildScheduledMessagesReviewUrl(
+      data.autoReplyInfo.messageId,
+    );
+    return `__自动答复__：✅ 已配置自动答复，将于 ${data.autoReplyInfo.scheduleTime} 自动发送 [🔗点击审核或取消](${scheduledMessagesUrl})
+> ${data.autoReplyInfo.replyContent?.substring(0, 100)}${(data.autoReplyInfo.replyContent?.length || 0) > 100 ? '...' : ''}`;
+  }
+
+  if (data.replyAdvice) {
+    return `__回复建议__：${data.replyAdvice}`;
+  }
+
+  return '';
+}
+
+function buildNotificationGroupSection(data: NotificationData): string {
+  if (data.teamId && data.teamName) {
+    return `__在群__：<a class='at_mention_compose' rel='{"id":${data.teamId}}'>@${data.teamName}</a>
+`;
+  }
+
+  if (data.teamName) {
+    return `__来源__：${data.teamName}
+`;
+  }
+
+  return '';
+}
+
+/**
+ * 解析本次推送实际使用的 Bot 模板。
+ *
+ * 显式指定 `botMessageTemplate` 时以它为准；否则优先看推送场景：关注后续场景
+ * （`pushScenario = 'follow_up'`）默认使用关注后续即时模板。这样即使调用方忘记
+ * 传模板，关注后续推送也不会退回「消息分析」模板。
+ */
+export function resolveBotMessageTemplate(
+  data: NotificationData,
+): BotMessageTemplate {
+  if (data.botMessageTemplate) {
+    return data.botMessageTemplate;
+  }
+
+  return data.pushScenario === FOLLOW_THREAD_PUSH_SCENARIO
+    ? 'follow_thread'
+    : 'default';
+}
+
+/**
+ * 关注后续推送是否使用独立模板（任意一种 follow-thread 模板）。
+ */
+export function isFollowThreadPush(data: NotificationData): boolean {
+  return resolveBotMessageTemplate(data) !== 'default';
 }
 
 // ==================== 工具函数 ====================
@@ -370,7 +494,16 @@ export class NotificationService {
    * 发送 Bot (Glip) 通知
    */
   private async sendBotNotification(data: NotificationData): Promise<void> {
-    const formattedMessage = buildBotNotificationMessage(data);
+    const formattedMessage = (() => {
+      switch (resolveBotMessageTemplate(data)) {
+        case 'follow_thread':
+          return buildFollowThreadBotNotificationMessage(data);
+        case 'follow_thread_digest':
+          return buildFollowThreadDigestBotNotificationMessage(data);
+        default:
+          return buildBotNotificationMessage(data);
+      }
+    })();
 
     const shouldMention = data.mention !== false;
 
@@ -393,7 +526,7 @@ export class NotificationService {
     
     // 构建通知标题
     let title: string;
-    if (data.originalMessageInfo) {
+    if (resolveBotMessageTemplate(data) === 'follow_thread') {
       title = `📌 关注后续：${data.sender} 回复了`;
     } else {
       title = `${data.sender} 在 ${data.teamName}`;
