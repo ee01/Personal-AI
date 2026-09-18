@@ -15,6 +15,8 @@ import {
   ensureDeviceApiKeyOutcome,
   clearStoredDeviceKey,
   clearStoredHelpCenterKey,
+  readAnyStoredDeviceKey,
+  readAnyStoredHelpCenterKey,
   type DeviceKeyOutcome,
 } from '../deviceApiKey.js';
 import { getDefaultEnvConfig } from '../utils.js';
@@ -5110,7 +5112,6 @@ export class MemoryServiceClient {
   private async ensureDeviceBearer(): Promise<string | undefined> {
     await this.ensureConfigLoaded();
     await this.ensureUserIdResolved();
-    if (!this.shouldSendUserIdentity()) return this.apiKey;
     this.bootstrapKey = this.resolveBootstrapKey(this.bootstrapKey);
 
     // Claim-gate left us needing Google / admin — do not fall through to
@@ -5124,12 +5125,50 @@ export class MemoryServiceClient {
       return this.apiKey;
     }
 
+    if (!this.shouldSendUserIdentity()) {
+      const adopted = await this.adoptStoredDeviceBearer();
+      if (adopted) return adopted;
+      return this.apiKey;
+    }
+
     if (!this._deviceKeyPromise) {
       this._deviceKeyPromise = this.issueDeviceKeyPromise(false);
     }
     const deviceToken = await this._deviceKeyPromise;
-    // Prefer per-device tier-2; fall back to service key only if needed.
-    return deviceToken || this.apiKey;
+    if (deviceToken) return deviceToken;
+
+    // Issuance for a caller-overridden userId can miss the pak already on
+    // this device. Re-attach that stored key instead of sending anonymous
+    // GET /config (401 authentication_required on production).
+    if (
+      !this._deviceKeyBlocked ||
+      this._deviceKeyBlocked.status === 'unavailable'
+    ) {
+      const adopted = await this.adoptStoredDeviceBearer();
+      if (adopted) return adopted;
+    }
+    return this.apiKey;
+  }
+
+  /**
+   * Extension pages (Scheduled Messages, Options) can call memory-service
+   * before userinfo is resolved. The already-issued pak in chrome.storage
+   * still authenticates GET /config; skipping it produces a false
+   * `authentication_required` and a "not configured" warning.
+   */
+  private async adoptStoredDeviceBearer(): Promise<string | null> {
+    try {
+      const stored =
+        (await readAnyStoredDeviceKey()) || (await readAnyStoredHelpCenterKey());
+      if (!stored?.token || !stored.userId) return null;
+      if (stored.userId !== this.userId) {
+        this.setUserId(stored.userId);
+      }
+      this._deviceKeyPromise = Promise.resolve(stored.token);
+      return stored.token;
+    } catch {
+      return null;
+    }
   }
 
   /** Throw when claim-gate blocked issuance and no service-key fallback exists. */

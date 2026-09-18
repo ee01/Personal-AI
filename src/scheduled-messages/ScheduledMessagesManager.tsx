@@ -1719,13 +1719,21 @@ const ScheduledMessagesManager: React.FC = () => {
         throw new Error('MEMORY_SERVICE_BASE_URL is empty');
       }
 
+      const client = getMemoryServiceClient({
+        baseUrl: runtimeBaseUrl,
+        timeout: envConfig.MEMORY_SERVICE_TIMEOUT || undefined,
+      });
       const userinfo = await getUserInfo().catch(() => null);
       const runtimeUserId =
         normalizeAgentTaskUserId(currentUsername) ||
         normalizeAgentTaskUserId(userinfo?.username) ||
+        normalizeAgentTaskUserId(userinfo?.userEmail) ||
         normalizeAgentTaskUserId(userinfo?.email);
-      const client = getMemoryServiceClient();
-      if (runtimeUserId) {
+      // The client already loads userinfo + the issued device pak via its
+      // shared request() wrapper. Only fill identity when storage still has
+      // `default`; overwriting a resolved id would miss the stored key and
+      // send unauthenticated GET /config (401 authentication_required).
+      if (runtimeUserId && client.getUserId() === 'default') {
         client.setUserId(runtimeUserId);
       }
       const runtime = await client.getRuntimeConfig();

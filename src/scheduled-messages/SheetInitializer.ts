@@ -5,7 +5,11 @@
 
 import { InitializationResult, SheetConfig } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
-import { formatLocalScheduleDate, getLocalScheduleTimeZone } from './scheduleDateTime';
+import {
+  formatLocalScheduleDate,
+  formatLocalScheduleTime,
+  getLocalScheduleTimeZone,
+} from './scheduleDateTime';
 
 interface SharingPermissionResult {
   status: 'domain_writer' | 'owner_only';
@@ -83,6 +87,53 @@ export const MESSAGES_SCHEMA = {
     'Exec_Log',
   ],
 };
+
+function formatLocalDateTime(date: Date): string {
+  return `${formatLocalScheduleDate(date)} ${formatLocalScheduleTime(date)}`;
+}
+
+/**
+ * Convert a 1-based column index to A1 notation (1→A, 26→Z, 27→AA).
+ */
+export function columnIndexToName(columnIndex: number): string {
+  let result = '';
+  let index = columnIndex;
+
+  while (index > 0) {
+    const remainder = (index - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    index = Math.floor((index - 1) / 26);
+  }
+
+  return result;
+}
+
+/**
+ * Welcome row written during one-click setup.
+ * Values are placed by `MESSAGES_SCHEMA.columns` name so Agent_* fields
+ * added in v2.9+ do not shift Status / Next_Exec into the wrong cells.
+ */
+export function buildWelcomeSampleRow(now: Date = new Date()): Array<string | number> {
+  const oneMinuteLater = new Date(now.getTime() + 60 * 1000);
+  const values: Record<string, string | number> = {
+    ID: `msg_welcome_${now.getTime()}`,
+    Topic: 'Personal AI 欢迎消息',
+    Content:
+      '🎉 恭喜！您的定时消息系统已成功初始化！\n\n这是一条测试消息，证明系统运行正常。\n\n您现在可以在管理界面添加更多定时消息。',
+    Schedule_Date: formatLocalScheduleDate(now),
+    Schedule_Time: formatLocalScheduleTime(oneMinuteLater),
+    Push_Method: 'AsMe',
+    Glip_User_Name: 'sync.service',
+    Status: 'Active',
+    Next_Exec: formatLocalDateTime(oneMinuteLater),
+    Exec_Count: 0,
+    Exec_Log: '待执行',
+  };
+
+  return MESSAGES_SCHEMA.columns.map((column) => (
+    Object.prototype.hasOwnProperty.call(values, column) ? values[column] : ''
+  ));
+}
 
 export const LOGS_SCHEMA = {
   version: '1.1',
@@ -501,41 +552,10 @@ export class SheetInitializer {
    * 添加示例数据
    */
   private async addSampleData(spreadsheetId: string): Promise<void> {
-    const now = new Date();
-    const oneMinuteLater = new Date(now.getTime() + 60 * 1000);
-
-    const sampleMessage = [
-      `msg_welcome_${Date.now()}`, // ID
-      'Personal AI 欢迎消息', // Topic
-      '🎉 恭喜！您的定时消息系统已成功初始化！\n\n这是一条测试消息，证明系统运行正常。\n\n您现在可以在管理界面添加更多定时消息。', // Content
-      this.formatDate(now), // Schedule_Date
-      this.formatTime(oneMinuteLater), // Schedule_Time（填写时间，自动判断为 Hourly 类型）
-      '', // End_Date
-      '', // Repeat_Every
-      '', // Repeat_Unit
-      '', // Repeat_Count
-      '', // Repeat_Days (v2.3 新增，多选日期)
-      '', // Timeline_Project
-      '', // Timeline_Milestone
-      '', // Timeline_Offset
-      'AsMe', // Push_Method
-      'sync.service', // Glip_User_Name
-      '', // Glip_Team_ID
-      '', // Attachment
-      '', // AI_Endpoint
-      '', // AI_Headers
-      '', // AI_Body
-      '', // Category
-      '', // Automation_Link (v2.2 新增)
-      'Active', // Status
-      '', // Last_Exec
-      this.formatDateTime(oneMinuteLater), // Next_Exec
-      0, // Exec_Count
-      '待执行', // Exec_Log
-    ];
+    const sampleMessage = buildWelcomeSampleRow();
 
     // 根据数据列数动态计算结束列名
-    const endColumn = this.getColumnName(sampleMessage.length);
+    const endColumn = columnIndexToName(sampleMessage.length);
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Messages!A2:${endColumn}2?valueInputOption=USER_ENTERED`,
@@ -995,26 +1015,10 @@ function minuteTrigger() {
   }
 
   private formatTime(date: Date): string {
-    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+    return formatLocalScheduleTime(date);
   }
 
   private formatDateTime(date: Date): string {
-    return `${this.formatDate(date)} ${this.formatTime(date)}`;
-  }
-
-  /**
-   * 将列索引转换为列名（1→A, 26→Z, 27→AA, 28→AB, ...）
-   */
-  private getColumnName(columnIndex: number): string {
-    let result = '';
-    let index = columnIndex;
-
-    while (index > 0) {
-      const remainder = (index - 1) % 26;
-      result = String.fromCharCode(65 + remainder) + result;
-      index = Math.floor((index - 1) / 26);
-    }
-
-    return result;
+    return formatLocalDateTime(date);
   }
 }
