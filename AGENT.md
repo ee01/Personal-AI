@@ -217,6 +217,9 @@ Keep a small local experiment, typo, or docs-only probe as a local commit unless
 | `npm run verify:roadmap-service` | Health + public frontend probe for the deployed roadmap-service | After `deploy:roadmap`, or to confirm the live site without redeploying |
 | `npm run verify:roadmap-dep-jira-status` | Assert source + `dist/contentScriptRoadmap.js` return Jira `status` with Target End | After Roadmap content-script changes, before treating 「刷新 Jira」 as proven |
 | `npm run build:app` | Build the desktop app and macOS installer package | When desktop-app or extension-to-desktop behavior needs packaged/installed-app E2E validation |
+| `npm --prefix desktop-app run test:device-key-ui` | Render the desktop settings page against a stubbed bridge and assert the Memory Service 设备密钥 row, its reissue round trip, and its layout | After changes to the desktop device-key flow, `desktop-app/src/deviceApiKey.ts`, or the Memory Service settings card |
+| `npm run verify:notification-push-templates` | Assert关注后续推送独立于消息分析推送：关注后续规则只要命中就路由到 `follow_up` 目标，并使用独立 Bot 模板 | After changes to `src/services/NotificationService.ts`, `src/messageAnalysisDelivery.ts`, `src/services/DigestQueueService.ts`, or the message-analysis push path |
+| `npm run verify:followup-ask-options` | Assert「跟进追问」开关与结果推送接线：`ENABLE_FOLLOWUP_ASK` 存在且默认开启、工具栏按自己的开关过滤按钮、跟进追问结果推送与「主动询问结果推送」共用 `OUTREACH_RESULT_PUSH_*` 存储 | After changes to the message-interaction Options section, `src/message-reaction/messageReactionLayout.ts`, or the followup result push wiring |
 
 ### Chrome Extension E2E Validation
 
