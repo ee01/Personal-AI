@@ -8,6 +8,10 @@ import {
   type TodayPilotMeetingPrepRecord,
 } from '../repositories/TodayPilotMeetingPrepRepository.js';
 import { normalizeUiLanguage, type UiLanguage } from '../i18n.js';
+import {
+  outputLanguageLabel,
+  resolveOutputLanguage,
+} from '../utils/outputLanguage.js';
 import { contentHash } from '../utils/hashing.js';
 import { redactMeetingCredentials } from '../utils/meetingCredentialRedaction.js';
 import { normalizeStorylineOpportunity } from '../utils/storyline.js';
@@ -172,22 +176,7 @@ function resolveMeetingPrepOutputLanguage(
   if (requested) {
     return normalizeUiLanguage(requested);
   }
-  const row = db
-    .prepare(
-      `SELECT item_value
-       FROM user_profile_items
-       WHERE status = 'active' AND item_key = 'language_preference'
-       ORDER BY user_confirmed DESC, updated_at DESC
-       LIMIT 1`,
-    )
-    .get() as { item_value: string } | undefined;
-  return /english|英文|en-us|\ben\b/i.test(row?.item_value || '')
-    ? 'en-US'
-    : 'zh-CN';
-}
-
-function meetingPrepLanguageLabel(language: UiLanguage): string {
-  return language === 'en-US' ? 'English' : 'Simplified Chinese';
+  return resolveOutputLanguage(db);
 }
 
 function meetingPrepQuestionsTitle(language: UiLanguage): string {
@@ -854,7 +843,7 @@ export class TodayPilotMeetingPrepService {
       '- A slot is a planned target only; do not claim it is resolved before meeting evidence exists.',
       '',
       'Language and summary rules:',
-      `- Write suggestedQuestions, question cue cards, summaryMd, and other user-facing meeting-prep prose in ${meetingPrepLanguageLabel(language)}. This is the user's Options UI language.`,
+      `- Write suggestedQuestions, question cue cards, summaryMd, and other user-facing meeting-prep prose in ${outputLanguageLabel(language)}. This is the user's Options UI language.`,
       '- Keep names, product names, Jira keys, URLs, IDs, and quoted source terms in their original form.',
       '- suggestedQuestions must be an array of distinct questions, one question per item. Never concatenate multiple questions into one string.',
       '- Do not restate calendar title, time, organizer, attendee list, or calendar description in summaryMd. The calendar UI already shows those. If there is no non-calendar insight, leave summaryMd empty or omit it.',
