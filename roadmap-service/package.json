@@ -9,7 +9,7 @@
     "build": "tsc && npm run build:web && npm run copy:assets",
     "build:web": "vite build --config web/vite.config.ts",
     "build:server": "tsc && npm run copy:assets",
-    "copy:assets": "mkdir -p dist/storage && cp src/storage/schema.sql dist/storage/schema.sql",
+    "copy:assets": "mkdir -p dist/storage dist/skills/roadmap-planning/references && cp src/storage/schema.sql dist/storage/schema.sql && cp plugin/skills/roadmap-planning/SKILL.md dist/skills/roadmap-planning/SKILL.md && cp plugin/skills/roadmap-planning/references/plan-schema.md dist/skills/roadmap-planning/references/plan-schema.md",
     "dev:web": "vite --config web/vite.config.ts",
     "start": "node dist/server.js",
     "test": "vitest run"

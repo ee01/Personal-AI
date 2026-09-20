@@ -4,9 +4,15 @@
 
 ## 安装
 
+两条路，任选其一（都只生成 Draft，不创建 Jira）。**普通用户请走远程 MCP，不必克隆本仓库。**
+
+1. **给 AI Agent 安装 Skill（推荐）**：把 GitHub `SKILL.md` 或 `http://roadmap.xmnup.com/skills/roadmap-planning/SKILL.md` 交给 Agent。远程 MCP 默认 `http://roadmap.xmnup.com/mcp`，自建则改成 `{站点}/mcp`。Headers：`X-Team-Id`、`X-Share-Token`。
+2. **Codex Plugin 导入**：在 Codex / ChatGPT 桌面的 Plugins 里导入 marketplace。仓库填 `https://github.com/ee01/Personal-AI`，Path `roadmap-service`，Branch `develop`，再安装 `roadmap-planning`。Plugin 里的本地 stdio MCP 仍可能要另配；优先用上面的远程 URL。
+
+本地 stdio 仅作后备：
+
 1. 构建 MCP：`npm --prefix roadmap-service/mcp run build`
-2. 在 Codex 中把 `roadmap-service` 当作 marketplace 根（见 `.agents/plugins/marketplace.json`）
-3. 配置环境变量（宿主安全存储，不要写进仓库）：
+2. 配置环境变量（宿主安全存储，不要写进仓库）：
 
 ```bash
 ROADMAP_BASE_URL=https://your-roadmap
@@ -14,7 +20,7 @@ ROADMAP_TEAM_ID=...
 ROADMAP_EDIT_TOKEN=...
 ```
 
-4. 新会话应发现 Skill `roadmap-planning` 与 MCP tools。独立安装（不装 Plugin）也可：只配 MCP + 复制本目录 `skills/roadmap-planning`。
+3. 新会话应发现 Skill `roadmap-planning` 与 MCP tools。
 
 ## 验收边界
 

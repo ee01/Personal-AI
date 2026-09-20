@@ -195,7 +195,7 @@
 | Roadmap 变更历史 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 团队层操作日志 drawer，不展示个人记忆 |
 | Roadmap 手动 Backlog 条目 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 不经 Jira 直接建条目；`LOCAL-` 合成 key 永不变更，已回填 Jira key 的条目不可删；新建后置顶 Backlog 首位 |
 | Roadmap AI 批量创建 Draft | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Backlog「使用 AI 批量创建」；默认先预览，勾选后才写入 Draft；不创建 Jira |
-| Roadmap 规划 MCP / Plugin | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 与网页共用 DraftPlanV1；stdio MCP + Skill + 内部 Codex Plugin；无 Jira create / Memory 依赖 |
+| Roadmap 规划 MCP / Plugin | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 远程 `/mcp` 默认 roadmap.xmnup.com；Skill 交给 Agent 即可装，不必克隆；无 Jira create / Memory 依赖 |
 | Roadmap draft 排期 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 判据只有 `jiraKey === null`；斜纹 bar 与 DRAFT 角标；draft 进 memory 但合成 key 不进 aliases |
 | Roadmap 两阶段创建 Jira | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | Prompt 空＝直连 API；非空＝按 Epic 最多 2 路 Agent；fixVersion 按 Target End 落点列（跨列留空；Jira 无此版本则省略字段继续创建）；失败可按组重试且不重建已成功 ticket |
 | 重点项目按团队覆盖同步 | Personal Roadmap | [personal_roadmap.md](./features/personal_roadmap.md) | 扩展 background 代发 sync；落选 archived；与 Target 回写独立 |

@@ -86,7 +86,7 @@ draft 同步进 memory 时 `externalRef.jiraKey` 写 `null`、`isDraft: true`。
 
 ### 产品内：新建条目 → 使用 AI 批量创建
 
-Backlog「+ 新建条目」弹窗增加「手动创建 / 使用 AI 批量创建」页签（`BacklogPanel.vue` + `DraftPlanningModal.vue`）。默认只需粘贴需求，点「生成预览」；勾选「直接创建 Draft」才一次写入。页面已带当前团队与季度，不要求填模型。发送前展示实际 provider / 网关展示名及本次范围。
+Backlog「+ 新建条目」弹窗增加「手动创建 / 使用 AI 批量创建」页签（`BacklogPanel.vue` + `DraftPlanningModal.vue`）。默认只需粘贴需求，点「生成预览」；勾选「直接创建 Draft」才一次写入。页面已带当前团队与季度，不要求填模型。发送前展示实际 provider / 网关展示名及本次范围。弹窗在「要用自己的 Agent 生成 Draft」处并列两条路：Codex Plugin 导入 GitHub marketplace（仓库 `https://github.com/ee01/Personal-AI`，Path `roadmap-service`，Branch `develop`，再装 `roadmap-planning`）；或把 GitHub / 线上 Skill 交给 Agent，远程 MCP 默认 `http://roadmap.xmnup.com/mcp`，不必克隆仓库。
 
 | 状态 | 用户看到的行为 |
 |---|---|
@@ -136,7 +136,7 @@ Backlog「+ 新建条目」弹窗增加「手动创建 / 使用 AI 批量创建�
 
 `roadmap-service/mcp/` 是本地 stdio MCP，只调 Roadmap HTTP API：不打开数据库、不调 Memory、不创建 Jira。生产 `ROADMAP_BASE_URL` 必须 HTTPS（`localhost` 可用 HTTP）。token 只放请求头。工具：`roadmap_get_context` / `validate_plan` / `revise_plan` / `generate_plan` / `get_request` / `cancel_job` / `commit_plan` / `get_batch` / `undo_batch`。`generate_plan` 才会花服务端 LLM 额度，默认 `autoCommit=false`。契约 `1.0.0` / schema `1`。
 
-Skill：`roadmap-service/plugin/skills/roadmap-planning/`（GitHub：`https://github.com/ee01/personal-ai/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md`；仓库若私有则 404，改用本地该路径）。Codex Plugin 把 MCP + Skill 打成可从 `roadmap-service/.agents/plugins/marketplace.json` 安装的单元。未装 Plugin 时，独立 MCP + Skill 也能 validate → commit → receipt。安装凭据走宿主安全配置，不写进 Git。不承诺官方公开目录上架。`ROADMAP_AI_AGENT_ACCESS` 关掉时 MCP / Agent 入口 403，网页「使用 AI 批量创建」不受影响。这与甘特「创建 Jira」里的扩展 Agent 执行器不是同一条路径。
+Skill：`roadmap-service/plugin/skills/roadmap-planning/`（GitHub：`https://github.com/ee01/Personal-AI/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md`；线上：`http://roadmap.xmnup.com/skills/roadmap-planning/SKILL.md`）。Roadmap Service 提供远程 Streamable HTTP MCP：`POST /mcp`，默认 `http://roadmap.xmnup.com/mcp`（自建用 `{ROADMAP_PUBLIC_BASE_URL}/mcp`）。鉴权走 `X-Team-Id` + `X-Share-Token`，不要求用户下载源码或运行本地 node。stdio MCP（`roadmap-service/mcp/`）仍可作为后备，只调 Roadmap HTTP API：不打开数据库、不调 Memory、不创建 Jira。Codex Plugin 把 MCP + Skill 打成可从 `roadmap-service/.agents/plugins/marketplace.json` 安装的单元。`ROADMAP_AI_AGENT_ACCESS` 关掉时 MCP / Agent 入口 403，网页「使用 AI 批量创建」不受影响。这与甘特「创建 Jira」里的扩展 Agent 执行器不是同一条路径。
 
 ### 描述上限（与 Jira handoff）
 

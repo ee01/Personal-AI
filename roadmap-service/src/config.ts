@@ -22,11 +22,13 @@ function parseProvider(): 'openai' | 'claude' {
 
 const openaiBase = (process.env.ROADMAP_OPENAI_API_BASE_URL || 'https://api.openai.com/v1').trim();
 
+export const DEFAULT_PUBLIC_BASE_URL = 'http://roadmap.xmnup.com';
+
 export const config = {
   port: Number(process.env.PORT) || 3220,
   host: process.env.HOST || '0.0.0.0',
   dataDir: process.env.DATA_DIR || path.resolve(__dirname, '../data'),
-  publicBaseUrl: (process.env.ROADMAP_PUBLIC_BASE_URL || '').trim(),
+  publicBaseUrl: (process.env.ROADMAP_PUBLIC_BASE_URL || DEFAULT_PUBLIC_BASE_URL).trim(),
   softLockTtlMs: Number(process.env.SOFT_LOCK_TTL_MS) || 30_000,
   activityRetentionDays: Number(process.env.ACTIVITY_RETENTION_DAYS) || 90,
   jira: {

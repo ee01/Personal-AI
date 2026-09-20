@@ -73,6 +73,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     service: 'roadmap-service',
     ts: Date.now(),
     jiraEnabled: config.jira.enabled,
+    mcp: {
+      endpoint: '/mcp',
+      skill: '/skills/roadmap-planning/SKILL.md',
+    },
   }));
 
   app.get('/api/v1/teams', async (request) => {

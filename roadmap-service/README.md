@@ -47,7 +47,7 @@ npm run deploy:roadmap
 
 ## AI 批量规划 Draft
 
-产品内入口：Backlog「新建条目 → 使用 AI 批量创建」。服务端调用 OpenAI 或 Claude 生成两级 Draft 并初排甘特，**不创建 Jira**。MCP 结构化提交不依赖服务端 LLM。
+产品内入口：Backlog「新建条目 → 使用 AI 批量创建」。服务端调用 OpenAI 或 Claude 生成两级 Draft 并初排甘特，**不创建 Jira**。远程 MCP：`GET/POST /mcp`，默认 `http://roadmap.xmnup.com/mcp`。弹窗在「要用自己的 Agent 生成 Draft」处并列 Codex Plugin 导入与把 GitHub/线上 Skill 交给 Agent（不必下载源码）。
 
 1. 复制 `.env.example` 后按需填写 `ROADMAP_OPENAI_API_KEY` 或 `ROADMAP_CLAUDE_API_KEY`
 2. `ROADMAP_AI_ENABLED=true` 才打开网页「生成」；关掉时手动创建和 MCP `validate/commit` 仍可用

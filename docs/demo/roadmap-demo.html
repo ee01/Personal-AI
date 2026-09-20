@@ -791,6 +791,13 @@ body.no-select,body.no-select *{user-select:none!important}
 .add-tab.on{border-color:var(--cur);background:#FFF4E5;color:var(--cur-deep)}
 .add-item-modal.add-item-ai{width:640px}
 .dp-disclose{margin-top:10px;font-size:12px;line-height:1.6;color:var(--muted);background:var(--bg);border-radius:9px;padding:9px 12px}
+.dp-ways{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.dp-ways-title{font-size:12.5px;font-weight:600;color:var(--ink)}
+.dp-way{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 12px}
+.dp-way-name{font-size:12.5px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.dp-way p{margin:0;font-size:12px;line-height:1.6;color:var(--muted)}
+.dp-ways a{color:var(--fut-deep)}
+.dp-ways code{font-size:11px}
 .dp-check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink);margin:0 0 0 auto;white-space:nowrap;cursor:pointer}
 .dp-preview-box{margin-top:12px}
 .m-body{padding:16px 22px;overflow-y:auto}
@@ -1185,7 +1192,17 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
       <label class="f-label">需求</label>
       <textarea class="f-input" id="dpText" style="min-height:140px;font-family:var(--sans)" placeholder="粘贴需求、会议纪要或 Markdown；已分 Epic 或尚未分组均可"></textarea>
       <div class="dp-disclose">会将输入及必要的团队规划信息交给本服务配置的 AI（演示为静态模拟）；只创建 Roadmap 草稿，不会创建 Jira。</div>
-      <div class="dp-disclose" style="margin-top:8px">要用自己的 Agent 生成 Draft：安装 <a href="https://github.com/ee01/personal-ai/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md" target="_blank" rel="noopener">roadmap-planning Skill</a> 并配置 MCP。GitHub 打不开时用仓库里的 <code>roadmap-service/plugin/skills/roadmap-planning/SKILL.md</code>。创建 Jira 仍走甘特「创建 Jira」。</div>
+      <div class="dp-ways">
+        <div class="dp-ways-title">要用自己的 Agent 生成 Draft，任选一种（都不会创建 Jira）</div>
+        <div class="dp-way">
+          <div class="dp-way-name">1. Codex Plugin 导入</div>
+          <p>打开 Codex / ChatGPT 桌面的 Plugins → 导入 marketplace，仓库填 <a href="https://github.com/ee01/Personal-AI" target="_blank" rel="noopener">https://github.com/ee01/Personal-AI</a>，Path <code>roadmap-service</code>，Branch <code>develop</code>，再安装 <code>roadmap-planning</code>。</p>
+        </div>
+        <div class="dp-way">
+          <div class="dp-way-name">2. 给 AI Agent 安装 Skill</div>
+          <p>把 <a href="https://github.com/ee01/Personal-AI/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md" target="_blank" rel="noopener">GitHub Skill</a> 或 <a href="http://roadmap.xmnup.com/skills/roadmap-planning/SKILL.md" target="_blank" rel="noopener">线上 Skill</a> 交给 Agent，不必下载源码。远程 MCP 默认 <code>http://roadmap.xmnup.com/mcp</code>。</p>
+        </div>
+      </div>
       <div id="dpPreview" class="dp-preview-box" style="display:none"></div>
     </div>
     <div class="m-foot" id="addManualFoot">
@@ -1401,7 +1418,7 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
     <li><b>阶段节点</b>（Design/Stage/Production/自定义）以菱形标记显示在 bar 下方的标记轨上，按日期定位、可超出 bar 范围；标记可<b>左右拖动改期</b>（按天吸附，拖到边缘自动滚动），<b>单击</b>则打开编辑器改日期 / 改名 / 删除</li>
     <li><b>外部依赖</b>不是子任务，可不填 Jira 直接手动添加，也可绑定 Jira ticket。打开页会镜像依赖票的 <b>status / Target End</b>（不自动改 ETA）。<b>Hover 只读</b>：缺 ETA 或与 Jira 日期不一致时提示「单击可同步」；<b>单击 🔗 / 标记</b>打开浮层：点 key 打开 Jira，点「未刷新」旁的 ↻ 刷新 status。缺少 ETA 时角标红色脉动；日期不一致时琥珀色</li>
     <li><b>Backlog 搜索</b>：按标题 / Key / 备注名 / 类型 / Quarter 过滤，多个关键词空格分隔需全部命中；Esc 清空</li>
-    <li><b>新建条目</b>：弹窗含 <b>手动创建</b> 与 <b>使用 AI 批量创建</b>。AI 路径默认先预览，勾选「直接创建 Draft」才一次写入；不创建 Jira；无扩展也能用。创建 Jira 仍走原弹窗。要用自己的 Agent 生成 Draft，安装仓库 <code>roadmap-service/plugin/skills/roadmap-planning/SKILL.md</code> 并配置 MCP。</li>
+    <li><b>新建条目</b>：弹窗含 <b>手动创建</b> 与 <b>使用 AI 批量创建</b>。AI 路径默认先预览，勾选「直接创建 Draft」才一次写入；不创建 Jira；无扩展也能用。创建 Jira 仍走原弹窗。要用自己的 Agent 生成 Draft 有两条路：Codex Plugin 导入 <code>https://github.com/ee01/Personal-AI</code>（Path <code>roadmap-service</code>，Branch <code>develop</code>）后装 <code>roadmap-planning</code>；或把 GitHub/线上 Skill 交给 Agent，远程 MCP 默认 <code>http://roadmap.xmnup.com/mcp</code>。</li>
     <li>任务可选 Owner：标题里输入 <b>@</b> 触发建议（可手输自定义），或点输入框左侧头像；直接 Enter 则跳过。Owner 数据来自<b>团队成员表</b>，新名字自动加入；双击任务条可改 Owner。选人浮层<b>搜索框置顶、打开即聚焦</b>，列表限高可滚动，↑↓ + Enter 快速选择，下方空间不足时自动向上翻转</li>
     <li><b>新增任务默认从今天开始、两周长</b>；草稿任务条不再叠创建者名，<b>hover 时在条外浮出灰色「xxx created」</b></li>
     <li><b>打开 Jira</b>：主/子任务条 hover 左上角出现 <b>↗</b> 圆钮，点击新开对应 issue；<b>⌘/Ctrl+单击任务条</b>等效（草稿无 issue 不显示）</li>

@@ -3,8 +3,11 @@ import { reactive } from 'vue';
 import { CURQ } from '../../composables/useGeometry';
 import { useDraftPlanning } from '../../composables/useDraftPlanning';
 import {
-  ROADMAP_PLANNING_MCP_URL,
-  ROADMAP_PLANNING_SKILL_PATH,
+  ROADMAP_PLANNING_GITHUB_REPO,
+  ROADMAP_PLANNING_LIVE_SKILL_URL,
+  ROADMAP_PLANNING_MARKETPLACE_PATH,
+  ROADMAP_PLANNING_MARKETPLACE_REF,
+  ROADMAP_PLANNING_MCP_HTTP_URL,
   ROADMAP_PLANNING_SKILL_URL,
 } from '../../composables/usePlanningAgentLinks';
 import { useRoadmapState } from '../../composables/useRoadmapState';
@@ -61,14 +64,37 @@ const quarterOptions = () => {
         <span>{{ state.snapshot.value?.team.name }} · {{ planning.quarter || '当前季度' }}</span>
       </div>
       <div class="dp-disclose">{{ planning.disclosure }}</div>
-      <p class="dp-note dp-hint">
-        要用自己的 Agent 生成 Draft：安装
-        <a :href="ROADMAP_PLANNING_SKILL_URL" target="_blank" rel="noopener">roadmap-planning Skill</a>
-        并按
-        <a :href="ROADMAP_PLANNING_MCP_URL" target="_blank" rel="noopener">MCP 说明</a>
-        配置。GitHub 打不开时用本地
-        <code>{{ ROADMAP_PLANNING_SKILL_PATH }}</code>。创建 Jira 仍走甘特「创建 Jira」，不走这个 Skill。
-      </p>
+      <div class="dp-ways">
+        <div class="dp-ways-title">要用自己的 Agent 生成 Draft，任选一种（都不会创建 Jira）</div>
+        <div class="dp-way">
+          <div class="dp-way-name">1. Codex Plugin 导入</div>
+          <p>
+            打开 Codex / ChatGPT 桌面的 Plugins → 导入 marketplace，仓库填
+            <a :href="ROADMAP_PLANNING_GITHUB_REPO" target="_blank" rel="noopener">{{ ROADMAP_PLANNING_GITHUB_REPO }}</a>
+            ，Path <code>{{ ROADMAP_PLANNING_MARKETPLACE_PATH }}</code>，Branch
+            <code>{{ ROADMAP_PLANNING_MARKETPLACE_REF }}</code>，再安装
+            <code>roadmap-planning</code>。
+          </p>
+        </div>
+        <div class="dp-way">
+          <div class="dp-way-name">2. 给 AI Agent 安装 Skill</div>
+          <p>
+            把
+            <a :href="ROADMAP_PLANNING_SKILL_URL" target="_blank" rel="noopener">GitHub 上的 Skill</a>
+            或
+            <a :href="ROADMAP_PLANNING_LIVE_SKILL_URL" target="_blank" rel="noopener">线上 Skill</a>
+            交给 Agent，不必下载源码。远程 MCP 默认
+            <code>{{ ROADMAP_PLANNING_MCP_HTTP_URL }}</code>
+            ，自建站点则改成你的
+            <code>/mcp</code>
+            。首次需要填团队
+            <code>X-Team-Id</code>
+            和可编辑
+            <code>X-Share-Token</code>
+            。
+          </p>
+        </div>
+      </div>
       <p v-if="planning.overLimit" class="dp-error">输入超出上限，请拆分后再提交</p>
 
       <button type="button" class="dp-adv-toggle" @click="planning.advancedOpen = !planning.advancedOpen">

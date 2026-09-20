@@ -466,7 +466,7 @@ export function useRoadmapApi() {
     );
   }
 
-  async function fetchActivity(
+  function subscribeEvents(
     teamId: string,
     handlers: {
       onSnapshot?: (snapshot: TeamSnapshot) => void;
