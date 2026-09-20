@@ -5,6 +5,11 @@
 
 import type Database from 'better-sqlite3';
 import { getLLMClient } from '../llm/LLMClient.js';
+import type { UiLanguage } from '../i18n.js';
+import {
+  outputLanguageLabel,
+  resolveOutputLanguage,
+} from '../utils/outputLanguage.js';
 import { now, formatDate } from '../utils/time.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
@@ -48,6 +53,36 @@ function normalizePushTarget(
   if (value === 'me' || value === 'user') return 'me';
   if (value === 'none') return 'none';
   return fallback;
+}
+
+function weeklyReportCopy(
+  language: UiLanguage,
+  dateStr: string,
+  msgCount: number,
+  reflectionCount: number,
+) {
+  const english = language === 'en-US';
+  const languageName = outputLanguageLabel(language);
+  return {
+    documentTitle: english ? `# Weekly Report — ${dateStr}` : `# 周报 — ${dateStr}`,
+    notificationTitle: english ? 'Weekly Report Ready' : '周报已生成',
+    notificationBody: english
+      ? `Your weekly report for ${dateStr} is ready`
+      : `你的 ${dateStr} 周报已经准备好`,
+    glipTitle: english ? 'Weekly Report' : '周报',
+    languageName,
+    sectionInstructions: english
+      ? `1. **Highlights** — Top 3-5 achievements or events
+2. **Key Discussions** — Important conversations and decisions
+3. **Insights** — Patterns or learnings observed
+4. **Action Items** — Recommended next steps
+5. **Statistics** — Message count: ${msgCount}, Reflections: ${reflectionCount}`
+      : `1. **要点** — 本周 3-5 件最重要的成果或事件
+2. **关键讨论** — 重要对话与决定
+3. **洞察** — 观察到的模式或学习
+4. **待办** — 建议的下一步
+5. **统计** — 消息数：${msgCount}，反思数：${reflectionCount}`,
+  };
 }
 
 function compactReportText(raw: string, maxLength: number): string {
@@ -170,7 +205,14 @@ export class WeeklyReporter {
       .map(m => `- [${m.source_type}] ${m.sender || 'unknown'}: ${m.summary}`)
       .join('\n');
 
-    // 4. Generate via LLM
+    // 4. Generate via LLM in the user's profile language
+    const outputLanguage = resolveOutputLanguage(this.db);
+    const copy = weeklyReportCopy(
+      outputLanguage,
+      dateStr,
+      msgCount,
+      reflections.length,
+    );
     const prompt = `Generate a concise weekly report in Markdown based on the following data.
 
 ## Daily Reflections (past 7 days):
@@ -180,13 +222,9 @@ ${reflections.length > 0 ? reflections.map(r => r.slice(0, 500)).join('\n---\n')
 ${messageSummaries || 'No summaries available.'}
 
 Write a weekly report with these sections:
-1. **Highlights** — Top 3-5 achievements or events
-2. **Key Discussions** — Important conversations and decisions
-3. **Insights** — Patterns or learnings observed
-4. **Action Items** — Recommended next steps
-5. **Statistics** — Message count: ${msgCount}, Reflections: ${reflections.length}
+${copy.sectionInstructions}
 
-Keep it concise (under 500 words). Write in the same language as the source content.`;
+Keep it concise (under 500 words). Write the entire report in ${copy.languageName}. Use the section titles above exactly. Keep person names, product names, group names, URLs, IDs, Jira keys, numbers, and quoted source terms in their original language. Do not switch to the language of the source content.`;
 
     const llm = getLLMClient();
     const response = await llm.generate(prompt, { maxTokens: 1500, temperature: 0.4 });
@@ -194,7 +232,7 @@ Keep it concise (under 500 words). Write in the same language as the source cont
     const reportSummary = compactReportText(reportText, 240);
     const reportExcerpt = compactReportText(reportText, 900);
 
-    const reportContent = `# Weekly Report — ${dateStr}\n\n${reportText}`;
+    const reportContent = `${copy.documentTitle}\n\n${reportText}`;
 
     // 5. Write report file
     const reportPath = options?.manual
@@ -215,8 +253,8 @@ Keep it concise (under 500 words). Write in the same language as the source cont
          VALUES (?, 'chrome_notification', 'weekly_report', ?, ?, ?, ?, ?, ?)`
       ).run(
         notificationId,
-        'Weekly Report Ready',
-        `Your weekly report for ${dateStr} is ready`,
+        copy.notificationTitle,
+        copy.notificationBody,
         JSON.stringify({
           reportPath,
           messageCount: msgCount,
@@ -231,7 +269,7 @@ Keep it concise (under 500 words). Write in the same language as the source cont
 
       const botResult = await this.notificationCenterService.deliverNoticeToGlip({
         sourceRef: `notification:${notificationId}`,
-        title: 'Weekly Report',
+        title: copy.glipTitle,
         body: reportText,
         mention: false,
         targetUserId: pushTarget === 'me' ? this.userId : undefined,

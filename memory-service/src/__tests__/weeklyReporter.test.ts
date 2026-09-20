@@ -8,21 +8,44 @@ import { buildApp } from '../server.js';
 import { NotificationCenterService } from '../core/NotificationCenterService.js';
 import { UserContextManager } from '../core/UserContextManager.js';
 import { WeeklyReporter } from '../core/WeeklyReporter.js';
+import { getLLMClient } from '../llm/LLMClient.js';
 import { UserDataManager } from '../storage/UserDataManager.js';
 import { resetConfigForTests } from '../config.js';
 import { getTestDb } from './setup.js';
 
+function lastWeeklyPrompt(): string {
+  const generate = vi.mocked(getLLMClient().generate);
+  const prompt = generate.mock.calls.at(-1)?.[0];
+  expect(typeof prompt).toBe('string');
+  return String(prompt);
+}
+
+function insertLanguagePreference(itemValue: string, id = 'weekly-lang'): void {
+  const db = getTestDb();
+  const timestamp = Math.floor(Date.now() / 1000);
+  db.prepare("DELETE FROM user_profile_items WHERE item_key = 'language_preference'").run();
+  db.prepare(
+    `INSERT INTO user_profile_items
+      (id, item_type, item_key, item_value, evidence_refs, source_kind,
+       confidence, user_confirmed, status, salience_score, mention_count,
+       last_seen, valid_from, valid_to, created_at, updated_at, fingerprint)
+     VALUES
+      (?, 'preference', 'language_preference',
+       ?, '[]', 'explicit',
+       1, 1, 'active', 1, 1, ?, NULL, NULL, ?, ?, ?)`,
+  ).run(id, itemValue, timestamp, timestamp, timestamp, `${id}-fp`);
+}
+
 vi.mock('../llm/LLMClient.js', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('../llm/LLMClient.js')>();
+  const generate = vi.fn(async () => ({
+    content:
+      '## Highlights\n- Project launch is on track.\n\n## Action Items\n- Review rollout notes.',
+  }));
   return {
     ...actual,
-    getLLMClient: () => ({
-      generate: vi.fn(async () => ({
-        content:
-          '## Highlights\n- Project launch is on track.\n\n## Action Items\n- Review rollout notes.',
-      })),
-    }),
+    getLLMClient: () => ({ generate }),
   };
 });
 
@@ -46,6 +69,8 @@ describe('WeeklyReporter push targets', () => {
     db.prepare('DELETE FROM messages_raw').run();
     db.prepare('DELETE FROM notification_records').run();
     db.prepare('DELETE FROM channel_delivery_records').run();
+    db.prepare("DELETE FROM user_profile_items WHERE item_key = 'language_preference'").run();
+    vi.mocked(getLLMClient().generate).mockClear();
     const now = Math.floor(Date.now() / 1000);
     db.prepare(
       `INSERT INTO messages_raw
@@ -168,6 +193,87 @@ describe('WeeklyReporter push targets', () => {
       .prepare("SELECT COUNT(*) AS cnt FROM notification_records WHERE type = 'weekly_report'")
       .get() as { cnt: number };
     expect(row.cnt).toBe(1);
+  });
+
+  it('defaults to Chinese prompt, headings, and notice copy when language_preference is absent', async () => {
+    const glipSpy = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true, messageId: 'weekly-zh-default' });
+
+    const reporter = new WeeklyReporter(db, userDataManager, 'esone.qiu');
+    const result = await reporter.generateWeeklyReport({
+      ignoreEnabled: true,
+      ignoreMinMessages: true,
+      manual: true,
+      pushTarget: 'me',
+    });
+
+    expect(result.generated).toBe(true);
+    expect(lastWeeklyPrompt()).toContain('Write the entire report in Simplified Chinese');
+    expect(lastWeeklyPrompt()).toContain('**要点**');
+    expect(lastWeeklyPrompt()).not.toContain('same language as the source content');
+    expect(userDataManager.readFile(result.reportPath || '')).toMatch(/^# 周报 — /);
+    const notification = db
+      .prepare(
+        "SELECT title, body FROM notification_records WHERE type = 'weekly_report' LIMIT 1",
+      )
+      .get() as { title: string; body: string };
+    expect(notification).toMatchObject({
+      title: '周报已生成',
+    });
+    expect(notification.body).toContain('周报已经准备好');
+    expect(glipSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '周报' }),
+    );
+  });
+
+  it('writes English prompt, headings, and notice copy when language_preference is English', async () => {
+    insertLanguagePreference(
+      'Reply and generate user-facing content in English.',
+    );
+    const glipSpy = vi
+      .spyOn(NotificationCenterService.prototype, 'deliverNoticeToGlip')
+      .mockResolvedValue({ sent: true, messageId: 'weekly-en' });
+
+    const reporter = new WeeklyReporter(db, userDataManager, 'esone.qiu');
+    await reporter.generateWeeklyReport({
+      ignoreEnabled: true,
+      ignoreMinMessages: true,
+      manual: true,
+      pushTarget: 'me',
+    });
+
+    expect(lastWeeklyPrompt()).toContain('Write the entire report in English');
+    expect(lastWeeklyPrompt()).toContain('**Highlights**');
+    const notification = db
+      .prepare(
+        "SELECT title, body FROM notification_records WHERE type = 'weekly_report' LIMIT 1",
+      )
+      .get() as { title: string; body: string };
+    expect(notification.title).toBe('Weekly Report Ready');
+    expect(notification.body).toMatch(/Your weekly report for .+ is ready/);
+    expect(glipSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Weekly Report' }),
+    );
+  });
+
+  it('honors the canonical Chinese language_preference value', async () => {
+    insertLanguagePreference('回复和生成面向用户的内容时使用中文');
+    vi.spyOn(
+      NotificationCenterService.prototype,
+      'deliverNoticeToGlip',
+    ).mockResolvedValue({ sent: true, messageId: 'weekly-zh-explicit' });
+
+    const reporter = new WeeklyReporter(db, userDataManager, 'esone.qiu');
+    const result = await reporter.generateWeeklyReport({
+      ignoreEnabled: true,
+      ignoreMinMessages: true,
+      manual: true,
+      pushTarget: 'none',
+    });
+
+    expect(lastWeeklyPrompt()).toContain('Write the entire report in Simplified Chinese');
+    expect(userDataManager.readFile(result.reportPath || '')).toMatch(/^# 周报 — /);
   });
 });
 

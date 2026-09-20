@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 
+import type { UiLanguage } from '../i18n.js';
 import type {
   KeystoneBrief,
   KeystoneBriefAuthority,
@@ -8,6 +9,7 @@ import type {
   KeystoneBriefSourceRef,
   KeystoneBriefSubjectType,
 } from '../types/index.js';
+import { resolveOutputLanguage } from '../utils/outputLanguage.js';
 import { now } from '../utils/time.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import {
@@ -77,7 +79,7 @@ interface ComposerOptions {
   lookbackDays?: number;
 }
 
-type KeystoneBriefOutputLanguage = 'zh-CN' | 'en-US';
+type KeystoneBriefOutputLanguage = UiLanguage;
 
 interface KeystoneBriefLocalizedContent {
   summary: string;
@@ -264,21 +266,6 @@ function existingSignature(brief: KeystoneBrief): string {
     .map((source) => `${source.ref}@${source.timestamp ?? 0}`)
     .sort()
     .join('|');
-}
-
-function resolveOutputLanguage(db: Database.Database): KeystoneBriefOutputLanguage {
-  const row = db
-    .prepare(
-      `SELECT item_value
-       FROM user_profile_items
-       WHERE status = 'active' AND item_key = 'language_preference'
-       ORDER BY user_confirmed DESC, updated_at DESC
-       LIMIT 1`,
-    )
-    .get() as { item_value: string } | undefined;
-  return /english|英文|en-us|\ben\b/i.test(row?.item_value || '')
-    ? 'en-US'
-    : 'zh-CN';
 }
 
 async function localizeBriefContentWithLlm(
