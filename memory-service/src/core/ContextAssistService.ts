@@ -32,7 +32,9 @@ import {
   applyOwnerAuthorshipToRequest,
   contextItemMatchesOwner,
   currentAskInvitesDecision,
+  generatedContinuesIncomingSpeaker,
   resolveComposerReplyTarget,
+  resolveComposerSpeakerLock,
 } from './composerReplyTarget.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type {
@@ -1229,6 +1231,14 @@ export class ContextAssistService {
         '相关上下文',
         '生成内容与用户已发送的回复重复，保持安静。',
         'composer_context_only_redundant_with_owner_reply',
+      );
+    }
+
+    if (generatedUsesIncomingSpeakerVoice(sanitized, request)) {
+      return silent(
+        '暂无可直接发送的建议',
+        '生成内容像在续写对方刚才的话，而不是以你的身份回复。',
+        'composer_generation_wrong_speaker',
       );
     }
 
@@ -2793,6 +2803,9 @@ async function buildComposerInsertText(
   if (isRedundantWithOwnerReply(sanitized, request)) {
     return null;
   }
+  if (generatedUsesIncomingSpeakerVoice(sanitized, request)) {
+    return null;
+  }
   return clipInsertText(sanitized);
 }
 
@@ -3467,7 +3480,7 @@ async function generateSendableComposerText(
             ? COMPOSER_JIRA_GENERATION_MAX_TOKENS
             : COMPOSER_GENERATION_MAX_TOKENS,
         systemPrompt:
-          'You write only the exact text the user can insert into the current composer. No explanation, no wrapper, no metadata.',
+          'You write only the exact reply the current user can send next. Do not continue the last incoming speaker. No explanation, no wrapper, no metadata.',
         timeoutMs: COMPOSER_GENERATION_TIMEOUT_MS,
         retryCount: 0,
       }),
@@ -3551,6 +3564,7 @@ export function buildComposerRefinePrompt(
 
   return [
     '请精修用户已经写好的草稿，输出可以直接替换原草稿并发送的正文。',
+    ...formatComposerSpeakerLockPrompt(request),
     '',
     `场景：${describeComposerScenario(scenario)}`,
     audience ? `对象：${audience}` : '',
@@ -3626,6 +3640,7 @@ export function buildComposerGenerationPrompt(
 
   return [
     '请根据当前场景，替用户写一段可以直接插入输入框并发送的内容。',
+    ...formatComposerSpeakerLockPrompt(request),
     '',
     `场景：${describeComposerScenario(scenario)}`,
     audience ? `对象：${audience}` : '',
@@ -3673,7 +3688,7 @@ export function buildComposerGenerationPrompt(
       : '* 语气像即时通讯里的真实回复，简短自然，默认 3-5 行以内。',
     '* 不要编造当前上下文或记忆里没有的事实。',
     '* 只回复明确 Hi/@ 点到你、或没有点名其他人的消息。不要替被点名的其他人作答，也不要对写给别人的消息说 Thanks。',
-    '* 不要把你自己先前发出的消息当成对方的提问来回答，也不要替被点名的人接话。',
+    '* 不要把你自己先前发出的消息当成对方的提问来回答，不要续写最新来消息的说话人，也不要替被点名的人接话。',
     // Repeated last on purpose: a Chinese prompt pulls the model toward Chinese
     // output, and the closing instruction is the one it follows most reliably.
     describeComposerOutputLanguage(
@@ -3794,14 +3809,50 @@ function isOwnerAuthoredContextItem(
   item: ComposerContextItem,
   identity?: ComposerOwnerIdentity,
 ): boolean {
-  if (
-    item.metadata?.isSelf === true ||
-    item.metadata?.authorRole === 'owner'
-  ) {
-    return true;
+  if (identity) return contextItemMatchesOwner(item, identity);
+  return (
+    item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner'
+  );
+}
+
+function shouldLockComposerSpeaker(request: ComposerAssistRequest): boolean {
+  return (
+    request.contextType === 'message_thread' ||
+    request.contextType === 'jira_issue'
+  );
+}
+
+function formatComposerSpeakerLockPrompt(
+  request: ComposerAssistRequest,
+): string[] {
+  if (!shouldLockComposerSpeaker(request)) return [];
+  const lock = resolveComposerSpeakerLock(request);
+  const lines = [
+    `说话身份：你是 ${lock.ownerDisplayName}。只写你接下来要插入输入框、以你自己名义发送的回复。`,
+  ];
+  if (lock.incomingSender || lock.incomingText) {
+    const from = lock.incomingSender || '对方';
+    const quote = lock.incomingText
+      ? `：「${formatChatSnippet(lock.incomingText)}」`
+      : '';
+    lines.push(
+      `最新来消息来自 ${from}${quote}。请回复对方；不要续写对方的句子，不要替对方完成他们刚说要去做的事，也不要把你自己先前发出的问题当成对方在问你。`,
+    );
+    return lines;
   }
-  if (!identity) return false;
-  return contextItemMatchesOwner(item, identity);
+  lines.push(
+    '不要续写对话里其他人的句子，也不要把你自己先前发出的消息当成对方的提问来回答。',
+  );
+  return lines;
+}
+
+function generatedUsesIncomingSpeakerVoice(
+  text: string,
+  request: ComposerAssistRequest,
+): boolean {
+  if (!shouldLockComposerSpeaker(request)) return false;
+  const lock = resolveComposerSpeakerLock(request);
+  return generatedContinuesIncomingSpeaker(text, lock.incomingText);
 }
 
 // CJK carries roughly twice the information per character as latin script, so a
@@ -4359,9 +4410,14 @@ function buildComposerContextText(
 ): string {
   const items = normalizeComposerContextItems(request);
   const maxItems = options.maxItems ?? 12;
+  const speakerLock = shouldLockComposerSpeaker(request);
   const contextLines = takeComposerContextItems(items, maxItems)
     .map((item) =>
-      formatComposerContextItem(item, options.includeSender ?? false),
+      formatComposerContextItem(
+        item,
+        options.includeSender ?? false,
+        speakerLock,
+      ),
     )
     .filter(Boolean);
   const audience = options.includeAudience
@@ -4434,11 +4490,23 @@ function normalizeComposerContextItems(
 function formatComposerContextItem(
   item: ComposerContextItem,
   includeSender: boolean,
+  speakerLock = false,
 ): string {
   const label = getComposerContextItemLabel(item.type);
-  const speaker = includeSender && item.sender ? `${item.sender}: ` : '';
   const body = formatChatSnippet(item.text || item.title || '');
   if (!body) return '';
+  if (!includeSender) return `${label}${body}`;
+  if (speakerLock && isComposerReplyItem(item)) {
+    const isOwner =
+      item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner';
+    if (isOwner) {
+      const name = item.sender ? `你 (${item.sender})` : '你';
+      return `${label}[你已发送] ${name}: ${body}`;
+    }
+    const name = item.sender || '对方';
+    return `${label}[来消息] ${name}: ${body}`;
+  }
+  const speaker = item.sender ? `${item.sender}: ` : '';
   return `${label}${speaker}${body}`;
 }
 
