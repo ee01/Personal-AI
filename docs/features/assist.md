@@ -1,6 +1,6 @@
 # Assist
 
-_最后更新: 2026-08-31_
+_最后更新: 2026-09-21_
 
 > 文档路径：`docs/features/assist.md`（旧文件名 `compose_assist.md`）。产品口语与 API 仍常称 Compose Assist / `/composer/assist`；本文覆盖其下两个子模块。
 
@@ -46,7 +46,7 @@ Compose Assist 只替用户判断两件事：当前输入框旁是否值得出�
 1. 用户 focus 输入框时建立会话：若草稿有效字符为 0，约 700ms 后请求 Draft Compose；若草稿非空则静默等待 blur。继续输入只让旧建议失效，不发 Draft Refine。只有一次真实 blur 且草稿非空才冻结当前草稿并请求 Draft Refine；发送按钮、格式工具栏和 Personal AI 自己的控件不会误触发请求。
 2. 后端先识别 `assistIntent` 与当前 scene。RingCentral/Jira 优先看当前会话、issue、可见字段和对象；Web AI 起草用页面可见 AI turns + 召回记忆，精修以冻结的 draft 作为 Prompt Compiler 主输入，再把直接相关记忆作为可选补充。
 3. Context Recall 的最终 matches 先经过 [Memory Claim Attribution（记忆主张归属）](./memory_claim_attribution.md)，移除假设/未知归属等 block claim，并把 AI 建议和他人转述标成背景；随后再经过共享 [Evidence Cohesion Gate（证据对齐）](./evidence_cohesion_gate.md)。Compose 在真正消费前再执行一次 cohesion，覆盖 change projection 和 locked-context fallback。RingCentral/Jira 起草生成可发送正文或受控 `draft_hint`；精修生成 `reply_refine`；Web AI 起草生成 `prompt_draft`，精修先匹配高频确定性 patch，再由编译器在完整重写、局部补丁、上下文追加和静默之间选择。完整重写不要求先命中记忆，context pack 则必须有直接相关且已对齐的证据。
-4. 每条候选都经过短生命周期 `PersonaProjection`。已确认人物关系优先于页面 hint；结构化画像只按当前场景裁剪，原始 `USER_CORE` 不进入 Compose。未确认、敏感、过期、scope 不明或无关的条目不能进入正文。
+4. 每条候选都经过短生命周期 `PersonaProjection`。已确认人物关系优先于页面 hint；结构化画像只按当前场景裁剪，原始 `USER_CORE` 不进入 Compose。未确认、敏感、过期、scope 不明或无关的条目不能进入正文。Glip/Jira 生成器还会锁定说话人：只以当前用户身份回复最新来消息，不能续写对方刚说的「我看下」。
 5. Draft Refine 额外过增量收益门：必须相对原草稿有足够语义偏差，或补入原草稿缺失的具体证据事实；Glip/Jira 更严，Web AI 较软。不通过则 `available=false`，原因只写在 `debug.refineReceipt`。
 6. 候选还必须通过可写入文本、语言/目标保真、风险、置信度和当前草稿版本检查。没有正文、projection blocked、低置信或旧版本响应都不显示 Compose icon；仅有只读关联记忆时交给 Memory Lens。
 7. hover 只给用户看最终待写入正文。`rewrite_prompt` / `prompt_draft` / `reply_refine` 替换完整草稿，`prompt_patch/context_pack` 按选区追加；高责任场景、`reply_refine` 或本轮存在归属回执时复用既有锁定预览，并在预览详情显示 compact attribution summary，不新增永久 icon 或独立页面。只要 attribution receipt 已经让本轮从直接插入升级为锁定预览，即使所有 claim 最终都是 `used`，预览也必须解释采用结果和原文不变边界，不能出现“被要求复核但没有原因”的状态；没有 receipt 的普通建议仍保持原有静默规则。任何模式都只改草稿、不发送，并保留精确撤销和脱敏校准边界。
@@ -451,6 +451,8 @@ Thread 回复框：
 - 如果 owner 已回复但可能不完整，生成内容必须是补充说明，不能重复前面已发内容。
 - 群聊点名闸：最新一条非自己的来消息如果用 `Hi` / `@` 明确点了其他人（不含 CC），`draft_compose` 和 `draft_refine` 都不生成以你名义可发送的草稿，原因码 `message_not_addressed_to_owner`。没有点名的提问（例如「poster 这期怎么处理？」）仍可起草。
 - 前端 `isSelf` 缺失时，后端仍用 `esone.qiu` ↔ `Esone Qiu` 的 compact 匹配把你自己的消息标回 owner；线程末尾已是完整回复则不再精修成「回复自己」。
+- 前端 `isSelf=true` 若和卡片上的具名发送者冲突（例如发送者是 `Jamie Yao`，owner 是 `Esone Qiu`），后端以姓名匹配为准并清掉错误的 owner 标记。不能把对方的「我看下」当成你未写完的草稿来续写。
+- 生成 prompt 会锁定说话身份：上下文里你的消息标成 `[你已发送] 你 (Esone Qiu)`，来消息标成 `[来消息] Jamie Yao`，并写明「你是 Esone Qiu，回复对方，不要续写对方的句子」。模型若仍输出「好，我看完再拆到 sheet 上」这类续写对方第一人称的正文，原因码 `composer_generation_wrong_speaker`，不展示 icon。
 
 ### Jira
 
@@ -670,7 +672,7 @@ POST /api/v1/extractor/from-chat
    - `previewRequired` 恒为 `true`；没有记忆背书的正文一律先预览再插入。
    - `confidence` 取展示层下限 `0.80`（`MIN_WORK_DRAFT_DISPLAY_CONFIDENCE`），刚好高于 Draft Compose 象限的 `0.78` 前端阈值。置信度在这里表达「是否值得展示」，「有没有记忆背书」由空 evidence 和强制预览承载。
    - 同一个下限也适用于**有记忆**的 Glip/Jira 起草：`responseConfidence` 取 `max(top evidence score, 0.80)`。回复草稿的质量下限由线程本身决定，不该被通过了门的最弱一条记忆拉下去。此前一条 0.62 分的预演线索会把整条建议压到前端 0.78 阈值以下，导致「命中一点弱记忆」反而比「完全没记忆」更不容易拿到建议。
-   - 仍然静默的情况：当前可见来消息是写给其他人的（`message_not_addressed_to_owner`）；owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复。
+   - 仍然静默的情况：当前可见来消息是写给其他人的（`message_not_addressed_to_owner`）；owner 已在上下文末尾回复完（`owner_already_replied_context_only`）；可见上下文信息量不足（`composer_context_too_thin`）；召回有结果但全部被相关性/对齐过滤掉且上下文也不足（`composer_evidence_not_relevant_to_current_scene`）；生成结果不可发送或与 owner 已发送内容重复；生成结果在续写对方刚才的话而不是以你的身份回复（`composer_generation_wrong_speaker`）。
    - 信息量门槛按信息权重而非裸字符数计算：CJK 字符记 2，其余非空白字符记 1，来自非 owner 条目的合计权重需 `>= 80`（`MIN_CONTEXT_ONLY_DRAFT_WEIGHT`）。裸字符数会让中文线程被要求写到两倍长才肯起草。
 5.2. Glip/Jira 输出语言（`resolveComposerOutputLanguage`）。生成 prompt 本身是中文写的，所以不给显式目标时，模型会用中文回复英文线程。语言按 owner 的承诺强度取第一个非 `unknown` 的信号：
 
@@ -724,9 +726,17 @@ POST /api/v1/extractor/from-chat
    - 用 `Hi` / `Hey` / `Hello` / `Dear` / `BTW` 后的成对英文名，或 `@mention` / `@team` 作为点名；不算 CC；不把句首普通词（如 Capacity Management）当成人名。
    - 有点名且不含 owner → `available=false`，`rejectedReason: message_not_addressed_to_owner`，不调用生成模型。`draft_compose` 和 `draft_refine` 都过此闸。
    - 无点名 → 仍可起草，覆盖小群里「这期 poster 怎么处理？」这类未点名提问。
-   - 后端不信任前端的 `metadata.isSelf`。`sender` / `authorValues` 与 owner 的 `userId`（如 `esone.qiu`）或全名做 compact 匹配时，也视为自己的消息。只认全名/compact，不认单独的 `Qiu`，避免把 Alice Qiu 当成自己。
+   - 后端不信任前端的 `metadata.isSelf`。`sender` / `authorValues` 与 owner 的 `userId`（如 `esone.qiu`）或全名做 compact 匹配时，也视为自己的消息。只认全名/compact，不认单独的 `Qiu`，避免把 Alice Qiu 当成自己。具名发送者与 owner 冲突时，即使前端标了 `isSelf=true` 也当成来消息。
    - 线程末尾已是自己的完整回复 → `owner_already_replied_context_only`，不再起草或精修成「Thanks Esone」。
    - Jira / Web AI 跳过点名闸。
+
+5.5. 说话身份锁定（`resolveComposerSpeakerLock`）。Glip/Jira 生成器必须知道「谁在输入框里说话」：
+
+   - prompt 开头写明 `说话身份：你是 <ownerDisplayName>`，并指出最新来消息来自谁。
+   - 上下文行标 `[你已发送] 你 (Esone Qiu)` 与 `[来消息] Jamie Yao`，避免模型把对话读成「下一条该由刚才说话的人接着说」。
+   - 用户问「要不要先拆到 sheet」、对方回「我看下」时，草稿必须是 Esone 对 Jamie 的回复，不能写成 Jamie 的「好，我看完再拆到 sheet 上」。
+   - 生成后若仍命中对方第一人称 holding reply 的续写（`generatedContinuesIncomingSpeaker`），`available=false`，原因码 `composer_generation_wrong_speaker`。
+   - Web AI prompt 编译不走这套第一人称回复锁定。
 
 6. 增量收益门（仅 refine）：计算 `refineGain`；语义偏差超过阈值，或引入原草稿缺失的具体证据事实，二选一即可放行。不通过则 `available=false`，`debug.refineReceipt` 记录原因，不进入用户可见文案。
 7. Web AI Draft Refine 先执行三个确定性 prompt patch。命中时直接返回 `prompt_patch + append_patch`，不调用通用编译器。
@@ -803,7 +813,7 @@ Compose Assist 可把 [变化脉络](./change_memory_ledger.md) 投影转成既�
 ## 源码与维护入口
 
 - API 与服务编排：`memory-service/src/routes/composerAssist.ts`、`memory-service/src/core/ContextAssistService.ts`（含 `resolveComposerAssistIntent`、`evaluateComposerRefineGain`、`assistWorkContextOnlyDraft`、四象限生成器）。
-- 群聊点名闸：`memory-service/src/core/composerReplyTarget.ts`。
+- 群聊点名闸：`memory-service/src/core/composerReplyTarget.ts`（含说话身份锁定 `resolveComposerSpeakerLock` / `generatedContinuesIncomingSpeaker`）。
 - 证据两槽：`memory-service/src/core/composerEvidenceSlots.ts`。
 - 身份投影：`memory-service/src/core/ComposerAudienceResolver.ts`、`memory-service/src/core/PersonaProjectionService.ts`（含 `prompt_draft` / `reply_refine` scene）。
 - 输入框探测、双策略触发和写入：`src/composer-guard/siteContextAdapters.ts`、`src/composer-guard/ComposerGuardController.ts`、`src/composer-guard/assistConfig.ts`。

@@ -61,21 +61,40 @@ export function authorValuesMatchOwner(
   return false;
 }
 
+function contextItemAuthorValues(item: ComposerContextItem): string[] {
+  const authorValues = item.metadata?.authorValues;
+  return [
+    item.sender,
+    ...(Array.isArray(authorValues) ? (authorValues as string[]) : []),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function hasNamedNonOwnerAuthor(
+  authors: string[],
+  identity: ComposerOwnerIdentity,
+): boolean {
+  return authors.some((value) => {
+    const compact = compactOwnerKey(String(value).replace(/^GLIP_PERSON\./i, ''));
+    const normalized = normalizeCueValue(value);
+    if (!normalized) return false;
+    if (compact.length < 5 && !normalized.includes(' ')) return false;
+    return !authorValuesMatchOwner([value], identity);
+  });
+}
+
 export function contextItemMatchesOwner(
   item: ComposerContextItem,
   identity: ComposerOwnerIdentity,
 ): boolean {
-  if (item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner') {
-    return true;
-  }
-  const authorValues = item.metadata?.authorValues;
-  return authorValuesMatchOwner(
-    [
-      item.sender,
-      ...(Array.isArray(authorValues) ? (authorValues as string[]) : []),
-    ],
-    identity,
-  );
+  const authors = contextItemAuthorValues(item);
+  if (authorValuesMatchOwner(authors, identity)) return true;
+
+  const claimedSelf =
+    item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner';
+  if (!claimedSelf) return false;
+  // Frontend isSelf is a hint. A named other person on the card wins.
+  if (hasNamedNonOwnerAuthor(authors, identity)) return false;
+  return true;
 }
 
 function isOwnerAuthored(
@@ -273,15 +292,96 @@ export function applyOwnerAuthorshipToRequest(
   return {
     ...request,
     contextItems: request.contextItems.map((item) => {
-      if (!contextItemMatchesOwner(item, identity)) return item;
-      return {
-        ...item,
-        metadata: {
-          ...(item.metadata || {}),
-          isSelf: true,
-          authorRole: 'owner',
-        },
-      };
+      if (contextItemMatchesOwner(item, identity)) {
+        return {
+          ...item,
+          metadata: {
+            ...(item.metadata || {}),
+            isSelf: true,
+            authorRole: 'owner',
+          },
+        };
+      }
+      if (
+        item.metadata?.isSelf === true ||
+        item.metadata?.authorRole === 'owner'
+      ) {
+        return {
+          ...item,
+          metadata: {
+            ...(item.metadata || {}),
+            isSelf: false,
+            authorRole: 'external',
+          },
+        };
+      }
+      return item;
     }),
   };
+}
+
+export interface ComposerSpeakerLock {
+  ownerDisplayName: string;
+  incomingSender?: string;
+  incomingText?: string;
+}
+
+function pickOwnerDisplayName(
+  items: ComposerContextItem[],
+  identity?: ComposerOwnerIdentity,
+): string {
+  for (const item of items) {
+    const isOwner = identity
+      ? contextItemMatchesOwner(item, identity)
+      : item.metadata?.isSelf === true || item.metadata?.authorRole === 'owner';
+    if (isOwner && item.sender) return item.sender;
+  }
+  if (identity) {
+    const spaced = identity.names.find(
+      (name) => name.includes(' ') && name.length >= 4,
+    );
+    if (spaced) return spaced;
+    if (identity.names[0]) return identity.names[0];
+  }
+  return '当前用户';
+}
+
+export function resolveComposerSpeakerLock(
+  request: ComposerAssistRequest,
+  identity?: ComposerOwnerIdentity,
+): ComposerSpeakerLock {
+  const items = applyReplyItems(request);
+  const ownerDisplayName = pickOwnerDisplayName(items, identity);
+  const incoming = identity
+    ? latestIncomingItem(items, identity)
+    : [...items]
+        .reverse()
+        .find(
+          (item) =>
+            item.metadata?.isSelf !== true &&
+            item.metadata?.authorRole !== 'owner',
+        );
+  const incomingText = incoming?.text || incoming?.title || undefined;
+  return {
+    ownerDisplayName,
+    incomingSender: incoming?.sender,
+    incomingText,
+  };
+}
+
+const HOLDING_INCOMING_REPLY_PATTERN =
+  /^(?:好的?，?)?(?:我看下|我看看|我看一下|我先看(?:一下|下)?|我先查(?:一下|下)?|let me (?:check|look|see)\b|i(?:'m| am) (?:checking|looking)|i(?:'ll| will) (?:check|look|take a look))[.。!！]?$/i;
+
+const INCOMING_VOICE_CONTINUATION_PATTERN =
+  /(?:^|[，,。!！\s])我(?:先)?看(?:完|一下|了)?再|after i (?:look|check|see)|once i(?:'ve| have)? (?:looked|checked|seen)|i(?:'ll| will) (?:look|check)(?:\s+\w+){0,6}\s+(?:then|and then)/i;
+
+export function generatedContinuesIncomingSpeaker(
+  generated: string,
+  incomingText?: string,
+): boolean {
+  const incoming = (incomingText || '').replace(/\s+/g, ' ').trim();
+  const output = (generated || '').replace(/\s+/g, ' ').trim();
+  if (!incoming || !output) return false;
+  if (!HOLDING_INCOMING_REPLY_PATTERN.test(incoming)) return false;
+  return INCOMING_VOICE_CONTINUATION_PATTERN.test(output);
 }

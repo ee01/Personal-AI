@@ -2170,4 +2170,105 @@ describe('Composer Assist API (POST /composer/assist)', () => {
     );
     expect(llmGenerateMock).not.toHaveBeenCalled();
   });
+
+  it('locks Glip drafts to the owner voice instead of continuing Jamie Yao', async () => {
+    const service = new ContextAssistService(db, 'esone.qiu');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateMock.mockResolvedValueOnce({
+      content: '好，我看完再拆到 sheet 上',
+    });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_message',
+      contextType: 'message_thread',
+      scenario: 'instant_message_reply',
+      assistIntent: 'draft_compose',
+      title: 'Planning',
+      draftText: '',
+      contextItems: [
+        {
+          type: 'message',
+          sender: 'Jamie Yao',
+          text: 'april 说的 sheet 拆分我还没细看。粒度可能要按 epic 来，而且和今晚的 plan 会挤在一起。我先对一下范围，回头再决定哪些要先拆到 sheet 上。',
+          metadata: { isSelf: false },
+        },
+        {
+          type: 'message',
+          sender: 'Esone Qiu',
+          text: '你要先拆一些到 sheet 上么？我们待会儿更好做 plan\n\napril 说定这个了',
+          metadata: { isSelf: true, authorRole: 'owner' },
+        },
+        {
+          type: 'message',
+          sender: 'Jamie Yao',
+          text: '我看下',
+          metadata: { isSelf: false },
+        },
+      ],
+      debug: true,
+    });
+
+    expect(llmGenerateMock).toHaveBeenCalled();
+    const prompt = String(llmGenerateMock.mock.calls[0]?.[0] || '');
+    expect(prompt).toMatch(/说话身份：你是 Esone Qiu/);
+    expect(prompt).toMatch(/\[你已发送\] 你 \(Esone Qiu\)/);
+    expect(prompt).toMatch(/\[来消息\] Jamie Yao/);
+    expect(prompt).toMatch(/不要续写对方的句子/);
+    expect(body.available).toBe(false);
+    expect(body.insertText).toBeUndefined();
+    expect(body.debug?.rejectedReason).toBe('composer_generation_wrong_speaker');
+  });
+
+  it('still drafts an owner-voice reply after Jamie’s holding message', async () => {
+    const service = new ContextAssistService(db, 'esone.qiu');
+    const recall = vi.fn().mockResolvedValue({
+      matches: [],
+      topMatch: null,
+      queryTimeMs: 2,
+      debug: {},
+    });
+    Object.defineProperty(service, 'recallService', { value: { recall } });
+    llmGenerateMock.mockResolvedValueOnce({
+      content: '好，那我等你看完，看完我们再一起拆到 sheet。',
+    });
+
+    const body = await service.assistComposer({
+      surface: 'ringcentral_message',
+      contextType: 'message_thread',
+      scenario: 'instant_message_reply',
+      assistIntent: 'draft_compose',
+      title: 'Planning',
+      draftText: '',
+      contextItems: [
+        {
+          type: 'message',
+          sender: 'Jamie Yao',
+          text: 'april 说的 sheet 拆分我还没细看。粒度可能要按 epic 来，而且和今晚的 plan 会挤在一起。我先对一下范围，回头再决定哪些要先拆到 sheet 上。',
+          metadata: { isSelf: false },
+        },
+        {
+          type: 'message',
+          sender: 'Esone Qiu',
+          text: '你要先拆一些到 sheet 上么？我们待会儿更好做 plan\n\napril 说定这个了',
+          metadata: { isSelf: true, authorRole: 'owner' },
+        },
+        {
+          type: 'message',
+          sender: 'Jamie Yao',
+          text: '我看下',
+          metadata: { isSelf: true, authorRole: 'owner' },
+        },
+      ],
+      debug: true,
+    });
+
+    expect(body.available).toBe(true);
+    expect(body.insertText).toMatch(/等你看完/);
+  });
 });
