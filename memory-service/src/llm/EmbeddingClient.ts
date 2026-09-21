@@ -17,6 +17,8 @@ const EMBEDDING_RETRY_BACKOFF_CAP_MS = 5 * 60 * 1000;
 /** Delay between bounded warmup attempts at server boot. */
 const EMBEDDING_WARMUP_RETRY_DELAY_MS = 15 * 1000;
 
+export const EMBEDDING_MODEL_VERSION = 'multilingual-e5-small-v1';
+
 export class EmbeddingClient {
   private static instance: EmbeddingClient | null = null;
 
@@ -26,10 +28,6 @@ export class EmbeddingClient {
   private _loaded = false;
 
   // ---- P0a-3 readiness / retryable warmup state ----
-  // A failed load must never be cached as permanently unavailable
-  // (memory-foundation plan §9.6; the Supermemory provider-init race is the
-  // external evidence). `this.loading` used to keep the rejected promise,
-  // so every later getInstance() re-threw the same failure forever.
   private loadAttempts = 0;
   private lastLoadError: string | null = null;
   private nextRetryAtMs = 0;

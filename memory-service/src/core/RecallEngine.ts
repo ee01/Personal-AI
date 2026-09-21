@@ -1063,12 +1063,20 @@ export class RecallEngine {
       console.warn('[RecallEngine] messages_vec search failed:', err);
     }
 
-    // --- Search chunks_vec ---
+    // --- Search chunks_vec (e5 shadow table with cross-language capability) ---
+    // B-plan switch 2026-09-10: prefer chunks_vec_e5 (multilingual-e5-small,
+    // P0.5 adjudicated +16.9pp hit@5 over MiniLM). Falls back to legacy
+    // chunks_vec (MiniLM) if the e5 table is missing or empty (e.g. fresh
+    // deployment before the backfill script runs).
+    const vecTable = this.db
+      .prepare(`SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'chunks_vec_e5'`)
+      .get() as { c: number };
+    const useE5 = vecTable.c > 0;
     try {
       const chunkVecRows = this.db
         .prepare(
           `SELECT chunk_id, distance
-           FROM chunks_vec
+           FROM ${useE5 ? 'chunks_vec_e5' : 'chunks_vec'}
            WHERE embedding MATCH ?
            ORDER BY distance
            LIMIT ?`,
