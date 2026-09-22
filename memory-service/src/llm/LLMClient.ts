@@ -546,8 +546,14 @@ export class LLMClient {
           messages,
           ...buildSamplingPayload(model, options),
           ...buildTokenLimitPayload(model, maxTokens),
-          ...(options?.reasoningEffort && /^gpt-5(?:\.|-|$)/i.test(model)
-            ? { reasoning_effort: options.reasoningEffort }
+          ...(options?.reasoningEffort
+            ? (/^gpt-5(?:\.|-|$)/i.test(model)
+                ? { reasoning_effort: options.reasoningEffort }
+                // OpenRouter unified reasoning control (2026-09-22): gpt-5
+                // uses reasoning_effort; every other reasoning tier (kimi-k3,
+                // glm-5.3, ...) accepts the unified `reasoning.effort` param.
+                // OpenRouter ignores it for models without reasoning support.
+                : { reasoning: { effort: options.reasoningEffort } })
             : {}),
         }),
         signal,

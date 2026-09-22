@@ -270,13 +270,24 @@ export class ExtractionWorker {
     } else {
       try {
         const llm = getExtractionLLMClient();
+        // Reasoning-tier fix (2026-09-22): kimi-k3 emits thinking tokens BEFORE
+        // the JSON answer. With the 2000-token default, thinking consumed the
+        // entire budget — completionTokens hit the cap exactly and content came
+        // back EMPTY (the 483+14 "no JSON object (head: )" dead_letters).
+        // Raise the ceiling and pin reasoning effort low via OpenRouter's
+        // unified param so thinking stays short.
         const response = await llm.generate(extractionPrompt({
           content: episode.content,
           sender: episode.sender,
           groupName: episode.groupName,
           sourceType: episode.sourceType,
           timestamp: episode.timestamp,
-        }));
+        }), {
+          maxTokens: 6000,
+          timeoutMs: 60_000,
+          retryCount: 0,
+          reasoningEffort: 'low',
+        });
         batchRaw = this.parseJsonLoose(response.content);
       } catch (err) {
         // Budget exhaustion resets daily (UTC) — it must NOT consume retry
