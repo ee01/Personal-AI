@@ -220,6 +220,7 @@ Notification Center 对外主要暴露两个接口：
 - `notice_digest` 是新的通知输出
 - `reminder_digest` 只是 `todo_digest` 的兼容别名
 - 周报和 `dream_digest` 的推送目标以 memory-service runtime config 为准：`me` 发给当前用户，`group` 发给配置的群组，`none` 不创建通知也不发 Bot；Options 里的“立即推送”会把当前选择带到后端，手动触发不会绕过这个门控
+- 周报正文、章节标题、报告 Markdown 标题，以及 notice 的 title/body、Glip title，都读取 `user_profile_items.language_preference`（与 Keystone Brief 相同的解析：匹配英文则 `en-US`，否则 `zh-CN`）。不再用“跟随源内容语言”的启发式；人名、项目名、URL、Jira key 等保持原文
 - 周报 notice payload 会保存 `reportSummary` / `reportExcerpt` 和消息、反思计数；Provider digest、Doubao 同步和 Chrome 预览优先展示这段可读摘要，旧数据没有摘录时才退回报告路径
 - Options 手动触发会读取当前可见控件值，避免刚切换 `none` / `group` 后立刻点击仍按旧目标推送；提交后会先在对应配置区显示 `请求已提交` 回执，替换旧结果并说明本次目标、notice / Bot 还在等待确认、不会改变自动调度或确认/忽略通知；后端返回后再显示结果回执：生成/未生成、目标、Notification Center notice 是否写入、Bot 是否确认送达、报告文件或 dream 落点与计数分开展示；`none` 会明确说明只生成内容，不写通知中心、不发 Bot/Chrome/Doubao，也不改变自动调度或通知处理状态；若内容已生成但 notice / Bot 投递未完整确认，回执标成“投递部分失败”，让用户按写入和 Bot 两行判断补救渠道
 - 如果 Options 手动触发时选择了自定义群组但当前可见群组 ID 为空，页面会显示 `手动门禁` 回执并在前端拦截：后端不会收到周报 / Dream Digest 生成请求，不会写 Notification Center，不会发送 Bot/Chrome/Doubao，也不会回退到旧保存群组或改变自动调度。

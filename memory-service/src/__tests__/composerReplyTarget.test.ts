@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyOwnerAuthorshipToRequest,
   authorValuesMatchOwner,
   extractPrimaryAddressees,
+  generatedContinuesIncomingSpeaker,
   resolveComposerReplyTarget,
+  resolveComposerSpeakerLock,
 } from '../core/composerReplyTarget.js';
 
 const identity = {
@@ -117,11 +120,107 @@ describe('resolveComposerReplyTarget', () => {
     expect(result.state).toBe('addressed');
     expect(result.incomingText).toMatch(/also demo this tool/);
   });
+
+  it('does not treat a named other person as owner even when isSelf is true', () => {
+    const result = resolveComposerReplyTarget(
+      {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Esone Qiu',
+            text: '你要先拆一些到 sheet 上么？我们待会儿更好做 plan',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+          {
+            type: 'message',
+            sender: 'Jamie Yao',
+            text: '我看下',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+        ],
+      },
+      identity,
+    );
+    expect(result.state).toBe('addressed');
+    expect(result.incomingText).toBe('我看下');
+  });
 });
 
 describe('authorValuesMatchOwner', () => {
   it('matches compact userId to display name and does not match another Qiu', () => {
     expect(authorValuesMatchOwner(['Esone Qiu'], identity)).toBe(true);
     expect(authorValuesMatchOwner(['Alice Qiu'], identity)).toBe(false);
+  });
+});
+
+describe('resolveComposerSpeakerLock', () => {
+  it('names the owner and the latest incoming speaker', () => {
+    const lock = resolveComposerSpeakerLock(
+      {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Esone Qiu',
+            text: '你要先拆一些到 sheet 上么？我们待会儿更好做 plan',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+          {
+            type: 'message',
+            sender: 'Jamie Yao',
+            text: '我看下',
+            metadata: { isSelf: false },
+          },
+        ],
+      },
+      identity,
+    );
+    expect(lock.ownerDisplayName).toBe('Esone Qiu');
+    expect(lock.incomingSender).toBe('Jamie Yao');
+    expect(lock.incomingText).toBe('我看下');
+  });
+});
+
+describe('generatedContinuesIncomingSpeaker', () => {
+  it('rejects completing Jamie’s holding reply in first person', () => {
+    expect(
+      generatedContinuesIncomingSpeaker('好，我看完再拆到 sheet 上', '我看下'),
+    ).toBe(true);
+  });
+
+  it('keeps a reply that waits for the other person to finish looking', () => {
+    expect(
+      generatedContinuesIncomingSpeaker(
+        '好，那我等你看完，看完我们再一起拆到 sheet。',
+        '我看下',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('applyOwnerAuthorshipToRequest', () => {
+  it('clears a false isSelf flag when the named sender is not the owner', () => {
+    const next = applyOwnerAuthorshipToRequest(
+      {
+        surface: 'ringcentral_message',
+        contextType: 'message_thread',
+        contextItems: [
+          {
+            type: 'message',
+            sender: 'Jamie Yao',
+            text: '我看下',
+            metadata: { isSelf: true, authorRole: 'owner' },
+          },
+        ],
+      },
+      identity,
+    );
+    expect(next.contextItems?.[0].metadata).toMatchObject({
+      isSelf: false,
+      authorRole: 'external',
+    });
   });
 });

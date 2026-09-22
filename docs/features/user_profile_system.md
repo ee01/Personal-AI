@@ -72,7 +72,8 @@ claim link 存在且归属改变画像后果时，现有“证据审计”展开
 - 来源：Options 页的界面语言下拉框会立即保存到 `chrome.storage.local.personalAiUiPreferences.language`，同时通过 `/profile/items` 写入或更新 active `preference` 条目。
 - 中文值：`回复和生成面向用户的内容时使用中文`。
 - 英文值：`Reply and generate user-facing content in English.`。
-- 影响范围：Reflection 自动生成的 Rehearsal、后续需要后台自主生成用户可读内容的能力，都应优先读取这个画像项；它不是普通 UI 翻译开关，也不改变人名、项目名、URL、Jira key 等原文。
+- 影响范围：Reflection 自动生成的 Rehearsal、Keystone Brief Composer、Today Pilot 会前准备、Weekly Report，以及后续需要后台自主生成用户可读内容的能力，都应优先读取这个画像项；它不是普通 UI 翻译开关，也不改变人名、项目名、URL、Jira key 等原文。
+- Weekly Report：生成链路读取同一条 `language_preference`（与 Keystone / Meeting Prep 共用解析，无画像时默认中文），prompt 明确要求输出语言和章节标题，不再跟随近 7 天源内容语言；Notification Center 的 title/body 与 Glip title 按 `zh-CN` / `en-US` 做短文案。
 - 更新规则：Options 本地保存的当前语言是权威来源；用户修改语言或重新打开 Options 时，系统会核对并同步更新同一个 `language_preference` 条目，不创建多条并列偏好。服务端条目只约束后台生成，不能单独用来判断 Options 当前选择。
 - 存储边界：语言不在 `chrome.storage.local.envConfig`。`envConfig` 只保存 memory-service 连接参数；当前语言单独位于 `personalAiUiPreferences.language`。
 - 同步路径：扩展请求用 `X-Personal-AI-Language` / `Accept-Language` 传递当前值；Options 再通过 Profile API 把值和 `options.ui_language` evidence 一起写入用户数据库。memory-service 不直接访问 Chrome storage。
