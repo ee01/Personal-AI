@@ -223,6 +223,25 @@ describe('v3 ExtractionWorker (P1 shadow dual-write)', () => {
     expect((db.prepare('SELECT COUNT(*) c FROM memory_units').get() as any).c).toBe(0);
   });
 
+  it('budget lockout parks the job until next UTC midnight without consuming attempts', async () => {
+    const { LLMBudgetExceededError } = await import('../llm/llmErrors.js');
+    generateMock.mockRejectedValue(
+      new LLMBudgetExceededError({ spentUsd: 10, capUsd: 10, scope: 'global' }),
+    );
+    const worker = new ExtractionWorker(db, 'test-user');
+    const jobId = worker.enqueueEpisode(episodeId);
+
+    const stats = await worker.processDueJobs(1);
+    expect(stats.budgetBlocked).toBe(1);
+    const job = db.prepare('SELECT * FROM ingest_jobs WHERE job_id = ?').get(jobId) as any;
+    expect(job.status).toBe('failed_retryable');
+    expect(job.last_error_class).toBe('budget_exceeded');
+    expect(job.attempts).toBe(0); // claim increment rolled back
+    const nextMidnight = Math.ceil(Date.now() / 1000 / 86400) * 86400 + 60;
+    expect(job.next_attempt_at).toBe(nextMidnight);
+    expect((db.prepare('SELECT COUNT(*) c FROM memory_units').get() as any).c).toBe(0);
+  });
+
   it('unknown candidate fields are rejected (additionalProperties=false)', async () => {
     const spanStart = byteOffsetOf('Cursor');
     generateMock.mockResolvedValue({

@@ -19,6 +19,7 @@ import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { getLLMClient, LLMClient } from '../../llm/LLMClient.js';
+import { LLMBudgetExceededError } from '../../llm/llmErrors.js';
 import { parseLLMFallbacks } from '../../llm/LLMTarget.js';
 import { getConfig } from '../../config.js';
 import { runWithUsageContext } from '../../analytics/usageContext.js';
@@ -40,6 +41,8 @@ export interface WorkerStats {
   zeroFact: number;
   retryable: number;
   deadLettered: number;
+  /** Budget-blocked this round; the queue resumes at the next UTC day. */
+  budgetBlocked: number;
 }
 
 export function isV3ShadowWriteEnabled(): boolean {
@@ -187,6 +190,7 @@ export class ExtractionWorker {
   private async processDueJobsInner(limit: number): Promise<WorkerStats> {
     const stats: WorkerStats = {
       claimed: 0, integrated: 0, zeroFact: 0, retryable: 0, deadLettered: 0,
+      budgetBlocked: 0,
     };
     for (let i = 0; i < limit; i += 1) {
       const job = this.claimJob();
@@ -197,6 +201,12 @@ export class ExtractionWorker {
       else if (outcome === 'zero') stats.zeroFact += 1;
       else if (outcome === 'retryable') stats.retryable += 1;
       else if (outcome === 'dead_letter') stats.deadLettered += 1;
+      // Budget exhaustion is queue-wide — every subsequent claim would fail
+      // the same guard, so stop draining instead of burning the queue.
+      else if (outcome === 'budget') {
+        stats.budgetBlocked += 1;
+        break;
+      }
     }
     return stats;
   }
@@ -239,7 +249,7 @@ export class ExtractionWorker {
 
   private async processJob(
     job: { jobId: string; episodeId: string; attempts: number },
-  ): Promise<'integrated' | 'zero' | 'retryable' | 'dead_letter'> {
+  ): Promise<'integrated' | 'zero' | 'retryable' | 'dead_letter' | 'budget'> {
     const episode = this.episodes.get(job.episodeId);
     if (!episode) {
       this.finishJob(job.jobId, 'dead_letter', 'episode_missing');
@@ -269,6 +279,12 @@ export class ExtractionWorker {
         }));
         batchRaw = this.parseJsonLoose(response.content);
       } catch (err) {
+        // Budget exhaustion resets daily (UTC) — it must NOT consume retry
+        // attempts (the mass-dead-letter under glm-5.3's budget lockout came
+        // from exactly this). Park the job until the next UTC day instead.
+        if (err instanceof LLMBudgetExceededError) {
+          return this.handleBudgetExceeded(job);
+        }
         return this.handleRetryable(job, 'llm_error', (err as Error).message);
       }
     }
@@ -384,6 +400,32 @@ export class ExtractionWorker {
       return 'self_statement';
     }
     return 'first_party_record';
+  }
+
+  /**
+   * Budget lockout (P0b §6.5): the daily cap resets at the next UTC midnight,
+   * so park the job there WITHOUT consuming retry attempts. claimJob already
+   * incremented `attempts` — decrement it back so MAX_EXTRACTION_ATTEMPTS
+   * budget-free days are not shortened by budget-blocked days.
+   */
+  private handleBudgetExceeded(
+    job: { jobId: string; episodeId: string; attempts: number },
+  ): 'budget' {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const nextUtcMidnightSec = Math.ceil(nowSec / 86400) * 86400 + 60;
+    this.db
+      .prepare(
+        `UPDATE ingest_jobs
+         SET status = 'failed_retryable', attempts = MAX(attempts - 1, 0),
+             last_error_class = 'budget_exceeded', next_attempt_at = ?,
+             leased_by = NULL, leased_until = NULL, updated_at = ?
+         WHERE job_id = ?`,
+      )
+      .run(nextUtcMidnightSec, nowSec, job.jobId);
+    console.warn(
+      '[ExtractionWorker] daily budget reached; extraction resumes at next UTC midnight',
+    );
+    return 'budget';
   }
 
   private handleRetryable(
