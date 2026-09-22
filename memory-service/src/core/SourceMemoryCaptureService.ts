@@ -302,6 +302,8 @@ export class SourceMemoryCaptureService {
   constructor(
     private readonly db: BetterSqlite3.Database,
     private readonly userDataManager?: UserDataManager | null,
+    /** F13: v3 shadow-extraction attribution user (routes pass request.userId). */
+    private readonly v3UserId: string = 'default',
   ) {
     this.changeLedger = new MemoryChangeLedgerService(db);
   }
@@ -1287,6 +1289,21 @@ export class SourceMemoryCaptureService {
     new MemoryClaimAttributionService(this.db).ensureForMessage(
       input.messageId,
     );
+
+    // F13 (2026-09-22): web capsules bypassed IngestionPipeline, so these
+    // episodes never entered the v3 shadow extraction queue (0 units across
+    // 162 web messages). Fire-and-forget; idempotent + flag-gated
+    // (MEMORY_WRITE_V3_SHADOW). Never blocks the capture path.
+    void import('./v3/ExtractionWorker.js')
+      .then(({ ExtractionWorker: Worker }) => {
+        new Worker(this.db, this.v3UserId).enqueueEpisode(input.messageId);
+      })
+      .catch((err: Error) => {
+        console.warn(
+          '[SourceMemoryCapture] v3 shadow enqueue failed:',
+          err.message,
+        );
+      });
   }
 
   private removeLinkedMemorySignal(messageId?: string | null): void {
@@ -1310,7 +1327,19 @@ export class SourceMemoryCaptureService {
     }
 
     this.db.prepare(`DELETE FROM chunks WHERE related_entity_id = ?`).run(normalizedMessageId);
-    this.db.prepare(`DELETE FROM messages_raw WHERE id = ?`).run(normalizedMessageId);
+    // F13: v3 extraction jobs FK-reference messages_raw — clear pending jobs
+    // before the episode is deleted.
+    this.db.prepare(`DELETE FROM ingest_jobs WHERE episode_id = ?`).run(normalizedMessageId);
+    // F13: if the episode already produced v3 units, keep the raw row —
+    // memory_unit_sources FK-references it and v3 lineage owns the lifecycle
+    // (dismissals propagate as unit tombstones in the cutover phase, not by
+    // hard-deleting the episode). Shadow-phase invariant: never break lineage.
+    const hasUnits = this.db
+      .prepare(`SELECT 1 AS present FROM memory_unit_sources WHERE episode_id = ? LIMIT 1`)
+      .get(normalizedMessageId) as { present: number } | undefined;
+    if (!hasUnits) {
+      this.db.prepare(`DELETE FROM messages_raw WHERE id = ?`).run(normalizedMessageId);
+    }
   }
 
   private hasLinkedMemorySignal(messageId?: string | null): boolean {

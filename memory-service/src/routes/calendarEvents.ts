@@ -103,6 +103,10 @@ export async function calendarEventRoutes(app: FastifyInstance): Promise<void> {
         deleted: 0,
         total: payload.events.length,
       };
+      // F13: episodes upserted inside the transaction are collected and
+      // enqueued for v3 shadow extraction AFTER commit — better-sqlite3
+      // transactions are synchronous; awaiting inside them is illegal.
+      const episodesToEnqueue: string[] = [];
 
       const sync = db.transaction(() => {
         for (const event of payload.events) {
@@ -135,6 +139,7 @@ export async function calendarEventRoutes(app: FastifyInstance): Promise<void> {
             removeCalendarMemoryChunk(db, normalized);
           } else {
             upsertCalendarMemory(db, normalized);
+            episodesToEnqueue.push(normalized.id);
           }
         }
 
@@ -157,6 +162,28 @@ export async function calendarEventRoutes(app: FastifyInstance): Promise<void> {
       });
 
       sync();
+
+      // F13: calendar episodes previously bypassed IngestionPipeline and
+      // never entered the v3 shadow extraction queue (0 units across 128
+      // calendar messages). enqueueEpisode is idempotent and flag-gated —
+      // safe on every re-sync.
+      if (episodesToEnqueue.length > 0) {
+        try {
+          const { ExtractionWorker } = await import(
+            '../core/v3/ExtractionWorker.js'
+          );
+          const worker = new ExtractionWorker(db, request.userId);
+          for (const episodeId of episodesToEnqueue) {
+            worker.enqueueEpisode(episodeId);
+          }
+        } catch (err) {
+          console.warn(
+            '[calendarEvents] v3 shadow enqueue failed:',
+            (err as Error).message,
+          );
+        }
+      }
+
       return reply.send(response);
     },
   );

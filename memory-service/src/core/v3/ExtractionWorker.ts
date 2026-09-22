@@ -140,9 +140,20 @@ export class ExtractionWorker {
     this.truth = new UnitTruthMaintainer(db, this.episodes);
   }
 
-  /** Enqueue a shadow job for a freshly persisted episode. No-op without flag. */
+  /**
+   * Enqueue a shadow job for a freshly persisted episode. No-op without flag.
+   *
+   * Idempotent (F13 fix, 2026-09-22): calendar/web sync paths upsert the same
+   * message id repeatedly. A naive enqueue would pile up duplicate jobs on
+   * every re-sync. Skip when ANY job already exists for the episode — content
+   * changes land as unit revisions via the maintainer path, not re-extraction.
+   */
   enqueueEpisode(episodeId: string): string | null {
     if (!isV3ShadowWriteEnabled()) return null;
+    const existing = this.db
+      .prepare(`SELECT job_id FROM ingest_jobs WHERE episode_id = ? LIMIT 1`)
+      .get(episodeId) as { job_id: string } | undefined;
+    if (existing) return null;
     const nowSec = Math.floor(Date.now() / 1000);
     const jobId = `job-${randomUUID()}`;
     this.db

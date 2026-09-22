@@ -24,6 +24,10 @@ describe('Calendar Events API (POST /calendar-events/sync)', () => {
   beforeEach(() => {
     db.prepare('DELETE FROM calendar_events').run();
     db.prepare(`DELETE FROM chunks WHERE source_type = 'calendar'`).run();
+    // F13: calendar episodes now enqueue v3 shadow extraction jobs whose
+    // episode_id FK-references messages_raw — clear them before deleting.
+    db.prepare(`DELETE FROM ingest_jobs WHERE episode_id IN (
+      SELECT id FROM messages_raw WHERE source_type = 'calendar')`).run();
     db.prepare(`DELETE FROM messages_raw WHERE source_type = 'calendar'`).run();
     db.prepare(`INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')`).run();
   });

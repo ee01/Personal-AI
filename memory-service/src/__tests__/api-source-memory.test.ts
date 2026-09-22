@@ -18,6 +18,9 @@ const TABLES_TO_CLEAR = [
   'memory_feedback_events',
   'memory_metadata',
   'chunks',
+  // F13: web/calendar episodes now enqueue v3 extraction jobs whose
+  // episode_id FK-references messages_raw — clear before the episode rows.
+  'ingest_jobs',
   'messages_raw',
 ];
 

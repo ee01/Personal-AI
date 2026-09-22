@@ -239,7 +239,11 @@ export async function sourceMemoryRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       try {
         const { db, userDataManager } = request.userContext;
-        const service = new SourceMemoryCaptureService(db, userDataManager);
+        const service = new SourceMemoryCaptureService(
+          db,
+          userDataManager,
+          request.userId,
+        );
         const capsule = service.createCapsule(request.body);
         return reply.status(200).send({ capsule });
       } catch (error) {
