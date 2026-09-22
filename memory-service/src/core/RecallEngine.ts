@@ -30,6 +30,7 @@ import type {
   RecallLifecycleMode,
 } from '../types/index.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
+import { embedWithE5 } from './v3/UnitEmbeddingWorker.js';
 import { now } from '../utils/time.js';
 import { toSlug } from '../utils/slug.js';
 import { parseQueryTimeRange } from '../utils/queryTime.js';
@@ -1065,13 +1066,24 @@ export class RecallEngine {
 
     // --- Search chunks_vec (e5 shadow table with cross-language capability) ---
     // B-plan switch 2026-09-10: prefer chunks_vec_e5 (multilingual-e5-small,
-    // P0.5 adjudicated +16.9pp hit@5 over MiniLM). Falls back to legacy
-    // chunks_vec (MiniLM) if the e5 table is missing or empty (e.g. fresh
-    // deployment before the backfill script runs).
+    // P0.5 adjudicated +16.9pp hit@5 over MiniLM). e5 is prefix-bound (plan
+    // §5.5): the MiniLM queryEmbedding lives in a different vector space and
+    // MUST be re-embedded with the `query: ` prefix before matching e5
+    // passage vectors. Falls back to legacy chunks_vec (MiniLM) when the e5
+    // table is absent (fresh DB) or the e5 pipeline is unavailable.
     const vecTable = this.db
       .prepare(`SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'chunks_vec_e5'`)
       .get() as { c: number };
-    const useE5 = vecTable.c > 0;
+    let useE5 = vecTable.c > 0;
+    let chunkEmbJson = embJson;
+    if (useE5) {
+      try {
+        chunkEmbJson = JSON.stringify(await embedWithE5(query.query, 'query:'));
+      } catch {
+        // e5 pipeline unavailable this round — fall back to legacy MiniLM table.
+        useE5 = false;
+      }
+    }
     try {
       const chunkVecRows = this.db
         .prepare(
@@ -1081,7 +1093,7 @@ export class RecallEngine {
            ORDER BY distance
            LIMIT ?`,
         )
-        .all(embJson, limit) as Array<{ chunk_id: number; distance: number }>;
+        .all(chunkEmbJson, limit) as Array<{ chunk_id: number; distance: number }>;
 
       if (chunkVecRows.length > 0) {
         const chunkIds = chunkVecRows.map((r) => r.chunk_id);
