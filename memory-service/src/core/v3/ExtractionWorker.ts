@@ -33,7 +33,11 @@ import {
 
 export const MAX_EXTRACTION_ATTEMPTS = 3;
 const RETRY_DELAY_SECONDS = [60, 300, 900];
-const LEASE_SECONDS = 120;
+// Lease must exceed the worst-case extraction call: reasoning-tier models
+// (kimi-k3 at maxTokens 6000, timeoutMs 60s) can run past 120s on a cold
+// provider — an expired lease lets a second worker reclaim the job and
+// both integrate the same work_unit_key (PK conflict).
+const LEASE_SECONDS = 300;
 
 export interface WorkerStats {
   claimed: number;
@@ -196,7 +200,27 @@ export class ExtractionWorker {
       const job = this.claimJob();
       if (!job) break;
       stats.claimed += 1;
-      const outcome = await this.processJob(job);
+      // Crash containment (2026-09-22): parallel drains can collide on a
+      // lease-expired job (slow reasoning call > lease window → reclaim →
+      // both workers integrate the same work_unit_key → PK conflict). A
+      // thrown SqliteError used to kill the whole drain process via an
+      // unhandled rejection. One bad job must never take the worker down —
+      // park it as retryable and keep draining.
+      let outcome: Awaited<ReturnType<ExtractionWorker['processJob']>>;
+      try {
+        outcome = await this.processJob(job);
+      } catch (err) {
+        console.warn(
+          '[ExtractionWorker] job crashed processing; parking as retryable:',
+          job.jobId,
+          (err as Error).message?.slice(0, 120),
+        );
+        outcome = this.handleRetryable(
+          job,
+          'worker_crash',
+          (err as Error).message ?? 'unknown',
+        );
+      }
       if (outcome === 'integrated') stats.integrated += 1;
       else if (outcome === 'zero') stats.zeroFact += 1;
       else if (outcome === 'retryable') stats.retryable += 1;
