@@ -384,13 +384,25 @@ export class UnitTruthMaintainer {
       this.writeSources(counterId, newSources, now);
       this.writeRevision(counterId, 1, 'disputed', conflicting.id, counterId, actor, workUnitKey);
 
-      // Mark the ORIGINAL unit as disputed (it already is via newStatus).
-      this.db
+      // Mark the ORIGINAL unit as disputed AND advance current_revision to
+      // match the revision row below. F14 (2026-09-22): the missing
+      // current_revision increment desynced memory_units from
+      // memory_unit_revisions — every later propose on the same unit read a
+      // stale N, tried writeRevision(N+1), and hit the (unit_id, revision)
+      // PK constraint deterministically (68 stuck retryables, the
+      // 'worker_crash: UNIQUE constraint' dead_letters).
+      const disputedUpdate = this.db
         .prepare(
-          `UPDATE memory_units SET status = 'disputed', updated_at = ?
+          `UPDATE memory_units SET status = 'disputed',
+             current_revision = current_revision + 1, updated_at = ?
            WHERE id = ? AND current_revision = ?`,
         )
         .run(nowSec, conflicting.id, conflicting.current_revision);
+      if (disputedUpdate.changes !== 1) {
+        throw new Error(
+          `[UnitTruthMaintainer] CAS conflict on disputed unit ${conflicting.id}; reload truth and retry (no last-write-wins)`,
+        );
+      }
 
       // Revision on the original unit records the dispute.
       this.writeRevision(conflicting.id, conflicting.current_revision + 1, 'disputed', conflicting.id, conflicting.id, actor, workUnitKey);
