@@ -128,6 +128,8 @@ describe('importTasksFromJira', () => {
     expect(subs.map((s) => s.key).sort()).toEqual(['NOVA-201', 'NOVA-202']);
     expect(subs.find((s) => s.key === 'NOVA-201')!.owner).toBe('Vivi');
     expect(subs.find((s) => s.key === 'NOVA-201')!.temp).toBe(false);
+    expect(subs.find((s) => s.key === 'NOVA-201')!.targetStart).toBe('2026-08-03');
+    expect(subs.find((s) => s.key === 'NOVA-201')!.targetEnd).toBe('2026-08-10');
     const mirrored = subs.find((s) => s.key === 'NOVA-202')!;
     expect(mirrored.start).toBe('2026-08-01');
     expect(mirrored.days).toBe(30);
@@ -195,6 +197,42 @@ describe('importTasksFromJira', () => {
     const updated = result.snapshot.items.find((i) => i.key === 'NOVA-200')!;
     expect(updated.targetStart).toBe('2026-08-10');
     expect(updated.targetEnd).toBe('2026-08-24');
+  });
+
+  it('confirmTargetSync stamps last mirrored Target onto a sub', () => {
+    expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey: 'NOVA-200',
+        title: 'confirm-child',
+        start: '2026-08-10',
+        days: 4,
+      }),
+    );
+    const draft = getTeamSnapshot(teamId)!
+      .items.find((i) => i.key === 'NOVA-200')!
+      .subs.find((s) => s.title === 'confirm-child')!;
+    expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: draft.id, jiraKey: 'NOVA-209' }],
+      }),
+    );
+    const result = confirmTargetSync(teamId, actor, {
+      subId: draft.id,
+      start: '2026-08-12',
+      end: '2026-08-21',
+      jiraKey: 'NOVA-209',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const sub = result.snapshot.items
+      .find((i) => i.key === 'NOVA-200')!
+      .subs.find((s) => s.id === draft.id)!;
+    expect(sub.start).toBe('2026-08-12');
+    expect(sub.days).toBe(10);
+    expect(sub.targetStart).toBe('2026-08-12');
+    expect(sub.targetEnd).toBe('2026-08-21');
   });
 
   it('confirmTargetSync restores schedule if silent refresh raced stale Target', () => {

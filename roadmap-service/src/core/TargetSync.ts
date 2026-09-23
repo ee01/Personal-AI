@@ -221,6 +221,11 @@ async function flushSubTargetSync(
 
   try {
     await jiraUpdateTargetDates(jiraKey, start, end);
+    const ts = Date.now();
+    db.prepare(
+      `UPDATE subs SET target_start = ?, target_end = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(start, end, ts, subId);
     await writeSyncResult({
       teamId,
       actor,

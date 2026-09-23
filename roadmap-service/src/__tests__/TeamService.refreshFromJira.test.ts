@@ -566,3 +566,214 @@ describe('refresh_from_jira item status', () => {
     expect(refreshed.status).toBe('Resolved');
   });
 });
+
+describe('refresh_from_jira keeps unsynced local schedule', () => {
+  it('does not relocate a resized epic when Jira Target is still the old dates', () => {
+    const snapshot = createTeam({
+      name: 'KeepLocalEpic',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [
+          {
+            key: 'NOVA-800',
+            type: 'Epic',
+            title: 'Keep me',
+            quarter: '2026-Q3',
+            targetStart: '2026-08-01',
+            targetEnd: '2026-08-14',
+          },
+        ],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'schedule',
+        itemKey: 'NOVA-800',
+        start: '2026-08-01',
+        days: 14,
+        lane: 0,
+        baseVersion: getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-800')!
+          .version,
+      }),
+    );
+    const scheduled = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-800')!;
+    expectOk(
+      apply(teamId, {
+        op: 'resize',
+        itemKey: 'NOVA-800',
+        start: '2026-08-01',
+        days: 21,
+        baseVersion: scheduled.version,
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-800',
+            fetchedAt: Date.now() + 1000,
+            fields: {
+              summary: 'Keep me from Jira',
+              status: 'In Progress',
+              targetStart: '2026-08-01',
+              targetEnd: '2026-08-14',
+            },
+          },
+        ],
+      }),
+    );
+    const kept = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-800')!;
+    expect(kept.start).toBe('2026-08-01');
+    expect(kept.days).toBe(21);
+    expect(kept.targetStart).toBe('2026-08-01');
+    expect(kept.targetEnd).toBe('2026-08-14');
+    expect(kept.title).toBe('Keep me from Jira');
+    expect(kept.status).toBe('In Progress');
+  });
+
+  it('still relocates when local span matches last mirrored Target and Jira moved', () => {
+    const snapshot = createTeam({
+      name: 'ApplyJiraEpic',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [
+          {
+            key: 'NOVA-801',
+            type: 'Epic',
+            title: 'Synced',
+            quarter: '2026-Q3',
+            targetStart: '2026-08-01',
+            targetEnd: '2026-08-14',
+          },
+        ],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'schedule',
+        itemKey: 'NOVA-801',
+        start: '2026-08-01',
+        days: 14,
+        lane: 0,
+        baseVersion: getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-801')!
+          .version,
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-801',
+            fetchedAt: Date.now() + 1000,
+            fields: {
+              targetStart: '2026-08-04',
+              targetEnd: '2026-08-20',
+            },
+          },
+        ],
+      }),
+    );
+    const moved = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-801')!;
+    expect(moved.start).toBe('2026-08-04');
+    expect(moved.days).toBe(17);
+    expect(moved.targetStart).toBe('2026-08-04');
+    expect(moved.targetEnd).toBe('2026-08-20');
+  });
+
+  it('keeps a resized sub after Target has been mirrored once', () => {
+    const snapshot = createTeam({
+      name: 'KeepLocalSub',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    expectOk(
+      apply(teamId, {
+        op: 'import',
+        quarters: ['2026-Q3'],
+        items: [{ key: 'NOVA-802', type: 'Epic', title: 'P', quarter: '2026-Q3' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'add_sub',
+        itemKey: 'NOVA-802',
+        title: 'child',
+        start: '2026-08-01',
+        days: 4,
+      }),
+    );
+    const draft = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-802')!.subs[0];
+    expectOk(
+      apply(teamId, {
+        op: 'resolve_draft',
+        mappings: [{ draftId: draft.id, jiraKey: 'NOVA-803' }],
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        issues: [
+          {
+            key: 'NOVA-803',
+            fetchedAt: Date.now() + 1000,
+            fields: {
+              targetStart: '2026-08-01',
+              targetEnd: '2026-08-04',
+              status: 'Open',
+            },
+          },
+        ],
+      }),
+    );
+    const mirrored = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-802')!.subs[0];
+    expect(mirrored.targetStart).toBe('2026-08-01');
+    expect(mirrored.targetEnd).toBe('2026-08-04');
+    expectOk(
+      apply(teamId, {
+        op: 'update_sub',
+        subId: mirrored.id,
+        start: '2026-08-01',
+        days: 10,
+        baseVersion: mirrored.version,
+      }),
+    );
+    expectOk(
+      apply(teamId, {
+        op: 'refresh_from_jira',
+        ignoreTtl: true,
+        issues: [
+          {
+            key: 'NOVA-803',
+            fetchedAt: Date.now() + 2000,
+            fields: {
+              targetStart: '2026-08-01',
+              targetEnd: '2026-08-04',
+              status: 'Closed',
+            },
+          },
+        ],
+      }),
+    );
+    const kept = getTeamSnapshot(teamId)!.items.find((i) => i.key === 'NOVA-802')!.subs[0];
+    expect(kept.start).toBe('2026-08-01');
+    expect(kept.days).toBe(10);
+    expect(kept.targetStart).toBe('2026-08-01');
+    expect(kept.targetEnd).toBe('2026-08-04');
+    expect(kept.status).toBe('Closed');
+  });
+});

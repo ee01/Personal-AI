@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildBacklogGroups,
   collectJiraRefreshKeys,
+  collectUnsyncedTargetRefs,
+  scheduleDivergesFromMirroredTarget,
   buildCreateJiraPayload,
   buildDraftGroups,
   buildStateMessage,
@@ -199,6 +201,82 @@ describe('collectJiraRefreshKeys', () => {
       new Set(),
     );
     expect(keys).toEqual(['NOVA-1', 'NOVA-2', 'NOVA-9']);
+  });
+});
+
+describe('unsynced Target writeback', () => {
+  it('treats a resized epic as dirty when last mirrored Target still has the old span', () => {
+    expect(
+      scheduleDivergesFromMirroredTarget({
+        start: '2026-08-01',
+        days: 21,
+        targetStart: '2026-08-01',
+        targetEnd: '2026-08-14',
+      }),
+    ).toBe(true);
+    expect(
+      scheduleDivergesFromMirroredTarget({
+        start: '2026-08-01',
+        days: 14,
+        targetStart: '2026-08-01',
+        targetEnd: '2026-08-14',
+      }),
+    ).toBe(false);
+    expect(
+      scheduleDivergesFromMirroredTarget({
+        start: '2026-08-01',
+        days: 21,
+        targetStart: null,
+        targetEnd: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('collects dirty epics and subs for extension writeback', () => {
+    const refs = collectUnsyncedTargetRefs([
+      item({
+        key: 'NOVA-1',
+        jiraKey: 'NOVA-1',
+        start: '2026-08-01',
+        days: 21,
+        targetStart: '2026-08-01',
+        targetEnd: '2026-08-14',
+        subs: [
+          sub({
+            id: 's1',
+            key: 'NOVA-2',
+            temp: false,
+            start: '2026-08-03',
+            days: 10,
+            targetStart: '2026-08-03',
+            targetEnd: '2026-08-07',
+          }),
+          sub({
+            id: 's2',
+            key: 'NOVA-3',
+            temp: false,
+            start: '2026-08-03',
+            days: 5,
+            targetStart: '2026-08-03',
+            targetEnd: '2026-08-07',
+          }),
+        ],
+      }),
+    ]);
+    expect(refs).toEqual([
+      {
+        itemKey: 'NOVA-1',
+        jiraKey: 'NOVA-1',
+        start: '2026-08-01',
+        days: 21,
+      },
+      {
+        subId: 's1',
+        jiraKey: 'NOVA-2',
+        start: '2026-08-03',
+        days: 10,
+      },
+    ]);
   });
 });
 

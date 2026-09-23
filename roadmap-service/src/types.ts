@@ -151,6 +151,10 @@ export interface SubRow {
   owner: string | null;
   start_date: string | null;
   days: number | null;
+  /** Last mirrored Jira Target Start (confirm / refresh / import). */
+  target_start: string | null;
+  /** Last mirrored Jira Target End (confirm / refresh / import). */
+  target_end: string | null;
   is_draft: number;
   /** 1 = hidden from Gantt/Resource after cleanup; restored when Epic is re-scheduled. */
   cleared: number;
@@ -253,6 +257,8 @@ export interface TeamSnapshot {
       owner?: string | null;
       start?: string | null;
       days?: number | null;
+      targetStart?: string | null;
+      targetEnd?: string | null;
       temp: boolean;
       cleared?: boolean;
       createdBy: string;

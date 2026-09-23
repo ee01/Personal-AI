@@ -285,6 +285,16 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    id: '017_subs_target_dates',
+    up: (database) => {
+      // Last mirrored Jira Target, so silent refresh can tell "local Gantt
+      // dirty" apart from "Jira Target moved". Do not backfill from start/days:
+      // that would mark unsynced local edits as already mirrored.
+      addColumn(database, 'subs', 'target_start', 'TEXT');
+      addColumn(database, 'subs', 'target_end', 'TEXT');
+    },
+  },
 ];
 
 function runMigrations(database: Db): void {

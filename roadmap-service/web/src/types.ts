@@ -74,6 +74,10 @@ export interface RoadmapSub {
   owner?: string | null;
   start?: string | null;
   days?: number | null;
+  /** Last mirrored Jira Target Start; used to detect unsynced Gantt edits. */
+  targetStart?: string | null;
+  /** Last mirrored Jira Target End; used to detect unsynced Gantt edits. */
+  targetEnd?: string | null;
   temp: boolean;
   /** Soft-hidden after cleanup; still counted in Backlog memory. */
   cleared?: boolean;

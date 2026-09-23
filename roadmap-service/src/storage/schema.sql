@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS subs (
   owner TEXT,
   start_date TEXT,
   days INTEGER,
+  target_start TEXT,
+  target_end TEXT,
   is_draft INTEGER NOT NULL DEFAULT 1,
   cleared INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL DEFAULT '',

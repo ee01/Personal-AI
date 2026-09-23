@@ -52,6 +52,7 @@ import {
 import {
   clipTxt,
   collectJiraRefreshKeys,
+  collectUnsyncedTargetRefs,
   epicColor,
   epicShort,
 } from '../composables/useRoadmapContract';
@@ -421,7 +422,7 @@ function targetTimerKey(ref: TargetSyncRef) {
   return ref.subId ? `sub:${ref.subId}` : `item:${ref.itemKey}`;
 }
 
-function scheduleTargetDateSync(ref: TargetSyncRef) {
+function scheduleTargetDateSync(ref: TargetSyncRef, opts?: { silent?: boolean }) {
   const timerKey = targetTimerKey(ref);
   const existing = targetSyncTimers.get(timerKey);
   if (existing) window.clearTimeout(existing);
@@ -434,11 +435,22 @@ function scheduleTargetDateSync(ref: TargetSyncRef) {
     timerKey,
     window.setTimeout(() => {
       targetSyncTimers.delete(timerKey);
-      void runTargetDateSync(ref).finally(() => {
+      void runTargetDateSync(ref, opts).finally(() => {
         targetSyncInFlightKeys.delete(ref.jiraKey);
       });
     }, 1500),
   );
+}
+
+/** Push Roadmap-only schedule edits (no extension at save time) before Jira pull. */
+function flushUnsyncedTargetDates() {
+  if (!state.hasExtension.value || !state.editable.value) return;
+  const refs = collectUnsyncedTargetRefs(state.scheduledItems.value).filter(
+    (ref) => !targetSyncInFlightKeys.has(ref.jiraKey),
+  );
+  if (!refs.length) return;
+  state.toast(`正在把 ${refs.length} 条未同步的排期写回 Jira…`, 2600);
+  for (const ref of refs) scheduleTargetDateSync(ref, { silent: true });
 }
 
 function pendingTargetJiraKeys(): Set<string> {
@@ -469,7 +481,7 @@ function editingOrDraggingJiraKeys(): Set<string> {
  * the extension is present but the write fails. No extension → local save
  * only, plus the one-line install notice (do not pretend PAT synced it).
  */
-async function runTargetDateSync(ref: TargetSyncRef) {
+async function runTargetDateSync(ref: TargetSyncRef, opts?: { silent?: boolean }) {
   if (!state.teamId.value || !state.editable.value) return;
   const start = ref.start;
   const end = fmtISO(addD(parseDate(start), Math.max(1, ref.days) - 1));
@@ -501,10 +513,12 @@ async function runTargetDateSync(ref: TargetSyncRef) {
           },
     );
     if (confirmed.snapshot) state.commitSnapshot(confirmed.snapshot);
-    state.toast(
-      `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}（经你的 Jira 账号）`,
-      2600,
-    );
+    if (!opts?.silent) {
+      state.toast(
+        `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}（经你的 Jira 账号）`,
+        2600,
+      );
+    }
     return;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -520,10 +534,12 @@ async function runTargetDateSync(ref: TargetSyncRef) {
         ? { subId: ref.subId, mode: 'queue' }
         : { itemKey: ref.itemKey!, mode: 'queue' },
     );
-    state.toast(
-      `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}`,
-      2600,
-    );
+    if (!opts?.silent) {
+      state.toast(
+        `<span class="ok">✓</span> 已回写 ${ref.jiraKey} Target ${start} → ${end}`,
+        2600,
+      );
+    }
   } catch {
     // Silent when server PAT also missing / network fails.
   }
@@ -581,6 +597,7 @@ async function silentRefreshFromJira() {
         },
       })),
     });
+    flushUnsyncedTargetDates();
   } catch (err) {
     console.debug('[roadmap] silent jira refresh skipped', err);
   } finally {
@@ -599,7 +616,10 @@ function scheduleSilentJiraRefresh() {
 watch(
   () => [state.hasExtension.value, state.editable.value, state.snapshot.value?.team.id] as const,
   ([hasExt, editable, teamId]) => {
-    if (hasExt && editable && teamId) scheduleSilentJiraRefresh();
+    if (hasExt && editable && teamId) {
+      flushUnsyncedTargetDates();
+      scheduleSilentJiraRefresh();
+    }
   },
   { immediate: true },
 );

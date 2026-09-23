@@ -91,6 +91,7 @@ describe('items migrations on an existing database', () => {
       '014_subs_original_estimate_days',
       '015_items_status',
       '016_draft_planning',
+      '017_subs_target_dates',
     ]);
     const row = db
       .prepare(`SELECT source, jira_key, project_key FROM items WHERE id = 'i1'`)
@@ -112,15 +113,17 @@ describe('items migrations on an existing database', () => {
     ).toBe(true);
     expect(
       (
-        db.pragma(`table_info(teams)`) as Array<{ name: string }>
-      ).some((c) => c.name === 'assignee_map_json'),
-    ).toBe(true);
+        db.pragma(`table_info(subs)`) as Array<{ name: string }>
+      ).map((c) => c.name),
+    ).toEqual(
+      expect.arrayContaining(['target_start', 'target_end', 'status']),
+    );
   });
 
   it('is safe to re-run on an already migrated database', () => {
     closeDb();
     const db = getDb();
-    expect(migrationIds(db)).toHaveLength(16);
+    expect(migrationIds(db)).toHaveLength(17);
     expect(
       db.prepare(`SELECT COUNT(*) AS n FROM items`).get() as { n: number },
     ).toEqual({ n: 1 });

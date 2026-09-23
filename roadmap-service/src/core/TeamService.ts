@@ -37,6 +37,7 @@ import {
   parseAssigneeMap,
 } from './assigneeMap.js';
 import { planDeferToTarget } from './deferPlan.js';
+import { scheduleDivergesFromMirroredTarget } from './targetSchedule.js';
 import {
   coerceOriginalEstimateDays,
   originalEstimateFromJiraFields,
@@ -221,6 +222,8 @@ function mapItem(row: ItemRow, subs: SubRow[], markers: MarkerRow[] = []) {
       owner: sub.owner,
       start: sub.start_date,
       days: sub.days,
+      targetStart: sub.target_start || null,
+      targetEnd: sub.target_end || null,
       temp: Boolean(sub.is_draft),
       cleared: Boolean(sub.cleared),
       createdBy: sub.created_by,
@@ -2184,12 +2187,14 @@ export function importRemoteTasks(
 
     const id = nanoid(12);
     const owner = task.assignee || null;
+    const mirroredStart = task.targetStart || start;
+    const mirroredEnd = task.targetEnd || addDaysIso(start, days - 1);
     db.prepare(
       `INSERT INTO subs (
         id, team_id, item_key, jira_key, title, alias, owner,
-        start_date, days, is_draft, cleared, created_by, original_estimate_days,
-        version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, 0, ?, ?, 1, ?, ?)`,
+        start_date, days, target_start, target_end, is_draft, cleared, created_by,
+        original_estimate_days, version, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0, 0, ?, ?, 1, ?, ?)`,
     ).run(
       id,
       teamId,
@@ -2199,6 +2204,8 @@ export function importRemoteTasks(
       owner,
       start,
       days,
+      mirroredStart,
+      mirroredEnd,
       actor.name,
       task.originalEstimateDays ?? null,
       ts,
@@ -2300,6 +2307,10 @@ function jiraStatusName(raw: unknown): string | null | undefined {
 /**
  * Batch Jira → Roadmap mirror. Returns true when the call was skipped by TTL
  * (caller should not write activity / should not treat it as a mutation).
+ *
+ * Schedule relocation uses last-mirrored `target_*` as the 3-way base: if the
+ * Gantt span already diverges (someone resized without confirming to Jira),
+ * keep local dates and still apply status/summary. Otherwise Jira Target wins.
  */
 function applyRefreshFromJira(
   teamId: string,
@@ -2371,13 +2382,30 @@ function applyRefreshFromJira(
       const nextTitle = summary || item.title;
       const nextDesc =
         description !== undefined ? description : item.description;
-      const nextTStart =
-        targetStart !== undefined ? targetStart : item.target_start;
-      const nextTEnd = targetEnd !== undefined ? targetEnd : item.target_end;
+      const dirty = scheduleDivergesFromMirroredTarget({
+        start: item.start_date,
+        days: item.days,
+        targetStart: item.target_start,
+        targetEnd: item.target_end,
+      });
+      const nextTStart = dirty
+        ? item.target_start
+        : targetStart !== undefined
+          ? targetStart
+          : item.target_start;
+      const nextTEnd = dirty
+        ? item.target_end
+        : targetEnd !== undefined
+          ? targetEnd
+          : item.target_end;
       const nextStatus = status !== undefined ? status : item.status;
       let nextStart = item.start_date;
       let nextDays = item.days;
-      if (item.scheduled && (targetStart !== undefined || targetEnd !== undefined)) {
+      if (
+        !dirty &&
+        item.scheduled &&
+        (targetStart !== undefined || targetEnd !== undefined)
+      ) {
         if (nextTStart && nextTEnd) {
           nextStart = nextTStart;
           nextDays = daysBetweenIso(nextTStart, nextTEnd);
@@ -2422,9 +2450,17 @@ function applyRefreshFromJira(
       const nextTitle = summary || sub.title;
       const nextDesc =
         description !== undefined ? description : sub.description;
+      const dirty = scheduleDivergesFromMirroredTarget({
+        start: sub.start_date,
+        days: sub.days,
+        targetStart: sub.target_start,
+        targetEnd: sub.target_end,
+      });
       let nextStart = sub.start_date;
       let nextDays = sub.days;
-      if (targetStart !== undefined || targetEnd !== undefined) {
+      let nextTStart = sub.target_start;
+      let nextTEnd = sub.target_end;
+      if (!dirty && (targetStart !== undefined || targetEnd !== undefined)) {
         const tStart = targetStart || sub.start_date;
         const tEnd =
           targetEnd ||
@@ -2437,6 +2473,8 @@ function applyRefreshFromJira(
         } else if (tStart) {
           nextStart = tStart;
         }
+        nextTStart = targetStart !== undefined ? targetStart : tStart;
+        nextTEnd = targetEnd !== undefined ? targetEnd : tEnd;
       }
       let nextOwner = sub.owner;
       if (assignee) {
@@ -2454,6 +2492,8 @@ function applyRefreshFromJira(
         (nextDesc || null) === (sub.description || null) &&
         (nextStart || null) === (sub.start_date || null) &&
         nextDays === sub.days &&
+        (nextTStart || null) === (sub.target_start || null) &&
+        (nextTEnd || null) === (sub.target_end || null) &&
         (nextOwner || null) === (sub.owner || null) &&
         (nextStatus || null) === (sub.status || null) &&
         (nextEstimate || null) === (sub.original_estimate_days || null);
@@ -2461,7 +2501,8 @@ function applyRefreshFromJira(
       const result = db
         .prepare(
           `UPDATE subs SET
-            title = ?, description = ?, start_date = ?, days = ?, owner = ?, status = ?,
+            title = ?, description = ?, start_date = ?, days = ?,
+            target_start = ?, target_end = ?, owner = ?, status = ?,
             original_estimate_days = ?,
             version = version + 1, updated_at = ?
            WHERE id = ? AND version = ?`,
@@ -2471,6 +2512,8 @@ function applyRefreshFromJira(
           nextDesc,
           nextStart,
           nextDays,
+          nextTStart,
+          nextTEnd,
           nextOwner,
           nextStatus,
           nextEstimate,
@@ -2574,9 +2617,11 @@ export function confirmTargetSync(
     const jiraKey = sub.jira_key || String(input.jiraKey || '').trim() || null;
     if (!jiraKey) return { ok: false, error: 'jira_key_required', status: 400 };
     db.prepare(
-      `UPDATE subs SET start_date = ?, days = ?, version = version + 1, updated_at = ?
+      `UPDATE subs SET
+        start_date = ?, days = ?, target_start = ?, target_end = ?,
+        version = version + 1, updated_at = ?
        WHERE id = ?`,
-    ).run(start, days, ts, subId);
+    ).run(start, days, start, end, ts, subId);
     writeActivity({
       teamId,
       actor,

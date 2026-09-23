@@ -39,12 +39,13 @@ describe('a database created from schema.sql', () => {
       '014_subs_original_estimate_days',
       '015_items_status',
       '016_draft_planning',
+      '017_subs_target_dates',
     ]);
     expect(
       (db.pragma('table_info(subs)') as Array<{ name: string }>).map(
         (row) => row.name,
       ),
-    ).toEqual(expect.arrayContaining(['cleared', 'description', 'status', 'original_estimate_days', 'owner_resolution']));
+    ).toEqual(expect.arrayContaining(['cleared', 'description', 'status', 'original_estimate_days', 'owner_resolution', 'target_start', 'target_end']));
     expect(
       (db.pragma('table_info(items)') as Array<{ name: string }>).map(
         (row) => row.name,

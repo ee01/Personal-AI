@@ -391,6 +391,103 @@ export function collectJiraRefreshKeys(
   return [...primary, ...extra];
 }
 
+/**
+ * Inclusive Gantt end (`days` is a length). Null when the bar has no span.
+ */
+export function ganttEndIso(
+  start: string | null | undefined,
+  days: number | null | undefined,
+): string | null {
+  if (!start || typeof days !== 'number' || !Number.isFinite(days) || days < 1) {
+    return null;
+  }
+  return fmtISO(addD(parseDate(start), Math.max(1, Math.floor(days)) - 1));
+}
+
+/**
+ * True when the Gantt bar no longer matches the last mirrored Jira Target.
+ * Missing both target fields means the row was never mirrored — do not treat
+ * it as a pending Roadmap→Jira write.
+ */
+export function scheduleDivergesFromMirroredTarget(input: {
+  start?: string | null;
+  days?: number | null;
+  targetStart?: string | null;
+  targetEnd?: string | null;
+}): boolean {
+  const start = input.start || null;
+  const days =
+    typeof input.days === 'number' && Number.isFinite(input.days)
+      ? Math.floor(input.days)
+      : null;
+  const targetStart = input.targetStart || null;
+  const targetEnd = input.targetEnd || null;
+  if (!start || !days || days < 1) return false;
+  if (!targetStart && !targetEnd) return false;
+  const end = ganttEndIso(start, days);
+  if (targetStart && targetStart !== start) return true;
+  if (targetEnd && end && targetEnd !== end) return true;
+  return false;
+}
+
+export type UnsyncedTargetRef = {
+  itemKey?: string;
+  subId?: string;
+  jiraKey: string;
+  start: string;
+  days: number;
+};
+
+/** Gantt rows whose local span diverges from last mirrored Jira Target. */
+export function collectUnsyncedTargetRefs(
+  items: RoadmapItem[],
+): UnsyncedTargetRef[] {
+  const out: UnsyncedTargetRef[] = [];
+  for (const it of items) {
+    if (
+      it.scheduled &&
+      it.jiraKey &&
+      it.start &&
+      typeof it.days === 'number' &&
+      scheduleDivergesFromMirroredTarget({
+        start: it.start,
+        days: it.days,
+        targetStart: it.targetStart,
+        targetEnd: it.targetEnd,
+      })
+    ) {
+      out.push({
+        itemKey: it.key,
+        jiraKey: it.jiraKey,
+        start: it.start,
+        days: it.days,
+      });
+    }
+    for (const s of it.subs || []) {
+      if (s.cleared || s.temp || !s.key || !s.start || typeof s.days !== 'number') {
+        continue;
+      }
+      if (
+        !scheduleDivergesFromMirroredTarget({
+          start: s.start,
+          days: s.days,
+          targetStart: s.targetStart,
+          targetEnd: s.targetEnd,
+        })
+      ) {
+        continue;
+      }
+      out.push({
+        subId: s.id,
+        jiraKey: s.key,
+        start: s.start,
+        days: s.days,
+      });
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ *
  * Backlog ordering
  * ------------------------------------------------------------------ */

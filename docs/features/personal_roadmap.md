@@ -14,6 +14,7 @@ Roadmap 是团队共享的意图声明（排期 / Epic / 草稿任务）。记�
 4. 高影响事件（日期变动等）抽成时间线，写双时态属性，并在 Roadmap bar 上出个人层角标；用户可「按此更新」或「忽略」，也可因 bar 收敛到建议日期而自动消除。
 5. 自我反思 / dreaming / 召回以 focus project 为锚点，但有多团队预算公平与 alias 短名压缩，避免 prompt 过载。
 6. 「创建 Jira」填了 Prompt 时，按 Epic 最多 2 路交给 Agent；某一组只成功一部分也会把已有 Jira key 写回 Roadmap，失败的行单独标错，可改字段后按组重试且不会再创建已成功的 ticket。Jira 里还没有对应 fixVersion 时留空该字段继续创建。
+7. 没装扩展的人改甘特长度（task end）只会写进 Roadmap。下一个装了扩展的协作者打开页面时，会**先**把这些尚未回写 Jira 的排期推上去（Gantt span ≠ 上次镜像的 Target），**再**静默拉 Jira 的 status / 摘要；拉下来的旧 Target **不会**盖掉别人已经存在 Roadmap 里、但还没同步的 bar。Jira 里单独改过、且 Roadmap 排期仍等于上次镜像的，才按 Jira 挪 bar。
 
 ## 数据分层
 
@@ -410,7 +411,7 @@ createmeta 不可用时只发 Epic Name（Jira 强制要求的那个）以及有
 
 ## 数据库迁移
 
-`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除；`014_subs_original_estimate_days` 给 `subs` 加 `original_estimate_days`——Jira Original Estimate 向上取整折算的人天（1 人天 = 8 小时），导入 Task / 打开页 `refresh_from_jira` 写入，人员视图「其余延至下周」拿它当最小任务长度（空则默认 3 人天）；`015_items_status` 给 `items` 加 `status`——同一套镜像，甘特主任务条（Epic）Closed/Resolved/Done 时用与子任务相同的浅绿 + ✓ 样式。
+`items` 表加了 `source` / `jira_key` / `project_key` 三列。远端已有真实数据，所以走幂等 `ALTER TABLE`（按 `PRAGMA table_info(items)` 判断）并记进 `_migrations`，不重建库。后续 `010_item_sub_description` 给 `items`/`subs` 加 `description`；`011_teams_jira_refreshed_at` 给 `teams` 加刷新时间戳；`013_subs_status` 给 `subs` 加 `status`——镜像的 Jira 工作流状态（`Closed`/`Resolved`/…），由 `applyRefreshFromJira` 的 sub 分支写入，人员视图/甘特图用它给已完成任务单独配色并从顺延候选里剔除；`014_subs_original_estimate_days` 给 `subs` 加 `original_estimate_days`——Jira Original Estimate 向上取整折算的人天（1 人天 = 8 小时），导入 Task / 打开页 `refresh_from_jira` 写入，人员视图「其余延至下周」拿它当最小任务长度（空则默认 3 人天）；`015_items_status` 给 `items` 加 `status`——同一套镜像，甘特主任务条（Epic）Closed/Resolved/Done 时用与子任务相同的浅绿 + ✓ 样式；`017_subs_target_dates` 给 `subs` 加 `target_start` / `target_end`——上次成功镜像的 Jira Target，用来区分「本地甘特改过还没回写」和「Jira Target 自己动了」。不从 `start_date`/`days` 回填，以免把未同步的本地改动标成已镜像。
 
 **顺序约束**：`Database.ts` 是先 `db.exec(schema.sql)` 再跑迁移。所以 `schema.sql` 里**不能**出现引用新列的索引——已有部署还没 ALTER 过，启动时就会崩。`idx_items_jira_key` 因此由迁移 `003` 创建而不是写在 `schema.sql` 里。`schema.sql` 只负责让全新库一次到位，迁移负责把老库补齐。description 列写在 `schema.sql` 里但不建索引。
 
@@ -587,8 +588,9 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 |---|---|---|
 | **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重（含 `originalEstimateDays`） |
 | **拖动回写 Target** | **仅**扩展 Options token（无扩展不走服务端 PAT） | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期。扩展在但 token 失败才 `mode=queue` 走服务端 PAT。**未装扩展**：Roadmap 排期照常保存，不写 Jira，底部一行「这次改动只保存在 Roadmap，没有同步到 Jira。」+ 文本按钮「安装插件开启同步」（点开与创建 Jira 同一套安装弹窗）。成功回写才 toast |
+| **打开页补回写未同步排期** | **仅**扩展 Options token | 有扩展打开页：在静默刷新前扫描 Gantt（主任务 `start`/`days` ≠ 上次镜像的 `targetStart`/`targetEnd`；子任务同理，需已镜像过 Target）。命中则先排队 Target 回写，并跳过这些 key 的 Jira 拉取，避免旧 Target 盖掉无扩展用户的本地改动。刷新结束后若仍有未同步条，再补一次。 |
 | **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；未映射 toast「未回写 assignee」；置空先 confirm。**未装扩展**：Roadmap Owner 已改，同一行安装提示，不再单独 toast |
-| **打开静默刷新 Jira（拉取）** | **仅**扩展 Options token | 无扩展时**保持静默、不拉取、也不弹安装条**（打开页不是用户主动写 Jira）。有扩展时：握手成功 + snapshot 后约 2s；**甘特**非 draft 主任务 + 有 key 的子任务与 **Backlog** 里有 `jiraKey` 的 Epic 共用最多 50 个 primary key（甘特优先），再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker；仍有 `jiraKey` 但 `status` 尚未镜像的行会绕过 TTL 再拉一次）。主/子任务按 Target 可能挪 bar；主任务同步 `status`（含仍在 Backlog 的 Epic）；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新。协作者仍能看到**上次有扩展的人**镜像进团队库的 status |
+| **打开静默刷新 Jira（拉取）** | **仅**扩展 Options token | 无扩展时**保持静默、不拉取、也不弹安装条**（打开页不是用户主动写 Jira）。有扩展时：握手成功 + snapshot 后约 2s；**甘特**非 draft 主任务 + 有 key 的子任务与 **Backlog** 里有 `jiraKey` 的 Epic 共用最多 50 个 primary key（甘特优先），再附加最多 25 个依赖 ticket；JQL `key in (...)` 每批 ≤25。结果走 `refresh_from_jira`（团队级 `jira_refreshed_at` 10 分钟 TTL，不进 ticker；仍有 `jiraKey` 但 `status` 尚未镜像的行会绕过 TTL 再拉一次）。主/子任务按 Target 可能挪 bar，**但 Gantt span 已偏离上次镜像 Target 的行只更新 status/摘要，不挪 bar、不改 `target_*`**；主任务同步 `status`（含仍在 Backlog 的 Epic）；子任务同步 `status` 与 `originalEstimateDays`；**依赖只写 status / Target End 缓存，不改 ETA**。跳过正在拖拽/编辑、以及 Target 回写防抖+HTTP 全程 in-flight 的 key。只读链接不刷新。协作者仍能看到**上次有扩展的人**镜像进团队库的 status |
 
 注意：Jira 侧修改人是 Options token 属主或服务端 PAT 属主；activity 里的 actor 仍是触发拖动的用户。`team.jiraEnabled` 只表示 PAT fallback 是否可用，**不再**控制「导入 Task」按钮。description ≠ alias：alias 永不回写 Jira。读方向（Jira→owner）未映射用实名入成员表；写方向（owner→Jira）必须有映射。空 assignee 刷新不清空 Roadmap Owner。
 
@@ -677,7 +679,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 ## 验证
 
 - 扩展入口：`npm start` + Playwright / 手动打开 popup
-- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 item/sub `status` 与 sub `originalEstimateDays` 的镜像与幂等、`draftPlanning` E-12 fixture / 幂等 / Owner / 撤销、MCP HTTP 头与 HTTPS 约束、前端 2000 字描述上限）
+- roadmap-service：`cd roadmap-service && npx vitest run`（含 JiraClient mock、Target 防抖回写、import-tasks 去重、ticker 过滤、markers、expand no-op、`defer_subs` 的平移/缩短/延长 Epic/幂等/跳过无效 id、`planDeferToTarget`、`landRelease` 落点列、`resolve_item`/`resolve_draft` 的 alias 固化、`refresh_from_jira` 对 item/sub `status` 与 sub `originalEstimateDays` 的镜像与幂等、**未同步本地排期不被旧 Jira Target 覆盖**、`draftPlanning` E-12 fixture / 幂等 / Owner / 撤销、MCP HTTP 头与 HTTPS 约束、前端 2000 字描述上限）
 - AI Draft 规划体验 eval：`npm run eval:validate` 与 `npm run eval:run -- --suite roadmap-ai-draft-planning --no-repair`（合成计划契约，不跑真实 Jira / Memory / 付费模型质量）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
