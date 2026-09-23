@@ -1,21 +1,20 @@
 /**
- * Guards the Roadmap page → extension → memory seam.
+ * Guards the extension half of the Roadmap page → extension → memory seam.
  *
- * The page and the extension live in different build trees, so nothing but a
- * test that runs both halves catches a rename on one side: `postMessageState()`
- * emitted `team` while the content script read `teamId`, which silently
- * disabled focus sync for the entire life of the feature.
+ * The page that emits `pai-roadmap-state` lives in the personal-roadmap repo.
+ * This file checks the wire shape the extension actually reads: both `team`
+ * and `teamId`, and `toFocusSyncItem()` nesting `subActivity` under
+ * `priorityHints`.
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildStateMessage } from '../../roadmap-service/web/src/composables/useRoadmapContract.js';
-import type { RoadmapItem } from '../../roadmap-service/web/src/types.js';
 import {
   isSyntheticItemKey,
   readTeamId,
   toFocusSyncItem,
+  type RoadmapFocusItem,
   type RoadmapStateMessage,
 } from '../roadmapFocusContract.js';
 import { reportAndRethrowMessageAnalysisError } from '../messageAnalysisError.js';
@@ -23,38 +22,33 @@ import { buildMessageFilterSystemPrompt } from '../prompts/messageAnalysis.js';
 import type { EnvConfigType } from '../utils.js';
 import { buildFocusProjectWatchRules } from '../watchRules.js';
 
-function item(overrides: Partial<RoadmapItem> = {}): RoadmapItem {
+function item(overrides: Partial<RoadmapFocusItem> = {}): RoadmapFocusItem {
   return {
     key: 'NOVA-1',
     type: 'Epic',
     title: 'Imported epic',
-    source: 'jira',
-    jiraKey: 'NOVA-1',
-    projectKey: 'NOVA',
     alias: null,
     quarter: '2026-Q3',
-    estimate: 3,
     targetStart: '2026-07-01',
     targetEnd: '2026-08-01',
-    scheduled: true,
     start: '2026-07-06',
     days: 21,
-    lane: 0,
-    expanded: false,
-    version: 1,
-    subs: [],
+    isDraft: false,
+    jiraKey: 'NOVA-1',
     ...overrides,
   };
 }
 
-function stateOf(items: RoadmapItem[]): RoadmapStateMessage {
-  return buildStateMessage({
+function stateOf(items: RoadmapFocusItem[]): RoadmapStateMessage {
+  return {
+    type: 'pai-roadmap-state',
     teamId: 'Sp1CSuq7w70L',
+    team: 'Sp1CSuq7w70L',
     teamName: 'Nova brandy',
     quarter: '2026-Q3',
     editable: true,
     items,
-  }) as RoadmapStateMessage;
+  };
 }
 
 /** What the extension keeps out of `syncFocusSnapshot` before doing any work. */
@@ -83,20 +77,7 @@ test('a page bundle that only sends the legacy team field still syncs', () => {
 test('sub-task activity is nested under priorityHints for memory', () => {
   const state = stateOf([
     item({
-      subs: [
-        {
-          id: 's1',
-          key: null,
-          title: 'child',
-          alias: null,
-          owner: null,
-          start: '2026-07-06',
-          days: 7,
-          temp: true,
-          createdBy: 'Tester',
-          version: 1,
-        },
-      ],
+      subActivity: true,
     }),
   ]);
 
@@ -130,23 +111,17 @@ test('description is forwarded for paragraph context and is not a keyword', () =
 });
 
 test('draft detection agrees across all four item states', () => {
-  const imported = item({ key: 'NOVA-1', source: 'jira', jiraKey: 'NOVA-1' });
+  const imported = item({ key: 'NOVA-1', jiraKey: 'NOVA-1' });
   const freshDraft = item({
     key: 'LOCAL-ab12cd34',
-    source: 'manual',
     jiraKey: null,
   });
   const resolvedManual = item({
     key: 'LOCAL-ab12cd34',
-    source: 'manual',
     jiraKey: 'NOVA-900',
   });
 
   const state = stateOf([imported, freshDraft, resolvedManual]);
-  assert.deepEqual(
-    state.items!.map((row) => row.isDraft),
-    [false, true, false],
-  );
   assert.deepEqual(
     state.items!.map((row) => toFocusSyncItem(row).isDraft),
     [false, true, false],
@@ -172,7 +147,6 @@ test('a draft watch rule carries no synthetic key', () => {
   const state = stateOf([
     item({
       key: 'LOCAL-ab12cd34',
-      source: 'manual',
       jiraKey: null,
       title: '低端机首帧优化',
       alias: '低端机',

@@ -683,11 +683,11 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - AI Draft 规划体验 eval：`npm run eval:validate` 与 `npm run eval:run -- --suite roadmap-ai-draft-planning --no-repair`（合成计划契约，不跑真实 Jira / Memory / 付费模型质量）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
-- Roadmap 契约：`roadmap-service/web` 下 `npm test -- roadmapContract`（含 fixVersion 透传、缺版本留空继续、失败重试不重建已成功 ticket）
+- Roadmap 契约：在 personal-roadmap 仓库运行 `npm test -- roadmapContract`（含 fixVersion 透传、缺版本留空继续、失败重试不重建已成功 ticket）
 - Agent mappings：`TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/__tests__/roadmapAgentMappings.test.ts`（partial / warning / jiraKey+error 折叠）
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）
 - 部署后：导入 Task / 创建 Jira / 无扩展时的 Target·Owner 回写都依赖扩展 Options `JIRA_API_TOKEN`。有扩展但 token 失败时，拖动回写仍可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`
-- 部署：`npm run deploy:roadmap`（仅 roadmap-service；本地 build 后 rsync + 远端 docker compose，默认 `10.32.56.212:3220`）。若同时改 memory，用 `npm run deploy:memory`（两者一起发）
+- 部署：在 personal-roadmap 仓库运行 `npm run deploy`（同步到现有主机的 `roadmap-service/` 目录，默认 `10.32.56.212:3220`）。memory 仍用本仓库 `npm run deploy:memory`
 - 部署后探活：`npm run verify:roadmap-service`（`:3220` 与 `http://roadmap.xmnup.com` 的 `/health`，并检查线上 JS 仍含依赖浮层「改用 Jira / 采用 … 为 ETA」文案，避免混合依赖再次打出空白浮窗）
 - focus sync / 抽取：`evals/cases/roadmap-focus-projects/`

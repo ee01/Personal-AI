@@ -36,5 +36,5 @@
 ```bash
 npm run eval:validate
 npm run eval:run -- --suite roadmap-ai-draft-planning --no-repair
-npm --prefix roadmap-service test -- --run src/__tests__/draftPlanning.test.ts mcp/src/http.test.ts
+npm --prefix ../personal-roadmap test -- --run src/__tests__/draftPlanning.test.ts mcp/src/http.test.ts
 ```

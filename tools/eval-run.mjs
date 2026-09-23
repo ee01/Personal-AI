@@ -2439,7 +2439,9 @@ async function runRoadmapAiDraftPlanningCase({
     './node_modules/.bin/tsx',
     ['../tools/eval-roadmap-ai-draft-planning.ts', resolveRepoPath(casePath)],
     {
-      cwd: resolveRepoPath('roadmap-service'),
+      cwd: process.env.ROADMAP_REPO
+        ? path.resolve(process.env.ROADMAP_REPO)
+        : path.resolve(resolveRepoPath('.'), '../personal-roadmap'),
       timeoutMs: 60_000,
     },
   );

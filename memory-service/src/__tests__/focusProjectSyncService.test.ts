@@ -6,8 +6,8 @@ import {
   syncFocusProjectsForTeam,
   type FocusSyncItem,
 } from '../core/FocusProjectSyncService.js';
-// Both sides of the seam, so a rename in either build tree fails here.
-import { buildStateMessage } from '../../../roadmap-service/web/src/composables/useRoadmapContract';
+// The page message is produced in the personal-roadmap repo. Here we feed the
+// extension's reader the wire fields that message carries.
 import { toFocusSyncItem } from '../../../src/roadmapFocusContract';
 import { cleanupTestDb, getTestDb } from './setup.js';
 
@@ -105,49 +105,19 @@ describe('syncFocusProjectsForTeam draft handling', () => {
    * payload it actually builds — not a hand-written one — is what has to work.
    */
   it('accepts the payload the extension builds from a page state message', () => {
-    const state = buildStateMessage({
-      teamId: TEAM_ID,
-      teamName: 'Nova',
+    const synced = toFocusSyncItem({
+      key: DRAFT_KEY,
+      type: 'Epic',
+      title: '手动新增的 backlog 条目',
+      alias: '手动条目',
       quarter: '2026-Q3',
-      editable: true,
-      items: [
-        {
-          key: DRAFT_KEY,
-          type: 'Epic',
-          title: '手动新增的 backlog 条目',
-          source: 'manual',
-          jiraKey: null,
-          projectKey: 'NOVA',
-          alias: '手动条目',
-          quarter: '2026-Q3',
-          estimate: null,
-          targetStart: null,
-          targetEnd: null,
-          scheduled: true,
-          start: '2026-07-06',
-          days: 21,
-          lane: 0,
-          expanded: false,
-          version: 1,
-          subs: [
-            {
-              id: 's1',
-              key: null,
-              title: '子任务',
-              alias: null,
-              owner: null,
-              start: '2026-07-06',
-              days: 7,
-              temp: true,
-              createdBy: 'Tester',
-              version: 1,
-            },
-          ],
-        },
-      ],
+      start: '2026-07-06',
+      days: 21,
+      jiraKey: null,
+      subActivity: true,
     });
 
-    sync(db, state.items.map(toFocusSyncItem) as FocusSyncItem[], 1_000);
+    sync(db, [synced] as FocusSyncItem[], 1_000);
 
     const [project] = listFocusProjects(db);
     expect(project.externalRef).toMatchObject({

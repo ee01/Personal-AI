@@ -4,9 +4,9 @@
  * Lives apart from `contentScriptRoadmap.ts` because that module talks to
  * `chrome.*` and mounts a bridge on import; this half is pure so both the
  * content script and the seam test can use it. The producing end is
- * `buildStateMessage()` in `roadmap-service/web/src/composables/useRoadmapContract.ts`,
- * the consuming end is `FocusSyncItem` in
- * `memory-service/src/core/FocusProjectSyncService.ts`.
+ * `buildStateMessage()` in the personal-roadmap repo
+ * (`web/src/composables/useRoadmapContract.ts`). The consuming end is
+ * `FocusSyncItem` in `memory-service/src/core/FocusProjectSyncService.ts`.
  */
 
 export type RoadmapFocusItem = {

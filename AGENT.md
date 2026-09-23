@@ -93,7 +93,7 @@ After implementing code, choose the smallest validation tier that gives real con
 | 0 - Docs/config-only | Markdown, comments, non-runtime docs, or agent instructions only | Review diff. No build needed unless scripts/env/runtime config changed |
 | 1 - Local compile / targeted tests | Any runtime source, webpack/static assets, manifest, package scripts, env plumbing | Run targeted tests if available. Run dev extension build via `npm start`, wait for first successful compile, then stop it |
 | 2 - Extension E2E | Popup/options/side panel/content script/background/manifest behavior, user-visible UI, cross-context messaging | Tier 1 plus Playwright extension E2E against fresh `dist/` or the relevant existing helper script |
-| 3 - Real browser / real service validation | Google Sheets/OAuth/session-dependent behavior, real Chrome profile state, RingCentral live pages, flows needing installed dev extension, real memory-service data, live roadmap-service at `:3220` / `roadmap.xmnup.com`, or installed desktop app integration | Tier 2 where practical, then use webpage-mcp against the real Chrome profile/dev extension, `npm run deploy:memory` plus `10.32.56.212` checks, `npm run deploy:roadmap` plus `npm run verify:roadmap-service`, or `npm run build:app` plus Computer Use installer validation |
+| 3 - Real browser / real service validation | Google Sheets/OAuth/session-dependent behavior, real Chrome profile state, RingCentral live pages, flows needing installed dev extension, real memory-service data, live roadmap-service at `:3220` / `roadmap.xmnup.com`, or installed desktop app integration | Tier 2 where practical, then use webpage-mcp against the real Chrome profile/dev extension, `npm run deploy:memory` plus `10.32.56.212` checks, `npm run deploy` in `../personal-roadmap` plus `npm run verify:roadmap-service`, or `npm run build:app` plus Computer Use installer validation |
 | 4 - Delivery gate | A complete feature/fix that is ready to hand off | Ensure relevant validation passes, summarize evidence, then auto-commit the owned files. If the change is large, also push to the tracked branch |
 
 Decision examples:
@@ -101,8 +101,8 @@ Decision examples:
 - `src/meeting-shell/**`, Meeting Pilot popup/side panel/panorama/offscreen/background changes: start at Tier 2; use existing `test:meeting-pilot-*` scripts where they match the feature
 - Google Sheets content script, OAuth, manifest permissions, or API key behavior: start at Tier 3 because dev Chrome auth/key state matters
 - Pure memory-service logic: run the relevant `memory-service` tests first; if the local result needs validation against real memory data, promote to Tier 3 with `npm run deploy:memory`, then verify against `http://10.32.56.212:3210`
-- Pure `roadmap-service/` logic or Vue Gantt UI: run `npm --prefix roadmap-service test` (or the targeted vitest files) first; if the change must be visible on the live Gantt, promote to Tier 3 with `npm run deploy:roadmap`, then `npm run verify:roadmap-service`. Hard-refresh `http://roadmap.xmnup.com` before treating a leftover tab as proof
-- Roadmap page + extension bridge (`src/contentScriptRoadmap.ts`, Options `ROADMAP_BASE_URL`): start at Tier 2 for the extension; also deploy/verify roadmap-service when the service contract or Gantt UI must match
+- Pure roadmap service logic or Vue Gantt UI lives in the sibling repo `../personal-roadmap` (`git@github.com:ee01/personal-roadmap.git`). Run `npm test` there first; if the change must be visible on the live Gantt, promote to Tier 3 with `npm run deploy` in that repo, then `npm run verify:roadmap-service` here. Hard-refresh `http://roadmap.xmnup.com` before treating a leftover tab as proof
+- Roadmap page + extension bridge (`src/contentScriptRoadmap.ts`, Options `ROADMAP_BASE_URL`): start at Tier 2 for the extension; also deploy/verify the personal-roadmap repo when the service contract or Gantt UI must match
 - `desktop-app/**`, native messaging, local service, packaged app, or extension-to-desktop integration changes: run local desktop tests/build first; if installed-app behavior matters, promote to Tier 3 with `npm run build:app`, install the generated `.pkg` via Computer Use, then validate the app behavior end to end
 - UI copy/style-only edits in an extension page: Tier 1 is enough unless layout or click behavior is part of the task
 - `src/manifest.json` changes: Tier 2 minimum because extension registration and permissions can break outside TypeScript
@@ -201,7 +201,7 @@ After a complete feature or bug fix is validated, **auto-commit**. Do not wait f
 **Auto-push when the change is large.** After a successful commit, also `git push` to the current tracked branch when any of these is true:
 
 - The commit is a user-visible feature or delivery-gate fix
-- The owned change set is roughly 5 or more files, or spans multiple packages (`src/`, `memory-service/`, `roadmap-service/`, `desktop-app/`, `worker/`)
+- The owned change set is roughly 5 or more files, or spans multiple packages (`src/`, `memory-service/`, `desktop-app/`, `worker/`)
 - The user already said the work is ready to land, ship, or share
 
 Keep a small local experiment, typo, or docs-only probe as a local commit unless the user asked to push. If there is no tracked upstream branch, create one with `-u` on first push. Do not rewrite published history.
@@ -213,8 +213,8 @@ Keep a small local experiment, typo, or docs-only probe as a local commit unless
 | `npm start` | Development build with watch mode using `.env.development`; stop after first successful compile for harness checks | After code changes (default) |
 | `npm run build` | Production build and zip | Release/package verification or production-env regression checks |
 | `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the memory container | After local verification when you need real-environment validation for memory |
-| `npm run deploy:roadmap` | Sync local `roadmap-service/` only to `10.32.56.212` and rebuild the roadmap container | Roadmap-only changes that need live `:3220` / `roadmap.xmnup.com` |
-| `npm run verify:roadmap-service` | Health + public frontend probe for the deployed roadmap-service | After `deploy:roadmap`, or to confirm the live site without redeploying |
+| `npm run deploy` in `../personal-roadmap` | Sync that repo into the host's `roadmap-service/` directory and rebuild the roadmap container | Roadmap-only changes that need live `:3220` / `roadmap.xmnup.com` |
+| `npm run verify:roadmap-service` | Health + public frontend probe for the deployed roadmap service | After a roadmap deploy, or to confirm the live site without redeploying |
 | `npm run verify:roadmap-dep-jira-status` | Assert source + `dist/contentScriptRoadmap.js` return Jira `status` with Target End | After Roadmap content-script changes, before treating 「刷新 Jira」 as proven |
 | `npm run build:app` | Build the desktop app and macOS installer package | When desktop-app or extension-to-desktop behavior needs packaged/installed-app E2E validation |
 | `npm --prefix desktop-app run test:device-key-ui` | Render the desktop settings page against a stubbed bridge and assert the Memory Service 设备密钥 row, its reissue round trip, and its layout | After changes to the desktop device-key flow, `desktop-app/src/deviceApiKey.ts`, or the Memory Service settings card |
@@ -311,20 +311,19 @@ Important constraints:
 
 ## Roadmap Service Deploy And Real Validation
 
-When the change is primarily in `roadmap-service/` (API, SQLite schema/migrations, Vue Gantt UI) and local verification is already complete, deploy the local roadmap-service working tree and validate the live site. Do not stop at local vitest when the user-visible bug is on `roadmap.xmnup.com`.
+When the change is primarily in the personal-roadmap repo (API, SQLite schema/migrations, Vue Gantt UI) and local verification is already complete, deploy that working tree and validate the live site. Do not stop at local vitest when the user-visible bug is on `roadmap.xmnup.com`.
 
 Recommended flow:
 
 1. Complete local verification first
-   - Run `npm --prefix roadmap-service test`, or the targeted vitest files for the touched surface (for example `web/src/__tests__/roadmapContract.test.ts` for hover/popover copy and Gantt contract helpers)
-   - For page↔extension seams, also run `npm run verify:roadmap-focus-contract` and/or `npm run verify:roadmap-jira-create-fields` when those contracts changed
+   - In `../personal-roadmap`, run `npm test`, or the targeted vitest files for the touched surface (for example `web/src/__tests__/roadmapContract.test.ts` for hover/popover copy and Gantt contract helpers)
+   - For page↔extension seams, also run `npm run verify:roadmap-focus-contract` and/or `npm run verify:roadmap-jira-create-fields` in this repo when those contracts changed
    - Extension-only Roadmap content-script / Options changes still follow the Chrome extension tiers; they are not a substitute for deploying the Vue bundle
    - 「刷新 Jira」 / dep status chips go through the **installed** content script (`pai-roadmap-fetch-issue-dates`). `verify:roadmap-service` cannot see that path. After `src/contentScriptRoadmap.ts` changes: rebuild `dist/` (`npm start` or `webpack --config webpack.dev.cjs`), run `npm run verify:roadmap-dep-jira-status`, reload the unpacked extension, then hard-refresh the Roadmap tab. A stale `dist/` returns Target End only and the chip stays 「未刷新」
-2. Deploy with `npm run deploy:roadmap` from the repo root
-   - This syncs the local working tree `roadmap-service/` and repo-root `docker-compose.yml` to `rcadmin@10.32.56.212:/Users/rcadmin/personal-ai`
+2. Deploy with `npm run deploy` from `../personal-roadmap`
+   - This syncs that repo into `rcadmin@10.32.56.212:/Users/rcadmin/personal-ai/roadmap-service` and rebuilds the container with the host's existing compose file
    - It preserves remote `roadmap-service/.env` and `roadmap-service/data/`
-   - It builds locally (`tsc` + Vite), then rebuilds and recreates the remote `roadmap-service` container on port `3220`
-   - It does **not** deploy memory-service. If both services changed, run `npm run deploy:memory` (deploys both) or run both scripts
+   - It does **not** replace the host `docker-compose.yml` and does **not** deploy memory-service. If memory also changed, run `npm run deploy:memory` here as well
 3. After deploy, real-environment checks must actually hit the live process
    - `npm run verify:roadmap-service` — `GET /health` on `http://10.32.56.212:3220` and `http://roadmap.xmnup.com`, then fetch the hashed Vite JS and assert the user-facing Gantt strings for the change (default: dep-popover adopt labels so a mixed-dep click cannot ship as a blank pill)
    - Optional read-only API: `GET /api/v1/teams?ids=<teamId>`
@@ -332,7 +331,7 @@ Recommended flow:
 
 Important constraints:
 
-- `npm run deploy:roadmap` deploys the **local working tree**, not just committed Git history
+- `npm run deploy` in `../personal-roadmap` deploys that working tree, not just committed Git history
 - Because deploy uses file sync, the remote Git worktree can become dirty; do not assume a later `git pull` on the server will be clean unless those same changes are committed upstream
 - Prefer read-only checks against the live team data unless the task explicitly requires mutating a real team
 - After deploy, hashed frontend assets change. Hard-refresh `http://roadmap.xmnup.com` (or close/reopen the tab) before treating the Gantt UI as updated

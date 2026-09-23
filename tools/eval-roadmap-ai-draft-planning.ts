@@ -1,6 +1,15 @@
 import { mkdtempSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const roadmapRoot = process.env.ROADMAP_REPO
+  ? path.resolve(process.env.ROADMAP_REPO)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../personal-roadmap');
+
+function roadmapModule(relativePath: string): string {
+  return pathToFileURL(path.join(roadmapRoot, relativePath)).href;
+}
 
 process.env.DATA_DIR = mkdtempSync(path.join(os.tmpdir(), 'roadmap-eval-'));
 process.env.ROADMAP_AI_ENABLED = 'true';
@@ -19,19 +28,19 @@ const caseItem = JSON.parse(readFileSync(casePath, 'utf8')) as {
   query?: { action?: string };
 };
 
-const { assertSafeBaseUrl } = await import('../roadmap-service/mcp/src/http.ts');
-const { MCP_TOOL_NAMES, MCP_TOOLS } = await import('../roadmap-service/mcp/src/tools.ts');
+const { assertSafeBaseUrl } = await import(roadmapModule('mcp/src/http.ts'));
+const { MCP_TOOL_NAMES, MCP_TOOLS } = await import(roadmapModule('mcp/src/tools.ts'));
 const { E12_SOURCE, E12_PLAN, e12PlanWithKeys } = await import(
-  '../roadmap-service/src/__tests__/fixtures/e12.ts'
+  roadmapModule('src/__tests__/fixtures/e12.ts')
 );
-const { validateDraftPlan } = await import('../roadmap-service/src/planning/DraftPlanValidator.js');
+const { validateDraftPlan } = await import(roadmapModule('src/planning/DraftPlanValidator.js'));
 const { applyIntent, createTeam, getTeamSnapshot } = await import(
-  '../roadmap-service/src/core/TeamService.js'
+  roadmapModule('src/core/TeamService.js')
 );
 const { submitStructuredPlan } = await import(
-  '../roadmap-service/src/planning/DraftPlanningService.js'
+  roadmapModule('src/planning/DraftPlanningService.js')
 );
-const { stripSecrets } = await import('../roadmap-service/src/planning/sanitize.js');
+const { stripSecrets } = await import(roadmapModule('src/planning/sanitize.js'));
 
 const actor = { name: 'Eval', clientId: 'eval', source: 'agent' as const };
 

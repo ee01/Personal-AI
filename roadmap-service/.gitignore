@@ -1,9 +1,0 @@
-node_modules/
-data/
-dist/
-web/dist/
-web/node_modules/
-.env
-*.db
-*.sqlite
-.DS_Store

@@ -1015,12 +1015,9 @@ suites:
       mode: suggest
       agent: codex
       allowedPaths:
-        - roadmap-service/src/planning/**
-        - roadmap-service/mcp/**
-        - roadmap-service/web/src/**
         - docs/features/personal_roadmap.md
       validate:
-        - npm --prefix roadmap-service test -- --run src/__tests__/draftPlanning.test.ts mcp/src/http.test.ts
+        - npm --prefix ../personal-roadmap test -- --run src/__tests__/draftPlanning.test.ts mcp/src/http.test.ts
 
   - id: recall-synthesis-contract
     title: Recall Synthesis Contract Eval
