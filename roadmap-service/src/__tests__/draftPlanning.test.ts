@@ -16,8 +16,16 @@ const {
   getTeamSnapshot,
 } = await import('../core/TeamService.js');
 const { validateDraftPlan } = await import('../planning/DraftPlanValidator.js');
-const { submitStructuredPlan, commitPlan, undoPlanningBatch, planningCapabilities, declareJiraHandoff } =
-  await import('../planning/DraftPlanningService.js');
+const {
+  submitStructuredPlan,
+  commitPlan,
+  undoPlanningBatch,
+  planningCapabilities,
+  declareJiraHandoff,
+  listPlanningItems,
+  deletePlanningItem,
+  unschedulePlanningItem,
+} = await import('../planning/DraftPlanningService.js');
 const { stripSecrets, publicIntentEvent } = await import('../planning/sanitize.js');
 const { getEventBus } = await import('../core/EventBus.js');
 
@@ -582,5 +590,73 @@ describe('share token minting', () => {
     });
     expect(ok.statusCode).toBe(200);
     await app.close();
+  });
+});
+
+describe('MCP item list / delete / unschedule', () => {
+  it('groups gantt vs backlog, unschedules onto backlog, and hard-deletes drafts only', () => {
+    const snapshot = createTeam({
+      name: 'Item tools',
+      jql: 'project = NOVA AND issuetype = Epic',
+      actor,
+    });
+    const teamId = snapshot.team.id;
+    const ganttKey = expectOk(
+      applyIntent(teamId, { op: 'add_item', title: 'On gantt' }, actor),
+    ).itemKey!;
+    expectOk(
+      applyIntent(
+        teamId,
+        {
+          op: 'schedule',
+          itemKey: ganttKey,
+          start: '2026-09-01',
+          days: 5,
+          baseVersion: 1,
+        },
+        actor,
+      ),
+    );
+    const backlogKey = expectOk(
+      applyIntent(teamId, { op: 'add_item', title: 'In backlog' }, actor),
+    ).itemKey!;
+    const jiraKey = expectOk(
+      applyIntent(teamId, { op: 'add_item', title: 'Has jira' }, actor),
+    ).itemKey!;
+    expectOk(
+      applyIntent(teamId, { op: 'resolve_item', itemKey: jiraKey, jiraKey: 'NOVA-88' }, actor),
+    );
+
+    const listed = listPlanningItems(teamId, undefined, 'all');
+    expect(listed.gantt.some((item) => item.key === ganttKey && item.view === 'gantt')).toBe(
+      true,
+    );
+    expect(listed.backlog.some((item) => item.key === backlogKey && item.view === 'backlog')).toBe(
+      true,
+    );
+    expect(listPlanningItems(teamId, undefined, 'gantt').backlog).toEqual([]);
+    expect(listPlanningItems(teamId, undefined, 'backlog').gantt).toEqual([]);
+
+    const moved = unschedulePlanningItem(teamId, actor, ganttKey);
+    expect(moved.status).toBe(200);
+    expect(moved.body.view).toBe('backlog');
+    expect(listPlanningItems(teamId, undefined, 'gantt').gantt.some((item) => item.key === ganttKey)).toBe(
+      false,
+    );
+    expect(
+      listPlanningItems(teamId, undefined, 'backlog').backlog.some((item) => item.key === ganttKey),
+    ).toBe(true);
+
+    const deleted = deletePlanningItem(teamId, actor, backlogKey);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.deletedKey).toBe(backlogKey);
+    expect(
+      getTeamSnapshot(teamId)!.items.some((item) => item.key === backlogKey),
+    ).toBe(false);
+
+    const refused = deletePlanningItem(teamId, actor, jiraKey);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('item_has_jira');
+    expect(getTeamSnapshot(teamId)!.items.some((item) => item.key === jiraKey)).toBe(true);
   });
 });

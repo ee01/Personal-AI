@@ -24,7 +24,7 @@ import { validateDraftPlan } from './DraftPlanValidator.js';
 import { normalizeDraftPlan } from './DraftScheduleNormalizer.js';
 import { commitNormalizedPlan, undoBatch } from './DraftBatchService.js';
 import { generateDraftPlan } from '../llm/RoadmapLlmClient.js';
-import { getTeamSnapshot } from '../core/TeamService.js';
+import { applyIntent, getTeamSnapshot } from '../core/TeamService.js';
 import { emitTeamEvent } from './eventBuffer.js';
 import {
   claimNextJob,
@@ -64,34 +64,145 @@ export function planningCapabilities(): PlanningCapabilities {
   };
 }
 
-export function planningContext(teamId: string, itemKeys?: string[]) {
+export type PlanningItemView = 'gantt' | 'backlog';
+export type PlanningListView = PlanningItemView | 'all';
+
+export function parsePlanningView(raw: unknown): PlanningListView {
+  const value = String(raw || 'all').trim().toLowerCase();
+  if (value === 'gantt' || value === 'scheduled') return 'gantt';
+  if (value === 'backlog' || value === 'unscheduled') return 'backlog';
+  return 'all';
+}
+
+function isManualDraft(item: ItemRow): boolean {
+  return item.source === 'manual' && !item.jira_key;
+}
+
+function toPlanningContextItem(item: ItemRow) {
+  const view: PlanningItemView = item.scheduled ? 'gantt' : 'backlog';
+  return {
+    key: item.key,
+    title: item.title,
+    type: item.type,
+    view,
+    scheduled: Boolean(item.scheduled),
+    start: item.start_date,
+    days: item.days,
+    version: item.version,
+    jiraKey: item.jira_key,
+    description: item.description,
+    canDelete: isManualDraft(item),
+    canUnschedule: Boolean(item.scheduled),
+  };
+}
+
+function loadTeamItems(teamId: string, itemKeys?: string[]): ItemRow[] {
   const db = getDb();
   const items = db
     .prepare(`SELECT * FROM items WHERE team_id = ? ORDER BY created_at DESC`)
     .all(teamId) as ItemRow[];
+  const wanted = itemKeys?.length ? new Set(itemKeys) : null;
+  return items.filter((item) => !wanted || wanted.has(item.key));
+}
+
+export function planningContext(
+  teamId: string,
+  itemKeys?: string[],
+  view: PlanningListView = 'all',
+) {
+  const db = getDb();
   const members = db
     .prepare(`SELECT * FROM members WHERE team_id = ? ORDER BY name`)
     .all(teamId) as MemberRow[];
-  const wanted = itemKeys?.length ? new Set(itemKeys) : null;
+  const items = loadTeamItems(teamId, itemKeys)
+    .map(toPlanningContextItem)
+    .filter((item) => view === 'all' || item.view === view);
   return {
     teamId,
-    items: items
-      .filter((item) => !wanted || wanted.has(item.key))
-      .map((item) => ({
-        key: item.key,
-        title: item.title,
-        type: item.type,
-        scheduled: Boolean(item.scheduled),
-        start: item.start_date,
-        days: item.days,
-        version: item.version,
-        jiraKey: item.jira_key,
-        description: item.description,
-      })),
+    view,
+    items,
     members: members.map((member) => ({ id: member.id, name: member.name })),
     contractVersion: PLANNING_CONTRACT_VERSION,
     schemaVersion: '1',
   };
+}
+
+export function listPlanningItems(
+  teamId: string,
+  itemKeys?: string[],
+  view: PlanningListView = 'all',
+) {
+  const all = loadTeamItems(teamId, itemKeys).map(toPlanningContextItem);
+  const gantt = all.filter((item) => item.view === 'gantt');
+  const backlog = all.filter((item) => item.view === 'backlog');
+  return {
+    teamId,
+    view,
+    gantt: view === 'backlog' ? [] : gantt,
+    backlog: view === 'gantt' ? [] : backlog,
+    counts: { gantt: gantt.length, backlog: backlog.length },
+  };
+}
+
+export function deletePlanningItem(
+  teamId: string,
+  actor: ActorContext,
+  itemKey: string,
+): { status: number; body: Record<string, unknown> } {
+  const key = String(itemKey || '').trim();
+  if (!key) return { status: 400, body: { error: 'item_key_required' } };
+  const result = applyIntent(teamId, { op: 'delete_item', itemKey: key }, actor);
+  if (!result.ok) {
+    const status =
+      result.error === 'item_not_found' ? 404 : result.error === 'item_has_jira' ? 409 : 400;
+    return {
+      status,
+      body: {
+        error: result.error,
+        itemKey: key,
+        message:
+          result.error === 'item_has_jira'
+            ? '已有 Jira key，不能从 Roadmap 永久删除。要从甘特拿掉请用 roadmap_unschedule_item 退回 Backlog。'
+            : result.error,
+      },
+    };
+  }
+  return { status: 200, body: { ok: true, deletedKey: key, permanent: true } };
+}
+
+export function unschedulePlanningItem(
+  teamId: string,
+  actor: ActorContext,
+  itemKey: string,
+  baseVersion?: unknown,
+): { status: number; body: Record<string, unknown> } {
+  const key = String(itemKey || '').trim();
+  if (!key) return { status: 400, body: { error: 'item_key_required' } };
+  const db = getDb();
+  const item = db
+    .prepare(`SELECT * FROM items WHERE team_id = ? AND key = ?`)
+    .get(teamId, key) as ItemRow | undefined;
+  if (!item) return { status: 404, body: { error: 'item_not_found', itemKey: key } };
+  if (!item.scheduled) {
+    return { status: 200, body: { ok: true, itemKey: key, view: 'backlog', noop: true } };
+  }
+  const version =
+    baseVersion != null && Number.isFinite(Number(baseVersion))
+      ? Number(baseVersion)
+      : item.version;
+  const result = applyIntent(
+    teamId,
+    { op: 'unschedule', itemKey: key, baseVersion: version },
+    actor,
+  );
+  if (!result.ok) {
+    const status = result.error === 'version_conflict' ? 409 : 400;
+    return {
+      status,
+      body: { error: result.error, itemKey: key, current: result.current },
+    };
+  }
+  return { status: 200, body: { ok: true, itemKey: key, view: 'backlog' } };
 }
 
 export function submitStructuredPlan(input: {

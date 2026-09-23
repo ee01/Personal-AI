@@ -59,7 +59,7 @@ export function handleMcpMessage(
           title: 'Roadmap Draft planning',
         },
         instructions:
-          'Bind a team with HTTP headers X-Team-Id and X-Share-Token. Default MCP URL is http://roadmap.xmnup.com/mcp. Does not create Jira issues.',
+          'Bind a team with HTTP headers X-Team-Id and X-Share-Token. Default MCP URL is http://roadmap.xmnup.com/mcp. List Gantt vs Backlog with roadmap_list_items. Permanently delete a Draft with roadmap_delete_item. Move a Gantt bar to Backlog with roadmap_unschedule_item. Does not create Jira issues.',
       }),
     };
   }

@@ -56,7 +56,8 @@ stdout 只输出 MCP 帧；诊断在 stderr。
 
 | 工具 | 副作用 |
 |---|---|
-| `roadmap_get_context` | 读上下文与 capabilities |
+| `roadmap_get_context` | 读上下文与 capabilities；每条 item 带 `view=gantt\|backlog`，可按 view 过滤 |
+| `roadmap_list_items` | 分组列出甘特 / Backlog 父项（`view=gantt\|backlog\|all`） |
 | `roadmap_validate_plan` | 保存待提交计划，不写 Draft，不花服务端 LLM |
 | `roadmap_revise_plan` | 改计划再校验 |
 | `roadmap_generate_plan` | 显式委托服务端 LLM，默认 `autoCommit=false` |
@@ -64,6 +65,8 @@ stdout 只输出 MCP 帧；诊断在 stderr。
 | `roadmap_cancel_job` | 取消未提交任务 |
 | `roadmap_commit_plan` | 原子写入 Draft |
 | `roadmap_get_batch` | 回执与不含 token 的链接 |
-| `roadmap_undo_batch` | 撤销仍为 Draft 的本批；已有 Jira key 的行留下 |
+| `roadmap_undo_batch` | 整批撤销仍为 Draft 的本批；已有 Jira key 的行留下。不是单条删除 |
+| `roadmap_delete_item` | 永久删除一条无 Jira key 的 Draft 主任务（含子任务）。不删 Jira |
+| `roadmap_unschedule_item` | 把甘特条目退回 Backlog，不删除 |
 
-没有 Jira create、没有 `applyIntent`、没有分享 token 签发。契约版本 `1.0.0` / schema `1`。
+没有 Jira create、没有分享 token 签发。契约版本 `1.0.0` / schema `1`。

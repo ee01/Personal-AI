@@ -10,14 +10,18 @@ import {
   cancelJob,
   commitPlan,
   createPlanningJob,
+  deletePlanningItem,
   getBatchPayload,
   jobPayload,
+  listPlanningItems,
   lookupRequest,
+  parsePlanningView,
   planningCapabilities,
   planningContext,
   revisePlan,
   submitStructuredPlan,
   undoPlanningBatch,
+  unschedulePlanningItem,
 } from '../planning/DraftPlanningService.js';
 
 function uuid(raw: unknown): string {
@@ -53,8 +57,18 @@ export function dispatchMcpTool(
           context: planningContext(
             teamId,
             Array.isArray(args.itemKeys) ? args.itemKeys.map(String) : undefined,
+            parsePlanningView(args.view),
           ),
         },
+      };
+    case 'roadmap_list_items':
+      return {
+        status: 200,
+        body: listPlanningItems(
+          teamId,
+          Array.isArray(args.itemKeys) ? args.itemKeys.map(String) : undefined,
+          parsePlanningView(args.view),
+        ),
       };
     case 'roadmap_validate_plan': {
       const sources = Array.isArray(args.sources)
@@ -132,6 +146,15 @@ export function dispatchMcpTool(
       return getBatchPayload(teamId, String(args.batchId));
     case 'roadmap_undo_batch':
       return undoPlanningBatch({ teamId, batchId: String(args.batchId), actor });
+    case 'roadmap_delete_item':
+      return deletePlanningItem(teamId, actor, String(args.itemKey || ''));
+    case 'roadmap_unschedule_item':
+      return unschedulePlanningItem(
+        teamId,
+        actor,
+        String(args.itemKey || ''),
+        args.baseVersion,
+      );
     default:
       return { status: 404, body: { error: `unknown_tool:${name}` } };
   }

@@ -71,11 +71,20 @@ export function createRoadmapClient(config: RoadmapClientConfig) {
     contractVersion: PLANNING_CONTRACT_VERSION,
     schemaVersion: PLANNING_SCHEMA_VERSION,
     capabilities: () => request('GET', '/planning/capabilities'),
-    context: (itemKeys?: string[]) =>
-      request(
-        'GET',
-        `/planning/context${itemKeys?.length ? `?itemKeys=${encodeURIComponent(itemKeys.join(','))}` : ''}`,
-      ),
+    context: (itemKeys?: string[], view?: string) => {
+      const qs = new URLSearchParams();
+      if (itemKeys?.length) qs.set('itemKeys', itemKeys.join(','));
+      if (view) qs.set('view', view);
+      const query = qs.toString();
+      return request('GET', `/planning/context${query ? `?${query}` : ''}`);
+    },
+    listItems: (itemKeys?: string[], view?: string) => {
+      const qs = new URLSearchParams();
+      if (itemKeys?.length) qs.set('itemKeys', itemKeys.join(','));
+      if (view) qs.set('view', view);
+      const query = qs.toString();
+      return request('GET', `/planning/items${query ? `?${query}` : ''}`);
+    },
     validatePlan: (body: Record<string, unknown>) =>
       request('POST', '/draft-plans', { ...body, autoCommit: false }),
     revisePlan: (planId: string, body: Record<string, unknown>) =>
@@ -89,6 +98,12 @@ export function createRoadmapClient(config: RoadmapClientConfig) {
       request('POST', `/draft-plans/${planId}/commit`, body),
     getBatch: (batchId: string) => request('GET', `/draft-batches/${batchId}`),
     undoBatch: (batchId: string) => request('POST', `/draft-batches/${batchId}/undo`, {}),
+    deleteItem: (itemKey: string) =>
+      request('POST', `/planning/items/${encodeURIComponent(itemKey)}/delete`, {}),
+    unscheduleItem: (itemKey: string, baseVersion?: number) =>
+      request('POST', `/planning/items/${encodeURIComponent(itemKey)}/unschedule`, {
+        ...(baseVersion != null ? { baseVersion } : {}),
+      }),
   };
 }
 

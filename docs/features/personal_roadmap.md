@@ -135,7 +135,7 @@ Backlog「+ 新建条目」弹窗增加「手动创建 / 使用 AI 批量创建�
 
 ### MCP / Skill / Codex Plugin
 
-`roadmap-service/mcp/` 是本地 stdio MCP，只调 Roadmap HTTP API：不打开数据库、不调 Memory、不创建 Jira。生产 `ROADMAP_BASE_URL` 必须 HTTPS（`localhost` 可用 HTTP）。token 只放请求头。工具：`roadmap_get_context` / `validate_plan` / `revise_plan` / `generate_plan` / `get_request` / `cancel_job` / `commit_plan` / `get_batch` / `undo_batch`。`generate_plan` 才会花服务端 LLM 额度，默认 `autoCommit=false`。契约 `1.0.0` / schema `1`。
+`roadmap-service/mcp/` 是本地 stdio MCP，只调 Roadmap HTTP API：不打开数据库、不调 Memory、不创建 Jira。生产 `ROADMAP_BASE_URL` 必须 HTTPS（`localhost` 可用 HTTP）。token 只放请求头。工具：`roadmap_get_context` / `list_items` / `validate_plan` / `revise_plan` / `generate_plan` / `get_request` / `cancel_job` / `commit_plan` / `get_batch` / `undo_batch` / `delete_item` / `unschedule_item`。`generate_plan` 才会花服务端 LLM 额度，默认 `autoCommit=false`。`list_items` 用 `view=gantt|backlog|all` 区分甘特与 Backlog；`delete_item` 永久删除无 Jira key 的 Draft 主任务；`unschedule_item` 把甘特条目退回 Backlog（不删除）。`undo_batch` 仍只做整批撤销。契约 `1.0.0` / schema `1`。
 
 Skill：`roadmap-service/plugin/skills/roadmap-planning/`（GitHub：`https://github.com/ee01/Personal-AI/blob/develop/roadmap-service/plugin/skills/roadmap-planning/SKILL.md`；线上：`http://roadmap.xmnup.com/skills/roadmap-planning/SKILL.md`）。Roadmap Service 提供远程 Streamable HTTP MCP：`POST /mcp`，默认 `http://roadmap.xmnup.com/mcp`（自建用 `{ROADMAP_PUBLIC_BASE_URL}/mcp`）。鉴权走 `X-Team-Id` + `X-Share-Token`，不要求用户下载源码或运行本地 node。stdio MCP（`roadmap-service/mcp/`）仍可作为后备，只调 Roadmap HTTP API：不打开数据库、不调 Memory、不创建 Jira。Codex Plugin 把 MCP + Skill 打成可从 `roadmap-service/.agents/plugins/marketplace.json` 安装的单元。`ROADMAP_AI_AGENT_ACCESS` 关掉时 MCP / Agent 入口 403，网页「使用 AI 批量创建」不受影响。这与甘特「创建 Jira」里的扩展 Agent 执行器不是同一条路径。
 

@@ -9,6 +9,7 @@ import {
 
 export const MCP_TOOL_NAMES = [
   'roadmap_get_context',
+  'roadmap_list_items',
   'roadmap_validate_plan',
   'roadmap_revise_plan',
   'roadmap_generate_plan',
@@ -17,16 +18,31 @@ export const MCP_TOOL_NAMES = [
   'roadmap_commit_plan',
   'roadmap_get_batch',
   'roadmap_undo_batch',
+  'roadmap_delete_item',
+  'roadmap_unschedule_item',
 ] as const;
 
 export const MCP_TOOLS = [
   {
     name: 'roadmap_get_context',
     description:
-      'Read the bound team planning context: limits, candidate parents, members, versions. Does not write Draft or call the server LLM.',
+      'Read the bound team planning context: limits, candidate parents, members, versions. Each item has view=gantt|backlog. Optional view filter. Does not write Draft or call the server LLM.',
     inputSchema: {
       type: 'object',
       properties: {
+        itemKeys: { type: 'array', items: { type: 'string' } },
+        view: { type: 'string', enum: ['gantt', 'backlog', 'all'] },
+      },
+    },
+  },
+  {
+    name: 'roadmap_list_items',
+    description:
+      'List parent items grouped by Gantt vs Backlog. view=gantt (scheduled on the chart), view=backlog (unscheduled), or view=all (default, returns both arrays). Does not write.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: { type: 'string', enum: ['gantt', 'backlog', 'all'] },
         itemKeys: { type: 'array', items: { type: 'string' } },
       },
     },
@@ -130,11 +146,35 @@ export const MCP_TOOLS = [
   },
   {
     name: 'roadmap_undo_batch',
-    description: 'Undo a Draft batch. Rows that already have a Jira key, or were edited after commit, are left in place.',
+    description:
+      'Undo a whole Draft generation batch. Not for a single item. For one Draft parent use roadmap_delete_item. Rows that already have a Jira key, or were edited after commit, are left in place.',
     inputSchema: {
       type: 'object',
       required: ['batchId'],
       properties: { batchId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'roadmap_delete_item',
+    description:
+      'Permanently delete one Draft parent item (no Jira key) and its children from Roadmap. Does not delete Jira issues. To remove a bar from the Gantt without deleting, use roadmap_unschedule_item.',
+    inputSchema: {
+      type: 'object',
+      required: ['itemKey'],
+      properties: { itemKey: { type: 'string' } },
+    },
+  },
+  {
+    name: 'roadmap_unschedule_item',
+    description:
+      'Move one Gantt item back to Backlog (unschedule / move to backlog). Keeps the row; does not delete. Works for Draft and Jira-linked items.',
+    inputSchema: {
+      type: 'object',
+      required: ['itemKey'],
+      properties: {
+        itemKey: { type: 'string' },
+        baseVersion: { type: 'number' },
+      },
     },
   },
 ];
@@ -155,8 +195,14 @@ export async function dispatchTool(
         capabilities: await client.capabilities(),
         context: await client.context(
           Array.isArray(args.itemKeys) ? args.itemKeys.map(String) : undefined,
+          args.view ? String(args.view) : undefined,
         ),
       };
+    case 'roadmap_list_items':
+      return client.listItems(
+        Array.isArray(args.itemKeys) ? args.itemKeys.map(String) : undefined,
+        args.view ? String(args.view) : undefined,
+      );
     case 'roadmap_validate_plan':
       return client.validatePlan(args);
     case 'roadmap_revise_plan':
@@ -177,6 +223,13 @@ export async function dispatchTool(
       return client.getBatch(String(args.batchId));
     case 'roadmap_undo_batch':
       return client.undoBatch(String(args.batchId));
+    case 'roadmap_delete_item':
+      return client.deleteItem(String(args.itemKey || ''));
+    case 'roadmap_unschedule_item':
+      return client.unscheduleItem(
+        String(args.itemKey || ''),
+        args.baseVersion != null ? Number(args.baseVersion) : undefined,
+      );
     default:
       throw new Error(`unknown_tool:${name}`);
   }

@@ -9,13 +9,17 @@ import {
   declareJiraHandoff,
   getBatchPayload,
   jobPayload,
+  listPlanningItems,
   lookupRequest,
+  parsePlanningView,
   planPayload,
   planningCapabilities,
   planningContext,
   revisePlan,
   submitStructuredPlan,
   undoPlanningBatch,
+  unschedulePlanningItem,
+  deletePlanningItem,
 } from '../planning/DraftPlanningService.js';
 import { todayInTimeZone } from '../planning/dates.js';
 import { randomUUID } from 'node:crypto';
@@ -81,7 +85,10 @@ export async function registerPlanningRoutes(app: FastifyInstance): Promise<void
     },
   );
 
-  app.get<{ Params: { teamId: string }; Querystring: { itemKeys?: string } }>(
+  app.get<{
+    Params: { teamId: string };
+    Querystring: { itemKeys?: string; view?: string };
+  }>(
     '/api/v1/teams/:teamId/planning/context',
     async (request, reply) => {
       const access = requireEdit(request.params.teamId, request);
@@ -90,7 +97,61 @@ export async function registerPlanningRoutes(app: FastifyInstance): Promise<void
         .split(',')
         .map((item) => item.trim())
         .filter(Boolean);
-      return planningContext(request.params.teamId, keys.length ? keys : undefined);
+      return planningContext(
+        request.params.teamId,
+        keys.length ? keys : undefined,
+        parsePlanningView(request.query.view),
+      );
+    },
+  );
+
+  app.get<{
+    Params: { teamId: string };
+    Querystring: { itemKeys?: string; view?: string };
+  }>(
+    '/api/v1/teams/:teamId/planning/items',
+    async (request, reply) => {
+      const access = requireEdit(request.params.teamId, request);
+      if (!access.ok) return reply.code(access.status).send({ error: access.error });
+      const keys = String(request.query.itemKeys || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+      return listPlanningItems(
+        request.params.teamId,
+        keys.length ? keys : undefined,
+        parsePlanningView(request.query.view),
+      );
+    },
+  );
+
+  app.post<{ Params: { teamId: string; itemKey: string } }>(
+    '/api/v1/teams/:teamId/planning/items/:itemKey/delete',
+    async (request, reply) => {
+      const access = requireEdit(request.params.teamId, request);
+      if (!access.ok) return reply.code(access.status).send({ error: access.error });
+      const result = deletePlanningItem(
+        request.params.teamId,
+        { ...access.actor, source: planningSource(request) },
+        request.params.itemKey,
+      );
+      return reply.code(result.status).send(result.body);
+    },
+  );
+
+  app.post<{ Params: { teamId: string; itemKey: string } }>(
+    '/api/v1/teams/:teamId/planning/items/:itemKey/unschedule',
+    async (request, reply) => {
+      const access = requireEdit(request.params.teamId, request);
+      if (!access.ok) return reply.code(access.status).send({ error: access.error });
+      const body = (request.body || {}) as Record<string, unknown>;
+      const result = unschedulePlanningItem(
+        request.params.teamId,
+        { ...access.actor, source: planningSource(request) },
+        request.params.itemKey,
+        body.baseVersion,
+      );
+      return reply.code(result.status).send(result.body);
     },
   );
 

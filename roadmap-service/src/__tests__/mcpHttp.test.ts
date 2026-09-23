@@ -11,7 +11,7 @@ process.env.ROADMAP_OPENAI_API_KEY = 'test-key';
 process.env.ROADMAP_AI_AGENT_ACCESS = 'true';
 process.env.ROADMAP_PUBLIC_BASE_URL = 'http://roadmap.xmnup.com';
 
-const { createShareToken, createTeam } = await import('../core/TeamService.js');
+const { createShareToken, createTeam, applyIntent } = await import('../core/TeamService.js');
 const { registerMcpRoutes } = await import('../routes/mcp.js');
 const { MCP_TOOL_NAMES } = await import('../mcp/catalog.js');
 
@@ -104,5 +104,65 @@ describe('remote MCP HTTP', () => {
     const res = await app.inject({ method: 'GET', url: '/skills/roadmap-planning/SKILL.md' });
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain('name: roadmap-planning');
+    expect(String(res.body)).toContain('roadmap_delete_item');
+    expect(String(res.body)).toContain('roadmap_list_items');
+    expect(String(res.body)).toContain('roadmap_unschedule_item');
+  });
+
+  it('lists gantt vs backlog, unschedules, and deletes a draft via MCP tools', async () => {
+    const gantt = applyIntent(teamId, { op: 'add_item', title: 'MCP gantt draft' }, actor);
+    if (!gantt.ok || !gantt.itemKey) throw new Error(gantt.ok ? 'missing key' : gantt.error);
+    const ganttKey = gantt.itemKey;
+    const scheduled = applyIntent(
+      teamId,
+      { op: 'schedule', itemKey: ganttKey, start: '2026-09-01', days: 4, baseVersion: 1 },
+      actor,
+    );
+    if (!scheduled.ok) throw new Error(scheduled.error);
+    const backlog = applyIntent(teamId, { op: 'add_item', title: 'MCP backlog draft' }, actor);
+    if (!backlog.ok || !backlog.itemKey) throw new Error(backlog.ok ? 'missing key' : backlog.error);
+
+    const listed = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { 'x-team-id': teamId, 'x-share-token': token },
+      payload: {
+        jsonrpc: '2.0',
+        id: 11,
+        method: 'tools/call',
+        params: { name: 'roadmap_list_items', arguments: { view: 'all' } },
+      },
+    });
+    const split = listed.json().result.structuredContent;
+    expect(split.gantt.some((item: { key: string }) => item.key === ganttKey)).toBe(true);
+    expect(split.backlog.some((item: { key: string }) => item.key === backlog.itemKey)).toBe(true);
+
+    const moved = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { 'x-team-id': teamId, 'x-share-token': token },
+      payload: {
+        jsonrpc: '2.0',
+        id: 12,
+        method: 'tools/call',
+        params: { name: 'roadmap_unschedule_item', arguments: { itemKey: ganttKey } },
+      },
+    });
+    expect(moved.json().result.isError).toBe(false);
+    expect(moved.json().result.structuredContent.view).toBe('backlog');
+
+    const deleted = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { 'x-team-id': teamId, 'x-share-token': token },
+      payload: {
+        jsonrpc: '2.0',
+        id: 13,
+        method: 'tools/call',
+        params: { name: 'roadmap_delete_item', arguments: { itemKey: backlog.itemKey } },
+      },
+    });
+    expect(deleted.json().result.isError).toBe(false);
+    expect(deleted.json().result.structuredContent.deletedKey).toBe(backlog.itemKey);
   });
 });
