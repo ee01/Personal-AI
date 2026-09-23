@@ -9,6 +9,7 @@ LOG_TAG="public-stack-watchdog"
 NPM_DIR="/Users/rcadmin/nginxproxymanager"
 NPM_DATA="${NPM_DIR}/data/nginx/proxy_host"
 PERSONAL_AI_DIR="/Users/rcadmin/personal-ai"
+ROADMAP_DIR="/Users/rcadmin/personal-roadmap"
 ROADMAP_URL="http://127.0.0.1/health"
 ROADMAP_HOST="roadmap.xmnup.com"
 MEMORY_HOST="memory.xmnup.com"
@@ -79,11 +80,11 @@ patch_npm_upstream() {
 }
 
 ensure_core_services() {
+  if [[ -d "$ROADMAP_DIR" ]]; then
+    (cd "$ROADMAP_DIR" && docker compose up -d roadmap-service) || true
+  fi
   if [[ -d "$PERSONAL_AI_DIR" ]]; then
-    (
-      cd "$PERSONAL_AI_DIR"
-      docker compose up -d roadmap-service memory-service 2>/dev/null || true
-    )
+    (cd "$PERSONAL_AI_DIR" && docker compose up -d memory-service) || true
   fi
 }
 
@@ -133,7 +134,7 @@ main() {
 
   if ! wait_for_health "http://127.0.0.1:${ROADMAP_PORT}/health" 15; then
     log "roadmap-service health failed; force-recreating"
-    (cd "$PERSONAL_AI_DIR" && docker compose up -d --force-recreate roadmap-service)
+    (cd "$ROADMAP_DIR" && docker compose up -d --force-recreate roadmap-service)
     wait_for_health "http://127.0.0.1:${ROADMAP_PORT}/health" 30 || true
   fi
 

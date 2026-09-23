@@ -118,6 +118,14 @@ if (!options.skipSync) {
     path.join(repoRoot, 'tools/deploy-memory-service.mjs'),
     `${options.host}:${options.remoteDir}/tools/deploy-memory-service.mjs`,
   ]);
+
+  run('rsync', [
+    '-az',
+    '-e',
+    rsyncSsh,
+    path.join(repoRoot, 'tools/server-public-stack-watchdog.sh'),
+    `${options.host}:${options.remoteDir}/tools/server-public-stack-watchdog.sh`,
+  ]);
 } else {
   console.log('\nSkipping source sync; rebuilding the existing remote worktree.');
 }

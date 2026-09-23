@@ -688,6 +688,6 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）
 - 部署后：导入 Task / 创建 Jira / 无扩展时的 Target·Owner 回写都依赖扩展 Options `JIRA_API_TOKEN`。有扩展但 token 失败时，拖动回写仍可 fallback 到服务器 `roadmap-service/.env` 的 `JIRA_PAT`（见 `.env.example`）
 - memory-service：`npm --prefix memory-service run build` + `npx vitest run src/__tests__/focusProjectSyncService.test.ts src/__tests__/api-projects.test.ts`
-- 部署：在 personal-roadmap 仓库运行 `npm run deploy`（同步到现有主机的 `roadmap-service/` 目录，默认 `10.32.56.212:3220`）。memory 仍用本仓库 `npm run deploy:memory`
+- 部署：在 [personal-roadmap](https://github.com/ee01/personal-roadmap) 仓库运行 `npm run deploy`（同步到 `/Users/rcadmin/personal-roadmap`，替换端口 `3220` 上的现有容器）。memory 仍用本仓库 `npm run deploy:memory`
 - 部署后探活：`npm run verify:roadmap-service`（`:3220` 与 `http://roadmap.xmnup.com` 的 `/health`，并检查线上 JS 仍含依赖浮层「改用 Jira / 采用 … 为 ETA」文案，避免混合依赖再次打出空白浮窗）
 - focus sync / 抽取：`evals/cases/roadmap-focus-projects/`

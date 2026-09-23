@@ -4693,7 +4693,15 @@ const Options = () => {
             placeholder="http://roadmap.xmnup.com"
           />
           <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-            Personal Roadmap 可视化站点，默认 http://roadmap.xmnup.com。Popup「项目
+            使用{' '}
+            <a
+              href="https://github.com/ee01/personal-roadmap"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              https://github.com/ee01/personal-roadmap
+            </a>{' '}
+            部署 Roadmap Service 后填入。默认 http://roadmap.xmnup.com。Popup「项目
             Roadmap」会打开此地址；留空则跳转到本配置项。已安装扩展时，打开站点会自动带入
             Glip 身份，无需再手动输入名字。自定义域名会在保存后动态注入桥接脚本；改完请刷新
             Roadmap 页。

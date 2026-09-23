@@ -213,7 +213,7 @@ Keep a small local experiment, typo, or docs-only probe as a local commit unless
 | `npm start` | Development build with watch mode using `.env.development`; stop after first successful compile for harness checks | After code changes (default) |
 | `npm run build` | Production build and zip | Release/package verification or production-env regression checks |
 | `npm run deploy:memory` | Sync local `memory-service/` to `10.32.56.212` and rebuild the memory container | After local verification when you need real-environment validation for memory |
-| `npm run deploy` in `../personal-roadmap` | Sync that repo into the host's `roadmap-service/` directory and rebuild the roadmap container | Roadmap-only changes that need live `:3220` / `roadmap.xmnup.com` |
+| `npm run deploy` in `../personal-roadmap` | Sync that repo to `/Users/rcadmin/personal-roadmap` and replace the existing `roadmap-service` container | Roadmap-only changes that need live `:3220` / `roadmap.xmnup.com` |
 | `npm run verify:roadmap-service` | Health + public frontend probe for the deployed roadmap service | After a roadmap deploy, or to confirm the live site without redeploying |
 | `npm run verify:roadmap-dep-jira-status` | Assert source + `dist/contentScriptRoadmap.js` return Jira `status` with Target End | After Roadmap content-script changes, before treating 「刷新 Jira」 as proven |
 | `npm run build:app` | Build the desktop app and macOS installer package | When desktop-app or extension-to-desktop behavior needs packaged/installed-app E2E validation |
@@ -321,9 +321,9 @@ Recommended flow:
    - Extension-only Roadmap content-script / Options changes still follow the Chrome extension tiers; they are not a substitute for deploying the Vue bundle
    - 「刷新 Jira」 / dep status chips go through the **installed** content script (`pai-roadmap-fetch-issue-dates`). `verify:roadmap-service` cannot see that path. After `src/contentScriptRoadmap.ts` changes: rebuild `dist/` (`npm start` or `webpack --config webpack.dev.cjs`), run `npm run verify:roadmap-dep-jira-status`, reload the unpacked extension, then hard-refresh the Roadmap tab. A stale `dist/` returns Target End only and the chip stays 「未刷新」
 2. Deploy with `npm run deploy` from `../personal-roadmap`
-   - This syncs that repo into `rcadmin@10.32.56.212:/Users/rcadmin/personal-ai/roadmap-service` and rebuilds the container with the host's existing compose file
-   - It preserves remote `roadmap-service/.env` and `roadmap-service/data/`
-   - It does **not** replace the host `docker-compose.yml` and does **not** deploy memory-service. If memory also changed, run `npm run deploy:memory` here as well
+   - This syncs that repo to `rcadmin@10.32.56.212:/Users/rcadmin/personal-roadmap` and replaces the existing `roadmap-service` container on port `3220`
+   - The first run copies `.env` and `data/` from `/Users/rcadmin/personal-ai/roadmap-service` when the new directory does not already have them
+   - It does **not** deploy memory-service. If memory also changed, run `npm run deploy:memory` here as well
 3. After deploy, real-environment checks must actually hit the live process
    - `npm run verify:roadmap-service` — `GET /health` on `http://10.32.56.212:3220` and `http://roadmap.xmnup.com`, then fetch the hashed Vite JS and assert the user-facing Gantt strings for the change (default: dep-popover adopt labels so a mixed-dep click cannot ship as a blank pill)
    - Optional read-only API: `GET /api/v1/teams?ids=<teamId>`

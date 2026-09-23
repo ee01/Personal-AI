@@ -116,6 +116,37 @@ npm run deploy:desktop
 npm --prefix desktop-app run macos:signing-info
 ```
 
+## 部署
+
+Memory Service 和 Roadmap Service 跑在同一台 Mac mini（`rcadmin@10.32.56.212`）上，但是两个仓库、两个目录、两个容器。公网分别是 `http://memory.xmnup.com`（3210）和 `http://roadmap.xmnup.com`（3220）。
+
+### Memory Service
+
+仓库：<https://github.com/ee01/personal-ai>
+
+```bash
+npm run deploy:memory
+```
+
+同步本仓库的 `memory-service/` 和根目录 `docker-compose.yml` 到 `/Users/rcadmin/personal-ai`，只重建 `memory-service` 容器。不会部署 Roadmap。
+
+先完成下面的 Roadmap 部署，再跑这条命令。这次同步上去的 compose 已经不再包含 Roadmap；如果 3220 上的容器还挂在旧的 personal-ai compose 项目里，它会被清掉。新目录里的容器不受影响。
+
+### Roadmap Service
+
+仓库：<https://github.com/ee01/personal-roadmap>
+
+```bash
+git clone git@github.com:ee01/personal-roadmap.git
+cd personal-roadmap
+npm install
+npm run deploy
+```
+
+同步到 `/Users/rcadmin/personal-roadmap`，容器名仍是 `roadmap-service`，端口仍是 `3220`。第一次部署会从旧目录 `/Users/rcadmin/personal-ai/roadmap-service` 拷走 `.env` 和 `data/`，然后替换已经在跑的那个容器。不会再起第二个 Roadmap 容器。
+
+部署完成后，在扩展 Options →「项目 Roadmap」填入站点地址（现有环境填 `http://roadmap.xmnup.com`）。
+
 ## 开发环境设置
 
 ### 开箱使用（本地开发）
