@@ -1,0 +1,16 @@
+{
+  "project_id": "f3c0d869-d3ae-4718-a02e-45ec65c19cb8",
+  "project_title": "Personal AI",
+  "resources": [
+    {
+      "id": "b6bcc319-2fd2-44db-91c3-ebf943472de4",
+      "resource_type": "local_directory",
+      "resource_ref": {
+        "label": "personal-ai",
+        "daemon_id": "01a08f03-fb55-704e-9b79-1af07176e20d",
+        "local_path": "/Users/Esone/git/personal-ai",
+        "execution_mode": "in_place"
+      }
+    }
+  ]
+}

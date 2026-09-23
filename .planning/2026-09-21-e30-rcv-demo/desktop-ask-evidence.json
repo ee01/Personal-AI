@@ -1,0 +1,90 @@
+{
+  "question": "rcv mobile有什么 demo 么？",
+  "snapshot_created_at_utc": "2026-09-21T05:58:54.454Z",
+  "snapshot_created_at_asia_shanghai": "2026-09-21T13:58:54.454+08:00",
+  "answer_exact_snapshot_summary": "# RCV Mobile Demo 相关信息 根据现有上下文，**未发现明确指向 RCV Mobile 的 demo 记录**。 ## 检索到的相关线索 - **[2] AI Delegate demo（非 RCV Mobile）**：`[RCV Leadership Team]` 中提到已录制一个演示视频，展示 AI Delegate 加入会议并捕获字幕的基本功能，但这是 **AI Delegate 项目**，与 RCV Mobile 无直接关联。 - **[3] RCV Mobile VT3 群里的图片附件**：\"哈哈，自己发的会没法玩\" —— 这是一张图片消息，语境更像是玩笑互动，并非正式 demo 内容，无法确认其为演示材料。 - **[9] Stretch goal 自评**：RCV mobile 的 stretch goal 提到自评 8 分，附有一个 Google Sheets 链接，但内容是评分表，不是 demo。 ## 状态判断 - **状态：unknown（未知/未找到）** - 当前证据中没有明确的 \"RCV Mobile demo\" 记录、视频或演示说明。 - 如果你指的是特定会议（如 [Meeting outcome] 中列出的 RCV AI/Milo、RCVSDK Daily Sync 等）中的 demo 环节，这些会议状态均为 `planned`，尚未产出具体 demo 内容。 需要我帮你在 Jira 或群组消息中进一步搜索\"demo\"关键词吗？",
+  "answer_summary_length": 648,
+  "answer_status": "answered",
+  "evidence_refs": [
+    {
+      "id": "1cca852a-d36e-4a9f-81cd-023d78c66a84",
+      "title": "[电话已隐藏]+esone.qiu+sync.service",
+      "sourceType": "message"
+    },
+    {
+      "id": "6000527f-4579-4e59-b765-b48275676fe9",
+      "title": "In a nutshell",
+      "sourceType": "message"
+    },
+    {
+      "id": "2f129e22-3a24-4b09-ad17-ee6a2040c9e6",
+      "title": "[Attachment 1] Image",
+      "sourceType": "message"
+    },
+    {
+      "id": "calendar:ringcentral_indexeddb:AAMkADJjYzA5ZDEwLWYwNDctNGJiNi04YWZmLWJlMDBkZWE3ZDYwNAFRAAgI3xdzR5xAAEYAAAAAugtg21Y_KkSvh9JtM8S63gcA2iX1tNhTuUWfwiYTLXXocwAAAAAB…",
+      "title": "RCV & RCW mobile daily",
+      "sourceType": "message"
+    },
+    {
+      "id": "fb8f8e66-59fb-40e6-9287-77ef002600d6",
+      "title": "MTR-152788: [Research] AI workflow management for RCV Mobile project",
+      "sourceType": "message"
+    }
+  ],
+  "channels": null,
+  "recall_diagnostics": null,
+  "diagnostic_limit": "本地resume只保存answer摘要和前5条evidence refs，未保存channel/score/recall diagnostics/structuredAnswer；不能据此证明未保留的候选从未被召回。",
+  "source": {
+    "kind": "Electron Chromium LevelDB WAL (read only decode)",
+    "relative_profile_path": "personal-ai-desktop/Local Storage/leveldb/000007.log",
+    "storage_key": "desktop-app.quick-ask.resume.v1",
+    "write_batch_sequence": 415
+  },
+  "answer_capture_limit": {
+    "max_answer_chars": 720,
+    "normalizes_whitespace": true,
+    "max_evidence_refs": 5,
+    "max_evidence_id_chars": 160,
+    "summary_ends_with_ellipsis": false,
+    "raw_sse_answer_available": false
+  },
+  "target_presence_in_persisted_first_five_refs": {
+    "calendar_event_eidt": {
+      "present": null,
+      "note": "有1条calendar:来源证据，但id被裁到160字符；没有持久化链接，因此无法验证具体eidt。",
+      "verification": "unresolved_truncated_id"
+    },
+    "dm_c760": {
+      "present": false
+    },
+    "new_group_478": {
+      "present": false
+    },
+    "historical_dc66": {
+      "present": false
+    }
+  },
+  "correlated_local_http_request": {
+    "request_id": "req-1f12",
+    "path": "/assistant/ask/stream",
+    "start_utc": "2026-09-21T05:54:52.724Z",
+    "end_utc": "2026-09-21T05:58:54.220Z",
+    "status": 200,
+    "response_ms": 241495.3464999199,
+    "correlation_limit": "日志不保存query；凭快照时间紧邻同窗口唯一ask请求完成时间强关联，非通过requestId直接关联。",
+    "source_log": "PersonalAI/desktop-app-agent.log",
+    "start_line": 4943946,
+    "end_line": 4944067,
+    "logged_errors_in_window": []
+  },
+  "environment_evidence": {
+    "current_memory_service_base_url": "http://10.32.56.212:3210",
+    "current_memory_service_user_id": "esone.qiu",
+    "installed_package_version": "5.0.0",
+    "installed_quick_ask_js_matches_repository_sha256": true,
+    "installed_quick_ask_resume_js_matches_repository_sha256": true,
+    "installed_file_mtime_utc": "2026-09-18T08:40:51Z",
+    "limit": "当前设置与安装文件不能单独证明请求当时服务配置/运行内存中的代码版本；resume未保存这些字段。"
+  }
+}

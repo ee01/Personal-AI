@@ -1,14 +1,12 @@
 ## User request
 
-Scheduled Message功能在打开新建弹窗的时候，帮我提示未配置，但是我已经配置了。
+针对 Roadmap Service 的 jira 信息同步，我有一个问题。
 
-我看了网络请求，是 `config` 这个请求401了，应该是后端新增的 OSS 验证。这个请求中没有使用公共方法，而公共方法应该会使用已经下发的 OSS Key 来发起认证请求。
+如果 A 用户没有安装 Chrome Extension，打开 Roadmap Service 编辑了甘特图的长度，也就是 task end 的时间。这个时候，他应该无法把这个信息同步到 Gira 上，但 Roadmap Service 记录并存储了这个信息。
 
-[http://memory.xmnup.com/api/v1/users/me/keys](http://memory.xmnup.com/api/v1/users/me/keys)
+之后 B 用户打开 Roadmap Service，这时他应该有两个操作需要做：
 
-[http://memory.xmnup.com/api/v1/config](http://memory.xmnup.com/api/v1/config) {
-    "error": "authentication_required",
-    "message": "Authorization Bearer required. Use a personal API key (pak.…), or the service key with X-User-Id."
-}
+1. 加载 jira 上最新的信息。
+2. 把其他没有安装 Chrome Extension 时存储的信息，例如刚刚 A 用户修改的 target end，同步到 jira。
 
-⚠️ **无法验证配置**——当前 tab 可先填写草稿；保存会被阻止，不会写入 Messages、不会创建 Jira Rule 或同步 runtime。 帮我问暂时无法读取 Memory Service 配置（无法读取 memory-service runtime 配置（http://memory.xmnup.com/api/v1）：MemoryService) 401: authentication_required）；这不代表 RingCentral 未配置。
+这两件事情会发生冲突吗？比如，会先同步出 jira 的信息，刷新掉 A 用户存储的修改吗？如何做到先帮其他用户的修改提交同步？

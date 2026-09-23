@@ -1,0 +1,247 @@
+{
+  "observed_date": "2026-09-21",
+  "user_namespace": "esone.qiu",
+  "database_access": "better-sqlite3 readonly + query_only; no API Ask or ingest invoked",
+  "counts": [
+    {
+      "kind": "chunks",
+      "n": 25169
+    },
+    {
+      "kind": "calendar_events",
+      "n": 1086
+    },
+    {
+      "kind": "source_memory_capsules",
+      "n": 1065
+    },
+    {
+      "kind": "memory_units",
+      "n": 421
+    },
+    {
+      "kind": "answer_memory_observations",
+      "n": 91
+    }
+  ],
+  "raw_count": [
+    {
+      "total": 16757,
+      "direct_deck_source": 0,
+      "exact_demo_text": 0
+    }
+  ],
+  "deck_reference_counts": [
+    {
+      "source_type": "calendar",
+      "n": 29
+    },
+    {
+      "source_type": "glip",
+      "n": 14
+    },
+    {
+      "source_type": "web",
+      "n": 3
+    }
+  ],
+  "deck_capsules": [],
+  "calendar": [
+    {
+      "id_suffix": "dehzAAjq4brOAAA=",
+      "title": "Canceled: pre demo of edit notes",
+      "start_at": 1789974000,
+      "end_at": 1789975800,
+      "created_at": 1789895218,
+      "synced_at": 1789895218,
+      "last_modified_at": 1789895118,
+      "cancelled": 1
+    },
+    {
+      "id_suffix": "dehzAAjrpVXsAAA=",
+      "title": "pre demo of eidt notes",
+      "start_at": 1789975800,
+      "end_at": 1789977600,
+      "created_at": 1789952218,
+      "synced_at": 1789953118,
+      "last_modified_at": 1789952994,
+      "cancelled": 0
+    }
+  ],
+  "key_messages": [
+    {
+      "id": "478294cd-b573-4920-98ff-2078cfaef9e9",
+      "group_id": "54490570758",
+      "group_name": "RCV Mobile VT3",
+      "sender": "Sandy Pan",
+      "content": "&lt;a class=&apos;at_mention_compose&apos; rel=&apos;&quot;id&quot;:&quot;1421651779587&quot;&apos;&gt;@April Huang&lt;/a&gt; &lt;a class=&apos;at_mention_compose&apos; rel=&apos;&quot;id&quot;:&quot;21860458499&quot;&apos;&gt;@Landcy Lan&lt;/a&gt; &lt;a class=&apos;at_mention_compose&apos; rel=&apos;&quot;id&quot;:&quot;1397183856643&quot;&apos;&gt;@Tom Chen&lt;/a&gt; &lt;a class=&apos;at_mention_compose&apos; rel=&apos;&quot;id&quot;:&quot;17215389699&quot;&apos;&gt;@Esone Qiu&lt;/a&gt; pre demo啦, santorini",
+      "summary": "该独立消息由 Sandy Pan 发送，内容包含对多位同事的提及，其中对 Esone Qiu 有明确提及，属于对本人在场群组中的隐性通知或点名。上下文显示是在预演/demo相关的沟通中提及了你。",
+      "timestamp": 1789975849,
+      "created_at": 1789978957,
+      "postId": "83778348335108"
+    },
+    {
+      "id": "c760d159-d730-44f3-ae85-ef3ba0a4b99d",
+      "group_id": "1350236299266",
+      "group_name": "esone.qiu+sandy.pan",
+      "sender": "Esone Qiu",
+      "content": "明天要demo Edit notes么，后天 weekly",
+      "summary": null,
+      "timestamp": 1789912796,
+      "created_at": 1789914091,
+      "postId": "83773714882564"
+    }
+  ],
+  "known_mobile_demo_messages": [
+    {
+      "id": "dc66ddc4-a6f5-43e5-950e-fb4b57c20fe3",
+      "group_name": "Video Weekly Sync Up",
+      "sender": "Esone Qiu",
+      "summary": "Esone Qiu shares a demo recording covering Mobile AVA delegate and Native Client NC Switcher features with the team.",
+      "timestamp": 1788243384,
+      "created_at": 1788243694
+    },
+    {
+      "id": "92c3a202-81d1-4d7c-8ad9-080d0f10afdc",
+      "group_name": "Video Weekly Sync Up",
+      "sender": "Esone Qiu",
+      "summary": "Esone Qiu shares a demo recording covering Mobile PLG in-app awareness campaign by Jeremy Lin and Mobile AI Notes everywhere by Eva Zhang.",
+      "timestamp": 1786697493,
+      "created_at": 1786935101
+    }
+  ],
+  "calendar_vectors": [
+    {
+      "kind": "calendar_chunk",
+      "n": 0
+    },
+    {
+      "kind": "calendar_message",
+      "n": 0
+    }
+  ],
+  "calendar_metadata": [
+    {
+      "id": "calendar:ringcentral_indexeddb:AAMkADJjYzA5ZDEwLWYwNDctNGJiNi04YWZmLWJlMDBkZWE3ZDYwNABGAAAAAAC6C2DbVj4qRK_H0m0zxLreBwDaJfW02FO5RZ-CJhMtdehzAAAAAAENAADaJfW02FO5RZ-CJhMtdehzAAjrpVXsAAA=",
+      "source_type": "calendar",
+      "group_name": "Calendar",
+      "scope": "work",
+      "source": "ringcentral_indexeddb",
+      "matched_projects_json": null,
+      "entities_json": null,
+      "created_at": 1789952218,
+      "updated_at": 1789980718
+    }
+  ],
+  "query_rank_probe": {
+    "current": [
+      {
+        "id": "478294cd-b573-4920-98ff-2078cfaef9e9",
+        "source_type": "glip",
+        "source_title": null,
+        "group_name": "RCV Mobile VT3",
+        "matches": 3,
+        "pos": 1,
+        "timestamp": 1789975849,
+        "created_at": 1789978957
+      },
+      {
+        "id": "dc66ddc4-a6f5-43e5-950e-fb4b57c20fe3",
+        "source_type": "glip",
+        "source_title": null,
+        "group_name": "Video Weekly Sync Up",
+        "matches": 2,
+        "pos": 144,
+        "timestamp": 1788243384,
+        "created_at": 1788243694
+      },
+      {
+        "id": "calendar:ringcentral_indexeddb:AAMkADJjYzA5ZDEwLWYwNDctNGJiNi04YWZmLWJlMDBkZWE3ZDYwNABGAAAAAAC6C2DbVj4qRK_H0m0zxLreBwDaJfW02FO5RZ-CJhMtdehzAAAAAAENAADaJfW02FO5RZ-CJhMtdehzAAjrpVXsAAA=",
+        "source_type": "calendar",
+        "source_title": "pre demo of eidt notes",
+        "group_name": "Calendar",
+        "matches": 1,
+        "pos": 626,
+        "timestamp": 1789975800,
+        "created_at": 1789952218
+      },
+      {
+        "id": "c760d159-d730-44f3-ae85-ef3ba0a4b99d",
+        "source_type": "glip",
+        "source_title": null,
+        "group_name": "esone.qiu+sandy.pan",
+        "matches": 1,
+        "pos": 641,
+        "timestamp": 1789912796,
+        "created_at": 1789914091
+      }
+    ],
+    "existed_by_ask": [
+      {
+        "id": "dc66ddc4-a6f5-43e5-950e-fb4b57c20fe3",
+        "source_type": "glip",
+        "source_title": null,
+        "group_name": "Video Weekly Sync Up",
+        "matches": 2,
+        "pos": 143,
+        "timestamp": 1788243384,
+        "created_at": 1788243694
+      },
+      {
+        "id": "calendar:ringcentral_indexeddb:AAMkADJjYzA5ZDEwLWYwNDctNGJiNi04YWZmLWJlMDBkZWE3ZDYwNABGAAAAAAC6C2DbVj4qRK_H0m0zxLreBwDaJfW02FO5RZ-CJhMtdehzAAAAAAENAADaJfW02FO5RZ-CJhMtdehzAAjrpVXsAAA=",
+        "source_type": "calendar",
+        "source_title": "pre demo of eidt notes",
+        "group_name": "Calendar",
+        "matches": 1,
+        "pos": 621,
+        "timestamp": 1789975800,
+        "created_at": 1789952218
+      },
+      {
+        "id": "c760d159-d730-44f3-ae85-ef3ba0a4b99d",
+        "source_type": "glip",
+        "source_title": null,
+        "group_name": "esone.qiu+sandy.pan",
+        "matches": 1,
+        "pos": 635,
+        "timestamp": 1789912796,
+        "created_at": 1789914091
+      }
+    ],
+    "raw_competition": [
+      {
+        "matches": 1,
+        "n": 2784
+      },
+      {
+        "matches": 2,
+        "n": 584
+      },
+      {
+        "matches": 3,
+        "n": 8
+      }
+    ],
+    "fts_scope_rank": [
+      {
+        "rowid": 331840,
+        "rank": -3.0401115869361695,
+        "pos": 774
+      }
+    ]
+  },
+  "rank_probe_limitations": "Current retained corpus; raw existed_by_ask only adds created_at cutoff; not historical full Ask replay; possible expansion and postfilters not replayed.",
+  "source_doc": {
+    "id": "1-KAOc2R704jxGQo9OuF3bdIfmqKAzQCTRiWISTpQso8",
+    "title": "Application Video Weekly Report",
+    "modified_time": "2026-09-21T08:48:48.757Z",
+    "quote": "Demo / Mobile: Edit notes in AI notes - Sandy Pan",
+    "historical_existence_at_ask": "not proven"
+  },
+  "active_watched_projects_have_rcv_mobile_alias": false,
+  "research_action": {
+    "id": "daefe1d3-7d35-475c-aed4-96e8167b351b",
+    "created_at": 1789970105,
+    "askRequestId": "ceb09615-55b6-400e-8895-ecc9808bd0fe"
+  }
+}

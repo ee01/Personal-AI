@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Personal AI · 来源刷新与 Ask 证据链 · 方案草图</title>
+  <style>
+    :root { color-scheme: light; --ink: #27323f; --muted: #647385; --accent: #4a5f75; --line: #dce3e8; --soft: #eff4f2; --success: #3f6a58; --warn: #83571d; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--soft); font-family: 'SF Pro Rounded', 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif; font-size: 14px; line-height: 1.65; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    button:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid #8299ac; outline-offset: 4px; }
+    button:disabled { cursor: wait; opacity: .55; }
+    [hidden] { display: none !important; }
+    .notice { padding: 10px 22px; background: #27323f; color: #fff; text-align: center; font-size: 12px; letter-spacing: .06em; }
+    .wrap { max-width: 1250px; margin: 0 auto; padding: 27px 26px 40px; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 22px; margin-bottom: 23px; }
+    .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { font-size: 27px; line-height: 1.3; font-weight: 600; margin: 6px 0 0; letter-spacing: -.025em; }
+    h2 { margin: 0; font-size: 17px; font-weight: 600; }
+    h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+    p { margin: 0 0 13px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .intro p { max-width: 360px; margin: 0; font-size: 13px; }
+    .window { border: 1px solid #fff; border-radius: 19px; background: #fbfcfd; box-shadow: 0 14px 45px #27323f12; overflow: hidden; }
+    .titlebar { padding: 16px 22px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+    .brand img { width: 25px; height: 25px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, .9fr); }
+    .ask { padding: 25px 27px; }
+    .source { padding: 25px; border-left: 1px solid var(--line); background: #f4f7f8; }
+    .section-label { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .12em; margin-bottom: 14px; }
+    .user-message { margin: 0 0 20px auto; max-width: 90%; padding: 12px 17px; border-radius: 13px 13px 3px 13px; background: #e0e8f4; }
+    .answer p { margin-bottom: 14px; }
+    .answer-title { margin-bottom: 13px; display: flex; align-items: baseline; gap: 10px; }
+    .citation { padding: 0 4px; background: #edf1f5; color: #3d566d; border: 0; border-radius: 4px; font-size: 11px; vertical-align: 1px; }
+    .uncertain { padding: 12px 14px; background: #faf3e7; border: 1px solid #e9decb; border-radius: 7px; font-size: 13px; }
+    .uncertain strong { color: var(--warn); }
+    .pipeline { margin: 21px 0 17px; }
+    summary { cursor: pointer; font-size: 12px; color: var(--accent); }
+    .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; padding: 13px 0 7px; }
+    .step { border-top: 2px solid #b0c0cc; padding: 8px 4px 0; font-size: 11px; color: var(--muted); }
+    .step strong { display: block; font-size: 20px; color: var(--ink); font-weight: 500; }
+    .pipeline p { font-size: 11px; color: var(--muted); margin: 7px 0 0; }
+    .source-list { padding: 0; list-style: none; margin: 12px 0 0; }
+    .source-list li { padding: 10px 0; border-top: 1px solid var(--line); scroll-margin: 18px; }
+    .source-list li:focus { background: #eef3f7; outline: 2px solid #a8bdcd; outline-offset: 3px; }
+    .evidence-title { display: flex; align-items: baseline; gap: 7px; font-size: 12px; }
+    .evidence-number { font-size: 11px; color: var(--muted); width: 15px; flex: 0 0 15px; }
+    .source-list p { margin: 4px 0 0 22px; color: var(--muted); font-size: 11px; }
+    .cancelled { color: #8b5660; font-size: 10px; margin-left: auto; white-space: nowrap; }
+    .text-button { padding: 7px 0; border: 0; background: none; color: var(--accent); font-size: 12px; }
+    .source-header { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 16px; }
+    .doc-card { padding: 19px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+    .document-type { color: var(--muted); font-size: 10px; letter-spacing: .1em; margin-bottom: 4px; }
+    .doc-name { font-size: 17px; font-weight: 500; line-height: 1.4; margin-bottom: 5px; }
+    .document-url { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .badge { display: inline-block; padding: 3px 9px; border-radius: 5px; background: #eef1f4; color: var(--accent); font-size: 11px; }
+    .badge[data-tone="success"] { background: #e8f1ec; color: var(--success); }
+    .badge[data-tone="warn"] { background: #faf0dd; color: var(--warn); }
+    .status { margin: 17px 0 12px; }
+    .status p { margin: 9px 0 0; min-height: 42px; font-size: 12px; color: var(--muted); }
+    .timestamps { margin: 0; padding-top: 12px; border-top: 1px solid var(--line); display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 11px; }
+    .timestamps dt { color: var(--muted); }
+    .timestamps dd { margin: 0; text-align: right; }
+    .excerpt { margin-top: 15px; padding: 13px; background: #f7f9fa; border-radius: 5px; font-size: 12px; }
+    .excerpt p { margin: 4px 0 0; }
+    .simulation { margin-top: 22px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .actions button { padding: 7px 10px; border: 1px solid #cbd5de; border-radius: 6px; background: #fff; font-size: 11px; }
+    .actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .policy { margin-top: 20px; font-size: 12px; }
+    .policy p { margin-bottom: 8px; }
+    .foot { display: flex; justify-content: space-between; gap: 20px; padding-top: 16px; color: var(--muted); font-size: 11px; }
+    @media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .source { border-left: 0; border-top: 1px solid var(--line); } .intro { align-items: start; flex-direction: column; gap: 10px; } .intro p { max-width: none; } }
+    @media (max-width: 480px) { .wrap { padding: 20px 12px; } h1 { font-size: 23px; } .ask, .source { padding: 20px; } .titlebar { padding: 13px 20px; } .foot { flex-direction: column; gap: 4px; } .steps { gap: 3px; } }
+  </style>
+</head>
+<body>
+  <!-- 设计假设：保留 Desktop Quick Ask 的浅灰绿与会话形态；来源卡是上下文内的信息，不是新的管理台。
+       此处仅模拟拟议交互。计数、状态时间、版本与诊断条目为示例，不对应生产返回或真实刷新记录。 -->
+  <div class="notice">方案交互草图 · 示例状态，未连接真实服务</div>
+  <main class="wrap">
+    <header class="intro">
+      <div><div class="eyebrow">Memory · Source refresh &amp; recall</div><h1>记得内容，也交代依据</h1></div>
+      <p class="muted">重新打开资料时检查变化；回答时看更多证据，让结论和出处一起回来。</p>
+    </header>
+    <section class="window" aria-label="Personal AI Desktop Ask 方案示意">
+      <header class="titlebar"><div class="brand"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAfCAYAAACGVs+MAAAAAXNSR0IArs4c6QAAAIRlWElmTU0AKgAAAAgABQESAAMAAAABAAEAAAEaAAUAAAABAAAASgEbAAUAAAABAAAAUgEoAAMAAAABAAIAAIdpAAQAAAABAAAAWgAAAAAAAABIAAAAAQAAAEgAAAABAAOgAQADAAAAAQABAACgAgAEAAAAAQAAACCgAwAEAAAAAQAAAB8AAAAAfM0gpwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAVlpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDYuMC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6dGlmZj0iaHR0cDovL25zLmFkb2JlLmNvbS90aWZmLzEuMC8iPgogICAgICAgICA8dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPgogICAgICA8L3JkZjpEZXNjcmlwdGlvbj4KICAgPC9yZGY6UkRGPgo8L3g6eG1wbWV0YT4KGV7hBwAACN5JREFUSA2lV31sHMUVf7M7s7fnj0SGNiJVQhtkUSSSqJIjVUFKa+fjjqi4KpATtmlQiForf7SV2j8K/wCXgkpVKhWJShWW+kWDz9U1BUGL47MDh0hJaUklokYlrRUTQgkkSk1wbN/u7M709+a8jl0lFKkjjWdv5s17b97H7z0LusKwVPaodEKIajXNjuMdfZuE520jaz9vidYJok9iXYVzgfUcfvOcMkR/EWRfDGojr2V3bankU/VmK6iM4+UDd5YP212Wol5OeNfuvHuFNvZefO1VwttIvsQnxPE0hrTFHwyceeSBlfAwsaYJaWNOQLOfS5v8TExULzp+S3jzbx7LFICmAV4d80G8o/9rUPnhIAivcwzTJAVxwxJ2SSiQSE9g4CO1rBFBaaHxev4RKl/6rLCOG+fI0oPBeOVJ0NBSGfx7UYHswH5poCPW5ikIvo3SlHSaNEDHrmhRUgnCY50FcJbapkV9frnvgxvYsWUSzQrNYfrK80OSkpI4HpWp3C0OP3Uhk4XzpgLZxlyhb60UYkKp8EZornGOV9lQBaFoWiE9gb0jmMch8gzcMwN6C7kroMpa7G/EvAVCN7BQHUesCD/AB48gjuenjPR68i8Mn369a1BtOjakhcWHwMeH3f2fCAN7FMI7tW5AeyGV7wesY5wmz3rW/kReSl8VR6vzYHjVYbv3hI1cvNkz5huBVHcwIazoHqNUkNdJfLqRqK4VTUv4iy6Iiv2HAhUWdTw/J+BjKZVKEn0W8veqscqhTCKeJKi726eZGwXdMN28f6rDUvs/LNXrHCf8ajf0rQNFY+wvoMhquAVKWANL5JI4eknVKluZyDGIi31fVyo/BLNzAEK6UrjwhhLJVjFW/bcdHFQ0PY0UQCxUqwi0y0KYSTaccqUSB6hPpzoStqzdds+12tcT4Pk58GT+nlI5GenoW2Gt8oSwvb0tOmo7gaj9DEw1jzUPk58JfG+9GH36w/cKu1uvq/16dlFIdzfStO7SNNvLVsSSvxQ7LO4K3L1YLF2Tt+p1uHQdBzXWEDLeDsKW9V4ctfZCIxYewx45ZgZ/38vCWTkWznFit9+9wS4IZ0GZ0GzNhNty2Ytu7d/oYovvdpfaVsKKwqb7FmAj1GmaBr66Xs/P3Qn4EL1NR1CkZM6DIuNqfOSwy4znn5+zO/o+pa+dOZx45rgOVr84U9i9il+5VIlF4TjTr56c8Ay9gTsvzxa/ulrUq5dYGTX+m1pizThcwTprl85CbEc2IXWQ03C97xQRtsoUGA6GtRCPqnzrFsCPUWHLlpzVP3Knpzr4LgeDQFw4QNCkH1b5th7sJaDdrEz6uKNtn3aWBU48534zmDnsos8yk7WpgSxhQ0oS1uFNJnKvhO/w2UMRUtnSLK9I+m3nYFYXYHDJfioz/Fg2tSVRoAhZKmjeYAU+bb0AOKd61cWQEOZvzcdSYAHXGJ2sQLtBegC34Xp8pZZz1o05AxQjAha4zAoAw6ygzOcp7wiQig9R2R3O+PkcmDVpLeXcphUyF5v85awRUep4CJE0LdDmgfAsFxOssQB2e1JwhXOjdXzkXcTIFEnwBbQCmvA6cbp9tHoe9IKODS1mgwMWoklSjvaSD1oo/Hbb4cr7DE7MAJi5ygeU465GtmHHvsU17J+uyhFFjOcmFV9g4qmFS8D7RwHkpHJhhwWgIcDKfE6Dg5JfxjMLSGPE900cQYfwGjY1BD3kaGmWpbFCt5DnEih1QUhiCmanV1wZRfYRwAoO3W2/vLd9Xf2XDWYcjo88l1Dak8SNH6bGdsvx4Rc41cTQ0KKrOAjZIuHE8JhJ7ZY4bjyWpMn2XK3yrN25M+cyoXewBUS78ELWZSGAxWsSmHXQ6uhBvKRVmyRCLVilG/OPgWgfnT8vmik2UsdvnuSEl5c3Fs4KbGE0MmKifARkPIlxg9oQmxhJY+a+IAhu0DqOfSECrKkw9ne4C+cXBkZUkLsL1QtFyOa57EZJ/J2wNvJjftk7m0vhmrjD+Zujn+9cbXDO89k7wbRcswZxBcxICn27fOEDPCwhzBsoSmGs42dgoTucAo1iqdOz8jjKaF6btOHBmj7iIUnT/ao2XM6EuRdxETr2ZILgdC9jBalU8o4BF7qYEEVpKVSjldsnPe+noOcOqqE8LwQgxTD9zWLswKTI6nJUGOgLfL8CJGTG/FqUpJyAVY6gC7lfjT/9R+afDRacmZ7XbD9bI0C355n9UgW3c/Di9eimKIfXi1THe2St8iu4N+BnuPLKWuviwPekDB5AP8AKcIujcSHgiE5MOmGFPYiG60hwYeVJB0Ts84VGk/tHFJjrffK6wJPh/XapAO1xBKtTBG3zMsgRAvSBXG3kkWZsVbl8Q33XtVYNv0QX+p/Bxa9oHXHZVUidCIqw5qCEGXnfoy+qQ5WjfDfaMVBCU3QfPlsxP434yXOKGVReY+0slPGxFwLr0Kim3w7GKo+7rhsAxvJcOrgS2jXoclX6H/RByJu4BOGkPeExjqOn0XNcMN23Sd7jDx4wwT2oFV0osTfBv+h4uOpHs2xy6fmtiLdQJ8lJOLbHCUcKU5mf0nSbU4AZOZOyT0ZHIyP8XrDhgFHGGgQc+TB/6DdB5K/5WnWK73COw0KdKTo4lNgGWnGDO1A9aMUM4bZ3gR/fVSv1RnXoQN0FMctaksbu1cyMBywRc/cDkJlsFPt2AaB+jzbXhyUcrDn0MuJ4kxrmSVZuQO92E6Obb9IQ4EOxMWc9E/0ZsPtbeSk5mPWQTji3bPU62F0eyxTgbUY4JhZjI39AUN4PfPgBTMrwBRDHXWv/lF1XnvwgTtNHbKov4p+Ef1nPTAYN83dGvoxmieDFupGdXXVltMsO40L/AXvbHos1wrRR4a71fMYplNH898pC+RzqwnsfPa5K4FoqbirBDJ3QURSjTTqKTrI/nauYebksqP7WoiKT+fdtZ1tb4oL6o+V+vFO785uuk7ForZLigMW/ay/xTWfWj8fif1ItmvpKlGL0iejM5lIekMn/H9yJlmX4SnT/z95/AFG3sBjPtKEBAAAAAElFTkSuQmCC" alt="">Personal AI <span class="muted">/ Ask</span></div><span class="small muted">个人记忆 · 示例</span></header>
+      <div class="workspace">
+        <section class="ask" aria-labelledby="ask-title">
+          <div class="section-label">场景 02 · ASK 与证据</div>
+          <div class="user-message">9 月 21 日的 demo 有 Edit notes 吗？Sandy 要讲什么？有新的录屏吗？</div>
+          <div class="answer">
+            <div class="answer-title"><h2 id="ask-title">有议题线索，完成情况尚未证实</h2></div>
+            <p>日历安排是 <strong>9/21 15:30</strong>。旧的 15:00 条目已取消，不应把它当成另一次会议。<button class="citation" data-source="1" aria-label="查看来源 1">1</button> <button class="citation" data-source="4" aria-label="查看来源 4">4</button></p>
+            <p>你在与 Sandy 的私聊中问过“明天要demo Edit notes么，后天 weekly”。文稿议程写有 <strong>Mobile: Edit notes in AI notes — Sandy Pan</strong>；这些证据支持“讨论过这个议题”，还不能证明已经演示完成。<button class="citation" data-source="2" aria-label="查看来源 2">2</button> <button class="citation" data-source="3" aria-label="查看来源 3">3</button></p>
+            <p>另有 <strong>9/1 Mobile AVA delegate</strong> 历史演示的录屏消息；消息含链接，但未播放核验，不代表本次 Edit notes 已录制。<button class="citation" data-source="6" aria-label="查看来源 6">6</button></p>
+            <div class="uncertain"><strong>仍未证实</strong> · 是否实际完成演示、是否产生新的录屏。群消息覆盖不完整，不能据此断言有或没有新录屏。<button class="citation" data-source="5" aria-label="查看来源 5">5</button></div>
+          </div>
+          <details class="pipeline">
+            <summary>这次回答怎样使用证据 · 示意计数</summary>
+            <div class="steps"><div class="step"><strong>40</strong>较宽候选</div><div class="step"><strong>12</strong>筛选后给 LLM</div><div class="step"><strong>6</strong>答案引用</div><div class="step"><strong>5 + 1</strong>默认展示 + 展开</div></div>
+            <p>以上数字仅演示层级，非实测与固定配置。候选先去重、核对版本与时间，再按问题和长度预算组成证据包，交给 LLM 整理答案。5 条只限制默认展示，不限制 LLM 可见证据。</p>
+          </details>
+          <div class="small"><strong>回答依据</strong> <span class="muted" id="source-count">默认展示 5 条 / 共 6 条</span></div>
+          <ol class="source-list">
+            <li id="evidence-1" tabindex="-1"><div class="evidence-title"><span class="evidence-number">1</span><strong>日历 · 9/21 15:30 安排</strong></div><p>支持会议计划时间；安排本身不证明会议已举行。</p></li>
+            <li id="evidence-2" tabindex="-1"><div class="evidence-title"><span class="evidence-number">2</span><strong>与 Sandy 的私聊 · 你提出 Edit notes 问题</strong></div><p>你问：“明天要demo Edit notes么，后天 weekly” · 9/20 21:59，22:21 入库。</p></li>
+            <li id="evidence-3" tabindex="-1"><div class="evidence-title"><span class="evidence-number">3</span><strong>Slides · Mobile 议程</strong><span class="badge">拟议正文证据</span></div><p>Mobile: Edit notes in AI notes — Sandy Pan。此处模拟补齐正文后的回答；原核查未发现正文入库。</p></li>
+            <li id="evidence-4" tabindex="-1"><div class="evidence-title"><span class="evidence-number">4</span><strong>日历 · 旧 15:00 条目</strong><span class="cancelled">已取消</span></div><p>保留旧状态以解释冲突，不把取消条目作为有效日程。</p></li>
+            <li id="evidence-5" tabindex="-1"><div class="evidence-title"><span class="evidence-number">5</span><strong>群消息覆盖说明</strong><span class="badge">诊断示例</span></div><p>同步覆盖尚未完整；这是回答的证据边界，不是“没有新录屏”的证明。</p></li>
+            <li id="evidence-6" tabindex="-1" hidden><div class="evidence-title"><span class="evidence-number">6</span><strong>9/1 · Mobile AVA delegate 录屏消息</strong></div><p>已核验历史消息含录屏链接，未播放视频；与本次 Edit notes 不是同一材料，不能证明本次演示完成。草图省略原始链接。</p></li>
+          </ol>
+          <button class="text-button" id="expand-sources" type="button" aria-expanded="false" aria-controls="evidence-6">展开其余 1 条依据</button>
+          <p class="small muted" style="margin:8px 0 0">点击正文的引用编号会定位到依据；被折叠的依据会自动展开。</p>
+        </section>
+        <aside class="source" aria-labelledby="source-title">
+          <div class="section-label">场景 01 · 打开已知链接</div>
+          <div class="source-header"><h2 id="source-title">来源资料</h2><span class="small muted">随打开动作自动检查</span></div>
+          <div class="doc-card">
+            <div class="document-type">GOOGLE SLIDES · 示例资料卡</div>
+            <div class="doc-name">Weekly demo · Mobile</div>
+            <div class="document-url">docs.google.com/presentation/… · 已知链接</div>
+            <div class="status" role="status" aria-live="polite"><span class="badge" id="refresh-badge">仅记住链接</span><p id="refresh-description">还没有可检索正文。记住 URL 不等于已经读过文稿。</p></div>
+            <dl class="timestamps"><dt>最近成功检查</dt><dd id="checked-at">尚无成功检查</dd><dt>内容更新时间</dt><dd id="updated-at">尚无正文</dd><dt>当前保留版本</dt><dd id="version">—</dd></dl>
+            <div class="excerpt" id="source-excerpt" hidden><strong>正文片段 · 模拟入库</strong><p>Mobile: Edit notes in AI notes — Sandy Pan</p><p class="small muted">这是议程内容，不代表演示已完成。</p></div>
+          </div>
+          <div class="simulation">
+            <h3>体验一次重访</h3><p class="small muted">以下按钮只推进本地示例状态，不打开真实文稿。</p>
+            <div class="actions"><button type="button" class="primary" id="simulate-change">重访 · 有变化</button><button type="button" id="simulate-unchanged" disabled>重访 · 无变化</button><button type="button" id="simulate-failure" disabled>重访 · 检查失败</button><button type="button" id="reset-refresh">重置示例</button></div>
+          </div>
+          <div class="policy"><p><strong>每次重访都检查，内容变化才更新。</strong>成功检查与内容更新时间分开记录；重复访问不制造新记忆。</p><p class="muted">检查失败时保留旧正文和上次成功检查时间，并说明它的新鲜度。未取得正文、失去访问权限或来源不支持，都不能显示“已更新”。</p><p class="muted">本草图只演示已授权来源；自动检查不扩大访问权限，不修改源文稿。</p></div>
+        </aside>
+      </div>
+    </section>
+    <footer class="foot"><span>拟议行为，待实现与评测；不代表当前线上效果。</span><span>原生 HTML · 无网络请求 · 无服务写入</span></footer>
+  </main>
+  <script>
+    'use strict';
+    const byId = (id) => document.getElementById(id);
+    const badge = byId('refresh-badge');
+    let version = 0;
+    let visit = 0;
+    let generation = 0;
+    const timers = [];
+    function setStatus(label, description, tone = '') {
+      badge.textContent = label;
+      badge.dataset.tone = tone;
+      byId('refresh-description').textContent = description;
+    }
+    function controls(busy) {
+      byId('simulate-change').disabled = busy;
+      byId('simulate-unchanged').disabled = busy || version === 0;
+      byId('simulate-failure').disabled = busy || version === 0;
+    }
+    function delay(fn, ms, run) {
+      timers.push(setTimeout(() => { if (run === generation) fn(); }, ms));
+    }
+    function simulate(outcome) {
+      const run = ++generation;
+      const stamp = '9/23 10:' + String(10 + ++visit).padStart(2, '0') + ' · 示例';
+      controls(true);
+      setStatus('正在检查', '已重访此链接，正在核对可访问性与内容变化。旧内容暂时保留。');
+      delay(() => {
+        if (outcome === 'failure') {
+          setStatus('检查失败 · 保留旧版', '本次检查未成功；保留上次成功检查时间与旧正文，不能把它当成刚更新的内容。', 'warn');
+          controls(false);
+        } else if (outcome === 'unchanged') {
+          byId('checked-at').textContent = stamp;
+          setStatus('已检查 · 内容未变化', '只更新最近成功检查时间，正文版本与内容更新时间保持不变。', 'success');
+          controls(false);
+        } else {
+          setStatus(version === 0 ? '取得正文 · 首次保存中' : '发现版本变化 · 刷新中', version === 0 ? '首次取得可读正文，正在保存正文与来源依据。' : '已检测到新版本；更新正文与来源依据，保留可追溯的旧版本。');
+          delay(() => {
+            version += 1;
+            byId('checked-at').textContent = stamp;
+            byId('version').textContent = 'v' + version + ' · 示例';
+            byId('updated-at').textContent = stamp;
+            byId('source-excerpt').hidden = false;
+            setStatus('已更新', '本次内容已保存。下次重访仍会检查，只有变化才生成新版本。', 'success');
+            controls(false);
+          }, 800, run);
+        }
+      }, 700, run);
+    }
+    byId('simulate-change').addEventListener('click', () => simulate('change'));
+    byId('simulate-unchanged').addEventListener('click', () => simulate('unchanged'));
+    byId('simulate-failure').addEventListener('click', () => simulate('failure'));
+    byId('reset-refresh').addEventListener('click', () => {
+      generation += 1;
+      timers.forEach(clearTimeout);
+      timers.length = 0;
+      version = 0;
+      visit = 0;
+      byId('checked-at').textContent = '尚无成功检查';
+      byId('updated-at').textContent = '尚无正文';
+      byId('version').textContent = '—';
+      byId('source-excerpt').hidden = true;
+      setStatus('仅记住链接', '还没有可检索正文。记住 URL 不等于已经读过文稿。');
+      controls(false);
+    });
+    const expandButton = byId('expand-sources');
+    function setExpanded(expanded) {
+      byId('evidence-6').hidden = !expanded;
+      expandButton.setAttribute('aria-expanded', String(expanded));
+      expandButton.textContent = expanded ? '收起补充依据' : '展开其余 1 条依据';
+      byId('source-count').textContent = expanded ? '已展示全部 6 条' : '默认展示 5 条 / 共 6 条';
+    }
+    expandButton.addEventListener('click', () => setExpanded(expandButton.getAttribute('aria-expanded') !== 'true'));
+    document.querySelectorAll('[data-source]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (button.dataset.source === '6') setExpanded(true);
+        byId('evidence-' + button.dataset.source).focus();
+      });
+    });
+  </script>
+</body>
+</html>

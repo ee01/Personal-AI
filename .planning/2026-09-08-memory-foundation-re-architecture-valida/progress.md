@@ -256,3 +256,75 @@ Worker 读 sourceType/trustClass 字段名不正确。
 3. Q1a 来源可靠性加固
 4. Q2 有界质量实验
 5. Q3 最小生产闭环
+
+---
+
+## 2026-09-22 召回缺失根因修复（B 方案 + F13 + 抽取管线三重修复）
+
+### 用户报告的两个失败查询
+- "sophia 最近问了我什么问题" / "delegate beta 需求这件事，谁在负责"
+- 两个查询的 episode 都是 Sept 8 后的新消息，但 v3 units 为 0，抽取 job 不存在（NO_JOB）
+
+### 根因（三层）
+1. **抽取模型配置错**：`MEMORY_EXTRACTION_LLM_FALLBACKS` 被某次 env 同步覆盖回
+   `openai/z-ai/glm-5.3`（应为 `openai/moonshotai/kimi-k3`）→ 修复 env
+2. **旁路 ingest 路径**（F13）：calendar（calendarEvents.ts）和 web（SourceMemoryCaptureService）
+   直接 INSERT messages_raw，绕过 IngestionPipeline → 318 条消息（128 calendar + 162 web +
+   39 条 9/8 flag 启用前的 glip）从未入队 → 全部路径补 enqueue + enqueueEpisode 幂等化
+3. **推理模型烧 token**（关键）：kimi-k3/glm-5.3 是推理模型，thinking tokens 在 JSON
+   答案前输出。默认 maxTokens=2000 被 thinking 吃光 → content 空 →
+   "no JSON object (head: )" 死信 483+14 条。修复：maxTokens 6000 +
+   OpenRouter 统一 `reasoning.effort=low`（非 gpt-5 模型路径）
+
+### 连带修复
+- **预算锁死不再烧重试**：LLMBudgetExceededError 停在 next UTC midnight，不消耗 attempts
+  （否则 790 job 的 drain 会在 $10 上限处被批量烧成 dead_letter）
+- **capsule dismiss FK**：removeLinkedMemorySignal 删 episode 前先删 ingest_jobs；
+  有 units 的 episode 保留（memory_unit_sources FK，影子期 lineage 不变式）
+- **B 方案关键修正**：RecallEngine 搜 chunks_vec_e5 时查询向量必须用
+  embedWithE5(query, 'query:') 重新嵌入（MiniLM 查询向量与 e5 passage 向量空间不兼容）
+
+### B 方案（legacy e5 重嵌）完成
+- `chunks_vec_e5`：16,609 chunks 全量重嵌（passage: 前缀，~26 分钟本地 CPU）
+- RecallEngine 向量通道自动切换（表存在用 e5，否则回退 MiniLM）
+- 生产进程 e5 加载 3 次成功 0 失败（docker exec 新进程会碰 wasm blob worker 问题，
+  生产进程无此问题）
+- Ask surface（retrievalMode=deep）走引擎默认通道含 vector → e5 直接生效
+- /api/v1/recall 路由是 safe mode（FTS-only，RECALL_ROUTE_SAFE_MODE_ENABLED=true）——设计如此
+
+### 结果（11:57 时点）
+- units: 285 → 815（drain 进行中，608 job 队列，4 并行 drain ~110 job/10min）
+- dead_letter: 仅剩 ~7 条 span out of range（LLM 算错 CJK byte 偏移，严格契约
+  正确拒绝，~1% 损失率，影子期可接受）
+- 今日 spend $0.99 / $10 上限
+- 两个失败查询经生产 API 验证：FTS+graph 已返回相关结果（Daily Summary with
+  Beta PRD、"AI, Sophia (Jinmei)" Memory Capture）
+
+### 提交
+- c28541b/9f684fe B-plan e5 切换（+分支误提交清理）
+- 4e1f240 e5 查询向量 prefix 修正
+- fbdb3b5 F13 calendar/web enqueue 旁路修复
+- 3c98b94 预算锁死不烧重试
+- 80308be 推理模型 token 上限修复
+
+### 追加修复（drain 过程中发现）
+- **89bc386 crash 容错**：单 job 异常不再杀死 drain 进程（并行 drain 碰撞时
+  PK 冲突以 unhandled rejection 杀死了全部 worker）；LEASE_SECONDS 120→300
+  （kimi-k3 推理调用可超 120s）
+- **d3d6592 F14（关键）**：dispute 路径写 revisions(N+1) 但漏了
+  memory_units.current_revision +1 → desync → 后续所有同 unit 写操作
+  确定性撞 PK（68 个卡死 retryable 全是这个 bug，不是并发竞态）。
+  修复 + 生产数据修复（70 个 desynced units）
+- 最终状态：**1,637 units**；Sept 8 后全部 1,532 episodes 处理完
+  （980 integrated + 539 extracted_zero + 13 dead_letter 全部为
+  span-out-of-range 模型局限，~0.8%）
+- 今日总 spend $1.03 / $10
+
+### 验证结论
+- "sophia 最近问了我什么问题"：Memory Capture (1529) AI, Sophia (Jinmei) 命中 top4
+- "delegate beta 需求这件事，谁在负责"：Daily Summary Beta PRD "Esone Qiu confirmed"
+  + Milo Beta planning 命中 top1/top4
+- 两条查询在 FTS+graph 通道即返回相关结果；e5 向量通道在 Ask surface
+  （deep retrievalMode）生效（生产进程 e5 加载 0 失败）
+- 覆盖率：Sept 8 后 episodes v3 units 覆盖 22% → 64%（980/1532，
+  其余为合法 extracted_zero——转发/元数据类消息无可提取记忆）

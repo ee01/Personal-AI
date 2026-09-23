@@ -1,0 +1,97 @@
+{
+  "current": [
+    {
+      "id": "478294cd-b573-4920-98ff-2078cfaef9e9",
+      "source_type": "glip",
+      "source_title": null,
+      "group_name": "RCV Mobile VT3",
+      "matches": 3,
+      "pos": 1,
+      "timestamp": 1789975849,
+      "created_at": 1789978957
+    },
+    {
+      "id": "dc66ddc4-a6f5-43e5-950e-fb4b57c20fe3",
+      "source_type": "glip",
+      "source_title": null,
+      "group_name": "Video Weekly Sync Up",
+      "matches": 2,
+      "pos": 144,
+      "timestamp": 1788243384,
+      "created_at": 1788243694
+    },
+    {
+      "id": "calendar:ringcentral_indexeddb:AAMkADJjYzA5ZDEwLWYwNDctNGJiNi04YWZmLWJlMDBkZWE3ZDYwNABGAAAAAAC6C2DbVj4qRK_H0m0zxLreBwDaJfW02FO5RZ-CJhMtdehzAAAAAAENAADaJfW02FO5RZ-CJhMtdehzAAjrpVXsAAA=",
+      "source_type": "calendar",
+      "source_title": "pre demo of eidt notes",
+      "group_name": "Calendar",
+      "matches": 1,
+      "pos": 626,
+      "timestamp": 1789975800,
+      "created_at": 1789952218
+    },
+    {
+      "id": "c760d159-d730-44f3-ae85-ef3ba0a4b99d",
+      "source_type": "glip",
+      "source_title": null,
+      "group_name": "esone.qiu+sandy.pan",
+      "matches": 1,
+      "pos": 641,
+      "timestamp": 1789912796,
+      "created_at": 1789914091
+    }
+  ],
+  "existed_by_ask": [
+    {
+      "id": "dc66ddc4-a6f5-43e5-950e-fb4b57c20fe3",
+      "source_type": "glip",
+      "source_title": null,
+      "group_name": "Video Weekly Sync Up",
+      "matches": 2,
+      "pos": 143,
+      "timestamp": 1788243384,
+      "created_at": 1788243694
+    },
+    {
+      "id": "calendar:ringcentral_indexeddb:AAMkADJjYzA5ZDEwLWYwNDctNGJiNi04YWZmLWJlMDBkZWE3ZDYwNABGAAAAAAC6C2DbVj4qRK_H0m0zxLreBwDaJfW02FO5RZ-CJhMtdehzAAAAAAENAADaJfW02FO5RZ-CJhMtdehzAAjrpVXsAAA=",
+      "source_type": "calendar",
+      "source_title": "pre demo of eidt notes",
+      "group_name": "Calendar",
+      "matches": 1,
+      "pos": 621,
+      "timestamp": 1789975800,
+      "created_at": 1789952218
+    },
+    {
+      "id": "c760d159-d730-44f3-ae85-ef3ba0a4b99d",
+      "source_type": "glip",
+      "source_title": null,
+      "group_name": "esone.qiu+sandy.pan",
+      "matches": 1,
+      "pos": 635,
+      "timestamp": 1789912796,
+      "created_at": 1789914091
+    }
+  ],
+  "raw_competition": [
+    {
+      "matches": 1,
+      "n": 2784
+    },
+    {
+      "matches": 2,
+      "n": 584
+    },
+    {
+      "matches": 3,
+      "n": 8
+    }
+  ],
+  "fts_scope_rank": [
+    {
+      "rowid": 331840,
+      "rank": -3.0401115869361695,
+      "pos": 774
+    }
+  ]
+}
