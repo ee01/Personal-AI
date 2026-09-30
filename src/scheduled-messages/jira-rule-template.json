@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.7.1",
-    "lastUpdated": "2026-08-14",
+    "version": "1.7.3",
+    "lastUpdated": "2026-09-30",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
       "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
@@ -11,6 +11,7 @@
       "API branches forward X-User-Id from Apps Script so memory-service write endpoints can keep per-user execution ledgers.",
       "API forwarding keeps literal http/https prefixes in Jira Rule URLs because Jira Automation rejects URL fields that are only smart-value variables.",
       "Bot private/group webhooks go through Dify botman jumpboard (BOTMAN_DIFY_*) because Jira cannot reach botman.int.rclabenv.com.",
+      "Bot private inputs.email is webhookResponse.body.botmanEmail. Apps Script builds that from Glip_User_Name as userId@ringcentral.com. userName is also passed as personName for compatibility with an older Apps Script response. Do not send initiator.emailAddress or @reply.ringcentral.glip.com as the Botman recipient.",
       "AgentTask execute goes through Dify agent-task jumpboard (AGENT_TASK_DIFY_*) because Jira cannot reach memory-service; Chrome AR still calls memory-service directly.",
       "AgentTask treats Dify workflow completion and downstream acceptance separately: only data.outputs.accepted=true confirms success; rejected outputs write trigger_delivery_failed plus the Dify error/status back to Sheet."
     ]
@@ -249,7 +250,7 @@
                 ],
                 "sendIssue": false,
                 "contentType": "custom",
-                "customBody": "{\n  \"inputs\": {\n    \"mode\": \"user\",\n    \"message\": {{webhookResponse.body.content.asJsonString}},\n    \"email\": \"{{initiator.emailAddress}}\",\n    \"mention\": \"true\",\n    \"mentionAutoCorrect\": \"true\"\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{initiator.emailAddress}}\"\n}",
+                "customBody": "{\n  \"inputs\": {\n    \"mode\": \"user\",\n    \"message\": {{webhookResponse.body.content.asJsonString}},\n    \"email\": \"{{webhookResponse.body.botmanEmail}}\",\n    \"personName\": \"{{webhookResponse.body.userName}}\",\n    \"mention\": \"true\",\n    \"emailAutoCorrect\": \"true\"\n  },\n  \"response_mode\": \"blocking\",\n  \"user\": \"{{initiator.emailAddress}}\"\n}",
                 "method": "POST",
                 "responseEnabled": true,
                 "usedSecretsKeys": []

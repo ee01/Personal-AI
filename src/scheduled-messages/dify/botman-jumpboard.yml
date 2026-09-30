@@ -172,6 +172,12 @@ workflow:
               required: false
               max_length: 16
               options: []
+            - variable: emailAutoCorrect
+              label: emailAutoCorrect
+              type: text-input
+              required: false
+              max_length: 16
+              options: []
             - variable: skipMentionCheck
               label: skipMentionCheck
               type: text-input
@@ -245,6 +251,10 @@ workflow:
               value_selector:
                 - '1785473000001'
                 - mentionAutoCorrect
+            - variable: emailAutoCorrect
+              value_selector:
+                - '1785473000001'
+                - emailAutoCorrect
             - variable: skipMentionCheck
               value_selector:
                 - '1785473000001'
@@ -330,6 +340,7 @@ workflow:
                 teamId: str = '',
                 mention: str = '',
                 mentionAutoCorrect: str = '',
+                emailAutoCorrect: str = '',
                 skipMentionCheck: str = '',
                 isTeamMention: str = '',
                 mentionList_json: str = '',
@@ -346,16 +357,20 @@ workflow:
                             body['message'] = message
                         if _trim(email):
                             body['email'] = _trim(email)
-                        if _trim(personName):
+                            body.pop('personName', None)
+                        elif _trim(personName):
                             body['personName'] = _trim(personName)
+                            body.pop('email', None)
                         if _trim(mention):
                             body['mention'] = _parse_bool(mention, True)
                         elif 'mention' not in body:
                             body['mention'] = True
-                        if _trim(mentionAutoCorrect):
-                            body['mentionAutoCorrect'] = _parse_bool(mentionAutoCorrect, True)
-                        elif 'mentionAutoCorrect' not in body:
-                            body['mentionAutoCorrect'] = True
+                        auto_correct = emailAutoCorrect if _trim(emailAutoCorrect) else mentionAutoCorrect
+                        if _trim(auto_correct):
+                            body['emailAutoCorrect'] = _parse_bool(auto_correct, True)
+                        elif 'emailAutoCorrect' not in body:
+                            body['emailAutoCorrect'] = True
+                        body.pop('mentionAutoCorrect', None)
                         if not _trim(body.get('message')):
                             raise ValueError('message is required for user/private mode')
                         if not (_trim(body.get('email')) or _trim(body.get('personName'))):

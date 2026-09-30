@@ -14,6 +14,7 @@
 - Chrome 扩展 AR 即时刷新仍直连 `MEMORY_SERVICE_BASE_URL`，不走 AgentTask 跳板。
 - AsMe 未启用 RingCentral sender 时走 AppScript 邮件 fallback，不走 Dify。
 - Bot 群组消息需要先把 “SM AI” 加进目标群；私发不需要。
+- Bot 私发的 `inputs.email` 来自 Apps Script `botmanEmail`（`Glip_User_Name` 规范成 `userId@ringcentral.com`），不是 Jira 发起人邮箱；`userName` 作为旧 Apps Script 响应缺少 `botmanEmail` 时的 `personName` 兜底。跳板只原样转发目标字段，不会自动补域名，并向 Botman 使用 `emailAutoCorrect`。Executor Rule ≥ 1.7.3 才会带上兼容字段；群发仍传 `teamId`。
 - secret 环境变量导入 YAML 时通常为空，Botman / RingCentral 相关 token、以及 AgentTask 跳板的 `MEMORY_SERVICE_API_KEY` 要在 Dify 环境变量里手工补齐后再 Publish。
 - AgentTask 跳板连的是 memory-service **全权 `API_KEY`**（所有用户共用，请求里带 `X-User-Id`），不是扩展本机 `pak.…`，也不是 `BOOTSTRAP_API_KEY`。缺这把钥匙时下游返回 `401 authentication_required`。Botman / RingCentral 跳板不调 memory-service，不需要这把 key。
 - **网络**：AgentTask 跳板下游 URL 写在 Dify 环境变量 `MEMORY_SERVICE_AGENT_TASK_URL`（YAML 默认 `http://10.32.56.212:3210/api/v1/agent-tasks/execute`），**不进** Jira rule / 扩展 `.env`。Jira rule 只打 `AGENT_TASK_DIFY_*`；Chrome AR 仍用 `MEMORY_SERVICE_BASE_URL`。

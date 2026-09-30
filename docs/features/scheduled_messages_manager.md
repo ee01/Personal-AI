@@ -209,8 +209,8 @@
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '2.13.0';
-  var APP_SCRIPT_LAST_UPDATED = '2026-09-03';
+  var APP_SCRIPT_VERSION = '2.13.1';
+  var APP_SCRIPT_LAST_UPDATED = '2026-09-30';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -390,6 +390,9 @@
 #### Bot（机器人身份发送）
 
 - 通过 Jira Automation 调用 Bot API；因 Jira 出站限制，私发 / 群发改为经 Dify botman jumpboard 转发，导出见 [src/scheduled-messages/dify/botman-jumpboard.yml](../../src/scheduled-messages/dify/botman-jumpboard.yml)
+- 私发目标来自该行 `Glip_User_Name`，不是 Jira Automation 发起人。Apps Script 把它规范成 `userId@ringcentral.com`（`esone.qiu`、`Esone Qiu`、`esone.qiu@ringcentral.com` 都得到 `esone.qiu@ringcentral.com`），经 webhook 字段 `botmanEmail` 传给 Dify `inputs.email`。不要用 `@reply.ringcentral.glip.com`，那是 AsMe 邮件 fallback
+- `Glip_User_Name` 用 `+` 或逗号连接多人时，botman `/user/message` 只接受一个 email，当前只发给第一个收件人。群发仍走 `Glip_Team_ID` → `teamId`
+- Executor Rule `1.7.3` 起私发 payload 使用 `webhookResponse.body.botmanEmail`，并以 `userName` 作为旧 Apps Script 响应缺少该字段时的 `personName` 兜底；已部署的旧规则要升级后才会停止把发起人邮箱当作收件人
 - 在 Glip 中显示为机器人（SM AI）发送的消息
 - Bot 路由和凭据由扩展配置 / Jira Automation 规则 / Dify 环境变量维护，不需要在单条消息里额外填写专属 endpoint 字段
 - 群组消息需要先把 “SM AI” 加到目标群；私发不需要
@@ -583,7 +586,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
 - 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` / `confirmBotMessageTriggered` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
 - Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。AgentTask 未确认可按 at-least-once 重领（memory-service 幂等吸收）；自定义 API 默认 at-most-once，claimed TTL（2h）后标 `trigger_delivery_failed`。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
-- Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.7.1 进一步区分 Dify workflow 成功与下游业务接受：只有 `data.outputs.accepted=true` 才确认成功，`accepted=false` 或缺失时把 `error/statusCode/queueStatus` 作为 `trigger_delivery_failed` 回写 Sheet。≥ 1.6.1 的领取 audit Log 仍保留。
+- Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.7.1 进一步区分 Dify workflow 成功与下游业务接受：只有 `data.outputs.accepted=true` 才确认成功，`accepted=false` 或缺失时把 `error/statusCode/queueStatus` 作为 `trigger_delivery_failed` 回写 Sheet。≥ 1.7.3 的 Bot 私发把 `inputs.email` 设为 Apps Script 返回的 `botmanEmail`，并兼容旧 Apps Script 的 `userName`，不再使用 `initiator.emailAddress`。≥ 1.6.1 的领取 audit Log 仍保留。
 - `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
 - Timeline Sync Rule 逐项目调用内网 release info API 并通过 GET 写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。
 - 首次配置或修复 Timeline Sync Rule 后，用户可以手动运行一次 Sync Rule 让缓存立即生效；新增/编辑 Timeline 消息或使用 `{currentRelease}`、`{nextPhase}` 等项目变量时，管理页会读取所选项目的缓存状态并展示执行影响，但不会阻止保存草稿。
@@ -877,6 +880,7 @@ A:
 
 ## 最近更新
 
+- 2026-09-30：Bot 私发把 Sheet `Glip_User_Name` 规范成 `userId@ringcentral.com` 后经 `botmanEmail` 传给 Dify（Apps Script `2.13.1`，Executor Rule `1.7.3`）；旧 Apps Script 响应缺少该字段时回退 `personName`，避免 Jira 生成非法 JSON。Dify 跳板改用 Botman 的 `emailAutoCorrect` 字段。不再把 Jira 发起人邮箱当作私发目标。群发 `teamId` 链路不变。多人 `+` 连接时 botman 只发给第一个收件人。
 - 2026-09-18：一键初始化欢迎 Demo 改为按 `MESSAGES_SCHEMA.columns` 列名写入（E-21）。v2.9 起表头在 Status 前插入了 Agent_* 列，旧 positional 数组把一分钟后的 `Next_Exec` 写进了 `Agent_Executor`。
 - 2026-09-18：Scheduled Messages 新建弹窗读 memory-service `GET /config` 误报未配置（E-21）。公共 `MemoryServiceClient.request()` 在 userinfo 尚未解析、或弹窗用 Google 本地名覆盖了已解析 userId 时会跳过本机已签发的 `pak.…`，生产环境因此 401 `authentication_required`。现改为始终优先使用 chrome.storage 里已下发的设备 key / 帮助中心 key，且只在 client 仍是 `default` 时才补 userId。
 - 2026-09-15：修复结果通知里「模板示例数字 + 本次真数字」并列的问题（E-8）。整理层不再把模板标题行当作不可变框架：提示词明确标题行里的数量 / 日期只是写模板时的示例、必须按本次证据写真实值；`enforceTemplateScaffolding` 在模型写出了自己的标题时以模型标题为准，只把模板头部其余行（`----` 分隔线、cc / mention 行）和结尾说明行补回，模型整行漏写标题时才回锚模板标题。`applyNotifyTemplateLocally` 本地填空仍然照模板出稿，模板标题的示例数字只在 LLM 不可用时可见。

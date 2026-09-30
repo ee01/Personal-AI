@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.13.0';
-var APP_SCRIPT_LAST_UPDATED = '2026-09-03';
+var APP_SCRIPT_VERSION = '2.13.1';
+var APP_SCRIPT_LAST_UPDATED = '2026-09-30';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -757,6 +757,45 @@ function generateEmailFromName(name) {
   } else {
     return nameParts[0].toLowerCase() + '@reply.ringcentral.glip.com';
   }
+}
+
+/**
+ * Botman /user/message 的目标邮箱。
+ * 由 Glip_User_Name 生成 userId@ringcentral.com，不使用 Jira 发起人，也不使用 @reply.ringcentral.glip.com。
+ * 已带域名时只保留本地部分再补 @ringcentral.com，避免拼成 user@ringcentral.com@ringcentral.com。
+ * 多人用 + 或逗号分隔时，/user/message 只接受一个 email，取第一个收件人。
+ * @param {string} glipUserName
+ * @returns {string}
+ */
+function buildBotmanTargetEmail(glipUserName) {
+  const raw = (glipUserName || '').toString().trim();
+  if (!raw) {
+    return '';
+  }
+
+  const tokens = raw.split(/[+,]/);
+  for (let i = 0; i < tokens.length; i++) {
+    const email = normalizeBotmanRecipientToken(tokens[i]);
+    if (email) {
+      return email;
+    }
+  }
+  return '';
+}
+
+function normalizeBotmanRecipientToken(token) {
+  const trimmed = (token || '').toString().trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const at = trimmed.lastIndexOf('@');
+  const local = at >= 0 ? trimmed.slice(0, at).trim() : trimmed;
+  const normalizedLocal = local.toLowerCase().replace(/\s+/g, '.');
+  if (!normalizedLocal) {
+    return '';
+  }
+  return normalizedLocal + '@ringcentral.com';
 }
 
 /**
@@ -3656,6 +3695,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       targetType: message.targetType,
       // Private 消息字段
       userName: message.Glip_User_Name || '',
+      botmanEmail: buildBotmanTargetEmail(message.Glip_User_Name || ''),
       // Group 消息字段
       teamId: message.Glip_Team_ID || '',
       teamName: message.Glip_Team_ID || 'Team', // 使用 teamId 作为 teamName 或默认值

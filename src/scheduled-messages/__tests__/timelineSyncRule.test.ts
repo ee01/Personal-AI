@@ -1589,7 +1589,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.7.1');
+  assert.equal(template._metadata.version, '1.7.3');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1823,6 +1823,37 @@ test('Executor rule routes Bot private/group through Dify botman jumpboard', () 
   );
   assert.equal(agentAuth?.value?.keyOrValue, 'Bearer {{AGENT_TASK_DIFY_API_KEY}}');
 
+  const privateWebhook = botmanDifyWebhooks.find((webhook) =>
+    String(webhook.value?.customBody || '').includes('"mode": "user"'),
+  );
+  const teamWebhook = botmanDifyWebhooks.find((webhook) =>
+    String(webhook.value?.customBody || '').includes('"mode": "team"'),
+  );
+  assert.ok(privateWebhook, 'Bot private branch should call the botman jumpboard');
+  assert.ok(teamWebhook, 'Bot group branch should call the botman jumpboard');
+  assert.match(
+    privateWebhook.value.customBody,
+    /"email": "\{\{webhookResponse\.body\.botmanEmail\}\}"/,
+  );
+  assert.match(
+    privateWebhook.value.customBody,
+    /"personName": "\{\{webhookResponse\.body\.userName\}\}",/,
+  );
+  assert.match(privateWebhook.value.customBody, /"emailAutoCorrect": "true"/);
+  assert.doesNotMatch(
+    privateWebhook.value.customBody,
+    /"email": "\{\{initiator\.emailAddress\}\}"/,
+  );
+  assert.match(privateWebhook.value.customBody, /"user": "\{\{initiator\.emailAddress\}\}"/);
+  assert.match(teamWebhook.value.customBody, /"teamId": "\{\{webhookResponse\.body\.teamId\}\}"/);
+
+  const jumpboard = readFileSync(
+    resolve(scheduledMessagesDir, 'dify', 'botman-jumpboard.yml'),
+    'utf8',
+  );
+  assert.match(jumpboard, /body\['emailAutoCorrect'\]/);
+  assert.match(jumpboard, /body\.pop\('mentionAutoCorrect', None\)/);
+
   const payload = {
     token: 'root-token',
     value: {
@@ -1937,12 +1968,49 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.13\.0';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.13\.1';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(parameters\.content\);/);
   assert.doesNotMatch(appScript, /decodeURIComponent\(e\.parameter\.(topic|content)\)/);
+});
+
+test('Apps Script normalizes Glip_User_Name into the Botman private email', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const context = {
+    results: [] as string[],
+  };
+
+  vm.runInNewContext(
+    `${appScript}
+results = [
+  buildBotmanTargetEmail('esone.qiu'),
+  buildBotmanTargetEmail('Esone Qiu'),
+  buildBotmanTargetEmail('esone.qiu@ringcentral.com'),
+  buildBotmanTargetEmail('esone.qiu@reply.ringcentral.glip.com'),
+  buildBotmanTargetEmail('esone.qiu+john.doe'),
+  buildBotmanTargetEmail('  ESONE.QIU  '),
+  buildBotmanTargetEmail(''),
+  buildBotmanTargetEmail('Esone Qiu, John Doe')
+];`,
+    context,
+  );
+
+  assert.deepEqual(Array.from(context.results, (value) => String(value)), [
+    'esone.qiu@ringcentral.com',
+    'esone.qiu@ringcentral.com',
+    'esone.qiu@ringcentral.com',
+    'esone.qiu@ringcentral.com',
+    'esone.qiu@ringcentral.com',
+    'esone.qiu@ringcentral.com',
+    '',
+    'esone.qiu@ringcentral.com',
+  ]);
+  assert.match(
+    appScript,
+    /botmanEmail: buildBotmanTargetEmail\(message\.Glip_User_Name \|\| ''\)/,
+  );
 });
 
 test('Apps Script builds safe stable execution keys for Jira mark callbacks', () => {
