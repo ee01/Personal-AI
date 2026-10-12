@@ -103,6 +103,7 @@ type UXDesignContext = {
   fixVersion: string | null;
   targetEnd: string | null;
   uxEpicKey?: string;
+  uxEpicSummary?: string;
   uxEpicStatus?: string;
   uxEta?: string;
   uxEtaSource?: 'targetEnd' | 'duedate' | 'fixVersion';
@@ -1009,15 +1010,18 @@ async function fetchUXDesignContext(
     const remoteDesignLinks = remoteDesignLinkScan.links;
 
     let uxEpicKey: string | undefined;
+    let uxEpicSummary: string | undefined;
     let uxEpicStatus: string | undefined;
 
     if (uxIssue.issueType === 'Epic') {
       uxEpicKey = uxIssue.key;
+      uxEpicSummary = uxIssue.summary || undefined;
       uxEpicStatus = uxIssue.status || undefined;
     } else if (uxIssue.epicKey) {
       const epicIssue = await fetchJiraIssueContext(uxIssue.epicKey);
       if (epicIssue) {
         uxEpicKey = epicIssue.key;
+        uxEpicSummary = epicIssue.summary || undefined;
         uxEpicStatus = epicIssue.status || undefined;
       }
     }
@@ -1040,6 +1044,7 @@ async function fetchUXDesignContext(
       fixVersion: uxIssue.fixVersion,
       targetEnd: uxIssue.targetEnd,
       uxEpicKey,
+      uxEpicSummary,
       uxEpicStatus,
       uxEta: designEta.eta,
       uxEtaSource: designEta.source,
@@ -1121,6 +1126,7 @@ async function appendUXDesignItems(
       designData.push({
         type: 'ux_ticket',
         summary: uxTicket.summary || designContext.summary,
+        uxTicketSummary: uxTicket.summary || designContext.summary,
         uxTicketKey: uxTicket.key,
         uxTicketKeySource: uxTicket.keySource,
         keyRecoveryCandidateCount: uxTicket.keyRecoveryCandidateCount,
@@ -1130,6 +1136,7 @@ async function appendUXDesignItems(
         linkProvided: false,
         issueStatus,
         uxEpicKey: designContext.uxEpicKey,
+        uxEpicSummary: designContext.uxEpicSummary,
         uxEpicStatus: designContext.uxEpicStatus,
         uxEta: designContext.uxEta,
         uxEtaSource: designContext.uxEtaSource
@@ -1143,6 +1150,7 @@ async function appendUXDesignItems(
         type: 'ux_ticket',
         url: candidate.url,
         summary: candidateDisplayLabel || uxTicket.summary || designContext.summary || candidate.label,
+        uxTicketSummary: uxTicket.summary || designContext.summary,
         designLabel: candidateDisplayLabel,
         uxTicketKey: uxTicket.key,
         uxTicketKeySource: uxTicket.keySource,
@@ -1154,6 +1162,7 @@ async function appendUXDesignItems(
         issueStatus,
         designStatus: candidate.status,
         uxEpicKey: designContext.uxEpicKey,
+        uxEpicSummary: designContext.uxEpicSummary,
         uxEpicStatus: designContext.uxEpicStatus,
         uxEta: designContext.uxEta,
         uxEtaSource: designContext.uxEtaSource,
@@ -1252,6 +1261,21 @@ function getDesignOpenTargetLabel(url: string, fallback: string): string {
     // Keep the receipt useful even when Jira gives a relative or malformed target.
   }
   return fallback;
+}
+
+function getTicketSummaryTooltip(ticketKey: string, summary?: string | null): string {
+  const normalizedSummary = String(summary || '').replace(/\s+/g, ' ').trim();
+  if (!normalizedSummary) return '';
+  if (normalizedSummary.toUpperCase() === String(ticketKey || '').trim().toUpperCase()) return '';
+  return normalizedSummary;
+}
+
+/** Renders a Jira ticket key so hovering the key reveals its full Jira summary. */
+function renderTicketKeyWithSummary(ticketKey: string, summary?: string | null): string {
+  const keyHtml = escapeHtml(ticketKey);
+  const tooltip = getTicketSummaryTooltip(ticketKey, summary);
+  if (!tooltip) return keyHtml;
+  return `<span class="ticket-key-summary" title="${escapeAttribute(tooltip)}">${keyHtml}</span>`;
 }
 
 function getDesignOpenBoundaryLabel(options: DesignOpenOptions): string {
@@ -1532,11 +1556,11 @@ function displayDesignLinks(
           <a href="${escapeAttribute(design.url)}" target="_blank" rel="noopener noreferrer" class="design-link" ${designOpenAttributes}>
             ${escapeHtml(designLabel)} <span class="external-link-icon">↗</span>
           </a>
-          <a href="${escapeAttribute(uxTicketUrl)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link" ${uxTicketOpenAttributes}>${escapeHtml(design.uxTicketKey)}</a>
+          <a href="${escapeAttribute(uxTicketUrl)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link" ${uxTicketOpenAttributes}>${renderTicketKeyWithSummary(design.uxTicketKey, design.uxTicketSummary)}</a>
         `
         : `
           <a href="${escapeAttribute(uxTicketUrl)}" target="_blank" rel="noopener noreferrer" class="ux-ticket-link" ${uxTicketOpenAttributes}>
-            ${escapeHtml(design.uxTicketKey)} <span class="external-link-icon">↗</span>
+            ${renderTicketKeyWithSummary(design.uxTicketKey, design.uxTicketSummary)} <span class="external-link-icon">↗</span>
           </a>
         `;
       const canonicalDesignStatus = design.linkProvided ? design.designStatus : 'Missing link';
@@ -1550,7 +1574,7 @@ function displayDesignLinks(
           <span class="ux-epic-status-tag" title="${escapeAttribute(uxEpicDisplayKey)}">
             ${shouldShowUxEpicLink
               ? `<a href="${escapeAttribute(uxEpicUrl)}" target="_blank" rel="noopener noreferrer" class="ux-epic-link" ${uxEpicOpenAttributes}>
-                  ${escapeHtml(uxEpicDisplayKey)} <span class="external-link-icon">↗</span>
+                  ${renderTicketKeyWithSummary(uxEpicDisplayKey, design.uxEpicSummary)} <span class="external-link-icon">↗</span>
                 </a>`
               : ''}
             <span class="ux-epic-status-pill ux-epic-status-pill--${uxEpicStatusTone}">${escapeHtml(design.uxEpicStatus)}</span>
@@ -2708,7 +2732,7 @@ function displayBackendProgress(progressData: BackendProgressData[]): void {
       <div class="backend-progress-item">
         <img src="${iconUrl}" title="Personal AI" class="design-icon" />
         Depends: <a href="${item.dependencyTicketUrl}" target="_blank" class="progress-link">
-          ${item.dependencyTicketKey} <span class="external-link-icon">↗</span>
+          ${renderTicketKeyWithSummary(item.dependencyTicketKey, item.summary)} <span class="external-link-icon">↗</span>
         </a>
         <span class="progress-detail">Early Build: ${earlyBuildDisplay}</span>
         <span class="progress-separator">|</span>

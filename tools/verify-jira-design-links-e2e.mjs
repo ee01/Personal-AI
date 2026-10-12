@@ -684,6 +684,15 @@ try {
     /打开后仍需复查设计.*不会把这次点击标记为已核对最新更新.*不会刷新 Figma\/Jira 元数据.*标记设计已复查.*创建或编辑 Jira 关联.*Memory Service/,
     'design-open receipt should not imply review confirmation, refresh, Jira writes, or Memory Service writes',
   );
+  const readyCheckoutUxKeySummary = page
+    .locator('.design-link-item', { hasText: 'Ready checkout prototype' })
+    .locator('.ux-ticket-link .ticket-key-summary');
+  assert.equal(await readyCheckoutUxKeySummary.textContent(), 'UX-100');
+  assert.equal(
+    await readyCheckoutUxKeySummary.getAttribute('title'),
+    'Checkout UX handoff',
+    'hovering a design-panel UX ticket key should reveal the full ticket summary',
+  );
   const [openedUxPage] = await Promise.all([
     context.waitForEvent('page'),
     page.locator('.design-link-item', { hasText: 'Ready checkout prototype' }).locator('.ux-ticket-link').click(),

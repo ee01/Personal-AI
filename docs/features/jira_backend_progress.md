@@ -1,6 +1,6 @@
 # Jira Backend Progress（外部依赖进展 / BE date）
 
-*最后更新: 2026-08-25*
+*最后更新: 2026-10-12*
 
 ## 功能概述
 
@@ -26,6 +26,7 @@ Backend Progress 在 Jira ticket summary 下方展示绿色卡片，汇总当前
 [icon] Depends: PLA-97920 ↗  Early Build: 5/10/2026 | Rollout to Prod: 5/20/2026  [parent_impact_layer:Platform]
 ```
 
+- 依赖票 key（如 `PLA-97920`）鼠标 hover 时用原生 tooltip 显示该 Jira ticket 的完整 summary；取不到 summary 或 summary 与 key 相同时不显示多余 tooltip
 - Early Build 无日期时显示 `N/A`
 - 有 fixVersion 但 DORA 尚无 rollout 时间时显示可点击的 `pending`
 - 日期均来自实时 API，**不写在本 md 或任何本地文件里**

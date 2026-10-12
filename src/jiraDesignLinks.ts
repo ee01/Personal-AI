@@ -102,6 +102,8 @@ export type UXDesignItem = {
   type: 'ux_ticket';
   url?: string;
   summary?: string;
+  /** Full Jira summary of the UX ticket, used for the key hover tooltip. */
+  uxTicketSummary?: string;
   designLabel?: string;
   designStatus?: string;
   uxTicketKey: string;
@@ -113,6 +115,8 @@ export type UXDesignItem = {
   linkProvided: boolean;
   issueStatus?: string;
   uxEpicKey?: string;
+  /** Full Jira summary of the UX Epic, used for the epic key hover tooltip. */
+  uxEpicSummary?: string;
   uxEpicStatus?: string;
   uxEta?: string;
   uxEtaSource?: DesignEtaSource;
@@ -1845,7 +1849,9 @@ export function dedupeDesignData(designData: DesignDisplayItem[]): DesignDisplay
       existing.designLabel = chooseDesignTitle(existing.designLabel, item.designLabel, existingSource, item.source)
         || existing.designLabel
         || item.designLabel;
+      existing.uxTicketSummary = existing.uxTicketSummary || item.uxTicketSummary;
       existing.uxEpicKey = existing.uxEpicKey || item.uxEpicKey;
+      existing.uxEpicSummary = existing.uxEpicSummary || item.uxEpicSummary;
       existing.uxEpicStatus = existing.uxEpicStatus || item.uxEpicStatus;
       existing.uxEta = existing.uxEta || item.uxEta;
       existing.uxEtaSource = existing.uxEtaSource || item.uxEtaSource;

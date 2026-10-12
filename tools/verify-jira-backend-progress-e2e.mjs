@@ -195,6 +195,25 @@ try {
   assert.match(rows[3], /parent_impact_layer:Apps - mThor/);
   assert.equal(rows.some(row => row.includes('RCV-153400') || row.includes('RCV-159999')), false);
 
+  const dependencyKeyTitles = await page.locator('.backend-progress-item .progress-link .ticket-key-summary').evaluateAll(elements => (
+    elements.map(element => ({ text: (element.textContent || '').trim(), title: element.getAttribute('title') }))
+  ));
+  assert.equal(dependencyKeyTitles.length, 4, 'every backend dependency ticket key should render a hoverable summary span');
+  assert.deepEqual(
+    dependencyKeyTitles.map(entry => entry.text),
+    ['RCV-153296', 'RCV-153452', 'RCV-152720', 'MTR-147003'],
+  );
+  assert.deepEqual(
+    dependencyKeyTitles.map(entry => entry.title),
+    [
+      'Outward clone relationship',
+      'Inward clone relationship',
+      'Same-project direct dependency must be shown',
+      'Cross-project INIT child remains eligible',
+    ],
+    'hovering a backend dependency ticket key should reveal the full ticket summary',
+  );
+
   console.log('Jira Backend Progress E2E verification passed:', rows.map(row => row.replace(/\s+/g, ' ').trim()));
 } finally {
   await context.close();

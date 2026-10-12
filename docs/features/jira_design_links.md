@@ -41,6 +41,7 @@ Jira 设计链接显示功能用于在 Jira ticket 页面自动汇总相关设�
 7. **可行动状态展示**：逐条展示 `Ready for dev`、`Design updated`、`Missing link`、`Not ready` 等有行动意义的状态，并用左侧状态扫描线降低多链接场景下的识别成本；`Not ready for dev` 和 `Ready for review` 不会被误判成可开发。
 8. **缺失链接提示**：当关联 UX ticket 没有可用设计链接时，会展示 `Missing link` 状态和 UX ticket key，但不展示设计 ticket 标题，并把该项排在普通链接之前；如果 key 来自非标准 DOM 恢复，具体行会显示 `Key from ...` 和 `只读恢复`，面板顶部不再显示 `恢复范围` 总览。
 9. **安全和去重**：只接受 http/https 设计链接，过滤重复设计链接/UX 链接，并保留合并后的来源标签；Figma 文件/节点链接会按稳定设计身份去重。
+10. **ticket key hover 显示完整 summary**：面板中的 UX ticket key 与 UX Epic key 在鼠标 hover 时会用原生 tooltip 显示对应 Jira ticket 的完整 summary；查不到 summary 或 summary 与 key 相同时不叠加多余 tooltip，原有的只读打开边界 tooltip 仍保留在链接本身。
 
 ## 使用方法
 

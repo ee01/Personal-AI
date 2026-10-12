@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-09-30*
+*最后更新: 2026-10-12*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -234,8 +234,10 @@
 | 设计工具保守分类 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | 排除 Figma/Zeplin marketing/community/profile/settings 假阳性，Miro/Loom 仅收交付资源路径；过滤计数在 footer，链接 hover/读屏说明只读打开边界 |
 | 设计链接更新时间展示 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | 行内 newest updated date、time-basis chip 和打开后待复查回执；不再渲染顶部复查范围汇总 |
 | Jira issue key 解析 | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | raw text/query/ARIA 恢复与行内只读恢复回执；不再渲染顶部恢复范围汇总 |
+| ticket key hover summary | Jira Design Links | [jira_design_links.md](./features/jira_design_links.md) | UX ticket key / UX Epic key hover 显示完整 Jira summary；保留只读打开边界 tooltip |
 | JIRA 后端依赖进展 | Jira Backend Progress | [jira_backend_progress.md](./features/jira_backend_progress.md) | Early Build / Rollout；linked → Epic → Parent Impacted Layers → Parent sub issues；Cancelled 不展示且不占 5 条名额 |
 | Backend Early Build / Rollout 日期 | Jira Backend Progress | [jira_backend_progress.md](./features/jira_backend_progress.md) | Jira Target End/End date + DORA Metrics；日期来自实时 API |
+| 依赖票 key hover summary | Jira Backend Progress | [jira_backend_progress.md](./features/jira_backend_progress.md) | `Depends:` key hover 显示完整 Jira summary；取不到或与 key 相同时不显示 |
 | Jira 自动化规则导入 | Jira Automation Import | [jira_automation_import.md](./features/jira_automation_import.md) | 导入预览与创建；首屏显示 create request scope |
 | 高风险导入提示 | Jira Automation Import | [jira_automation_import.md](./features/jira_automation_import.md) | 入口按钮先说明只打开本机 JSON 选择和 disabled-copy 预览；不强制勾选确认；可直接创建 disabled copy；复制复核包只是本机剪贴板 handoff；链式触发选择有回执；导入后跳转可取消 |
 | secret value 脱敏 | Jira Automation Import | [jira_automation_import.md](./features/jira_automation_import.md) | `secret=true`、signed URL、function/API gateway query 凭据不展示 raw value，预览和 create 按钮按重录队列提示启用前处理顺序 |
