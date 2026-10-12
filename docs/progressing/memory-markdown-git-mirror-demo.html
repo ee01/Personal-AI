@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Personal AI · GitHub 记忆镜像 · Options Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #e8efec; --paper: #fbfcfb; --ink: #27323f; --muted: #6f7d89; --faint: #95a0aa;
+      --line: rgba(70, 84, 96, .15); --accent: #4a5f75; --accent-soft: #e7edf3;
+      --green: #3f6a58; --green-soft: #e8f1ec; --amber: #83571d; --amber-soft: #faf1df; --rose: #925365; --rose-soft: #f6eaed;
+      --shadow: 0 24px 60px rgba(34, 50, 61, .14);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--canvas); font-family: 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif; font-size: 14px; line-height: 1.6; }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+    h1, h2, h3, p { margin: 0; }
+    .note { padding: 8px 16px; background: var(--ink); color: #fff; text-align: center; font-size: 12.5px; }
+    .stage { max-width: 1120px; margin: 28px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .panel-head h2 { font-size: 14px; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .body { padding: 14px 16px; display: grid; gap: 12px; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tab { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 12.5px; }
+    .tab.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .field { display: grid; gap: 4px; }
+    .field label { font-size: 12.5px; color: var(--muted); }
+    .field input, .field select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .pill { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
+    .pill.green { background: var(--green-soft); color: var(--green); border-color: transparent; }
+    .pill.amber { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
+    .pill.rose { background: var(--rose-soft); color: var(--rose); border-color: transparent; }
+    .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+    .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .callout { border: 1px solid var(--line); border-left: 3px solid var(--amber); background: var(--amber-soft); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+    .tree { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.7; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre; overflow-x: auto; }
+    .tree .ex { color: var(--faint); }
+    .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    .diff { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre; overflow-x: auto; }
+    .diff .add { color: var(--green); }
+    .diff .del { color: var(--rose); }
+    .meta { font-size: 12px; color: var(--muted); }
+    .legend { padding: 12px 16px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+    @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="note">静态原型 · Options「自动备份」卡片新增「GitHub 镜像」通道 · 数据为场景示例，token 为占位</div>
+  <main class="stage">
+    <section class="panel" aria-label="自动备份设置">
+      <div class="panel-head">
+        <h2>自动备份</h2>
+        <span class="sub">memory-service · 每用户独立配置 · 密钥只存服务端</span>
+      </div>
+      <div class="body">
+        <div class="tabs">
+          <button class="tab">WebDAV</button>
+          <button class="tab">S3</button>
+          <button class="tab">本地目录</button>
+          <button class="tab on">GitHub 镜像</button>
+        </div>
+
+        <div class="callout" id="egress-note">
+          这条通道推送的是<strong>人类可读的 Markdown 投影</strong>（画像、一页纸、实体、原子事实、进行中事务、每日摘要行），不是全量备份。原文、SQLite、config.json 永不推送。全量恢复请用加密 zip 备份。
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>仓库地址</label>
+            <input value="https://github.com/esone/memory-mirror" readonly>
+          </div>
+          <div class="field">
+            <label>分支</label>
+            <input value="main" readonly>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Fine-grained token（只写不回显 · 仅 Contents 读写）</label>
+            <input type="password" value="github_pat_placeholder" readonly>
+          </div>
+          <div class="field">
+            <label>推送时间</label>
+            <input value="每晚 23:30（巩固结束后）" readonly>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>模式</label>
+            <select id="mode">
+              <option value="markdown">可读 Markdown（可被 Obsidian / OpenClaw 读取）</option>
+              <option value="encrypted">加密包（仓库里只有密文，放弃互通）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>范围</label>
+            <select id="scope">
+              <option value="all">全部 confirmed 内容（含有 confirmed 关系的人）</option>
+              <option value="self">只镜像关于我的内容</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn" id="btn-test">测试连接</button>
+          <button class="btn primary" id="btn-enable">开启镜像</button>
+          <span class="pill" id="test-pill">未测试</span>
+          <span class="pill" id="egress-pill">egress：approved_destinations · github.com</span>
+        </div>
+
+        <div>
+          <div class="meta" style="margin-bottom:4px">将推送的目录（开启前展示一次）</div>
+          <div class="tree" id="tree">MIRROR.md                      生成时间 · 过滤策略 · 未包含声明
+profile/one-pager.md           常驻一页纸（preferences 只出 confirmed）
+profile/USER_CORE.md
+entities/people/sophia-lin.md  别名 · 关系 manager(confirmed) · 最近互动摘要
+entities/projects/mtr-141852.md
+knowledge/preferences/u-2041.md  frontmatter: kind/status/evidence_class/observed_at/sources
+knowledge/facts/u-1877.md        status: superseded → 指向 u-2102
+workstreams/active/q4-goal-setting.md
+workstreams/completed/retro-action-items.md
+timeline/daily/2026-10-09.md   一行摘要 + 当日新增 unit 链接（无原文）
+consolidation/DIARY.md         +3 preferences · 1 superseded · 2 open loops closed
+interop/openclaw/USER.md · MEMORY.md · memory/2026-10-09.md
+<span class="ex">× messages_raw 原文 · × memory.db · × config.json · × restricted 字段</span></div>
+        </div>
+      </div>
+      <div class="legend">范围选「只镜像关于我的内容」时，entities/people 只保留你本人与 confirmed 关系的名字，不含他人事实。local_only 用户此 tab 置灰。</div>
+    </section>
+
+    <aside class="panel" aria-label="上次镜像回执">
+      <div class="panel-head">
+        <h2>上次镜像</h2>
+        <span class="sub" id="last-state">尚未开启</span>
+      </div>
+      <div class="body">
+        <dl class="kv">
+          <dt>commit</dt><dd id="commit">—</dd>
+          <dt>文件</dt><dd id="files">—</dd>
+          <dt>校验</dt><dd id="verify">—</dd>
+          <dt>被过滤</dt><dd id="filtered">—</dd>
+        </dl>
+        <div class="meta">今日 diff 预览</div>
+        <div class="diff" id="diff">（开启后显示）</div>
+        <div class="meta" id="hint">增量按内容哈希比对，未变文件不重传；远端若被手改，新建 conflict-日期/ 目录保留两版，永不 force push。</div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      $('btn-test').addEventListener('click', function () {
+        $('test-pill').textContent = '连接正常 · 读到 refs/heads/main · 权限 Contents: write';
+        $('test-pill').className = 'pill green';
+      });
+      $('mode').addEventListener('change', function () {
+        var enc = $('mode').value === 'encrypted';
+        $('tree').hidden = enc;
+        $('egress-note').innerHTML = enc
+          ? '加密模式：整个投影目录打成 <strong>mirror.tar.enc</strong>（PABK1 · scrypt · AES-256-GCM）后提交，仓库里只有密文，可用于公开仓库；此模式下无法被 Obsidian / OpenClaw 直接读取。'
+          : '这条通道推送的是<strong>人类可读的 Markdown 投影</strong>（画像、一页纸、实体、原子事实、进行中事务、每日摘要行），不是全量备份。原文、SQLite、config.json 永不推送。全量恢复请用加密 zip 备份。';
+      });
+      $('scope').addEventListener('change', function () {
+        var self = $('scope').value === 'self';
+        $('egress-pill').textContent = self ? 'egress：approved_destinations · github.com · self_only' : 'egress：approved_destinations · github.com';
+      });
+      $('btn-enable').addEventListener('click', function () {
+        $('last-state').textContent = '2026-10-09 23:31 · 成功';
+        $('commit').textContent = 'a41c9f2 · memory mirror 2026-10-09: +3 preferences, 1 superseded fact, 2 open loops closed';
+        $('files').textContent = '142 个文件 · 本次变更 9 · 重传 0';
+        $('verify').textContent = 'ref 与 tree sha 一致';
+        $('filtered').textContent = ($('scope').value === 'self' ? '11' : '4') + ' 个文件按 egress / sensitivity 过滤';
+        $('diff').innerHTML = '<span class="del">- workstreams/active/q4-goal-setting.md</span>\n<span class="add">+ workstreams/completed/q4-goal-setting.md</span>\n<span class="add">+ knowledge/preferences/u-2041.md  「回复先给结论」 confirmed</span>\n  knowledge/facts/u-1877.md\n<span class="del">-   status: active</span>\n<span class="add">+   status: superseded</span>\n<span class="add">+   superseded_by: u-2102  (Jira first_party_record, 2026-10-08)</span>';
+      });
+    })();
+  </script>
+</body>
+</html>

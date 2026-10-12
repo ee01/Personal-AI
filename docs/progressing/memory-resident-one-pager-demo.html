@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Personal AI · 常驻一页纸 · 交互 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #e8efec; --paper: #fbfcfb; --ink: #27323f; --muted: #6f7d89; --faint: #95a0aa;
+      --line: rgba(70, 84, 96, .15); --accent: #4a5f75; --accent-soft: #e7edf3;
+      --green: #3f6a58; --green-soft: #e8f1ec; --amber: #83571d; --amber-soft: #faf1df; --rose: #925365; --rose-soft: #f6eaed;
+      --shadow: 0 24px 60px rgba(34, 50, 61, .14);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--canvas); font-family: 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif; font-size: 14px; line-height: 1.6; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    [hidden] { display: none !important; }
+    h1, h2, h3, p { margin: 0; }
+    .note { padding: 8px 16px; background: var(--ink); color: #fff; text-align: center; font-size: 12.5px; }
+    .stage { max-width: 1180px; margin: 28px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .panel-head h2 { font-size: 14px; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .body { padding: 14px 16px; display: grid; gap: 12px; }
+    .draft { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; white-space: pre-wrap; }
+    .receipt { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--accent-soft); padding: 10px 12px; }
+    .receipt h3 { font-size: 13px; font-weight: 600; }
+    .rows { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 12.5px; }
+    .rows li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .pill { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
+    .pill.green { background: var(--green-soft); color: var(--green); border-color: transparent; }
+    .pill.amber { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
+    .pill.rose { background: var(--rose-soft); color: var(--rose); border-color: transparent; }
+    .tabs { display: flex; gap: 6px; }
+    .tab { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 12.5px; }
+    .tab.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .section { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 10px 12px; }
+    .section-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .section-head h3 { font-size: 13.5px; font-weight: 600; }
+    .items { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+    .items li { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; font-size: 13px; }
+    .items .x { font-size: 12px; color: var(--muted); border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 1px 8px; }
+    .items li.off { color: var(--faint); text-decoration: line-through; }
+    .bar { height: 6px; border-radius: 999px; background: var(--accent-soft); overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: var(--accent); width: 62%; }
+    .meta { font-size: 12px; color: var(--muted); }
+    .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+    .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .legend { padding: 12px 16px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+    @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="note">静态原型 · 左：Compose Assist 草稿与「依据一页纸」回执 · 右：Memory Exploring 的一页纸页签 · 数据为场景示例</div>
+  <main class="stage">
+    <section class="panel" aria-label="Compose Assist">
+      <div class="panel-head">
+        <h2>Compose Assist · 回复 Sophia</h2>
+        <div class="tabs">
+          <button class="tab on" id="tab-with">有一页纸</button>
+          <button class="tab" id="tab-without">无一页纸</button>
+        </div>
+      </div>
+      <div class="body">
+        <div class="meta">正在回复：敏捷教练-RC China · Sophia「Q4 Goal Setting… Deadline 10/13/2026」</div>
+        <div class="draft" id="draft">收到，Sophia。我这边会在 10/13 前把 Q4 目标在 WD 提交；其中一条会对齐我们在 retro 里定的「缩短 BE 等待设计的周期」。</div>
+        <div class="receipt" id="receipt">
+          <h3>依据一页纸 · 3 段</h3>
+          <ul class="rows">
+            <li><span class="pill green">identity</span><span>敏捷教练 · 直属上级 Sophia · Asia/Shanghai</span><span class="pill">生成 03:12 · 2 来源</span></li>
+            <li><span class="pill green">active_workstreams</span><span>Q4 Goal Setting（截止 10/13）· MTR-141852 BE 等设计</span><span class="pill">更新 1 小时前 · 5 来源</span></li>
+            <li><span class="pill amber">preferences</span><span>回复简短、先给结论、中文为主</span><span class="pill amber">stale · 生成 3 天前 · 未引用</span></li>
+          </ul>
+          <div class="meta" style="margin-top:6px">预算 3,000 token · 本次注入 1,860 · Compose 面 · 会话内快照冻结</div>
+        </div>
+        <div class="receipt" id="receipt-without" hidden>
+          <h3>无一页纸</h3>
+          <ul class="rows">
+            <li><span>检索到 3 条相关消息；身份、上级关系、截止日均需从消息中推断</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="legend">stale 段（超过 48 小时未刷新）不会被 Compose 默认引用；回执里标出，供用户判断。identity 段只收用户确认过的值。</div>
+    </section>
+
+    <section class="panel" aria-label="一页纸">
+      <div class="panel-head">
+        <h2>Memory Exploring · 一页纸</h2>
+        <span class="sub">版本 v128 · 今晨 03:12 由睡眠期生成 · 保留最近 7 版</span>
+      </div>
+      <div class="body">
+        <div>
+          <div class="meta">预算使用 1,860 / 3,000</div>
+          <div class="bar"><span></span></div>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><h3>identity · 300</h3><span class="pill green">已确认 · 变更即刷</span></div>
+          <ul class="items">
+            <li><span>角色：敏捷教练（RC China）</span><button class="x" data-x="i1">不放进一页纸</button></li>
+            <li><span>直属上级：Sophia (Jinmei) Lin</span><button class="x" data-x="i2">不放进一页纸</button></li>
+            <li><span>时区：Asia/Shanghai · 中文为主</span><button class="x" data-x="i3">不放进一页纸</button></li>
+          </ul>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><h3>active_workstreams · 800</h3><span class="pill">每晚 + 事件刷新 · 5 来源</span></div>
+          <ul class="items">
+            <li><span>Q4 Goal Setting · 截止 10/13 · 来源 Glip</span><button class="x" data-x="w1">不放进一页纸</button></li>
+            <li><span>MTR-141852 · BE 等设计确认 · 最后更新 10/07</span><button class="x" data-x="w2">不放进一页纸</button></li>
+            <li><span>Retro action items · 3 条 · Confluence 待发</span><button class="x" data-x="w3">不放进一页纸</button></li>
+          </ul>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><h3>open_loops · 600</h3><span class="pill">来自注意力分诊 · 事件刷新</span></div>
+          <ul class="items">
+            <li><span>提交 Q4 Goal Setting（WD）· 10/13 · armed</span><button class="x" data-x="o1">不放进一页纸</button></li>
+            <li><span>同事等你整理 retro action items · 周五</span><button class="x" data-x="o2">不放进一页纸</button></li>
+          </ul>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><h3>preferences · 500</h3><span class="pill amber">stale · 3 天前 · 睡眠期 D 阶段生成</span></div>
+          <ul class="items">
+            <li><span>回复简短、先给结论 <span class="pill">confirmed</span></span><button class="x" data-x="p1">不放进一页纸</button></li>
+            <li><span>偏好用表格对比方案 <span class="pill amber">provisional</span></span><button class="x" data-x="p2">不放进一页纸</button></li>
+          </ul>
+        </div>
+
+        <div class="meta" id="excl-receipt">排除即时生效、可撤销；写入 one_pager_exclusions，不删除原始记忆。</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      $('tab-with').addEventListener('click', function () {
+        $('tab-with').className = 'tab on'; $('tab-without').className = 'tab';
+        $('receipt').hidden = false; $('receipt-without').hidden = true;
+        $('draft').textContent = '收到，Sophia。我这边会在 10/13 前把 Q4 目标在 WD 提交；其中一条会对齐我们在 retro 里定的「缩短 BE 等待设计的周期」。';
+      });
+      $('tab-without').addEventListener('click', function () {
+        $('tab-with').className = 'tab'; $('tab-without').className = 'tab on';
+        $('receipt').hidden = true; $('receipt-without').hidden = false;
+        $('draft').textContent = '收到，我会尽快完成 Goal Setting 并提交。';
+      });
+      var xs = document.querySelectorAll('[data-x]');
+      Array.prototype.forEach.call(xs, function (btn) {
+        btn.addEventListener('click', function () {
+          var li = btn.parentNode;
+          var off = li.className.indexOf('off') >= 0;
+          li.className = off ? '' : 'off';
+          btn.textContent = off ? '不放进一页纸' : '撤销排除';
+          $('excl-receipt').textContent = off
+            ? '已撤销排除；下次渲染恢复该条。'
+            : '已排除；下次渲染立即生效（one_pager_exclusions），原始记忆未删除。';
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

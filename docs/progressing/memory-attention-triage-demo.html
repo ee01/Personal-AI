@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Personal AI · 注意力分诊 · 交互 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #e8efec;
+      --paper: #fbfcfb;
+      --ink: #27323f;
+      --muted: #6f7d89;
+      --faint: #95a0aa;
+      --line: rgba(70, 84, 96, .15);
+      --accent: #4a5f75;
+      --accent-soft: #e7edf3;
+      --green: #3f6a58;
+      --green-soft: #e8f1ec;
+      --amber: #83571d;
+      --amber-soft: #faf1df;
+      --rose: #925365;
+      --rose-soft: #f6eaed;
+      --shadow: 0 24px 60px rgba(34, 50, 61, .14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--ink); background: var(--canvas);
+      font-family: 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+      font-size: 14px; line-height: 1.6;
+    }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    [hidden] { display: none !important; }
+    h1, h2, h3, p { margin: 0; }
+    .note { padding: 8px 16px; background: var(--ink); color: #fff; text-align: center; font-size: 12.5px; }
+    .stage { max-width: 1180px; margin: 28px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1.35fr 1fr; gap: 20px; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+    .panel-head h2 { font-size: 14px; font-weight: 600; }
+    .panel-head .sub { color: var(--muted); font-size: 12px; }
+    .chat { padding: 16px; display: grid; gap: 14px; }
+    .msg { display: grid; grid-template-columns: 36px 1fr; gap: 10px; }
+    .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 600; font-size: 13px; }
+    .meta { font-size: 12px; color: var(--muted); }
+    .meta b { color: var(--ink); font-weight: 600; }
+    .bubble { margin-top: 4px; padding: 10px 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; white-space: pre-wrap; }
+    .lens { margin-top: 8px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--accent-soft); padding: 10px 12px; }
+    .lens-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pill { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
+    .pill.amber { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
+    .pill.green { background: var(--green-soft); color: var(--green); border-color: transparent; }
+    .pill.rose { background: var(--rose-soft); color: var(--rose); border-color: transparent; }
+    .lens h3 { font-size: 13.5px; font-weight: 600; margin-top: 6px; }
+    .reasons { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12.5px; }
+    .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+    .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn.ghost { background: transparent; }
+    .chip { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #fff; border: 1px dashed var(--line); font-size: 12.5px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .chip .btn { padding: 3px 10px; font-size: 12px; }
+    .receipt { margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .right { display: grid; gap: 20px; align-content: start; }
+    .task { padding: 14px 16px; display: grid; gap: 10px; }
+    .task h3 { font-size: 14px; font-weight: 600; }
+    .kv { display: grid; grid-template-columns: 90px 1fr; gap: 4px 10px; font-size: 13px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    .timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    .timeline li { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; transform: translateY(-1px); }
+    .dot.on { background: var(--green); }
+    .state { display: flex; gap: 6px; flex-wrap: wrap; }
+    .empty { color: var(--faint); font-size: 13px; padding: 14px 16px; }
+    .legend { padding: 12px 16px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+    .legend code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--accent-soft); padding: 0 4px; border-radius: 4px; }
+    @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="note">静态原型 · 模拟 RingCentral Glip 团队群页面中的 Personal AI Lens 分诊卡 · 数据为场景示例，非真实记录</div>
+  <main class="stage">
+    <section class="panel" aria-label="Glip 群聊">
+      <div class="panel-head">
+        <h2>敏捷教练-RC China</h2>
+        <span class="sub">RingCentral Glip · 团队群 · 12 人</span>
+      </div>
+      <div class="chat">
+        <div class="msg">
+          <div class="avatar">L</div>
+          <div>
+            <div class="meta"><b>Liang</b> · 09:41</div>
+            <div class="bubble">本周 retro 我整理了三条 action items，稍后发到 Confluence。</div>
+          </div>
+        </div>
+        <div class="msg">
+          <div class="avatar">S</div>
+          <div>
+            <div class="meta"><b>Sophia (Jinmei) Lin</b> · 10:02</div>
+            <div class="bubble">Team 2026 Q4 Goal Setting Task 已发布，请大家及时完成并在WD提交。
+- Deadline for Employee Goal Setting: 10/13/2026</div>
+
+            <div class="lens" id="lens">
+              <div class="lens-head">
+                <span class="pill amber">截止 10/13（4 天后）</span>
+                <span class="pill">受众：群发，含我</span>
+                <span class="pill">来源：高频发送者</span>
+                <span class="pill">分诊：确定性，无 LLM</span>
+              </div>
+              <h3>提交 2026 Q4 Goal Setting（WD）</h3>
+              <ul class="reasons">
+                <li>日期「10/13/2026」解析为未来 4 天；任务动词「完成并提交」</li>
+                <li>「请大家」+ 你在此群 → 受众包含你；非 @你，权重低于直接请求</li>
+                <li>Sophia 近 30 天在你所在群发言 27 次，权重 +0.2</li>
+              </ul>
+              <div class="actions">
+                <button class="btn primary" id="btn-accept">创建待办</button>
+                <button class="btn" id="btn-remind">只创建提醒</button>
+                <button class="btn" id="btn-done">已完成</button>
+                <button class="btn ghost" id="btn-dismiss">不相关</button>
+              </div>
+              <div class="chip" id="chip">
+                <span>Sophia 是你的直属上级吗？确认后同类消息权重提高（写入 <span class="pill">social_edges · manager · 已确认</span>）</span>
+                <button class="btn" data-mgr="yes">是</button>
+                <button class="btn" data-mgr="no">否</button>
+                <button class="btn ghost" data-mgr="later">以后再说</button>
+              </div>
+              <div class="receipt" id="receipt">这张卡不会改变消息的已读状态，也不会自动回复或提交。</div>
+            </div>
+          </div>
+        </div>
+        <div class="msg">
+          <div class="avatar">W</div>
+          <div>
+            <div class="meta"><b>Wen</b> · 10:05</div>
+            <div class="bubble">收到，今天下午提交。</div>
+          </div>
+        </div>
+      </div>
+      <div class="legend">
+        Lens 卡出现在原消息下方（Passive 面）。按钮语义：<code>创建待办</code> 写入 <code>proposed_actions(task_kind='remind')</code>；<code>已完成</code> / <code>不相关</code> 只写 <code>attention_feedback</code>，回流打扰预算校准。
+      </div>
+    </section>
+
+    <aside class="right">
+      <section class="panel" aria-label="Task Center">
+        <div class="panel-head">
+          <h2>Task Center · 提醒</h2>
+          <span class="sub" id="task-state-label">尚未创建</span>
+        </div>
+        <div class="empty" id="task-empty">点左侧「创建待办」后，这里出现落账后的任务卡与三次提醒计划。</div>
+        <div class="task" id="task" hidden>
+          <h3>提交 2026 Q4 Goal Setting（WD）</h3>
+          <dl class="kv">
+            <dt>截止</dt><dd>2026-10-13（周二）</dd>
+            <dt>来源</dt><dd>Glip · 敏捷教练-RC China · Sophia · 10-09 10:02</dd>
+            <dt>类型</dt><dd>remind · 来自消息分诊</dd>
+            <dt>受众</dt><dd>群发，含我 <span id="mgr-tag"></span></dd>
+          </dl>
+          <div>
+            <div class="meta" style="margin-bottom:4px">提醒计划（冷却 24h，最多 3 次，到期 7 天后过期）</div>
+            <ul class="timeline">
+              <li><span class="dot on"></span>10-11 早晨 · T-48h · Day Pilot 置顶一次</li>
+              <li><span class="dot"></span>10-12 早晨 · T-24h · Chrome 通知（走打扰预算）</li>
+              <li><span class="dot"></span>10-13 早晨 · 当天 · 一页纸 open_loops 段</li>
+            </ul>
+          </div>
+          <div class="state">
+            <span class="pill green" id="st-accepted">accepted</span>
+            <span class="pill" id="st-armed">armed</span>
+            <span class="pill" id="st-complete" hidden>completed · 证据：你在群里回复「done」</span>
+          </div>
+          <div class="actions">
+            <button class="btn" id="btn-evidence">模拟：我在群里回复「done」</button>
+            <button class="btn ghost" id="btn-cancel">取消提醒（持久）</button>
+          </div>
+          <div class="receipt" id="task-receipt"></div>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="回执">
+        <div class="panel-head"><h2>分诊回执</h2><span class="sub">写入与不写入</span></div>
+        <div class="task">
+          <dl class="kv">
+            <dt>已写入</dt><dd id="w-yes">attention_items（status=proposed）</dd>
+            <dt>未写入</dt><dd id="w-no">proposed_actions · entity_properties · 已读状态 · 任何外发</dd>
+            <dt>LLM 调用</dt><dd>0（复用 ingest 已有的一次结构化抽取）</dd>
+          </dl>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      var receipt = $('receipt');
+      var taskReceipt = $('task-receipt');
+      var state = { mgr: null, accepted: false };
+
+      function setWrites(yes, no) { $('w-yes').textContent = yes; $('w-no').textContent = no; }
+
+      $('btn-accept').addEventListener('click', function () {
+        state.accepted = true;
+        $('task-empty').hidden = true;
+        $('task').hidden = false;
+        $('task-state-label').textContent = 'accepted · armed';
+        receipt.textContent = '已落账到 Task Center。后续提醒走打扰预算；你随时可以取消。';
+        setWrites('attention_items（accepted） · proposed_actions（remind, 3 次计划）', 'entity_properties · 已读状态 · 任何外发');
+      });
+
+      $('btn-remind').addEventListener('click', function () {
+        state.accepted = true;
+        $('task-empty').hidden = true;
+        $('task').hidden = false;
+        $('task-state-label').textContent = 'accepted · remind-only · armed';
+        receipt.textContent = '只创建到期提醒，不进任务列表；提醒仍走打扰预算与三次计划。';
+        setWrites('attention_items（accepted） · proposed_actions（remind, remind-only）', 'entity_properties · 已读状态 · 任何外发');
+      });
+
+      $('btn-done').addEventListener('click', function () {
+        receipt.textContent = '已标记完成。不会再提醒；这条反馈会降低同类群发的权重。';
+        setWrites('attention_items（completed） · attention_feedback', 'proposed_actions · 已读状态 · 任何外发');
+      });
+
+      $('btn-dismiss').addEventListener('click', function () {
+        receipt.textContent = '已标记不相关。同一截止日的其他消息不会再出卡；可在 Memory Exploring 撤销。';
+        setWrites('attention_items（dismissed） · attention_feedback', 'proposed_actions · 已读状态 · 任何外发');
+      });
+
+      var chipButtons = document.querySelectorAll('[data-mgr]');
+      Array.prototype.forEach.call(chipButtons, function (btn) {
+        btn.addEventListener('click', function () {
+          var v = btn.getAttribute('data-mgr');
+          state.mgr = v;
+          var chip = $('chip');
+          if (v === 'yes') {
+            chip.innerHTML = '<span class="pill green">已确认：Sophia 是你的上级</span><span>写入 social_edges（manager，user_confirmed=1）。可在画像页撤销。</span>';
+            $('mgr-tag').innerHTML = '<span class="pill green">来自上级 +0.3</span>';
+          } else if (v === 'no') {
+            chip.innerHTML = '<span class="pill">已记录：不是上级</span><span>不写入关系；90 天内不再询问。</span>';
+          } else {
+            chip.innerHTML = '<span class="pill">以后再说</span><span>7 天内不再询问。</span>';
+          }
+        });
+      });
+
+      $('btn-evidence').addEventListener('click', function () {
+        $('st-complete').hidden = false;
+        $('st-armed').hidden = true;
+        $('task-state-label').textContent = 'completed';
+        taskReceipt.textContent = '夜间整理在同线程检测到你的完成回复，剩余两次提醒已取消。这是 evidence watch（确定性匹配），不是反思。';
+      });
+
+      $('btn-cancel').addEventListener('click', function () {
+        $('st-armed').hidden = true;
+        $('st-complete').hidden = true;
+        $('st-accepted').textContent = 'cancelled';
+        $('st-accepted').className = 'pill rose';
+        $('task-state-label').textContent = 'cancelled';
+        taskReceipt.textContent = '取消是持久状态；系统不会从对话里推断取消，也不会因新消息重新武装这条提醒。';
+      });
+    })();
+  </script>
+</body>
+</html>

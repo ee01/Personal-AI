@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Personal AI · OpenClaw 联动记忆 · Options Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #e8efec; --paper: #fbfcfb; --ink: #27323f; --muted: #6f7d89; --faint: #95a0aa;
+      --line: rgba(70, 84, 96, .15); --accent: #4a5f75; --accent-soft: #e7edf3;
+      --green: #3f6a58; --green-soft: #e8f1ec; --amber: #83571d; --amber-soft: #faf1df; --rose: #925365; --rose-soft: #f6eaed;
+      --shadow: 0 24px 60px rgba(34, 50, 61, .14);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--canvas); font-family: 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif; font-size: 14px; line-height: 1.6; }
+    button, input { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+    h1, h2, h3, p { margin: 0; }
+    .note { padding: 8px 16px; background: var(--ink); color: #fff; text-align: center; font-size: 12.5px; }
+    .stage { max-width: 1120px; margin: 28px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1.25fr 1fr; gap: 20px; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .panel-head h2 { font-size: 14px; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .body { padding: 14px 16px; display: grid; gap: 12px; }
+    .exec { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 10px 12px; display: grid; gap: 6px; }
+    .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    .pill { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
+    .pill.green { background: var(--green-soft); color: var(--green); border-color: transparent; }
+    .pill.amber { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
+    .pill.rose { background: var(--rose-soft); color: var(--rose); border-color: transparent; }
+    .link { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--accent-soft); padding: 10px 12px; display: grid; gap: 10px; }
+    .link h3 { font-size: 13.5px; font-weight: 600; }
+    .toggle { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; }
+    .toggle input { margin-top: 4px; }
+    .toggle small { display: block; color: var(--muted); font-size: 12px; }
+    .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+    .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .consent { background: #fff; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+    .consent ul { margin: 6px 0 0 18px; padding: 0; }
+    .code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre; overflow-x: auto; line-height: 1.6; }
+    .meta { font-size: 12px; color: var(--muted); }
+    .flow { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre; overflow-x: auto; line-height: 1.6; }
+    .legend { padding: 12px 16px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+    @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="note">静态原型 · Options「Agent 执行器」中 OpenClaw 卡片下方新增「联动记忆」区块 · 命令与 key 为示例</div>
+  <main class="stage">
+    <section class="panel" aria-label="OpenClaw 执行器">
+      <div class="panel-head">
+        <h2>Agent 执行器 · OpenClaw</h2>
+        <span class="sub">openclaw-gateway · 已启用</span>
+      </div>
+      <div class="body">
+        <div class="exec">
+          <dl class="kv">
+            <dt>Gateway</dt><dd>http://127.0.0.1:18789</dd>
+            <dt>Token</dt><dd><span class="pill green">已配置</span></dd>
+            <dt>探测</dt><dd><span class="pill green">connect ok · 2 分钟前</span></dd>
+          </dl>
+        </div>
+
+        <div class="link">
+          <h3>联动记忆</h3>
+          <label class="toggle"><input type="checkbox" id="t-read" checked>
+            <span>让 OpenClaw 读取我的记忆（只读）<small>通过已有 MCP server（/mcp）暴露 memory_search、memory_context_brief、memory_profile_hint；只含你确认过的关于你自己的事实与 open loops；不含原文、不含他人事实。</small></span></label>
+          <label class="toggle"><input type="checkbox" id="t-import" checked>
+            <span>把 OpenClaw 学到的事带回来（未确认）<small>安装 personal-ai-memory 插件，会话结束后把它写入的 daily notes / MEMORY.md 变更推到本服务，入库为「来自 OpenClaw，未确认」，经夜间整理后由你确认。</small></span></label>
+
+          <div class="consent" id="consent">
+            <strong>开启前请确认</strong>
+            <ul>
+              <li>读通道：OpenClaw 可读到的内容经出口策略过滤；每段带回声标记，带回来时不会重复入库。</li>
+              <li>写通道：带回的内容不会直接进入你的画像、真值或一页纸；Lens 上会标「来自 OpenClaw，未确认」。</li>
+              <li>删除权各自保留：你在这里删除导入项不会删除 OpenClaw 那边的记录，反之亦然。</li>
+              <li>我们不会远程修改你的 openclaw.json；命令全文可见，由你或同机的 Personal AI.app 执行。</li>
+            </ul>
+          </div>
+
+          <div class="actions">
+            <button class="btn primary" id="btn-gen">生成配置</button>
+            <button class="btn" id="btn-run" hidden>帮我执行（桌面端同机）</button>
+            <button class="btn" id="btn-copy" hidden>复制命令</button>
+            <button class="btn" id="btn-verify" hidden>验证</button>
+            <button class="btn" id="btn-revoke" hidden>断开联动</button>
+            <span class="pill" id="key-pill">尚未签发 key</span>
+          </div>
+
+          <div class="code" id="cmds" hidden></div>
+          <div class="meta" id="gen-meta" hidden></div>
+        </div>
+      </div>
+      <div class="legend">key 的 scope 按勾选签发：读通道 memory.read，写通道 memory.import；90 天过期，可在「用户密钥」页吊销。不签发 memory.write 或 evidence.raw.read。</div>
+    </section>
+
+    <aside class="panel" aria-label="状态与数据流">
+      <div class="panel-head">
+        <h2>联动状态</h2>
+        <span class="sub" id="status-sub">未开启</span>
+      </div>
+      <div class="body">
+        <dl class="kv">
+          <dt>读通道</dt><dd id="s-read">—</dd>
+          <dt>写通道</dt><dd id="s-import">—</dd>
+          <dt>上次导入</dt><dd id="s-last">—</dd>
+          <dt>key</dt><dd id="s-key">—</dd>
+        </dl>
+        <div class="meta">数据流</div>
+        <div class="flow">A 读  我们 ──MCP(memory.read)──▶ OpenClaw
+     confirmed · self · 带 pai:unit 标记
+     不含原文 / 他人事实 / restricted
+
+B 写  OpenClaw ──插件 agent_end──▶ POST /import/openclaw
+     daily notes / MEMORY.md 变更
+     入库 untrusted · 未确认 · 夜间判决
+     回声行只记 derived_from</div>
+        <div class="meta" id="hint">A 与 B 互不占用同一文件：我们不写 OpenClaw 的 workspace，它不写我们的真源。</div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+      var SERVICE = 'https://memory.example.internal';
+      function scopes() {
+        var s = [];
+        if ($('t-read').checked) s.push('memory.read');
+        if ($('t-import').checked) s.push('memory.import');
+        return s;
+      }
+      $('btn-gen').addEventListener('click', function () {
+        var sc = scopes();
+        if (!sc.length) { $('key-pill').textContent = '至少勾选一个通道'; $('key-pill').className = 'pill rose'; return; }
+        var lines = [];
+        if ($('t-read').checked) {
+          lines.push('# 1. 注册只读 MCP server');
+          lines.push('openclaw mcp add personal-memory --url ' + SERVICE + '/mcp --transport streamable-http \\');
+          lines.push('  --header "Authorization: Bearer pai_user_************" \\');
+          lines.push("  --include 'memory_search,memory_context_brief,memory_profile_hint'");
+        }
+        if ($('t-import').checked) {
+          lines.push('# 2. 安装推送插件并指向本服务');
+          lines.push('openclaw plugins install clawhub:personal-ai-memory');
+          lines.push('openclaw config set plugins.entries.personal-ai-memory.config.serviceUrl ' + SERVICE);
+          lines.push('openclaw config set plugins.entries.personal-ai-memory.config.apiKey pai_user_************');
+          lines.push('openclaw config set plugins.entries.personal-ai-memory.hooks.allowConversationAccess true');
+        }
+        lines.push('# 3. 重启网关');
+        lines.push('openclaw gateway restart');
+        $('cmds').textContent = lines.join('\n');
+        $('cmds').hidden = false;
+        $('gen-meta').hidden = false;
+        $('gen-meta').textContent = '已签发 key（label openclaw-link，scope ' + sc.join(' + ') + '，90 天过期）。key 只显示这一次，之后只显示「已配置」。';
+        $('key-pill').textContent = 'key 已签发 · ' + sc.join(' + ');
+        $('key-pill').className = 'pill green';
+        $('btn-run').hidden = false; $('btn-copy').hidden = false; $('btn-verify').hidden = false; $('btn-revoke').hidden = false;
+        $('s-key').textContent = 'openclaw-link · ' + sc.join(' + ') + ' · 2027-01-07 过期';
+        $('status-sub').textContent = '待执行';
+      });
+      $('btn-run').addEventListener('click', function () {
+        $('gen-meta').textContent = '桌面端已在本机执行 3 条命令，输出：MCP server personal-memory 已添加 · 插件已安装 · 网关已重启。';
+      });
+      $('btn-copy').addEventListener('click', function () {
+        $('gen-meta').textContent = '命令已复制。粘贴到运行 OpenClaw 的机器终端执行，然后点「验证」。';
+      });
+      $('btn-verify').addEventListener('click', function () {
+        $('s-read').innerHTML = $('t-read').checked ? '<span class="pill green">就绪 · gateway 已注册 personal-memory</span>' : '<span class="pill">未开启</span>';
+        $('s-import').innerHTML = $('t-import').checked ? '<span class="pill amber">插件已启用 · 等待首次导入</span>' : '<span class="pill">未开启</span>';
+        $('s-last').textContent = '无';
+        $('status-sub').textContent = '已联动';
+      });
+      $('btn-revoke').addEventListener('click', function () {
+        $('s-read').innerHTML = '<span class="pill rose">已断开 · key 已吊销</span>';
+        $('s-import').innerHTML = '<span class="pill rose">已断开</span>';
+        $('s-key').textContent = '已吊销';
+        $('status-sub').textContent = '已断开';
+        $('gen-meta').textContent = 'key 已吊销，/mcp 对它返回 401。请在 OpenClaw 侧执行 openclaw mcp remove personal-memory 与 openclaw plugins uninstall personal-ai-memory。已导入项保留为未确认，可批量归档。';
+      });
+    })();
+  </script>
+</body>
+</html>

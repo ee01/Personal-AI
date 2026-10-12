@@ -90,3 +90,35 @@ OpenViking 的三级上下文（一句话/概览/全文）。本系统 chunks �
 | ai-context-passport-plan | 候选 | plan #9 把其 P3（MCP）提前独立交付 |
 | source-memory-distiller-plan | 候选 | QW-3 与其文档级蒸馏分层衔接 |
 | memory-trust-console / freshness-radar / relevance-trainer 等 | 候选/搁置 | 各 plan「与既有 plan 的关系」节已逐一标注 |
+
+## 2026-10-09 E-72 批次：Instinct 对标后的建议归属
+
+来源：Multica issue E-72（Instinct 视频资料整理与对标，2026-10-08 至 10-09）。第二轮给出的 25 条建议按下表归入 plan、快赢或搁置，避免散失。子任务 E-75 ～ E-80 对应六份 plan，均未 assign。
+
+| 建议 | 归属 | 状态 |
+|---|---|---|
+| A1 写入侧 provenance 闭集 / session-kind 门控 / 召回回路防护 | [memory-write-provenance-gate-plan](./memory-write-provenance-gate-plan.md)（E-75） | 仅规划 |
+| A2 可编辑 Markdown 工作区（视图，round-trip） | [memory-markdown-git-mirror-plan](./memory-markdown-git-mirror-plan.md) 投影层（E-79）；回写 proposal 留给 one-pager plan §4.3 | 仅规划 |
+| A3 常驻用户 one-pager | [memory-resident-one-pager-plan](./memory-resident-one-pager-plan.md)（E-78） | 仅规划 |
+| A4 投入从检索转向写入侧 curation（alias / supersession / 矛盾扫描） | [memory-sleep-time-reconciliation-plan](./memory-sleep-time-reconciliation-plan.md) 阶段 A / C（E-76） | 仅规划 |
+| A5 前瞻记忆生命周期（standing intents） | [memory-attention-triage-plan](./memory-attention-triage-plan.md) §5.1（E-77） | 仅规划 |
+| A6 事件唤醒补充轮询 | attention-triage plan Phase 3 的 Heartbeat 读 ledger；扩展侧事件触发留作其 Phase 2 之后的增量 | 部分覆盖 |
+| A7 后台成本分级 | reconciliation plan §5.5 预算制度 | 仅规划 |
+| A8 记忆场景评测进 CI | 各 plan 的 Evals 节 + [memory-longmemeval-benchmark-plan](./memory-longmemeval-benchmark-plan.md) 回归门 | 已有框架 |
+| A9 删除预览与覆盖范围声明 | 未独立成 plan；建议并入 [memory-cascade-deletion-plan](./memory-cascade-deletion-plan.md) 增「dry-run 报告」 | 待并入 |
+| F1 Open loops 作为记忆 kind | attention-triage plan §5.1 / §4.2 L1 | 仅规划 |
+| F2 偏好外推 | reconciliation plan 场景 B（实体锚定 preference unit）；Compose 展示依据留 one-pager plan | 部分覆盖 |
+| F3 从重复蒸馏 procedural memory | 归 [personal-skill-foundry-plan](./personal-skill-foundry-plan.md)：增「重复才是信号、候选存 git、人工安装」 | 待并入 |
+| F4 关系层级 → 分享能力矩阵 | attention-triage plan §5.2 四层解析器只做了「读」；「写出去给谁」留给 [common-ground-memory-plan](./common-ground-memory-plan.md) | 部分覆盖 |
+| F5 fill-only 敏感值收集 | 已有 [ephemeral-secret-vault-plan](./ephemeral-secret-vault-plan.md)，对齐即可 | 已有 |
+| F6 日简报写作与安静规则 | 归 [memory-day-pilot-plan](./memory-day-pilot-plan.md)：增「并入已开线程、前 30% 承载要点」两条 | 待并入 |
+| F7 巩固日志（Dream Diary 式） | git-mirror plan `consolidation/DIARY.md` + reconciliation plan `unit_reconcile_decisions` | 仅规划 |
+| F8 语音 / 快速捕获 | 不立项；desktop quick-ask 已有 | 不做 |
+| F9 可分享记忆简报页 | 不立项；现有 HTML 报告能力足够，egress gate 先行 | 不做 |
+| F10 信任代理指标 | attention-triage plan §10 可观测性 + usage dashboard | 部分覆盖 |
+| P1 定位为「给你已在用的代理供上下文的记忆层」 | [openclaw-memory-link-plan](./openclaw-memory-link-plan.md)（E-80）是第一个落地样例 | 仅规划 |
+| P2 低风险动作「办完」而非只「备菜」 | attention-triage plan §4.2 L2 → 外部副作用走 allowlist；allowlist 本身归 [agent-task-ledger-plan](./agent-task-ledger-plan.md) | 部分覆盖 |
+| P3 不做 A2A，但把人建模成 destination | 推迟；F4 落地后再议 | 推迟 |
+| P4 以滞后换成本 | reconciliation plan Phase 4（OnlineReflection 采样） | 仅规划 |
+| P5 把「我们不做什么」写成信任承诺 | 文档类，建议在 `docs/memory_system.md` 产品愿景后增一节 | 待写 |
+| P6 与 Markdown 生态互通 | git-mirror plan `interop/` + openclaw-memory-link plan | 仅规划 |
