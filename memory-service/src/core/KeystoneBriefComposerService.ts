@@ -1,3 +1,4 @@
+import { gateEnabled } from './WriteProvenanceGate.js';
 import type Database from 'better-sqlite3';
 
 import type { UiLanguage } from '../i18n.js';
@@ -522,7 +523,7 @@ export class KeystoneBriefComposerService {
                 sender, group_id, group_name, timestamp, entities_json,
                 matched_projects_json, metadata_json, importance, scope
          FROM messages_raw
-         WHERE timestamp >= ?
+         WHERE ${gateEnabled() ? 'promotion_eligible=1 AND' : ''} timestamp >= ?
            AND COALESCE(scope, 'work') = 'work'
            AND (
              content LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR

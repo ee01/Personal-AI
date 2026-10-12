@@ -1,3 +1,4 @@
+import { markRecalled, stripRecalled, recordRecallExposures } from './WriteProvenanceGate.js';
 /**
  * Context Pack — read-only prompt packs for external AI / HTTP integration.
  *
@@ -340,7 +341,8 @@ export class ContextPackService {
       const text = (item.previewText || item.content || '').trim();
       if (!text) continue;
       const clipped = text.length > 280 ? `${text.slice(0, 280)}…` : text;
-      lines.push(`- (${item.source || item.type || 'memory'}) ${clipped}`);
+      const marked = markRecalled(item.id, `- (${item.source || item.type || 'memory'}) ${clipped}`, 'context_pack');
+      lines.push(stripRecalled(marked));
       sources.push({
         kind: String(item.type || 'memory'),
         id: item.id,
@@ -348,6 +350,7 @@ export class ContextPackService {
       });
     }
 
+    recordRecallExposures(this.db, sources.map(source => source.id).filter((id): id is string => !!id), 'context_pack');
     return {
       scope: 'custom',
       prompt: wrapPrompt(
@@ -361,10 +364,10 @@ export class ContextPackService {
       experimental: true,
       query: q,
       redactionReceipt: {
-        applied: false,
-        reasonCodes: [],
+        applied: true,
+        reasonCodes: ['recalled_markers_stripped'],
         blockedSlotCount: 0,
-        note: 'Custom packs use FTS/time recall only (no vector cold-start).',
+        note: 'Custom packs use FTS/time recall only; internal recall markers stripped before export.',
       },
     };
   }

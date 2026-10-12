@@ -1,3 +1,4 @@
+import { SESSION_KINDS, ORIGIN_CLASSES } from '../core/WriteProvenanceGate.js';
 /**
  * Batch ingestion route.
  *
@@ -57,6 +58,7 @@ const INGEST_DECISION_REASONS = [
   'insert_failed',
   'supply_decoupled_indexed',
   'skipped_empty_content',
+  'recalled_exposure',
 ] as const satisfies readonly IngestDecisionReason[];
 
 const INGEST_EXTRACTION_STATUSES = [
@@ -83,6 +85,10 @@ const INGEST_SANITIZATION_STATUSES = [
 const ingestDecisionSchema = {
   type: 'object' as const,
   properties: {
+    originClass: { type: 'string' as const, enum: ORIGIN_CLASSES },
+    sessionKind: { type: 'string' as const, enum: SESSION_KINDS },
+    promotionEligible: { type: 'boolean' as const },
+    derivedFrom: { type: 'array' as const, items: { type: 'string' as const } },
     storage: {
       type: 'string' as const,
       enum: ['indexed', 'stored_unindexed', 'duplicate', 'error'],
@@ -98,6 +104,7 @@ const ingestDecisionSchema = {
         'duplicate_content_source_sender',
         'indexing_failed',
         'insert_failed',
+        'recalled_exposure',
       ],
     },
     salienceScore: { type: 'number' as const },
@@ -165,6 +172,7 @@ const decisionReasonCountSchema = {
     duplicate_content_source_sender: { type: 'number' as const },
     indexing_failed: { type: 'number' as const },
     insert_failed: { type: 'number' as const },
+    recalled_exposure: { type: 'number' as const },
     unknown: { type: 'number' as const },
   },
 };
@@ -245,6 +253,7 @@ const ingestPayloadItemSchema = {
     sourceTitle: { type: 'string' as const },
     timestamp: { type: 'number' as const },
     metadata: { type: 'object' as const, additionalProperties: true },
+    session_kind: { type: 'string' as const, enum: SESSION_KINDS },
     skipExtraction: { type: 'boolean' as const },
   },
   additionalProperties: false,

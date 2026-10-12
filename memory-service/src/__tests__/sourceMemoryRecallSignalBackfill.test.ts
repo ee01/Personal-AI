@@ -296,6 +296,7 @@ function createFixture(): {
       metadata_json TEXT,
       trust_class TEXT,
       injection_flags_json TEXT,
+      promotion_eligible INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER
     );

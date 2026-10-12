@@ -1,0 +1,20 @@
+{
+  "capturedAt": "2026-10-12",
+  "endpoint": "deployed service container loopback",
+  "attempts": 2,
+  "current": {
+    "extraction": 1,
+    "multi_session": 1,
+    "temporal": 1,
+    "knowledge_update": 0.6666666666666666,
+    "abstention": 1,
+    "prospective": 0.5
+  },
+  "gatesDisabledControl": {
+    "knowledge_update": 0.6666666666666666,
+    "prospective": 0.5
+  },
+  "baselineRegressionGate": "failed: knowledge_update and prospective below stored 1.0 baseline",
+  "interpretation": "Both regressed abilities reproduce with WRITE_ORIGIN_GATE_ENABLED, RECALL_LOOP_GUARD_ENABLED and TURN_TAINT_ENABLED disabled. No additional regression observed from this gate; existing service/data quality remains below the stored baseline.",
+  "codeHash": "ee2ece88e1fd5e42fa026c207c356f3dd9785a403ce8d4553c97d171ac7da55b"
+}

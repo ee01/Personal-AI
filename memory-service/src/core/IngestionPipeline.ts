@@ -1,3 +1,4 @@
+import { classifyWrite, recalledIds, recordRecallExposures, applyTurnTaint, gateEnabled } from './WriteProvenanceGate.js';
 /**
  * Ingestion pipeline — Phase 2.
  *
@@ -249,6 +250,15 @@ export class IngestionPipeline {
    * Ingest a single payload through the full pipeline.
    */
   async ingest(payload: IngestPayload): Promise<IngestResult> {
+    payload = { ...payload, ...applyTurnTaint(this.db, payload) } as IngestPayload;
+    const provenance = classifyWrite(payload, this.v3UserId);
+    const loopIds = recalledIds(payload.content);
+    if (loopIds.length) {
+      recordRecallExposures(this.db, loopIds, 'ingest_loop', payload.metadata?.turn_id);
+      return { id: loopIds[0], status: 'duplicate', entitiesExtracted: 0,
+        decision: { storage: 'duplicate', reason: 'recalled_exposure', indexed: false,
+          shouldIndex: false, extractionStatus: 'skipped', ...provenance } };
+    }
     const id = uuidv4();
     const scope = payload.scope ?? 'work';
     const source = payload.source?.trim() || null;
@@ -333,6 +343,7 @@ export class IngestionPipeline {
           duplicateOf: existing.id,
           dedupeReason: existing.dedupeReason,
           indexed: false,
+          ...provenance,
           trustClass,
           sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
           injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,
@@ -348,7 +359,7 @@ export class IngestionPipeline {
     // ---- 2. LLM entity extraction (non-blocking on failure) ----
     let extraction: LLMExtraction | null = null;
     const skip =
-      payload.skipExtraction === true || !isIngestExtractionEnabled();
+      payload.skipExtraction === true || !isIngestExtractionEnabled() || (gateEnabled() && !provenance.promotionEligible);
 
     if (!skip) {
       try {
@@ -389,7 +400,7 @@ export class IngestionPipeline {
     let salienceComponents: IngestSalienceComponents | undefined;
     // With supply decoupled (P0a-1) salience is computed deterministically for
     // every episode — it feeds ranking/tier only and never gates indexing.
-    if (!skip || scoreSkippedArtifact || supplyDecoupled) {
+    if ((!skip || scoreSkippedArtifact || supplyDecoupled) && (!gateEnabled() || provenance.promotionEligible)) {
       salienceScore = 0.5;
       try {
         const salienceResult = await this.scorer.scoreMessage(
@@ -397,6 +408,7 @@ export class IngestionPipeline {
           importance,
           sentiment,
           ts,
+          provenance.originFamily,
         );
         salienceScore = salienceResult.score;
         salienceComponents = salienceResult.components;
@@ -422,8 +434,9 @@ export class IngestionPipeline {
              sender, group_id, group_name, timestamp,
              entities_json, matched_projects_json,
               importance, sentiment, metadata_json, trust_class, injection_flags_json,
+              origin_class, session_kind, promotion_eligible, derived_from_json, origin_family,
               claim_attribution_status, claim_attribution_version, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?)`,
         )
         .run(
           id,
@@ -445,6 +458,11 @@ export class IngestionPipeline {
           payload.metadata ? JSON.stringify(payload.metadata) : null,
           trustClass,
           injectionScreen.flagged ? JSON.stringify(injectionScreen.flags) : null,
+          provenance.originClass,
+          provenance.sessionKind,
+          provenance.promotionEligible ? 1 : 0,
+          JSON.stringify(provenance.derivedFrom),
+          provenance.originFamily,
           now(),
         );
     } catch (err) {
@@ -478,7 +496,7 @@ export class IngestionPipeline {
       if (jobId) {
         // Fire-and-forget with visible failure states (job table carries
         // retry/dead_letter; nothing is silently dropped).
-        void worker.processDueJobs(1).catch((err) => {
+        await worker.processDueJobs(1).catch((err) => {
           console.warn(
             '[IngestionPipeline] v3 shadow extraction dispatch failed:',
             (err as Error).message,
@@ -636,6 +654,7 @@ export class IngestionPipeline {
 
     // ---- 6b. Profile candidate extraction ----
     if (
+      (!gateEnabled() || provenance.promotionEligible) &&
       extraction?.profileCandidates?.length &&
       this.isOwnerAuthoredPayload(payload)
     ) {
@@ -796,6 +815,7 @@ export class IngestionPipeline {
         supplyDecoupled,
         contentEligible,
       }),
+      ...provenance,
       trustClass,
       sanitization: injectionScreen.flagged ? 'flagged' : 'clean',
       injectionFlags: injectionScreen.flagged ? injectionScreen.flags : undefined,

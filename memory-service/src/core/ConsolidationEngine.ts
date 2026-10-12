@@ -1,3 +1,4 @@
+import { gateEnabled } from './WriteProvenanceGate.js';
 /**
  * ConsolidationEngine — daily memory consolidation triggered by CronScheduler at 23:00.
  *
@@ -288,7 +289,7 @@ export class ConsolidationEngine {
       .prepare(
         `SELECT id, content, sender, timestamp, source_type
          FROM messages_raw
-         WHERE timestamp BETWEEN ? AND ?
+         WHERE ${gateEnabled() ? 'promotion_eligible = 1 AND' : ''} timestamp BETWEEN ? AND ?
          ORDER BY timestamp ASC`,
       )
       .all(startOfDay, endOfDay) as MessageRow[];
@@ -344,7 +345,7 @@ ${formattedMessages}`;
       .prepare(
         `SELECT id, content, sender, timestamp, source_type
          FROM messages_raw
-         WHERE timestamp >= ?
+         WHERE ${gateEnabled() ? 'promotion_eligible = 1 AND' : ''} timestamp >= ?
          ORDER BY timestamp ASC`,
       )
       .all(startOfDay) as MessageRow[];
@@ -468,7 +469,7 @@ ${formattedMessages}`;
           .prepare(
             `SELECT id, content, sender, timestamp
              FROM messages_raw
-             WHERE timestamp >= ?
+             WHERE ${gateEnabled() ? 'promotion_eligible = 1 AND' : ''} timestamp >= ?
                AND (matched_projects_json LIKE ? OR content LIKE ?)
              ORDER BY timestamp ASC`,
           )
@@ -955,7 +956,7 @@ Brief current status
 
     const messageCount = this.db
       .prepare(
-        `SELECT COUNT(*) as count FROM messages_raw WHERE timestamp BETWEEN ? AND ?`,
+        `SELECT COUNT(*) as count FROM messages_raw WHERE ${gateEnabled() ? 'promotion_eligible = 1 AND' : ''} timestamp BETWEEN ? AND ?`,
       )
       .get(startOfDay, startOfDay + 86400 - 1) as { count: number };
 

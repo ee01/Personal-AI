@@ -1,3 +1,4 @@
+import { episodePromotionEligible } from './WriteProvenanceGate.js';
 /**
  * TruthMaintainer — bitemporal entity property management with conflict resolution.
  *
@@ -127,6 +128,9 @@ export class TruthMaintainer {
   // -------------------------------------------------------------------------
 
   async processPropertyChange(change: PropertyChange): Promise<PropertyChangeResult> {
+    if (change.sourceMessageId && !episodePromotionEligible(this.db, change.sourceMessageId)) {
+      return { action: 'rejected', propertyId: 0 };
+    }
     const timestamp = now();
     const confidence = change.confidence ?? DEFAULT_CONFIDENCE;
     const authority = change.sourceAuthority ?? DEFAULT_AUTHORITY;

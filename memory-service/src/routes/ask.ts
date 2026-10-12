@@ -1,3 +1,4 @@
+import { markRecalled, recalledIds, recordRecallExposures } from '../core/WriteProvenanceGate.js';
 /**
  * Ask route — Natural language Q&A over the memory store.
  *
@@ -803,7 +804,7 @@ export function assembleEvidenceContext(
           : item.previewText || item.displayText || item.content;
       parts.push(compactText(preview, 160));
     }
-    return `- ${parts.join(' ')}`;
+    return markRecalled(item.id, `- ${parts.join(' ')}`, 'ask');
   };
 
   for (let i = 0; i < items.length; i++) {
@@ -846,10 +847,10 @@ function renderEvidenceLines(
   if (!config.evidenceProgressiveEnabled) {
     return items
       .map((item, index) =>
-        `- ${[
+        markRecalled(item.id, `- ${[
           ...evidenceHeaderParts(item, numberByItem?.get(item) ?? index + 1),
           sourceMemoryEvidenceText(item, 500),
-        ].join(' ')}`,
+        ].join(' ')}`, 'ask'),
       )
       .join('\n');
   }
@@ -1724,7 +1725,7 @@ async function recallForAsk(
     memoryContext: [
       anticipationContext,
       answerMemoryContext,
-      formatRecalledContext(recalledItems),
+      formatRecalledContextWithExposure(db, recalledItems),
       changeContext,
     ]
       .filter(Boolean)
@@ -4106,4 +4107,10 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
       }
     },
   );
+}
+
+function formatRecalledContextWithExposure(db: import('better-sqlite3').Database, items: RecallItem[]): string {
+  const text = formatRecalledContext(items);
+  recordRecallExposures(db, recalledIds(text), 'ask');
+  return text;
 }

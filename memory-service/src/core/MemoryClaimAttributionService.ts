@@ -1,3 +1,4 @@
+import { episodePromotionEligible } from './WriteProvenanceGate.js';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { MemoryClaimRepository } from '../repositories/MemoryClaimRepository.js';
@@ -207,7 +208,9 @@ export class MemoryClaimAttributionService {
       existingState.status === 'resolved' &&
       existingClaims.length > 0
     ) {
-      return this.toDecision('resolved', existingClaims);
+      if (episodePromotionEligible(this.db, messageId)) return this.toDecision('resolved', existingClaims);
+      // Historical cached policy cannot bypass a backfilled write gate.
+      options = { ...options, force: true };
     }
     if (!options.force && existingState.status === 'failed') {
       return this.toDecision('failed', existingClaims);
@@ -281,7 +284,10 @@ export class MemoryClaimAttributionService {
     options: { ensure?: boolean } = { ensure: true },
   ): MemoryClaimEnvelope[] {
     if (options.ensure !== false) this.ensureForMessage(messageId);
-    return this.repository.getClaimsForMessage(messageId);
+    const claims = this.repository.getClaimsForMessage(messageId);
+    return episodePromotionEligible(this.db, messageId) ? claims : claims.map(claim => ({
+      ...claim, policy: { ...claim.policy, profileCandidate: false, currentTruthCandidate: false, actionCandidate: false },
+    }));
   }
 
   buildReceipt(
@@ -503,7 +509,9 @@ export class MemoryClaimAttributionService {
       commitment: segmented.commitment,
       confidence: segmented.confidence,
       signals: [...segmented.signals],
-      policy,
+      policy: episodePromotionEligible(this.db, messageId) ? policy : {
+        ...policy, profileCandidate: false, currentTruthCandidate: false, actionCandidate: false,
+      },
       revision: 1,
       status: 'active',
       corrected: false,
@@ -518,9 +526,9 @@ export class MemoryClaimAttributionService {
   ): IngestClaimAttributionDecision {
     const allowed = claims.filter(
       (claim) =>
-        claim.policy.profileCandidate ||
+        episodePromotionEligible(this.db, claim.sourceMessageId) && (claim.policy.profileCandidate ||
         claim.policy.currentTruthCandidate ||
-        claim.policy.actionCandidate,
+        claim.policy.actionCandidate),
     ).length;
     return {
       status,

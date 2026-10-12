@@ -1,3 +1,4 @@
+import { backfillWriteProvenance } from './WriteProvenanceGate.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -155,7 +156,10 @@ export class UserContextManager {
 
     // Create Database wrapper (handles dir creation, WAL, migrations)
     const database = new Database({ dataDir: userDir });
-    database.migrate();
+    const applied = database.migrate();
+    if (applied.includes('074_write_provenance_gate.sql')) {
+      backfillWriteProvenance(database.raw, userId);
+    }
     const ftsState = database.verifyAndRepairFtsIndex();
     if (ftsState !== 'clean' && ftsState !== 'skipped') {
       console.warn(`[UserContextManager] chunks_fts for ${userId}: ${ftsState}`);

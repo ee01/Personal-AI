@@ -1,6 +1,6 @@
 # Memory Claim Attribution / 记忆主张归属
 
-_最后更新：2026-07-31_
+_最后更新：2026-10-12_
 
 ## 大白话结论
 
@@ -11,6 +11,20 @@ _最后更新：2026-07-31_
 只有当归属确实改变本轮后果时，既有 Ask、Memory Lens Expanded Card、Compose preview、User Profile 证据审计或 Meeting 证据详情才显示一条紧凑回执。纠错控件只放在 Ask 和 Memory Lens 的既有详情里；Compose、Profile、Meeting 只读解释本轮后果。纠正只更新 Personal AI 的派生判断和下游权限，永远不改原始消息，也不写回 Glip、网页、会议平台或其他外部系统。
 
 交互 Demo：[memory-claim-attribution.html](../demo/memory-claim-attribution.html)。
+
+## 来源闭集与会话门控（Write Provenance Gate）
+
+先判定“文本由谁产生、当前会话是什么”，再做句内 attribution。可信手动输入与 Glip/Jira 明确本人作者信号可成为 `owner`；他人的 Glip、Jira 记录、会议与日历为 `observed`。AI 派生物为 `agent`，网页、外部 AI、委派及文档导入为 `untrusted`，后台脚手架为 `system`。未知来源保守落入不可信；不会因为 sender 非空或模型判断自动成为 owner。文档导入即使历史 source_type 是 manual，也不能冒充用户亲述。
+
+`session_kind` 接受 interactive、import、heartbeat、cron、subagent、reflection、dream。后五种会话没有晋升资格。只有 owner/observed 且属于 interactive/import 才有 `promotion_eligible=1`，它只是必要条件，仍要通过现有句级归属、确认与权限门。原文与可检索资料保留；门控挡住 profile、truth、行动、简报和后台整理候选，不删除内容，也不新增人工审阅队列。外部资料若要成为用户代表性事实，仍需用户通过可信手动渠道明确确认，不能用 metadata 自报已确认提权。
+
+Ask 的每个内部证据段及 Compose 的记忆段带 `<recalled id="…" exposure="…">`。ingest 遇到标记只记录 `memory_exposures` 与 derivedFrom 回执，返回 duplicate/recalled_exposure；不抽取、不加 salience、不新增 episode/unit。Context Pack 外发会剥离内部标记并在 redactionReceipt 说明。展示、引用和 OnlineReflection 的使用记录不是确认，不再自动强化生命周期。
+
+同轮工具污染通过 ingest metadata 的 `session_id`、`turn_id`、`role`、`network_origin`/`tool_origin=network` 或 `tool_name`（web_fetch/openclaw/external_ai）声明。声明后同 session 后续 assistant 写入降为 untrusted；下一条 role=user 清除。状态存于用户隔离数据库，不依赖进程内全局变量。本地 read_file 未声明网络来源不会污染；工具未声明、任意自由复述丢失结构标记，是确定性追踪的已知边界。
+
+实现：`core/WriteProvenanceGate.ts`、migration 074、`IngestionPipeline`、v3 `ExtractionWorker/UnitTruthMaintainer`。系统后台使用 `SystemWriteContext`；直接 SQL 导入有 import 标识和数据库保守默认。句级缓存与纠正后的 claim 在消费时仍必须通过原始 episode 晋升资格。
+
+验证：`npm run eval:write-provenance-gate`；体验报告 `npm run eval:run -- --suite write-provenance-gate --no-repair`。六能力回归命令会先运行该确定性套件；它包含十条后台产物、十次 Ask/Compose 回灌、十组来源独立性、六组网络污染、100 条迁移 fixture 与 100 条生产去内容 owner 抽样。
 
 ## 用户体验分层
 

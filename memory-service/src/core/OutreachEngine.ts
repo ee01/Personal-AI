@@ -1,3 +1,4 @@
+import { SystemWriteContext } from './WriteProvenanceGate.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
@@ -3581,6 +3582,8 @@ export class OutreachEngine {
         session.targetType === 'group' ? 'outreach-group' : null,
         timestamp,
         JSON.stringify({
+          session_kind: SystemWriteContext.current() ?? 'interactive',
+          generatedByAgent: sourceType === 'outreach_question',
           sessionId: session.id,
           originKind: session.originKind,
           ...metadata,

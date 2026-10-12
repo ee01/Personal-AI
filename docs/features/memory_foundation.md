@@ -1,12 +1,30 @@
 # Memory Foundation 架构（v1 → v2 → v3 数据模型）
 
 > 所属能力：记忆服务（核心平台）
-> 更新日期：2026-09-08
+> 更新日期：2026-10-12
 > Canonical 方案：[memory-foundation-rearchitecture-plan.md](../progressing/memory-foundation-rearchitecture-plan.md)
 
 ## 大白话运行逻辑
 
 这个系统要把用户的记忆存好、找准、管住。它现在同时跑三代数据模型：旧的 v1/v2 负责"把消息存下来能搜到"，新的 v3 负责"把消息变成原子事实、管好真值、管住权限"。三代并行运行，v3 以 shadow（影子）模式验证质量后再切换。
+
+## 写入来源与晋升硬门
+
+写入先保存确定性来源，再决定是否可成为长期事实。`messages_raw` 与 `memory_unit_sources` 的 origin_class 是 owner / observed / agent / untrusted / system 闭集；session_kind、promotion_eligible、derived_from_json 与原文血缘一起保存。来源分类不调用 LLM，模型不能改变来源权限。
+
+- interactive/import 中的 owner/observed 才可进入 durable 候选，仍须通过 claim attribution 与 ACL。heartbeat/cron/subagent/reflection/dream 只保留任务产物。v3 在 enqueue、历史队列重放及 truth 整合入口都检查来源资格；旧 truth 与 profile 写入也受 claim 门控。
+- 日摘要、项目摘要、reflection、dream、报告 markdown 保留为产物，`MarkdownManager.reindexFile` 不再把这些派生目录重新切成事实 chunks。现有索引不删除。
+- salience 频次统计只认可晋升的不同 origin_family（来源渠道 + 作者），并排除当前作者族；同作者重复、同族派生物没有多来源增益。v3 提取从持久化源取得 family，使用 MemoryClaimEnvelope 确认是否可以表示 self_statement。
+- 整理、反思证据与 Keystone 简报的源读取过滤 promotion_eligible。尚未落地的睡眠协调、resident one-pager 与 attention 工作流应复用 `promotion_eligible_units` 视图及 `listPromotionEligibleUnitIds`，而不是另造宽松来源门。`canAutoPromoteProfile` 必须显式提供 promotionEligible。
+- Ask/Compose 内部 prompt 的 recalled 标记支持回灌只记 exposure、不新增 unit；exposure 不更新置信度或稳定性。外发 Context Pack 剥离内部标记。声明网络工具后的 session taint 持久化，用户新消息清除。
+
+迁移 074 保守回填全部历史行，用户上下文初始化追加用户身份精确映射；无效 metadata JSON 视为空对象。它只更新来源和资格，不删原文。回填可重入，并且忽略当前后台调度上下文，避免将历史 owner 消息整批误标为 cron。
+
+2026-10-12 上线前只读审计：181 条系统/AI 来源原文，1,763 条关联或派生目录 chunks；按 evidence_refs/episode 血缘可追溯到的 profile/truth 为 0。历史会话未普遍带 session_kind，不能把已声明后台回灌次数 0 解释为历史没有回灌。生产 owner 去内容抽样为 99 条 Glip + 1 条 manual；完整数字保留在 `memory-service/evals/write-provenance-gate/phase0.json`。
+
+三个 flag 默认开启：WRITE_ORIGIN_GATE_ENABLED、RECALL_LOOP_GUARD_ENABLED、TURN_TAINT_ENABLED。关闭 flag 可恢复对应旧路径，新增来源列与 audit 记录保留。排查可按 raw 的 origin/session/promotion 分组、按 memory_exposures.surface 统计回路命中、读取 memory_turn_taint 检查当前污染状态；不将 exposure 当确认。
+
+实现与验证：`WriteProvenanceGate.ts`、migration 074、`SystemWriteContext`、`ConsolidationPhases.ts`；`npm run eval:write-provenance-gate` 和 `npm run eval:memory-abilities`。后者的端点必须运行当前部署代码。
 
 ## 三代数据模型演进
 

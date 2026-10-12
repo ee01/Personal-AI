@@ -1,3 +1,4 @@
+import { episodePromotionEligible } from '../WriteProvenanceGate.js';
 /**
  * v3 UnitTruthMaintainer (memory-foundation plan §5.6): the single entry
  * point for memory-unit state changes in the v3 schema.
@@ -154,6 +155,9 @@ export class UnitTruthMaintainer {
   ): ProposeResult {
     if (sources.length === 0) {
       throw new Error('[UnitTruthMaintainer] propose requires at least one source row (I2)');
+    }
+    if (sources.some(s => !episodePromotionEligible(this.db, s.episodeId))) {
+      throw new Error('[UnitTruthMaintainer] provenance_not_eligible');
     }
     const candidateHash = candidateHashOf(candidate, sources);
 

@@ -881,6 +881,7 @@ export interface MemoryClaimCorrectionResponse {
 // ============ API Types ============
 
 export interface IngestPayload {
+  session_kind?: import('../core/WriteProvenanceGate.js').SessionKind;
   content: string;
   sourceType: SourceType;
   scope?: MemoryScope;
@@ -912,7 +913,8 @@ export type IngestDecisionReason =
   | 'indexing_failed'
   | 'insert_failed'
   | 'supply_decoupled_indexed'
-  | 'skipped_empty_content';
+  | 'skipped_empty_content'
+  | 'recalled_exposure';
 
 export type IngestDedupeReason = 'post_id' | 'content_source_sender';
 export type IngestExtractionStatus = 'extracted' | 'skipped' | 'unavailable';
@@ -930,6 +932,10 @@ export interface IngestSalienceComponents {
 }
 
 export interface IngestDecision {
+  originClass?: import('../core/WriteProvenanceGate.js').OriginClass;
+  sessionKind?: import('../core/WriteProvenanceGate.js').SessionKind;
+  promotionEligible?: boolean;
+  derivedFrom?: string[];
   storage: IngestStorageDecision;
   reason: IngestDecisionReason;
   salienceScore?: number;

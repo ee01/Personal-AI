@@ -1,3 +1,4 @@
+import { SystemWriteContext } from './WriteProvenanceGate.js';
 /**
  * ProactiveScheduler -- dual-loop scheduler that orchestrates heartbeat
  * and cron-based consolidation tasks for ALL registered users.
@@ -566,7 +567,7 @@ export class ProactiveScheduler {
     fn: () => Promise<unknown>,
   ): Promise<void> {
     try {
-      await fn();
+      await SystemWriteContext.run('cron', fn);
     } catch (err) {
       console.error(
         `[ProactiveScheduler] Error in ${label}:`,

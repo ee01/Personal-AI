@@ -260,6 +260,10 @@ async function runCase({ suite, caseItem, runDir }) {
     return runComposeAssistCase({ suite, caseItem, runDir, collected });
   }
 
+  if (suite.id === 'write-provenance-gate') {
+    return runWriteProvenanceCase({ suite, caseItem, runDir });
+  }
+
   if (suite.id === 'memory-lifecycle') {
     return runMemoryLifecycleCase({ suite, caseItem, runDir, collected });
   }
@@ -7569,4 +7573,28 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+async function runWriteProvenanceCase({ suite, caseItem, runDir }) {
+  const reportPath = resolveRepoPath(path.join(runDir, `${caseItem.id}.vitest.json`));
+  const command = await runProcess('npm', ['--prefix', 'memory-service', 'test', '--', '--run',
+    'src/__tests__/writeProvenanceGate.test.ts', '--testNamePattern', caseItem.testNamePattern,
+    '--reporter=json', `--outputFile=${reportPath}`], {cwd: repoRoot, timeoutMs: 60_000});
+  let report = {};
+  try { report = JSON.parse(await fs.readFile(reportPath, 'utf8')); } catch { /* command failure is evidence */ }
+  const executed = (report.testResults || []).flatMap(t => t.assertionResults || []).filter(t => t.status === 'passed' || t.status === 'failed');
+  const passed = command.code === 0 && executed.length >= caseItem.minimumTests && executed.every(t => t.status === 'passed');
+  const status = passed ? 'pass' : 'fail';
+  const result = {caseId:caseItem.id,suiteId:suite.id,caseKind:caseItem.kind,caseTitle:caseItem.title,
+    expectedBehavior:caseItem.expectedBehavior, status,verdict:status,overallScore:passed?100:0,
+    scores:{boundary:passed?3:0},
+    sampleDetails:{assertions:executed.map(t=>({name:t.fullName,status:t.status}))},
+    sampleSummary:`${executed.length} deterministic checks`,
+    userConclusion:passed?caseItem.expectedBehavior:`来源门控校验失败：${caseItem.title}`,
+    improvementSuggestions:passed?[]:['检查 vitest 报告并修复失败边界。'],
+    why:[`${executed.length} checks, exit ${command.code}`],
+    actualOutput:{exitCode:command.code,executed:executed.length,evidenceCount:executed.length,proofChecks:executed.map(t=>({key:t.fullName,passed:t.status==='passed',detail:t.status})),stderr:command.stderr.slice(-2000)},
+    judge:{heuristic:{verdict:status},llm:null}};
+  await appendJsonl(path.join(runDir,'judge-results.jsonl'),result);
+  return result;
 }

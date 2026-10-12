@@ -1,3 +1,5 @@
+import type Database from 'better-sqlite3';
+import { gateEnabled } from '../WriteProvenanceGate.js';
 /**
  * P3 ConsolidationPhases (plan §11.8): the consolidation whitelist drives
  * which background phases are active. Each phase must pass its gate before
@@ -32,7 +34,9 @@ export type ProfileSlotSensitivity = 'normal' | 'durable' | 'sensitive';
 export function canAutoPromoteProfile(slot: {
   sensitivity: ProfileSlotSensitivity;
   independentSourceCount: number;
+  promotionEligible: boolean;
 }): boolean {
+  if (gateEnabled() && !slot.promotionEligible) return false;
   // Durable identity and sensitive slots always need confirmation (§6.6).
   if (slot.sensitivity === 'durable' || slot.sensitivity === 'sensitive') {
     return false;
@@ -128,4 +132,12 @@ export function computeStability(
     default:
       return currentStability || BASE;
   }
+}
+
+/** Shared B/C/D source gate for sleep, briefs, profile and attention consumers.
+ * Returns sources only; generation still needs its own attribution/ACL gates. */
+export function listPromotionEligibleUnitIds(db: Database.Database, limit = 100): string[] {
+  const table = gateEnabled() ? 'promotion_eligible_units' : 'memory_units';
+  return (db.prepare(`SELECT id FROM ${table} WHERE status IN ('provisional','active') ORDER BY updated_at DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(1000, limit))) as Array<{id:string}>).map(row => row.id);
 }

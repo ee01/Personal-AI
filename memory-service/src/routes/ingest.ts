@@ -1,3 +1,4 @@
+import { SESSION_KINDS, ORIGIN_CLASSES } from '../core/WriteProvenanceGate.js';
 /**
  * Ingest route.
  *
@@ -18,6 +19,10 @@ import { ingestClaimAttributionDecisionSchema } from './claimAttributionSchemas.
 const ingestDecisionSchema = {
   type: 'object' as const,
   properties: {
+    originClass: { type: 'string' as const, enum: ORIGIN_CLASSES },
+    sessionKind: { type: 'string' as const, enum: SESSION_KINDS },
+    promotionEligible: { type: 'boolean' as const },
+    derivedFrom: { type: 'array' as const, items: { type: 'string' as const } },
     storage: {
       type: 'string' as const,
       enum: ['indexed', 'stored_unindexed', 'duplicate', 'error'],
@@ -33,6 +38,7 @@ const ingestDecisionSchema = {
         'duplicate_content_source_sender',
         'indexing_failed',
         'insert_failed',
+        'recalled_exposure',
       ],
     },
     salienceScore: { type: 'number' as const },
@@ -110,6 +116,7 @@ const ingestBodySchema = {
     sourceTitle: { type: 'string' as const },
     timestamp: { type: 'number' as const },
     metadata: { type: 'object' as const, additionalProperties: true },
+    session_kind: { type: 'string' as const, enum: SESSION_KINDS },
     skipExtraction: { type: 'boolean' as const },
   },
   additionalProperties: false,

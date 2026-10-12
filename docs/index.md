@@ -53,8 +53,8 @@
 
 | 小功能点 | 所属能力 | 所在文档 | 说明 |
 |---|---|---|---|
-| 记忆基础架构 | Memory Service 全平台 | [memory_foundation.md](./features/memory_foundation.md) | v1/v2/v3 三代数据模型并行；v3 真值体系（原子单元 + 血缘 + 修订 + 幂等回执）；供给管线（抽取→冻结→整合）+ 读取管线（三通道 RRF shadow）；预算硬顶 + 网页分析客户端优先 + ACL/egress 全矩阵 |
-| 记忆主张归属 | Ask / Memory Lens / Compose Assist / User Profile / Meeting Pilot | [memory_claim_attribution.md](./features/memory_claim_attribution.md) | raw-first 句内 owner/stance/verification 门禁；普通 Glip 零新增操作，混合证据只在既有消费详情显示 compact receipt，纠错不改原文或外部系统 |
+| 记忆基础架构 | Memory Service 全平台 | [memory_foundation.md](./features/memory_foundation.md) | v1/v2/v3 三代数据模型并行；v3 真值体系（原子单元 + 血缘 + 修订 + 幂等回执）；供给管线（抽取→冻结→整合）+ 读取管线（三通道 RRF shadow）；预算硬顶 + 网页分析客户端优先 + ACL/egress 全矩阵；写入来源/会话硬门、召回回灌只记 exposure、同轮网络污染 |
+| 记忆主张归属 | Ask / Memory Lens / Compose Assist / User Profile / Meeting Pilot | [memory_claim_attribution.md](./features/memory_claim_attribution.md) | raw-first 句内 owner/stance/verification 门禁；普通 Glip 零新增操作，混合证据只在既有消费详情显示 compact receipt，纠错不改原文或外部系统；来源闭集与后台会话晋升门控 |
 | InteractionScene 场景快照 | Memory Lens / Compose Assist | [memory_system.md](./memory_system.md) | 前端确定性场景信号供给 `/context-recall` 与 `/composer/assist`；语义决策仍在 Memory Service |
 | 场景记忆自动驾驶 | Memory Lens | [memory_system.md](./memory_system.md) / [memory_lens.md](./features/memory_lens.md) | `/context-recall` 展示前过滤，决定 silent / chip / card / context_pack；Lens 卡片显示展示前过滤回执 |
 | 关键记忆简报 | Memory Lens | [memory_system.md](./memory_system.md) / [memory_lens.md](./features/memory_lens.md) | 独立轻量维护循环从 Reflection Thread 和多来源工作记忆自动生成；ready/partial 在同一 Lens 入口优先于变化脉络并替换首屏，stale/blocked/hidden/缺失回落变化脉络或普通记忆 |

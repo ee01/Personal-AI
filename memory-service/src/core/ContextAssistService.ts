@@ -1,3 +1,4 @@
+import { markRecalled, recordRecallExposures } from './WriteProvenanceGate.js';
 import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from './ContextRecallService.js';
@@ -377,6 +378,7 @@ export class ContextAssistService {
       slots.topicEvidence,
     );
     const evidence = cohesion.evidence;
+    recordRecallExposures(this.db, evidence.slice(0, 3).map(item => item.id), 'compose');
     const personalPriors = slots.personalPriors;
     const priorReceipt = slots.priorReceipt;
     const cohesionReceipt = mergeComposerCohesionReceipts({
@@ -3169,7 +3171,7 @@ async function generateWebPromptDraftComposeResult(
     candidateMemories: evidence.map((item) => ({
       id: item.id,
       title: (item.title || item.sourceTitle || '').slice(0, 160),
-      context: formatComposerEvidenceForPrompt(item).slice(0, 520),
+      context: markRecalled(item.id, formatComposerEvidenceForPrompt(item).slice(0, 520), 'compose'),
       whyRelevant: (item.whyRelevant ?? []).slice(0, 3),
     })),
     composeMode: 'draft_compose',
@@ -3233,7 +3235,7 @@ export function buildWebPromptCompilerPrompt(
     candidateMemories: evidence.map((item) => ({
       id: item.id,
       title: (item.title || item.sourceTitle || '').slice(0, 160),
-      context: formatComposerEvidenceForPrompt(item).slice(0, 520),
+      context: markRecalled(item.id, formatComposerEvidenceForPrompt(item).slice(0, 520), 'compose'),
       whyRelevant: (item.whyRelevant ?? []).slice(0, 3),
     })),
   };
@@ -3556,7 +3558,7 @@ export function buildComposerRefinePrompt(
     .slice(0, 3)
     .map(
       (item, index) =>
-        `[M${index + 1}] ${formatComposerEvidenceForPrompt(item)}`,
+        markRecalled(item.id, `[M${index + 1}] ${formatComposerEvidenceForPrompt(item)}`, 'compose'),
     )
     .join('\n');
   const ownerConstraints = formatPersonaProjectionForGeneration(projection);
@@ -3631,7 +3633,7 @@ export function buildComposerGenerationPrompt(
     .slice(0, 3)
     .map(
       (item, index) =>
-        `[M${index + 1}] ${formatComposerEvidenceForPrompt(item)}`,
+        markRecalled(item.id, `[M${index + 1}] ${formatComposerEvidenceForPrompt(item)}`, 'compose'),
     )
     .join('\n');
   const ownerConstraints = formatPersonaProjectionForGeneration(projection);

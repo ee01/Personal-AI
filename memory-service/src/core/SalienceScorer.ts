@@ -1,3 +1,4 @@
+import { gateEnabled } from './WriteProvenanceGate.js';
 /**
  * SalienceScorer — computes a salience score for memories.
  *
@@ -211,7 +212,7 @@ export class SalienceScorer {
    * The raw count is capped at FREQUENCY_CAP (5) and returned as-is;
    * normalisation happens in `score()`.
    */
-  computeFrequency(entityNames: string[], windowDays: number = 7): number {
+  computeFrequency(entityNames: string[], windowDays: number = 7, excludeFamily?: string): number {
     if (entityNames.length === 0) {
       return 0;
     }
@@ -227,11 +228,12 @@ export class SalienceScorer {
     try {
       const row = this.db
         .prepare(
-          `SELECT COUNT(*) AS cnt
+          `SELECT ${gateEnabled() ? 'COUNT(DISTINCT origin_family)' : 'COUNT(*)'} AS cnt
            FROM messages_raw
-           WHERE timestamp >= ? AND (${conditions})`,
+           WHERE ${gateEnabled() ? 'promotion_eligible=1 AND' : ''} timestamp >= ? AND (${conditions})
+             AND (? IS NULL OR ${gateEnabled() ? 'origin_family' : 'NULL'} <> ?)`,
         )
-        .get(cutoff, ...params) as MentionCountRow | undefined;
+        .get(cutoff, ...params, gateEnabled() ? excludeFamily ?? null : null, gateEnabled() ? excludeFamily ?? null : null) as MentionCountRow | undefined;
 
       const count = row?.cnt ?? 0;
       return Math.min(count, FREQUENCY_CAP);
@@ -351,6 +353,7 @@ export class SalienceScorer {
     importance: number,
     sentiment: string,
     timestamp: number,
+    originFamily?: string,
   ): Promise<SalienceResult> {
     // --- Recency ---
     const recency = this.computeRecency(timestamp);
@@ -384,7 +387,7 @@ export class SalienceScorer {
     // capitalised multi-word sequences).  A production implementation
     // would use the entities already extracted by the ingestion pipeline.
     const entityNames = extractNameCandidates(content);
-    const frequency = this.computeFrequency(entityNames);
+    const frequency = this.computeFrequency(entityNames, 7, originFamily);
 
     // --- User interest boost ---
     const userInterestBoost = this.computeUserInterestBoost(content);

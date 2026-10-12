@@ -1,3 +1,4 @@
+import { SystemWriteContext } from './WriteProvenanceGate.js';
 /**
  * GenerativeReplay — weekly "dreaming" engine triggered by CronScheduler
  * on Sundays at 03:00.
@@ -131,6 +132,10 @@ export class GenerativeReplay {
    * 5. Write dream narratives as markdown files.
    */
   async runWeeklyDreaming(): Promise<DreamResult> {
+    return SystemWriteContext.run('dream', () => this.runWeeklyDreamingWithContext());
+  }
+
+  private async runWeeklyDreamingWithContext(): Promise<DreamResult> {
     console.log('[GenerativeReplay] Starting weekly dreaming...');
     const startMs = Date.now();
 

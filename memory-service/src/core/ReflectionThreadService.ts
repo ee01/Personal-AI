@@ -1,3 +1,4 @@
+import { evidencePromotionEligible, gateEnabled } from './WriteProvenanceGate.js';
 import { randomUUID } from 'node:crypto';
 
 import { contentHash } from '../utils/hashing.js';
@@ -1603,7 +1604,7 @@ export class ReflectionThreadService {
       }
     }
 
-    return evidenceItems;
+    return gateEnabled() ? evidenceItems.filter(item => evidencePromotionEligible(this.db, item.sourceKind, item.sourceId)) : evidenceItems;
   }
 
   private hasPendingConfirmRequestForThread(

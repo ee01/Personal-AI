@@ -554,6 +554,7 @@ export class SmartMemoryImportService {
     const source = `import:${batchId}`;
     const title = entry.title || entry.path;
     const metadata = {
+      session_kind: 'import',
       importBatchId: batchId,
       importEntryId: entry.id,
       importEntryPath: entry.path,

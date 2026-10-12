@@ -15,7 +15,6 @@ import { v4 as uuidv4 } from 'uuid';
 import type Database from 'better-sqlite3';
 import type { RecallItem } from '../types/index.js';
 
-import { ForgettingEngine } from './ForgettingEngine.js';
 import { getLLMClient } from '../llm/LLMClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { contentHash } from '../utils/hashing.js';
@@ -118,16 +117,8 @@ export class OnlineReflection {
       .filter(Boolean);
     const profileEvidenceText = profileEvidence.join(' ');
 
-    // Step 1: Reinforce used memories
-    const forgettingEngine = new ForgettingEngine(this.db);
-    for (const itemId of usedItemIds) {
-      try {
-        const targetType = /^\d+$/.test(itemId) ? 'chunk' : 'message';
-        forgettingEngine.reinforceMemory(targetType, itemId);
-      } catch (err) {
-        console.warn(`[OnlineReflection] Failed to reinforce memory ${itemId}:`, err);
-      }
-    }
+    // Exposure is not verification (I9). Used/cited memories are logged by
+    // prompt assembly; only explicit outcomes may reinforce lifecycle.
 
     // Step 2: Call LLM for reflection
     const responsePreview = llmResponse.length > 500

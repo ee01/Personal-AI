@@ -1,3 +1,5 @@
+import { MemoryClaimAttributionService } from '../MemoryClaimAttributionService.js';
+import { episodePromotionEligible } from '../WriteProvenanceGate.js';
 /**
  * v3 ExtractionWorker (memory-foundation plan §6.1/§6.4, §11.6):
  * shadow dual-write pipeline for new episodes.
@@ -157,6 +159,7 @@ export class ExtractionWorker {
    */
   enqueueEpisode(episodeId: string): string | null {
     if (!isV3ShadowWriteEnabled()) return null;
+    if (!episodePromotionEligible(this.db, episodeId)) return null;
     const existing = this.db
       .prepare(`SELECT job_id FROM ingest_jobs WHERE episode_id = ? LIMIT 1`)
       .get(episodeId) as { job_id: string } | undefined;
@@ -280,6 +283,10 @@ export class ExtractionWorker {
       return 'dead_letter';
     }
 
+    if (!episodePromotionEligible(this.db, job.episodeId)) {
+      this.finishJob(job.jobId, 'extracted_zero', 'provenance_not_eligible');
+      return 'zero';
+    }
     // Frozen-batch replay (plan §6.4): integration retries read the already
     // frozen candidate batch; they must NOT re-sample the model.
     const frozen = this.db
@@ -365,10 +372,25 @@ export class ExtractionWorker {
       return episode.timestamp; // field omitted — inherit episode envelope time
     };
 
+    const attribution = new MemoryClaimAttributionService(this.db);
+    const claimDecision = attribution.ensureForMessage(job.episodeId);
+    if (claimDecision.status !== 'resolved') {
+      this.finishJob(job.jobId, 'extracted_zero', 'claim_attribution_unavailable');
+      return 'zero';
+    }
+    const claims = attribution.getClaimsForMessage(job.episodeId, {ensure:false});
     let integrated = 0;
     for (const [ordinal, candidate] of parsed.batch.candidates.entries()) {
       const workUnitKey = `${job.jobId}:${resultHash}:${ordinal}`;
-      const evidenceClass = this.deriveEvidenceClass(episode, this.userId);
+      const provenance = this.db.prepare('SELECT origin_class,origin_family FROM messages_raw WHERE id=?').get(job.episodeId) as {origin_class:string;origin_family:string};
+      const evidenceClassFromEnvelope = provenance.origin_class === 'owner' ? 'self_statement' : this.deriveEvidenceClass(episode, this.userId);
+      const candidateClaims = claims.filter(claim => {
+        const start = Buffer.byteLength(episode.content.slice(0, claim.sourceSpan.start), 'utf8');
+        const end = Buffer.byteLength(episode.content.slice(0, claim.sourceSpan.end), 'utf8');
+        return start < candidate.spanEnd && end > candidate.spanStart;
+      });
+      const selfAllowed = candidateClaims.length > 0 && candidateClaims.every(claim => claim.owner.kind === 'self' && claim.policy.currentTruthCandidate);
+      const evidenceClass = evidenceClassFromEnvelope === 'self_statement' && !selfAllowed ? 'first_party_record' : evidenceClassFromEnvelope;
       const result = this.truth.propose(
         {
           memoryForm: candidate.memoryForm,
@@ -388,7 +410,7 @@ export class ExtractionWorker {
             spanEnd: candidate.spanEnd,
             sourceRole: 'extraction',
             evidenceKey: `${job.episodeId}:${candidate.spanStart}-${candidate.spanEnd}`,
-            provenanceFamily: job.episodeId,
+            provenanceFamily: provenance.origin_family,
             originType: episode.sourceType,
             evidenceClass,
           },
@@ -431,7 +453,7 @@ export class ExtractionWorker {
     if (episode.sourceType === 'manual') return 'self_statement';
     // Glip: owner-authored is self-statement; others are first-party records
     // of what they said/observed, not statements about themselves.
-    if (episode.sender && ownerUserId && episode.sender === ownerUserId) {
+    if (episode.sourceType === 'glip' && episode.sender && ownerUserId && episode.sender === ownerUserId) {
       return 'self_statement';
     }
     return 'first_party_record';

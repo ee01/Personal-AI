@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-10-12T08:50:54.889Z",
+  "rawDerived": 181,
+  "recallChunks": 1763,
+  "profile": 0,
+  "truthSources": 0,
+  "reingestedBackground": 0,
+  "ownerSample": [
+    {
+      "source_type": "glip",
+      "n": 99
+    },
+    {
+      "source_type": "manual",
+      "n": 1
+    }
+  ]
+}

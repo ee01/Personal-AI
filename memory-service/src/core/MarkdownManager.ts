@@ -1,3 +1,4 @@
+import { gateEnabled } from './WriteProvenanceGate.js';
 /**
  * MarkdownManager — Central manager for all Markdown file operations
  * with chunk indexing.
@@ -241,6 +242,7 @@ export class MarkdownManager {
    * @returns Number of chunks created.
    */
   async reindexFile(relativeFilePath: string): Promise<number> {
+    if (gateEnabled() && /^(daily|projects|reflections|dreams|reports)\//.test(relativeFilePath)) return 0;
     const absPath = this.abs(relativeFilePath);
 
     // 1. Read file content

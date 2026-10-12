@@ -51,13 +51,17 @@ describe('P3 consolidation phase gating (§11.8)', () => {
 
 describe('P3 profile auto-promotion rules (§6.6)', () => {
   it('durable slots always need user confirmation', () => {
-    expect(canAutoPromoteProfile({ sensitivity: 'durable', independentSourceCount: 5 })).toBe(false);
-    expect(canAutoPromoteProfile({ sensitivity: 'sensitive', independentSourceCount: 5 })).toBe(false);
+    expect(canAutoPromoteProfile({ promotionEligible: true, sensitivity: 'durable', independentSourceCount: 5 })).toBe(false);
+    expect(canAutoPromoteProfile({ promotionEligible: true, sensitivity: 'sensitive', independentSourceCount: 5 })).toBe(false);
+  });
+
+  it('ineligible sources cannot promote even with many independent families', () => {
+    expect(canAutoPromoteProfile({promotionEligible:false,sensitivity:'normal',independentSourceCount:10})).toBe(false);
   });
 
   it('normal slots need ≥2 independent sources', () => {
-    expect(canAutoPromoteProfile({ sensitivity: 'normal', independentSourceCount: 1 })).toBe(false);
-    expect(canAutoPromoteProfile({ sensitivity: 'normal', independentSourceCount: 2 })).toBe(true);
+    expect(canAutoPromoteProfile({ promotionEligible: true, sensitivity: 'normal', independentSourceCount: 1 })).toBe(false);
+    expect(canAutoPromoteProfile({ promotionEligible: true, sensitivity: 'normal', independentSourceCount: 2 })).toBe(true);
   });
 });
 

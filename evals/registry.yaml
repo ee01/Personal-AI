@@ -1097,3 +1097,41 @@ suites:
       validate:
         - npm --prefix memory-service test -- --run src/__tests__/openClawGatewayExecutor.test.ts src/__tests__/actionExecutor.test.ts src/__tests__/actionRepositoryStaleRunning.test.ts src/__tests__/acpExecutor.test.ts src/__tests__/mcpTools.test.ts src/__tests__/a2aRoutes.test.ts src/__tests__/executorRegistry.test.ts
         - npm run eval:run -- --suite agent-executor-runtime --no-repair
+
+  - id: write-provenance-gate
+    title: Write Provenance Gate
+    description: 写入来源闭集、会话门控、召回回灌、独立来源、同轮污染的确定性安全边界。
+    enabled: true
+    workflow: evals/workflows/write-provenance-gate/experience.md
+    cases: evals/cases/write-provenance-gate/cases.jsonl
+    runMode: manual
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/workflows/write-provenance-gate/rubric.md
+    readerProof:
+      claims:
+        - id: background
+          statement: 后台产物不进入 durable 候选
+          caseIds: [wpg-background]
+        - id: loop
+          statement: Ask 与 Compose 标记回灌只写 exposure
+          caseIds: [wpg-loop]
+        - id: families
+          statement: 同族来源不能强化 salience
+          caseIds: [wpg-families]
+        - id: taint
+          statement: 同轮声明网络来源后 assistant 为 untrusted
+          caseIds: [wpg-taint]
+        - id: backfill
+          statement: 历史 owner 回填保留资格
+          caseIds: [wpg-backfill]
+      boundaries:
+        - 工具未声明网络来源以及结构标记被移除后的任意自由复述不在本轮证明范围
+    repair:
+      mode: suggest
+      allowedPaths:
+        - memory-service/src/**
+        - memory-service/evals/write-provenance-gate/**
+      validate:
+        - npm run eval:write-provenance-gate

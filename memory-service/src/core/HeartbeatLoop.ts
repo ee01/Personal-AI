@@ -1,3 +1,4 @@
+import { SystemWriteContext, gateEnabled } from './WriteProvenanceGate.js';
 /**
  * HeartbeatLoop -- micro-consolidation and proactive notification engine.
  *
@@ -199,6 +200,10 @@ export class HeartbeatLoop {
    * on any interval; it uses `lastHeartbeat` to avoid reprocessing.
    */
   async run(): Promise<HeartbeatResult> {
+    return SystemWriteContext.run('heartbeat', () => this.runWithContext());
+  }
+
+  private async runWithContext(): Promise<HeartbeatResult> {
     const checkedAt = now();
     this.lastHeartbeat = this.getLastHeartbeatCheckpoint();
     const actions: string[] = [];
@@ -560,7 +565,7 @@ export class HeartbeatLoop {
         `SELECT id, content, summary, source_type, sender, group_id, group_name,
                 timestamp, entities_json, matched_projects_json, importance, created_at
          FROM messages_raw
-         WHERE created_at > ?
+         WHERE ${gateEnabled() ? 'promotion_eligible=1 AND' : ''} created_at > ?
          ORDER BY created_at ASC`,
       )
       .all(this.lastHeartbeat) as MessageRow[];
@@ -856,7 +861,7 @@ export class HeartbeatLoop {
       .prepare(
         `SELECT COUNT(*) AS cnt
          FROM messages_raw
-         WHERE created_at > ?
+         WHERE ${gateEnabled() ? 'promotion_eligible=1 AND' : ''} created_at > ?
            AND matched_projects_json LIKE ?`,
       )
       .get(this.lastHeartbeat, `%${project.id}%`) as CountRow | undefined;
@@ -869,7 +874,7 @@ export class HeartbeatLoop {
         .prepare(
           `SELECT COUNT(*) AS cnt
            FROM messages_raw
-           WHERE created_at > ?
+           WHERE ${gateEnabled() ? 'promotion_eligible=1 AND' : ''} created_at > ?
              AND content LIKE ?`,
         )
         .get(this.lastHeartbeat, `%${project.name}%`) as CountRow | undefined;

@@ -1,3 +1,4 @@
+import { SystemWriteContext } from './WriteProvenanceGate.js';
 import { getConfig } from '../config.js';
 import {
   EvidenceResolutionPlanner,
@@ -162,6 +163,15 @@ export class ReflectionWorker {
   constructor(private readonly db?: import('better-sqlite3').Database) {}
 
   async generate(
+    thread: ReflectionThreadRecord,
+    evidence: ReflectionEvidenceItem[],
+    triggerType: string,
+    outputLanguage?: ReflectionOutputLanguagePreference,
+  ): Promise<GeneratedReflection> {
+    return SystemWriteContext.run('reflection', () => this.generateWithContext(thread, evidence, triggerType, outputLanguage));
+  }
+
+  private async generateWithContext(
     thread: ReflectionThreadRecord,
     evidence: ReflectionEvidenceItem[],
     triggerType: string,

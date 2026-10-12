@@ -452,7 +452,7 @@ export class SourceMemoryRecallSignalBackfillService {
         row.source_host,
         timestamp,
         messageImportance,
-        JSON.stringify(metadata),
+        JSON.stringify({...metadata, session_kind:'import'}),
         trustClass,
         injectionFlagsJson,
         timestamp,

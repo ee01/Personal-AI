@@ -72,7 +72,7 @@ function seedWhatsAppTopic(db: BetterSqlite3.Database): void {
     'composer-msg-2',
     'The WhatsApp provider boundary is still open, so the team should research the current RingCX SMS path first.',
     'Provider 边界未确认，先调研现有链路。',
-    'web',
+    'glip',
     'https://example.com/ringcx-whatsapp-notes',
     'RingCX architecture notes',
     'Bob',
@@ -106,7 +106,7 @@ describe('KeystoneBriefComposerService', () => {
       compositionVersion: 'auto-reflection-grounded-v2-zh-CN',
       sceneAnchors: {
         topics: ['WhatsApp'],
-        surfaces: ['ringcentral_thread_reading', 'web_reading'],
+        surfaces: ['ringcentral_thread_reading'],
       },
     });
     expect(brief.sourceMap).toHaveLength(2);
@@ -115,6 +115,13 @@ describe('KeystoneBriefComposerService', () => {
     const second = await composer.run({ maxBriefs: 2 });
     expect(second).toMatchObject({ composed: 0, failed: 0 });
     expect(second.skippedUnchanged).toBeGreaterThanOrEqual(1);
+  });
+
+  it('withholds a brief when the second independent source is untrusted or background generated', async () => {
+    db.prepare("UPDATE messages_raw SET origin_class='untrusted',promotion_eligible=0 WHERE id='composer-msg-2'").run();
+    const result = await new KeystoneBriefComposerService(db, preserveLocalizedContent).run({maxBriefs:1});
+    expect(result.composed).toBe(0);
+    expect(result.skippedInsufficientEvidence).toBeGreaterThan(0);
   });
 
   it('does not recreate a brief after the user hides it', async () => {

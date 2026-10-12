@@ -1237,6 +1237,7 @@ export class SourceMemoryCaptureService {
         messageImportance,
         JSON.stringify({
           ...input.metadata,
+          session_kind: 'import',
           sourceMemoryCapsuleId: input.capsuleId,
           captureLayer: 'memory_capture',
         }),

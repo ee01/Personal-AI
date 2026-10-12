@@ -1,0 +1,7 @@
+// Read-only, content-free sample. Strip names, IDs, links and free text.
+const Database=require('better-sqlite3');
+const db=new Database(process.argv[2]||'/app/data/users/esone.qiu/memory.db',{readonly:true});
+const fields=['isSelf','authorIsSelf','senderIsSelf','fromSelf','isOwner','ownerAuthored','authorRole','senderRole','fromRole','role','messageAuthorRole','session_kind','generatedByAgent','turn_tainted','network_origin'];
+const rows=db.prepare(`SELECT source_type,sender,metadata_json,content LIKE '%<recalled %' recalled FROM messages_raw WHERE source_type='manual' OR (source_type IN ('glip','jira') AND (sender='esone.qiu' OR json_extract(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,'$.isSelf')=1 OR json_extract(CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,'$.authorRole') IN ('self','owner','user'))) LIMIT 100`).all();
+const clean=m=>Object.fromEntries(fields.filter(k=>typeof m[k]==='boolean'||['owner','self','user','assistant','system','interactive','import','heartbeat','cron','subagent','reflection','dream'].includes(m[k])).map(k=>[k,m[k]]));
+console.log(JSON.stringify(rows.map(r=>{let m={};try{m=JSON.parse(r.metadata_json||'{}')||{}}catch{};return{sourceType:r.source_type,sender:r.sender==='esone.qiu'?'owner': /^(system|assistant|agent)$/i.test(r.sender||'')?r.sender:'connector-owner',metadata:clean(m),content:r.recalled?'<recalled id="redacted">historical exposure</recalled>':'redacted owner content'};}),null,2));
