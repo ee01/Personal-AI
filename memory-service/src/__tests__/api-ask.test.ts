@@ -673,7 +673,7 @@ describe('Ask API', () => {
     expect(body.structuredAnswer).toBeUndefined();
   });
 
-  it('returns a deterministic evidence summary when answer generation times out', async () => {
+  it.each(['timeout','empty'])('returns a deterministic evidence summary when generation returns %s', async failure => {
     generateMock
       .mockResolvedValueOnce({
         resolutionState: 'partial',
@@ -686,9 +686,9 @@ describe('Ask API', () => {
         legacyClassification: 'answer',
         summary: 'John raised release risk.',
       })
-      .mockRejectedValueOnce(
-        new Error('[LLMClient] Request timed out after 5000ms'),
-      );
+      .mockImplementationOnce(() => failure==='empty'
+        ? Promise.resolve({content:'   '})
+        : Promise.reject(new Error('[LLMClient] Request timed out after 5000ms')));
 
     const res = await app.inject({
       method: 'POST',
@@ -707,7 +707,7 @@ describe('Ask API', () => {
     expect(body.evidence).toHaveLength(1);
     expect(body.evidence[0].id).toBe('ask-john-message');
     expect(body.missingInfo).toContain(
-      'LLM 综合生成超时，当前回答为确定性证据摘要。',
+      failure==='empty' ? 'LLM 未返回有效回答，当前回答为确定性证据摘要。' : 'LLM 综合生成超时，当前回答为确定性证据摘要。',
     );
     expect(body.analysis.summary).toContain('可能相关的记忆');
     expect(generateMock).toHaveBeenCalledTimes(2);

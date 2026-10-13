@@ -46,7 +46,7 @@ SQLite 真源 ──每晚巩固后──▶ Markdown 投影（本地 data/users
                             GitHub 仓库（用户自有，一晚一 commit；可选整库加密）
 ```
 
-- **投影**是 `memory-sleep-time-reconciliation-plan.md` D 阶段的一个确定性输出，不调 LLM；它与现有 backup zip 的区别是「人类可读、按实体组织、带 frontmatter」，而不是数据库快照。
+- **投影**是 [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) D 阶段的一个确定性输出，不调 LLM；它与现有 backup zip 的区别是「人类可读、按实体组织、带 frontmatter」，而不是数据库快照。
 - **镜像**只是把投影目录 commit 到远端。SQLite 真源永不进镜像（全量恢复仍走现有加密 zip 备份）。
 
 ### 4.2 投影目录（对齐 Instinct，保留我们的 provenance）
@@ -91,7 +91,7 @@ SQLite 真源 ──每晚巩固后──▶ Markdown 投影（本地 data/users
 | plan / 能力 | 关系 |
 |---|---|
 | `docs/features/memory_auto_backup.md` | 本方案是其第三 provider；全量恢复仍走 zip；共用调度、互斥、失败通知 |
-| `memory-sleep-time-reconciliation-plan.md` | 投影是其 D 阶段的确定性输出；`consolidation/DIARY.md` 来自 `unit_reconcile_decisions` |
+| [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) | 投影是其 D 阶段的确定性输出；`consolidation/DIARY.md` 来自 `unit_reconcile_decisions` |
 | `memory-resident-one-pager-plan.md` | `profile/one-pager.md` 直接复用 |
 | `memory-attention-triage-plan.md` | `workstreams/` 的 open / completed 来自 `attention_items` |
 | `memory-write-provenance-gate-plan.md` | 只镜像 `promotion_eligible=true` 的 unit |

@@ -23,6 +23,7 @@ import { ReflectionThreadService } from './ReflectionThreadService.js';
 import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { segmentMemoryClaims } from './ClaimSegmenter.js';
 import { compileMemoryClaimPolicy } from './ClaimPolicyCompiler.js';
+import { isConsolidationPhaseEnabled } from './v3/ConsolidationPhases.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,6 +86,11 @@ export class OnlineReflection {
    */
   async reflect(input: ReflectionInput): Promise<void> {
     try {
+      if (isConsolidationPhaseEnabled('A')) {
+        const counter = this.db.prepare(`INSERT INTO reconcile_online_sampling(id,interactions) VALUES (1,1)
+          ON CONFLICT(id) DO UPDATE SET interactions=interactions+1 RETURNING interactions`).get() as {interactions:number};
+        if (counter.interactions % 5 !== 0) return;
+      }
       await this.doReflect(input);
     } catch (err) {
       console.error('[OnlineReflection] Reflection failed (non-blocking):', err);
@@ -159,7 +165,7 @@ Return JSON: { "newFacts": [{"entity":"..","key":"..","value":"..","confidence":
       reflectionData.userPreferences,
       profileEvidence,
     );
-    if (userPreferences.length > 0) {
+    if (userPreferences.length > 0 && !isConsolidationPhaseEnabled('D')) {
       try {
         this.writePreferencesToDb(userPreferences);
       } catch (err) {

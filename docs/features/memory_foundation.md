@@ -1,7 +1,7 @@
 # Memory Foundation 架构（v1 → v2 → v3 数据模型）
 
 > 所属能力：记忆服务（核心平台）
-> 更新日期：2026-10-12
+> 更新日期：2026-10-13
 > Canonical 方案：[memory-foundation-rearchitecture-plan.md](../progressing/memory-foundation-rearchitecture-plan.md)
 
 ## 大白话运行逻辑
@@ -15,7 +15,7 @@
 - interactive/import 中的 owner/observed 才可进入 durable 候选，仍须通过 claim attribution 与 ACL。heartbeat/cron/subagent/reflection/dream 只保留任务产物。v3 在 enqueue、历史队列重放及 truth 整合入口都检查来源资格；旧 truth 与 profile 写入也受 claim 门控。
 - 日摘要、项目摘要、reflection、dream、报告 markdown 保留为产物，`MarkdownManager.reindexFile` 不再把这些派生目录重新切成事实 chunks。现有索引不删除。
 - salience 频次统计只认可晋升的不同 origin_family（来源渠道 + 作者），并排除当前作者族；同作者重复、同族派生物没有多来源增益。v3 提取从持久化源取得 family，使用 MemoryClaimEnvelope 确认是否可以表示 self_statement。
-- 整理、反思证据与 Keystone 简报的源读取过滤 promotion_eligible。尚未落地的睡眠协调、resident one-pager 与 attention 工作流应复用 `promotion_eligible_units` 视图及 `listPromotionEligibleUnitIds`，而不是另造宽松来源门。`canAutoPromoteProfile` 必须显式提供 promotionEligible。
+- 整理、反思证据与 Keystone 简报的源读取过滤 promotion_eligible。睡眠协调已复用此视图；后续 resident one-pager 与 attention 投递工作流应复用 `promotion_eligible_units` 视图及 `listPromotionEligibleUnitIds`，而不是另造宽松来源门。`canAutoPromoteProfile` 必须显式提供 promotionEligible。
 - Ask/Compose 内部 prompt 的 recalled 标记支持回灌只记 exposure、不新增 unit；exposure 不更新置信度或稳定性。外发 Context Pack 剥离内部标记。声明网络工具后的 session taint 持久化，用户新消息清除。
 
 迁移 074 保守回填全部历史行，用户上下文初始化追加用户身份精确映射；无效 metadata JSON 视为空对象。它只更新来源和资格，不删原文。回填可重入，并且忽略当前后台调度上下文，避免将历史 owner 消息整批误标为 cron。
@@ -51,7 +51,7 @@ v3 把每条消息拆成**原子记忆单元**（atomic memory units），每个
 1. **冲突判定范围**：`tenant + owner + subject_key + predicate_key + scope + 有效期`
 2. **同 evidence_key 重放不加固**（I5）：同一证据源的重播只返回已有回执
 3. **独立来源加权**（I6）：confidence 只因新增独立 provenance family 而提升（每 family +0.08，上限 0.95）
-4. **争议不自动覆盖**：不同文本 → `disputed` 状态，永不自动 supersede
+4. **写入不做模型裁决**：不同文本暂记 `disputed`，保留独立候选；夜间通过 shadow 资格门的 B/C 才可调用带回执的真值裁决。更新必须是同槽、已知时间更晚、来源权威不低且不是纯推断；用户确认过的事实不能被自动替代。
 5. **CAS 并发安全**：`BEGIN IMMEDIATE` + `current_revision` compare-and-swap
 
 ## v3 供给管线（P1 shadow dual-write）
@@ -130,3 +130,47 @@ tenant × owner × requesting_agent × scope
 | `core/v3/SurfaceCutover.ts` | 切面 flag + 非劣门统计 |
 | `analytics/BudgetGuard.ts` | 日预算硬顶 |
 | `storage/migrations/070-072_*.sql` | v3 schema |
+
+## 睡眠期整理与两车道读取
+
+白天先把来源和原文存好；夜里把新线索与旧事实逐条比较。原文、反对意见与旧版本始终可追溯。朋友多年以前的偏好降低被动展示频率，但用户主动问到这个人时仍可找回。确定性实体/alias、lexical 和单一 dense 通道先找证据；用户明确深问，或深问而快车道没有强命中时，才做有界的拆问与时间词扩展。
+
+### Nightly A–E
+
+`ConsolidationEngine` 在既有日巩固任务的 synonym 阶段之后调用 `SleepReconciliation`，不新建调度器。开关 `MEMORY_CONSOLIDATION_V3=A,B,C,D,E` 必须包含前序阶段；未配置时保持旧路径。
+
+| 阶段 | 判决与产物 | 成本与安全边界 |
+|---|---|---|
+| A | 按 form/kind 降低可访问性；evidence-key/family 独立来源去重统计；synonym 连通组写可逆 canonical alias 映射 | 0 LLM；只合并相同类型、相同 owner/tenant/scope/sensitivity/egress 组合；歧义别名不归一 |
+| B | 当天新 unit 对旧真值逐对判 `corroborate/refine/supersede/dispute/noop`；停机期间的新 unit 由扫描水位补齐，超预算留 deferred 次日优先 | 默认 shadow；同 key 候选穷尽，并集 lexical 两通道与同模型 dense 各自 Top-10，不用 recall RRF Top-K 做真值候选 |
+| C | 同实体同 key 多值与高相似异义对，以 LLM judge 判断是否真矛盾 | 14 天 pair 冷却；不同值不直接判矛盾；仅 durable 自身偏好、已确认事实或 restricted 争议生成现有确认请求 |
+| D | 各权限组确定性 one-pager（24h），最多 5 个低权威 insight（7d）；自身偏好进入 `profile_slots.pending_confirmation` | one-pager 即使无模型预算也生成；insight 不回灌 durable 真值；来源 id 必须来自同权限组；local_only 与未明确选源的 user_selected 不发到外部模型 |
+| E | action_item/open_question 形成 attention 候选（7d），明确日期的未来 event 保留至事件日结束 | 只落候选，不发消息或执行动作；实际 attention 产品投递由后续工作流消费 |
+
+B 默认每用户每晚最多 120 调用、120,000 token 预留上界；C 为 60 调用、60,000 token；D 最多 5 次 insight、12,000 token。A–E 新阶段的合计默认上界 192,000；按 B→C 顺序分配，A 永不停。`reconcile_nightly_budgets` 的预留先于调用且持久化，失败调用不返还，禁用 provider fallback/重试以免跨预算放大。预留按 prompt UTF-8 字节数加输出上限计算，是保守上界；真实调用由 `usage_events` 的 `reconcile_b/c/d` feature 归属统计。
+
+预算参数为 `RECONCILE_LLM_BUDGET_PER_NIGHT`、`RECONCILE_C_PAIRS_PER_NIGHT`、`RECONCILE_B_TOKEN_CAP`、`RECONCILE_C_TOKEN_CAP`、`RECONCILE_TOTAL_TOKEN_CAP`。B/C 可用 `RECONCILE_CHEAP_MODEL` 指定当前 provider 支持的小模型；未指定时沿用用户现有模型路由，不隐式换 provider。D 使用现有主模型。
+
+### Shadow → live 与回滚
+
+`RECONCILE_B_MODE=live` / `RECONCILE_C_MODE=live` 本身不能跳过资格门：同 owner/tenant、当前模型须有至少 50 对不同 pair 的人工 shadow 标签，一致率 >=.85；C 还须至少 15 对 both-valid，误判 <=.1。更换模型后重新资格验证。使用 `memory-service/tools/review-sleep-reconciliation.ts review <db> <labels.json> <reviewer>` 导入人工标签，labels 格式为 `[{"decisionId":"...","expectedDecision":"noop"}]`。合成 eval 标签绝不写入生产。
+
+所有 status 变更经 `UnitTruthMaintainer` 的 `BEGIN IMMEDIATE`/revision 校验，原子提交决策、before/after snapshot、revision 与 projection outbox；证据资格/ACL 改变或 revision 过期则标 stale。`supersede` 不改原文，推断不能覆盖一手来源，用户确认事实不会自动被替代。`refine` 保留互补双方；`corroborate` 仅对新增 evidence 且独立 family 加固，重复作者不加置信度。重要争议的确认请求有 `keep_old/keep_new/both_valid` 三种回答，用户选择写入可审计的新 revision。
+
+关闭阶段开关停止后续工作；`review-sleep-reconciliation.ts revert <db> <decision-id>` 可在后续 revision 未变时恢复状态、confidence、有效期和派生来源拷贝；revision 仍单调递增，原始 source 与 episode 不删除。
+
+### 遗忘与读取
+
+A 开启后，实体锚定 semantic preference/fact 的 metadata salience 最低 .15，只归档为 `archive_only`；procedural 不按时间衰减。关联的原始 message/chunk 也受到保护。其他 episodic 保持原策略；不自动复活历史软删条目，不覆盖 privacy_delete。`FORGETTING_KIND_POLICY=off` 可恢复旧衰减。
+
+`MEMORY_READ_TWO_LANES=true` 接入 ActiveRecallService（Ask/主动 recall）。快车道为实体+alias（含明确 parent/child 边的一跳）、lexical、一个 e5 dense（启用时）和 RRF，均无在线 LLM。迁移期仍补充 legacy lexical，显式过滤关联已 superseded/retracted 等 unit 的原文，避免 v3 语料不完整导致历史证据缺失。读取完整执行 owner、scope、sensitivity、evidence-class、有效期及状态门，再截断 Top-K。Passive 不升级深车道，也不展示 archived 生命周期 unit。深车道是有界的确定性拆问/时间词扩展；本次没有新增在线 reranker 模型。
+
+A 开启后 OnlineReflection 持久计数每 5 次交互抽样 1 次，并关闭 ingestion 内联 merge；D 开启后偏好候选交给 nightly profile proposal。反思研究循环不在本任务恢复。
+
+### 证据与验证
+
+2026-10-13 生产只读基线：2,571 units、142 组同 key 多值（legacy property 73 组）、近 24h 新旧配对 18 组。统计中三年以上 preference unit metadata 软删为 0；这不能证明旧 episode 没被软删，或真实三年偏好存量充足。基线见 `memory-service/evals/sleep-time-reconciliation/phase0.json`。
+
+确定性 suite 位于 `memory-service/src/__tests__/sleepReconciliation.test.ts` 和 `evals/cases/sleep-time-reconciliation/`；真实配置模型的 50 对匿名场景结果见 `memory-service/evals/sleep-time-reconciliation/quality-report.json`，覆盖最新值、互补和来源权威。六能力报告的本地服务将回答超时预算设为 60s，线上默认 9s 的延迟表现未由该报告证明。生产 50 对人工资格、Passive p95 <500ms、Ask 深车道率 <20% 与实际 /ask p95、每日 token 降幅需随真实 rollout 观测，不能由合成压力条件证明。源码：`SleepReconciliation.ts`、`TruthCandidatePlan.ts`、`ReconcileTruth.ts`、migration 075。执行 `npm run eval:validate`、`npm run eval:run -- --suite sleep-time-reconciliation --no-repair`、`quality.ts`，以及指向本分支的 `npm run eval:memory-abilities`。
+
+两车道回答阶段关闭额外推理开销。同步/流式模型若返回空文本，使用现有确定性证据摘要，并明确说明模型未返回有效回答；不把空字符串作为成功答案。

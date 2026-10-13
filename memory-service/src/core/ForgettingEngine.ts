@@ -18,6 +18,7 @@
 import type Database from 'better-sqlite3';
 import { classifyMemoryLifecycle } from './MemoryLifecyclePolicy.js';
 import { now } from '../utils/time.js';
+import { isConsolidationPhaseEnabled } from './v3/ConsolidationPhases.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,10 +94,12 @@ export class ForgettingEngine {
     }
 
     const S0 = meta.salience_score;
+    const protection = this.kindProtection(meta);
+    if (protection === 'procedural') return S0;
 
     // If salience was already 0 or negative, no further decay needed.
     if (S0 <= 0) {
-      return 0;
+      return protection === 'semantic' ? 0.15 : 0;
     }
 
     const currentTime = now();
@@ -113,7 +116,18 @@ export class ForgettingEngine {
       return S0;
     }
 
-    return S0 * Math.exp(-t / denominator);
+    const decayed = S0 * Math.exp(-t / denominator);
+    return protection === 'semantic' ? Math.max(0.15,decayed) : decayed;
+  }
+
+  private kindProtection(meta: MemoryMetadataRow): 'semantic' | 'procedural' | undefined {
+    if (process.env.FORGETTING_KIND_POLICY === 'off' || !isConsolidationPhaseEnabled('A')) return;
+    const units = this.db.prepare(`SELECT u.memory_form,u.kind,u.subject_key FROM memory_units u
+      WHERE (u.id=? AND ?='unit') OR EXISTS (SELECT 1 FROM memory_unit_sources s WHERE s.unit_id=u.id AND
+        (s.episode_id=? AND ?='message' OR ?='chunk' AND s.episode_id IN (SELECT related_entity_id FROM chunks WHERE cast(chunk_id AS TEXT)=?)))`)
+      .all(meta.target_id,meta.target_type,meta.target_id,meta.target_type,meta.target_type,meta.target_id) as Array<{memory_form:string;kind:string;subject_key:string|null}>;
+    if (units.some(u=>u.memory_form==='procedural')) return 'procedural';
+    if (units.some(u=>u.memory_form==='semantic' && ['fact','preference'].includes(u.kind) && u.subject_key)) return 'semantic';
   }
 
   // ---- Forgetting cycle ---------------------------------------------------
@@ -168,6 +182,7 @@ export class ForgettingEngine {
 
     for (const row of rows) {
       result.totalProcessed += 1;
+      if (this.kindProtection(row)==='procedural') continue;
 
       const currentSalience = this.computeCurrentSalience(row);
 
@@ -181,7 +196,7 @@ export class ForgettingEngine {
         counted = true;
       }
       // Priority 2: Archived
-      else if (currentSalience < 0.15) {
+      else if (currentSalience < 0.15 || currentSalience === 0.15 && this.kindProtection(row)==='semantic') {
         newLevel = 'archived';
         result.archived += 1;
         counted = true;
@@ -222,7 +237,7 @@ export class ForgettingEngine {
       updateStmt.run(
         currentSalience,
         newLevel,
-        lifecycle.tier,
+        newLevel === 'archived' && this.kindProtection(row)==='semantic' ? 'archive_only' : lifecycle.tier,
         lifecycle.effectiveSalience,
         archivedAt,
         lifecycle.archiveReason ?? row.archive_reason ?? null,

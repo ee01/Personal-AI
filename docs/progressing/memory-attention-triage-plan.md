@@ -46,7 +46,7 @@ Sophia 在「敏捷教练-RC China」发：「Team 2026 Q4 Goal Setting Task 已
 
 ## 4. 为什么这是「写入时的薄分诊」而不是「写入时的重整理」
 
-与 `memory-sleep-time-reconciliation-plan.md` 的原则一致：整理（merge / supersede / 矛盾）放睡眠期；但**时间敏感的关注项不能等到夜里**。分诊只做三件便宜的事：
+与 [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) 的原则一致：整理（merge / supersede / 矛盾）放睡眠期；但**时间敏感的关注项不能等到夜里**。分诊只做三件便宜的事：
 
 1. 复用已经在跑的那一次 v3 抽取（`MEMORY_WRITE_V3_SHADOW` 已开），读它的 `action_item / event / open_question` 与日期字段，不新增 LLM 调用。
 2. 确定性规则：日期解析（中英混合格式、相对日期「周五前」）、请求词、受众（@我 / 我所在群 / 私聊）、发送者权重（已确认上级 / 高频协作者）。
@@ -151,7 +151,7 @@ L2 的动作类型（都走 `proposed_actions`，`task_kind` 已有 push / agent
 | `rehearsal`（`docs/features/rehearsal.md`） | Rehearsal 管「未来场景该说什么」，本方案管「未来时点该做什么」；共用 cue 匹配与 stale 降权语义 |
 | `relationship-memory-radar-plan.md` | per-person open loop 由本 ledger 提供；manager 确认 chip 的落点是 `social_edges` |
 | `MessageRuleAutomationPlanner` | 用户自定义规则继续可用；本方案是无需配置的默认能力 |
-| `memory-sleep-time-reconciliation-plan.md` E 阶段 | 夜间去重 / completed / 过期 / 喂 one-pager |
+| [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) E 阶段 | 夜间去重 / completed / 过期 / 喂 one-pager |
 | `memory-write-provenance-gate-plan.md` | 只有 `origin_class ∈ {owner, observed}` 的消息能产关注项；心跳 / 反思产物不产 |
 
 ### 5.5 明确不做

@@ -1135,3 +1135,47 @@ suites:
         - memory-service/evals/write-provenance-gate/**
       validate:
         - npm run eval:write-provenance-gate
+
+  - id: sleep-time-reconciliation
+    title: 睡眠期记忆整理提纯
+    description: 五组确定性执行边界验证；真实模型质量另跑 quality.ts
+    enabled: true
+    workflow: evals/workflows/sleep-time-reconciliation/experience.md
+    cases: evals/cases/sleep-time-reconciliation/cases.jsonl
+    runMode: scheduled
+    schedule:
+      enabled: true
+      every: 7d
+      timezone: Asia/Shanghai
+      action: report
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/workflows/sleep-time-reconciliation/experience.md
+    readerProof:
+      claims:
+        - id: latest
+          statement: 同 key 最新一手版本替代旧值并保留历史
+          caseIds: [sr-latest]
+        - id: preference
+          statement: 远期实体偏好不软删且可主动 alias 检索
+          caseIds: [sr-preferences]
+        - id: both-valid
+          statement: 互补事实不按不同值直接判矛盾
+          caseIds: [sr-both-valid]
+        - id: authority
+          statement: 推断不能覆盖一手来源
+          caseIds: [sr-authority]
+        - id: budget
+          statement: 每用户 nightly 调用和 token 预留预算持久化
+          caseIds: [sr-cost]
+      boundaries:
+        - 此 registry suite 注入 judge 判决，真实模型质量由独立 quality.ts 报告证明
+        - 生产 50 对人工 shadow 抽样、Passive p95 与 Ask 深车道流量占比不由合成用例证明
+    repair:
+      mode: suggest
+      allowedPaths:
+        - memory-service/src/**
+        - memory-service/evals/sleep-time-reconciliation/**
+      validate:
+        - npm --prefix memory-service test -- --run src/__tests__/sleepReconciliation.test.ts

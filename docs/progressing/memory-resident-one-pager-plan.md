@@ -133,4 +133,4 @@ Instinct 每次对话都带着一页约 4k token 的「关于你」的一页纸�
 
 ## 12. 推荐决策
 
-先做 Phase 0（QW-1，一天）与 Phase 1 的确定性段，立刻可见；LLM 段等 `memory-sleep-time-reconciliation-plan.md` 的 D 阶段一起上。
+先做 Phase 0（QW-1，一天）与 Phase 1 的确定性段，立刻可见；LLM 段等 [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) 的 D 阶段一起上。

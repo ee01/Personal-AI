@@ -1370,6 +1370,7 @@ function buildAskGenerationFallbackResponse(params: {
   actionOutcome: PreparedAskContext['actionOutcome'];
   includeEvidence?: boolean;
   queryTimeMs: number;
+  failureReason?: 'empty_response';
 }): AskResponse {
   const {
     query,
@@ -1389,6 +1390,9 @@ function buildAskGenerationFallbackResponse(params: {
   );
   const topItems = fallbackItems.slice(0, 5);
   const synthesis = buildDeterministicAskSynthesis(query, topItems);
+  const generationIssue=params.failureReason==='empty_response'
+    ? 'LLM 未返回有效回答，当前回答为确定性证据摘要。'
+    : 'LLM 综合生成超时，当前回答为确定性证据摘要。';
   const structuredAnswer: StructuredAskAnswer = {
     confidence: synthesis.confidence,
   };
@@ -1405,7 +1409,7 @@ function buildAskGenerationFallbackResponse(params: {
       summary: synthesis.summary,
       keyFindings: synthesis.keyFindings,
       openQuestions: [
-        'LLM 综合生成超时；当前回答是确定性证据摘要。',
+        generationIssue,
         ...actionOutcome.missingInfo,
       ],
       confidence: structuredAnswer.confidence,
@@ -1420,7 +1424,7 @@ function buildAskGenerationFallbackResponse(params: {
       ...(recalledItems.length > 0 && topItems.length === 0
         ? ['已检索到候选记忆，但与本问题的关键锚点没有足够交集，未作为回答证据。']
         : []),
-      'LLM 综合生成超时，当前回答为确定性证据摘要。',
+      generationIssue,
     ],
   };
 
@@ -1589,7 +1593,9 @@ async function recallForAsk(
       groupFilter: parsedIntent.filters.groupNames,
       minImportance: parsedIntent.filters.minImportance,
       sourceTypes: parsedIntent.filters.sourceTypes,
-      retrievalMode: 'deep',
+      retrievalMode: process.env.MEMORY_READ_TWO_LANES === 'true'
+        ? (/深入|详细分析|多跳|deep dive|in depth/i.test(query) ? 'deep' : 'balanced')
+        : 'deep',
       presentationBlocks: ['evidence_list', 'timeline', 'media'],
       lifecycleMode: isHistoricalRecallIntent(query, parsedIntent)
         ? 'historical'
@@ -3609,11 +3615,13 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             maxTokens: ASK_ANSWER_LLM_MAX_TOKENS,
             timeoutMs: ASK_ANSWER_LLM_TIMEOUT_MS,
             retryCount: 0,
+            reasoningEffort: process.env.MEMORY_READ_TWO_LANES==='true' ? 'none' : undefined,
           });
 
           // Step 4: Build the response
           const queryTimeMs = Date.now() - startMs;
           const parsedAnswer = parseStructuredAnswer(llmResponse.content);
+          if(!parsedAnswer.answer.trim()) throw new Error('empty_llm_answer');
           const finalAnswer = applyContextMatchAnswerLead(
             contextMatch,
             parsedAnswer.answer,
@@ -3688,6 +3696,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             'Ask generation failed; returning recalled evidence fallback',
           );
           const fallbackResponse = buildAskGenerationFallbackResponse({
+            failureReason: generationError instanceof Error && generationError.message==='empty_llm_answer' ? 'empty_response' : undefined,
             query: effectiveQuery,
             recalledItems,
             recallBlocks,
@@ -3929,6 +3938,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
           streamedAnswer += `${contextMatchLead}\n\n`;
           writeSseEvent(reply, 'delta', { text: `${contextMatchLead}\n\n` });
         }
+        let generatedDelta='';
         try {
           const answerResponse = await llmClient.generateStream(
             answerPrompt,
@@ -3938,17 +3948,20 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
               maxTokens: 1400,
               timeoutMs: ASK_STREAM_ANSWER_LLM_TIMEOUT_MS,
               retryCount: 0,
+              reasoningEffort: process.env.MEMORY_READ_TWO_LANES==='true' ? 'none' : undefined,
             },
             async (delta) => {
               if (!delta) return;
               streamedAnswer += delta;
+              generatedDelta += delta;
               writeSseEvent(reply, 'delta', { text: delta });
             },
           );
 
           finalAnswer =
-            (answerResponse.content || streamedAnswer).trim() ||
-            streamedAnswer.trim();
+            (answerResponse.content || generatedDelta).trim() ||
+            generatedDelta.trim();
+          if(!finalAnswer.trim()) throw new Error('empty_llm_answer');
           finalAnswer = applyContextMatchAnswerLead(contextMatch, finalAnswer);
         } catch (generationError) {
           request.log.warn(
@@ -3956,6 +3969,7 @@ export async function askRoutes(app: FastifyInstance): Promise<void> {
             'Ask stream generation failed; returning recalled evidence fallback',
           );
           const fallbackResponse = buildAskGenerationFallbackResponse({
+            failureReason: generationError instanceof Error && generationError.message==='empty_llm_answer' ? 'empty_response' : undefined,
             query: effectiveQuery,
             recalledItems,
             recallBlocks,

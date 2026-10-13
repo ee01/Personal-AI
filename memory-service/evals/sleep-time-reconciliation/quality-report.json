@@ -1,0 +1,515 @@
+{
+  "generatedAt": "2026-10-13T08:59:46.010Z",
+  "realLLM": true,
+  "grounding": "issue scenarios; controlled anonymous fixtures",
+  "reservedTokenUpperBound": 104620,
+  "scores": {
+    "latestAccuracy": 1,
+    "bothValidFalsePositive": 0,
+    "authorityViolations": 0,
+    "agreement": 0.98
+  },
+  "pass": true,
+  "results": [
+    {
+      "id": "judge-0",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-1",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-2",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-3",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-4",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-5",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-6",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-7",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-8",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-9",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-10",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-11",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-12",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-13",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-14",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-15",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-16",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-17",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-18",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-19",
+      "group": "latest",
+      "expected": "supersede",
+      "decision": "supersede",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": false,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-20",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-21",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-22",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-23",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-24",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-25",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-26",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-27",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-28",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-29",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-30",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-31",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-32",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-33",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-34",
+      "group": "both_valid",
+      "expected": "refine",
+      "decision": "refine",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-35",
+      "group": "corroborate",
+      "expected": "corroborate",
+      "decision": "corroborate",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-36",
+      "group": "corroborate",
+      "expected": "corroborate",
+      "decision": "corroborate",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-37",
+      "group": "corroborate",
+      "expected": "corroborate",
+      "decision": "corroborate",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-38",
+      "group": "corroborate",
+      "expected": "corroborate",
+      "decision": "corroborate",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-39",
+      "group": "corroborate",
+      "expected": "corroborate",
+      "decision": "corroborate",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-40",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-41",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-42",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-43",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-44",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-45",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-46",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-47",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "noop",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-48",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    },
+    {
+      "id": "judge-49",
+      "group": "authority",
+      "expected": "dispute",
+      "decision": "dispute",
+      "state": "shadow",
+      "pass": true,
+      "protectedAuthority": true,
+      "model": "claude-sonnet-5"
+    }
+  ]
+}

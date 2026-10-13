@@ -1,4 +1,5 @@
 import { episodePromotionEligible } from '../WriteProvenanceGate.js';
+import { applyReconciliation, revertReconciliation, resolveReconcileConfirmation } from './ReconcileTruth.js';
 /**
  * v3 UnitTruthMaintainer (memory-foundation plan §5.6): the single entry
  * point for memory-unit state changes in the v3 schema.
@@ -138,6 +139,15 @@ function normalizeText(text: string): string {
 }
 
 export class UnitTruthMaintainer {
+  resolveReconcileConfirmation(id:string,answer:string,owner:string,at=Math.floor(Date.now()/1000)) {
+    return resolveReconcileConfirmation(this.db,id,answer,owner,at);
+  }
+  revertReconcileDecision(receiptId:string,at=Math.floor(Date.now()/1000)):boolean {
+    return revertReconciliation(this.db,receiptId,at);
+  }
+  applyReconcileDecision(receiptId: string, at = Math.floor(Date.now()/1000)): boolean {
+    return applyReconciliation(this.db, receiptId, at);
+  }
   constructor(
     private readonly db: Database.Database,
     private readonly episodes: import('./EpisodeRepository.js').EpisodeRepository,

@@ -46,6 +46,10 @@ const RECALLABLE_STATUSES = "('provisional', 'active', 'disputed')";
  * must receive before being wired into user-visible paths.
  */
 export interface ReadPolicyContext {
+  egressDestination?: 'local' | 'llm';
+  ownerUserId?: string;
+  tenantId?: string;
+  accessibilityMode?: 'active' | 'passive';
   /** Restrict to specific scope locator (e.g. 'work'). Null = no scope filter. */
   scopeLocator?: string | null;
   /** Maximum sensitivity the caller may see. Higher levels are filtered. */
@@ -67,7 +71,7 @@ export class UnitRecallReader {
    * Async read: lexical channels + the e5 vector channel when enabled.
    * Same fusion/dedup/status rules as recall().
    */
-  async recallAsync(queryText: string, limit = 20): Promise<UnitRecallResult> {
+  async recallAsync(queryText: string, limit = 20, policy?: ReadPolicyContext): Promise<UnitRecallResult> {
     const { getUnitVectorChannel, embedWithE5 } = await import(
       './UnitEmbeddingWorker.js'
     );
@@ -94,7 +98,7 @@ export class UnitRecallReader {
           const precomputed = new Map<string, Map<string, number>>([
             ['vector_e5', map],
           ]);
-          return this.recall(queryText, limit, precomputed);
+          return this.recall(queryText, limit, precomputed, policy);
         }
       } catch (err) {
         console.warn(
@@ -103,7 +107,7 @@ export class UnitRecallReader {
         );
       }
     }
-    return this.recall(queryText, limit);
+    return this.recall(queryText, limit, undefined, policy);
   }
 
   recall(
@@ -115,6 +119,7 @@ export class UnitRecallReader {
     const policyGate = policy ?? {};
     const started = Date.now();
     const perChannel = new Map<string, Map<string, number>>(); // channel → unitId → rank
+    this.entityChannel(queryText,perChannel,policyGate);
 
     this.lexicalChannel(
       'lexical_seg',
@@ -151,10 +156,10 @@ export class UnitRecallReader {
 
     const top = [...fused.entries()]
       .sort((a, b) => b[1].score - a[1].score)
-      .slice(0, limit);
+      ;
 
     const metaStmt = this.db.prepare(
-      `SELECT kind, text, language, observed_at, status, scope_locator, sensitivity,
+      `SELECT kind, text, language, observed_at, status, scope_locator, sensitivity,tenant_id,owner_user_id,egress_policy,
               valid_from, valid_to
        FROM memory_units WHERE id = ?`,
     );
@@ -166,11 +171,22 @@ export class UnitRecallReader {
             observed_at: number | null; status: string;
             scope_locator: string | null; sensitivity: string;
             valid_from: number | null; valid_to: number | null;
+            tenant_id: string; owner_user_id: string;
+            egress_policy: string;
           }
         | undefined;
       if (!row) continue;
       // Re-verify status at read time (I6: projection can lag truth).
       if (!['provisional', 'active', 'disputed'].includes(row.status)) continue;
+      if (policyGate.ownerUserId && row.owner_user_id!==policyGate.ownerUserId) continue;
+      if (policyGate.tenantId && row.tenant_id!==policyGate.tenantId) continue;
+      if (policyGate.egressDestination==='llm' && row.egress_policy!=='approved_destinations') continue;
+      if (policyGate.allowedEvidenceClasses?.length && !this.db.prepare(`SELECT 1 FROM memory_unit_sources WHERE unit_id=?
+        AND evidence_class IN (${policyGate.allowedEvidenceClasses.map(()=>'?').join(',')}) LIMIT 1`).get(unitId,...policyGate.allowedEvidenceClasses)) continue;
+      if (policyGate.accessibilityMode==='passive') {
+        const lifecycle=this.db.prepare('SELECT accessibility_tier FROM unit_lifecycle WHERE unit_id=?').get(unitId) as {accessibility_tier:string}|undefined;
+        if (lifecycle?.accessibility_tier==='archived') continue;
+      }
 
       // F5 fix: scope gate — filter by scope_locator when policy specifies it.
       if (policyGate.scopeLocator != null && row.scope_locator !== policyGate.scopeLocator) {
@@ -206,6 +222,7 @@ export class UnitRecallReader {
         channels: entry.channels,
         score: Number(entry.score.toFixed(6)),
       });
+      if (candidates.length>=Math.max(1,limit)) break;
     }
 
     return {
@@ -216,6 +233,61 @@ export class UnitRecallReader {
       })),
       queryTimeMs: Date.now() - started,
     };
+  }
+
+  /** Exact entity/alias anchoring is independent of embedding and text similarity. */
+  private entityChannel(query: string, channels: Map<string,Map<string,number>>, policy: ReadPolicyContext) {
+    const q=query.toLowerCase();
+    const kinship=/女儿|儿子|孩子|\b(?:daughter|son|child|children)\b/i.test(query);
+    const contains=(name:string) => /^[a-z0-9._-]+$/i.test(name)
+      ? new RegExp(`(^|[^a-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?=$|[^a-z0-9_])`,'i').test(query)
+      : q.includes(name.toLowerCase());
+    const entities=this.db.prepare("SELECT id,name,aliases_json FROM entities WHERE status='active'").all() as Array<{id:string;name:string;aliases_json:string|null}>;
+    const keys=new Set<string>();
+    for (const e of entities) {
+      let aliases:string[]=[];
+      try { const parsed=JSON.parse(e.aliases_json??'[]'); if(Array.isArray(parsed)) aliases=parsed.filter(x=>typeof x==='string'); } catch { /* no identity from malformed JSON */ }
+      const names=[e.name,...aliases].filter(n=>n.trim().length>=2 || kinship && /^[A-Z]$/.test(n) && query.includes(n));
+      if (names.some(contains)) { keys.add(e.id);names.forEach(n=>keys.add(n)); }
+    }
+    if(kinship) {
+      const parents=entities.filter(e=>keys.has(e.id)).map(e=>e.id);
+      for(const parent of parents) {
+        const relations=this.db.prepare(`SELECT to_entity_id AS child FROM relationships WHERE from_entity_id=?
+          AND relation_type IN ('parent_of','has_child','has_daughter','has_son','father_of','mother_of') AND valid_to IS NULL
+          UNION SELECT from_entity_id AS child FROM relationships WHERE to_entity_id=?
+          AND relation_type IN ('child_of','daughter_of','son_of') AND valid_to IS NULL`).all(parent,parent) as Array<{child:string}>;
+        for(const {child} of relations) {keys.add(child);const entity=entities.find(e=>e.id===child);if(entity) keys.add(entity.name);}
+      }
+    }
+    // Named subject keys also work before entity projection catches up.
+    const rows=this.db.prepare(`SELECT id,subject_key FROM memory_units WHERE status IN ${RECALLABLE_STATUSES}
+      AND (? IS NULL OR owner_user_id=?) AND (? IS NULL OR tenant_id=?) ORDER BY observed_at DESC,created_at DESC`).all(
+        policy.ownerUserId??null,policy.ownerUserId??null,policy.tenantId??null,policy.tenantId??null) as Array<{id:string;subject_key:string|null}>;
+    const map=new Map<string,number>();
+    for(const r of rows) if(r.subject_key && (keys.has(r.subject_key)||r.subject_key.length>=2 && contains(r.subject_key))) map.set(r.id,map.size);
+    if(map.size) channels.set('entity_anchor',map);
+  }
+
+  async recallLanes(query: string, limit: number, options: {policy?:ReadPolicyContext;explicitDeep?:boolean;deepQuestion?:boolean}={}) {
+    const started=Date.now();
+    const fast=await this.recallAsync(query,limit,options.policy);
+    const strong=fast.candidates.some(c=>c.status==='active' && (c.channels.includes('entity_anchor') || c.channels.length>=2));
+    if (options.policy?.accessibilityMode==='passive' || !(options.explicitDeep || options.deepQuestion && !strong)) {
+      return {...fast,lane:'fast' as const,escalated:false};
+    }
+    // Bounded deterministic decomposition and temporal expansion. Every read
+    // uses the same ACL/status gates; deep failure returns the fast evidence.
+    try {
+      const pieces=query.split(/[。？！?;；\n]/).map(s=>s.trim()).filter(Boolean).slice(0,3);
+      pieces.push(query.replace(/(?:去年|前年|今年|三年前|上个月|最近|last year|last month|recently)/gi,' ').trim());
+      const results=pieces.map(q=>this.recall(q,limit,undefined,options.policy));
+      const candidates=new Map<string,{candidate:UnitRecallCandidate;score:number}>();
+      for(const r of [fast,...results]) r.candidates.forEach((c,rank)=>{
+        const entry=candidates.get(c.unitId)??{candidate:c,score:0};entry.score+=1/(60+rank);candidates.set(c.unitId,entry);
+      });
+      return {...fast,candidates:[...candidates.values()].sort((a,b)=>b.score-a.score).slice(0,limit).map(e=>e.candidate),queryTimeMs:Date.now()-started,lane:'deep' as const,escalated:true};
+    } catch { return {...fast,lane:'fast' as const,escalated:false}; }
   }
 
   /**

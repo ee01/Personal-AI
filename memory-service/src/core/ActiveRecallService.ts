@@ -38,6 +38,8 @@ import type {
   RecallTimelineEvent,
 } from '../types/index.js';
 import { RecallEngine } from './RecallEngine.js';
+import { UnitRecallReader } from './v3/UnitRecallReader.js';
+import { getUsageContext } from '../analytics/usageContext.js';
 import { LLMClient } from '../llm/LLMClient.js';
 import { getConfig } from '../config.js';
 import {
@@ -174,7 +176,41 @@ export class ActiveRecallService {
       blockTypes: undefined,
     };
 
-    const baseResult = await this.engine.recall(baseQuery);
+    let baseResult: RecallResult | undefined;
+    if (process.env.MEMORY_READ_TWO_LANES === 'true' && options.runtimePolicy!=='safe_fts') {
+      const deepQuestion=/为什么|怎么变化|综合|不同对话|比较|回顾|why|how.*changed|compare|across.*(?:sources|conversations)/i.test(query.query);
+      const policy = { ownerUserId:getUsageContext()?.userId,egressDestination:'llm' as const,
+        scopeLocator:query.scope==='work'||query.scope==='personal'?query.scope:undefined,
+        maxSensitivity:'private' as const, temporalMode:query.lifecycleMode==='historical'?'audit' as const:'current' as const,
+        accessibilityMode:'active' as const };
+      const v3 = await new UnitRecallReader(this.db).recallLanes(query.query,baseTopK,{policy,
+        explicitDeep:query.retrievalMode==='deep',deepQuestion});
+      const projected:RecallItem[]=[];
+      for(const unit of v3.candidates) {
+        const source=this.db.prepare(`SELECT m.id,m.scope,m.source_type,m.timestamp,m.source_url FROM memory_unit_sources s
+          JOIN messages_raw m ON m.id=s.episode_id WHERE s.unit_id=? ORDER BY s.promotion_eligible DESC,s.created_at DESC LIMIT 1`).get(unit.unitId) as {id:string;scope:'work'|'personal';source_type:string;timestamp:number;source_url:string|null}|undefined;
+        if(!source || (query.scope==='work'||query.scope==='personal') && source.scope!==query.scope) continue;
+        projected.push({id:`unit:${unit.unitId}`,type:'message',content:unit.text,scope:source.scope,score:unit.score,
+          source:source.source_type,sourceUrl:source.source_url??undefined,timestamp:unit.observedAt??source.timestamp,
+          metadata:{unitId:unit.unitId,sourceEpisodeId:source.id,status:unit.status,observedAt:unit.observedAt,recallLane:v3.lane}});
+      }
+      if(projected.length) {
+        // The v3 corpus is still a shadow projection. Keep raw lexical evidence
+        // during migration, using no second dense channel or online model.
+        const reviewQuestion=/评价|优缺点|review|evaluation/i.test(query.query);
+        const lexicalQuery=v3.escalated && reviewQuestion ? `${query.query}\n成本 价格 cost expensive 优点 缺点` : query.query;
+        const legacy=await this.engine.recall({...baseQuery,query:lexicalQuery,channels:['fts'],topK:baseTopK*2});
+        const linked=new Set(v3.candidates.flatMap(c=>(this.db.prepare('SELECT episode_id FROM memory_unit_sources WHERE unit_id=?').all(c.unitId) as Array<{episode_id:string}>).map(s=>s.episode_id)));
+        const currentLegacy=legacy.items.filter(item=>!linked.has(item.id) && !this.db.prepare(`SELECT 1 FROM memory_unit_sources s JOIN memory_units u ON u.id=s.unit_id
+          WHERE s.episode_id=? AND u.status IN ('superseded','retracted','deletion_pending','quarantined') LIMIT 1`).get(item.id));
+        const fused=new Map<string,{item:RecallItem;rankScore:number}>();
+        for(const [rank,item] of projected.entries()) fused.set(item.id,{item,rankScore:1/(60+rank)});
+        for(const [rank,item] of currentLegacy.entries()) fused.set(item.id,{item,rankScore:1/(60+rank)});
+        baseResult={...legacy,items:[...fused.values()].sort((a,b)=>b.rankScore-a.rankScore).map(x=>x.item),totalFound:fused.size,
+          queryTimeMs:Date.now()-startedAt,channels:[...new Set([...legacy.channels,...v3.channelStats.filter(c=>c.candidateCount>0).map(c=>c.channel)])]};
+      }
+    }
+    baseResult ??= await this.engine.recall(baseQuery);
     const retrievalTimeMs = Date.now() - startedAt;
     // The engine may retain a direct raw claim at the end of the over-fetched
     // set. Preserve it after this service applies its public result cap.

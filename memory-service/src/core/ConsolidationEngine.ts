@@ -18,6 +18,7 @@ import { gateEnabled } from './WriteProvenanceGate.js';
 import type Database from 'better-sqlite3';
 
 import { ForgettingEngine } from './ForgettingEngine.js';
+import { SleepReconciliation } from './v3/SleepReconciliation.js';
 import { MarkdownManager } from './MarkdownManager.js';
 import { BehaviorAffinityService } from './BehaviorAffinityService.js';
 import { SynonymEdgeService } from './SynonymEdgeService.js';
@@ -43,6 +44,7 @@ export interface ConsolidationResult {
   cleaned: number;
   reflected: number;
   reindexed: number;
+  reconciliation?: Record<string, unknown>;
 }
 
 interface MessageRow {
@@ -210,6 +212,13 @@ export class ConsolidationEngine {
       );
     } catch (err) {
       console.error('[ConsolidationEngine] Phase 3.7 (Synonym) failed:', err);
+    }
+
+    // v3 A–E uses this scheduler, after synonym discovery and before decay.
+    try {
+      result.reconciliation = await new SleepReconciliation(this.db).run();
+    } catch (err) {
+      console.error('[ConsolidationEngine] Sleep reconciliation failed:', err);
     }
 
     // Phase 4: Clean — run forgetting cycle

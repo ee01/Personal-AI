@@ -7,9 +7,9 @@ import { gateEnabled } from '../WriteProvenanceGate.js';
  *
  * A: deterministic decay, evidence-key dedup, independent-source reinforcement
  * B: duplicate/refine/correct proposals (shadow diff first)
- * C: low-authority insight/brief with expiry (D1 in plan numbering)
- * D: profile proposals; durable/sensitive slots stay pending confirmation (D2)
- * E: association edges shadow; must not cross scope or change current truth
+ * C: contradiction judge, 14-day pair cooldown
+ * D: scoped one-pager and profile proposals (durable stays pending)
+ * E: attention candidates, no external action
  *
  * The exposure/outcome logging is always on (no whitelist gate) so the
  * learned-ranker shadow has data even before E is ready.
@@ -21,7 +21,8 @@ export function isConsolidationPhaseEnabled(phase: ConsolidationPhase): boolean 
   const raw = process.env.MEMORY_CONSOLIDATION_V3?.trim().toUpperCase();
   if (!raw) return false;
   const phases = raw.split(',').map((s) => s.trim());
-  return phases.includes(phase);
+  return (['A','B','C','D','E'] as const).slice(0,['A','B','C','D','E'].indexOf(phase)+1)
+    .every(p=>phases.includes(p));
 }
 
 /**

@@ -1,4 +1,5 @@
 import { classifyWrite, recalledIds, recordRecallExposures, applyTurnTaint, gateEnabled } from './WriteProvenanceGate.js';
+import { isConsolidationPhaseEnabled } from './v3/ConsolidationPhases.js';
 /**
  * Ingestion pipeline — Phase 2.
  *
@@ -623,7 +624,7 @@ export class IngestionPipeline {
       // neighbors and an LLM decides ADD/UPDATE/MERGE/NOOP rather than always
       // piling up a new version. Default off (adds embedding + LLM call). On any
       // failure or no neighbor it stays ADD (identical to legacy behavior).
-      if (getConfig().chunkMergeDecisionEnabled && createdChunks.length > 0) {
+      if (!isConsolidationPhaseEnabled('A') && getConfig().chunkMergeDecisionEnabled && createdChunks.length > 0) {
         try {
           const svc = new MergeDecisionService(this.db);
           const primary = createdChunks[0];

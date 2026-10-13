@@ -323,3 +323,11 @@ Popup 还提供可展开的后台作业概览：
 9. 运行 `npm run verify:background-jobs-api`，覆盖首次启动不安排隐藏执行、启用不立即执行、storage 缺 row/清空时回退任务默认值、alarm 显式跨会话持久化、alarm 创建失败回滚、手动执行、失败记录、跳过记录、最近运行历史、重复执行跳过、停用任务手动执行、状态刷新补齐丢失 alarm、自动修复失败时仍返回任务列表、状态刷新回执、具体 alarm 校准任务明细、队列明细读取失败回执、重排失败时保留旧 alarm、识别并修复明显滞后的 alarm，以及清理旧版本遗留的未知 `scheduled_task_*` alarm
 10. 运行 `npm run verify:background-job-status-filters`，覆盖后台作业状态计数、状态优先级和状态分类判定
 11. 运行 `npm run verify:background-jobs-popup:e2e`，用 fresh Chromium 扩展实例验证 popup 折叠态需处理作业预览、展开后不显示筛选标签、需处理总览、作业列表优先级、上次确认时间、刷新中 `正在核对` 回执、刷新范围回执、具体 alarm 校准明细、刷新失败 `刷新未确认` 回执和旧快照边界、队列明细未确认回执、停用/立即执行/重排确认中都不提前改成成功状态、启停/重排失败操作回执、行内操作范围、最近一次运行解释、失败详情呈现、确认后的操作回执、英文静默分析文案和右上角 Help Center / Desktop App 图标顺序
+
+## 睡眠期记忆整理（Memory Service）
+
+既有 daily consolidation cron 在 synonym 边生成后、遗忘前调用 v3 A–E：确定性按 kind 归档和 alias 归一 → 新旧真值判决 → 14 天冷却的矛盾扫描 → one-pager/低权威 insight/待确认 profile → attention 候选。SQLite 仍是真源；原文不删，不新建 cron，不启动 reflection 研究循环。
+
+`MEMORY_CONSOLIDATION_V3` 按 `A,B,C,D,E` 前序白名单开启；B/C 默认 shadow，live 需要当前模型、同 owner/tenant 的 50 对不同 pair 人工标签一致率 >=.85，C 加 15 对 both-valid 误判 <=.1。调用预算在 `reconcile_nightly_budgets` 中持久预留，超帽或 provider 失败留 deferred/failed，下次优先。A 与确定性 one-pager 无模型调用；每阶段失败不阻断后续允许阶段。
+
+用量记录标为 `reconcile_b/c/d` feature；结果带 judged/applied/deferred、aliases、units 与 attention candidate 数。确认只用于自身长期偏好、已确认事实或 restricted 争议；一般矛盾自行标 disputed。attention 当前只落候选，不代表执行/外发。关闭开关停止运行，带 revision 校验的回执支持逐项回滚。具体预算、读取与回滚命令见 [memory_foundation.md](./memory_foundation.md#睡眠期整理与两车道读取)。

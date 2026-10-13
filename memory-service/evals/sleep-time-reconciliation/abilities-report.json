@@ -1,0 +1,21 @@
+{
+  "generatedAt": "2026-10-13",
+  "endpoint": "local branch service :3219",
+  "source": "read-only production snapshot, user explicitly named in E-76",
+  "environment": {
+    "MEMORY_CONSOLIDATION_V3": "A",
+    "MEMORY_READ_TWO_LANES": true,
+    "ASK_ANSWER_LLM_TIMEOUT_MS": 60000
+  },
+  "scores": {
+    "extraction": 1,
+    "multi_session": 1,
+    "temporal": 1,
+    "knowledge_update": 1,
+    "abstention": 1,
+    "prospective": 1
+  },
+  "overall": 1,
+  "regression": "no regression vs baseline (overall 1 → 1)",
+  "report": ".eval-runs/e76-memory-abilities-verified/mem-abilities-local/reader-report.json"
+}

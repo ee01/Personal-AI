@@ -98,7 +98,7 @@ B 写通道（OpenClaw → 我们）
 | `memory-share-with-openclaw.md` | 其架构 A + C 的执行版；其架构 B 不做 |
 | `memory-mcp-server-plan.md` | 不改 MCP schema；只加 OpenClaw 注册、scope 收紧、egress 评估与回声标记 |
 | `memory-write-provenance-gate-plan.md` | 导入固定 `untrusted`；回声标记识别；前置 |
-| `memory-sleep-time-reconciliation-plan.md` | 导入 unit 的判决在 B 阶段 |
+| [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) | 导入 unit 的判决在 B 阶段 |
 | `memory-resident-one-pager-plan.md` | `memory_context_brief` 对 OpenClaw 的投影来源 |
 | `agent-task-ledger-plan.md` / OpenClaw 执行器 | 共用执行器卡片与探测端点；联动记忆不改变委派语义 |
 | `ai-context-passport-plan.md` | 对外上下文包继续走 ContextPack；MCP 返回同样经 `PersonaProjectionService` |

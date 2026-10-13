@@ -10,6 +10,8 @@ import type { FastifyInstance } from 'fastify';
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
 import { ReflectionThreadService } from '../core/ReflectionThreadService.js';
 import { TruthMaintainer } from '../core/TruthMaintainer.js';
+import { UnitTruthMaintainer } from '../core/v3/UnitTruthMaintainer.js';
+import { EpisodeRepository } from '../core/v3/EpisodeRepository.js';
 import { reclassifyLegacyEvidenceResolutionConfirmRequests } from '../core/ConfirmRequestRoutingBackfill.js';
 import { EvidenceWatchContractService } from '../core/EvidenceWatchContractService.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
@@ -204,9 +206,14 @@ export async function confirmRequestRoutes(
           'Watch items cannot be answered. Use the state endpoint instead.',
       });
     }
+    if(current.category==='sleep_reconcile' && !['keep_old','keep_new','both_valid'].includes(answer)) {
+      return reply.status(400).send({error:'Invalid reconciliation answer'});
+    }
 
     try {
-      truthMaintainer.resolveConfirmRequest(id, answer, detail);
+      if(current.category==='sleep_reconcile') {
+        new UnitTruthMaintainer(db,new EpisodeRepository(db)).resolveReconcileConfirmation(id,answer,request.userId);
+      } else truthMaintainer.resolveConfirmRequest(id, answer, detail);
       const threadService = new ReflectionThreadService(
         db,
         userDataManager,

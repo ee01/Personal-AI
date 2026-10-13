@@ -1,0 +1,20 @@
+{
+  "snapshot": "data/users/esone.qiu/memory.db",
+  "readOnly": true,
+  "generatedAt": "2026-10-13T08:33:56.752Z",
+  "units": {
+    "count": 2571
+  },
+  "legacyMultiValueKeys": {
+    "count": 73
+  },
+  "unitMultiValueKeys": {
+    "count": 142
+  },
+  "forgottenOldPreferences": {
+    "count": 0
+  },
+  "todayOldSameKeyPairs": {
+    "count": 18
+  }
+}
