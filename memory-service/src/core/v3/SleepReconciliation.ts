@@ -110,7 +110,7 @@ export class SleepReconciliation {
           ON CONFLICT(unit_id) DO UPDATE SET accessibility_tier=excluded.accessibility_tier,updated_at=excluded.updated_at`).run(u.id,tier,at,at);
         // Evidence-key dedup is a rollup, preserving every source span.
         const sources = sourcesFor(this.db,u.id);
-        const unique = new Map(sources.map(s=>[s.evidence_key,s]));
+        const unique = new Map(sources.filter(s=>s.evidence_class!=='system_inference').map(s=>[s.evidence_key,s]));
         const count = new Set([...unique.values()].map(s=>s.provenance_family)).size;
         this.db.prepare('UPDATE memory_units SET source_independence_count_cached=?,evidence_class_set_cached=? WHERE id=?')
           .run(count,JSON.stringify([...new Set(sources.map(s=>s.evidence_class))].sort()),u.id);
@@ -245,7 +245,7 @@ Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>
 
   derive(at: number) {
     const groups = new Map<string,ReconcileUnit[]>();
-    for (const u of this.units().filter(u=>u.status!=='disputed')) {
+    for (const u of this.units().filter(u=>u.status!=='disputed' && sourcesFor(this.db,u.id).some(s=>s.evidence_class!=='system_inference'))) {
       const key=JSON.stringify([u.tenant_id,u.owner_user_id,u.scope_locator,u.sensitivity,u.egress_policy]);
       groups.set(key,[...(groups.get(key)??[]),u]);
     }
@@ -269,7 +269,7 @@ Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>
 
   attention(at:number) {
     let candidates=0;
-    for (const u of this.units().filter(x=>x.status!=='disputed')) {
+    for (const u of this.units().filter(x=>x.status!=='disputed' && sourcesFor(this.db,x.id).some(s=>s.evidence_class!=='system_inference'))) {
       const eventExpiry=u.kind==='event'?futureEventExpiry(u,at):undefined;
       if(!['action_item','open_question'].includes(u.kind) && !eventExpiry) continue;
       const inserted=this.db.prepare(`INSERT OR IGNORE INTO reconcile_artifacts(artifact_key,tenant_id,owner_user_id,kind,content,source_unit_ids_json,scope_locator,sensitivity,egress_policy,expiry_at,created_at)
@@ -281,7 +281,8 @@ Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>
 
   async insights(at:number) {
     const groups=new Map<string,ReconcileUnit[]>();
-    for(const u of this.units().filter(u=>u.status==='active' && u.egress_policy==='approved_destinations')) {
+    for(const u of this.units().filter(u=>u.status==='active' && u.egress_policy==='approved_destinations'
+      && sourcesFor(this.db,u.id).some(s=>s.evidence_class!=='system_inference'))) {
       const key=JSON.stringify([u.tenant_id,u.owner_user_id,u.scope_locator,u.sensitivity,u.egress_policy]);
       groups.set(key,[...(groups.get(key)??[]),u]);
     }

@@ -174,3 +174,5 @@ A 开启后 OnlineReflection 持久计数每 5 次交互抽样 1 次，并关闭
 确定性 suite 位于 `memory-service/src/__tests__/sleepReconciliation.test.ts` 和 `evals/cases/sleep-time-reconciliation/`；真实配置模型的 50 对匿名场景结果见 `memory-service/evals/sleep-time-reconciliation/quality-report.json`，覆盖最新值、互补和来源权威。六能力报告的本地服务将回答超时预算设为 60s，线上默认 9s 的延迟表现未由该报告证明。生产 50 对人工资格、Passive p95 <500ms、Ask 深车道率 <20% 与实际 /ask p95、每日 token 降幅需随真实 rollout 观测，不能由合成压力条件证明。源码：`SleepReconciliation.ts`、`TruthCandidatePlan.ts`、`ReconcileTruth.ts`、migration 075。执行 `npm run eval:validate`、`npm run eval:run -- --suite sleep-time-reconciliation --no-repair`、`quality.ts`，以及指向本分支的 `npm run eval:memory-abilities`。
 
 两车道回答阶段关闭额外推理开销。同步/流式模型若返回空文本，使用现有确定性证据摘要，并明确说明模型未返回有效回答；不把空字符串作为成功答案。
+
+当前两车道读取同时检查 message 与关联 chunk 的 unit 状态；被替代来源的旧 chunk 不会混入当前答案，历史读取仍保留。unit 回执提供原 episode 的 timeline 跳转。来源权威按实际支持 span 复核：owner/observed 消息中已标为 AI 作者的片段只能作为 system_inference，不能继承消息容器的一手权威，也不能成为 profile/attention 的唯一来源或独立来源加固。

@@ -50,6 +50,17 @@ import {
 const ACTIVE_OVER_FETCH_FACTOR = 1.5;
 const BALANCED_OVER_FETCH_FACTOR = 1.25;
 const EVIDENCE_ONLY_DEFAULT_CHANNELS: RecallChannelName[] = ['fts'];
+function passesCurrentTruth(db:Database.Database,item:RecallItem):boolean {
+  if(item.id.startsWith('unit:')) {
+    const row=db.prepare('SELECT status FROM memory_units WHERE id=?').get(item.id.slice(5)) as {status:string}|undefined;
+    return !!row && ['active','provisional','disputed'].includes(row.status);
+  }
+  return !db.prepare(`SELECT 1 FROM memory_unit_sources s JOIN memory_units u ON u.id=s.unit_id
+    WHERE (s.episode_id=? OR ?='chunk' AND s.episode_id IN
+      (SELECT related_entity_id FROM chunks WHERE cast(chunk_id AS TEXT)=?))
+    AND u.status IN ('superseded','retracted','archived','deletion_pending','quarantined') LIMIT 1`)
+    .get(item.id,item.type,item.id);
+}
 const BALANCED_DEFAULT_CHANNELS: RecallChannelName[] = ['vector', 'fts'];
 const SYNTHESIS_CACHE_TTL_MS = 5 * 60 * 1000;
 const SYNTHESIS_CACHE_MAX_ENTRIES = 100;
@@ -192,6 +203,7 @@ export class ActiveRecallService {
         if(!source || (query.scope==='work'||query.scope==='personal') && source.scope!==query.scope) continue;
         projected.push({id:`unit:${unit.unitId}`,type:'message',content:unit.text,scope:source.scope,score:unit.score,
           source:source.source_type,sourceUrl:source.source_url??undefined,timestamp:unit.observedAt??source.timestamp,
+          exploreLink:`#/timeline?focus=${encodeURIComponent(source.id)}`,
           metadata:{unitId:unit.unitId,sourceEpisodeId:source.id,status:unit.status,observedAt:unit.observedAt,recallLane:v3.lane}});
       }
       if(projected.length) {
@@ -201,8 +213,7 @@ export class ActiveRecallService {
         const lexicalQuery=v3.escalated && reviewQuestion ? `${query.query}\n成本 价格 cost expensive 优点 缺点` : query.query;
         const legacy=await this.engine.recall({...baseQuery,query:lexicalQuery,channels:['fts'],topK:baseTopK*2});
         const linked=new Set(v3.candidates.flatMap(c=>(this.db.prepare('SELECT episode_id FROM memory_unit_sources WHERE unit_id=?').all(c.unitId) as Array<{episode_id:string}>).map(s=>s.episode_id)));
-        const currentLegacy=legacy.items.filter(item=>!linked.has(item.id) && !this.db.prepare(`SELECT 1 FROM memory_unit_sources s JOIN memory_units u ON u.id=s.unit_id
-          WHERE s.episode_id=? AND u.status IN ('superseded','retracted','deletion_pending','quarantined') LIMIT 1`).get(item.id));
+        const currentLegacy=legacy.items.filter(item=>!linked.has(item.id) && (query.lifecycleMode==='historical'||passesCurrentTruth(this.db,item)));
         const fused=new Map<string,{item:RecallItem;rankScore:number}>();
         for(const [rank,item] of projected.entries()) fused.set(item.id,{item,rankScore:1/(60+rank)});
         for(const [rank,item] of currentLegacy.entries()) fused.set(item.id,{item,rankScore:1/(60+rank)});
@@ -211,6 +222,9 @@ export class ActiveRecallService {
       }
     }
     baseResult ??= await this.engine.recall(baseQuery);
+    if(process.env.MEMORY_READ_TWO_LANES==='true' && query.lifecycleMode!=='historical') {
+      baseResult={...baseResult,items:baseResult.items.filter(item=>passesCurrentTruth(this.db,item))};
+    }
     const retrievalTimeMs = Date.now() - startedAt;
     // The engine may retain a direct raw claim at the end of the over-fetched
     // set. Preserve it after this service applies its public result cap.

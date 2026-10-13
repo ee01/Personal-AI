@@ -12,6 +12,7 @@ import { OnlineReflection } from '../core/OnlineReflection.js';
 import { ActiveRecallService } from '../core/ActiveRecallService.js';
 import { resetConfigForTests, getConfig } from '../config.js';
 import { isConsolidationPhaseEnabled } from '../core/v3/ConsolidationPhases.js';
+import { MemoryClaimAttributionService } from '../core/MemoryClaimAttributionService.js';
 import type { ReconcileUnit } from '../core/v3/ReconcileTruth.js';
 
 const llmMock=vi.hoisted(()=>vi.fn());
@@ -144,6 +145,20 @@ describe('sleep safety and routing',()=>{
     truth().applyReconcileDecision(receipt(n.id,o.id,'supersede'),at);
     expect(row(o.id).status).toBe('disputed');expect((row(o.id) as any).superseded_by).toBeNull();
   });
+  it('an AI-owned quote inside an eligible human episode cannot inherit firsthand authority',()=>{
+    const o=seed('Jira confirms Project Aurora is ready',{observed:at-3600});
+    const n=seed('Claude says Project Aurora is blocked.',{observed:at-300});
+    const claims=new MemoryClaimAttributionService(db).getClaimsForMessage(n.ep);
+    expect(claims.some(c=>c.owner.kind==='ai_agent')).toBe(true);
+    // The historical writer classified the episode as firsthand. Reconcile
+    // must honor the more precise, server-derived owner of the support span.
+    const d=receipt(n.id,o.id,'supersede');
+    const sources=db.prepare('SELECT evidence_keys_json FROM unit_reconcile_decisions WHERE id=?').get(d) as any;
+    const evidence=JSON.parse(sources.evidence_keys_json);evidence[0][0].evidence_class='system_inference';
+    db.prepare('UPDATE unit_reconcile_decisions SET evidence_keys_json=? WHERE id=?').run(JSON.stringify(evidence),d);
+    truth().applyReconcileDecision(d,at);
+    expect(row(o.id).status).toBe('disputed');expect((row(o.id) as any).superseded_by).toBeNull();
+  });
   it('truth candidates preserve all deterministic slots outside recall top-k',()=>{
     for(let i=0;i<22;i++) seed(`value ${i}`,{created:at-100-i});
     const n=seed('new',{created:at});expect(truthCandidates(db,row(n.id)).length).toBe(22);
@@ -207,6 +222,17 @@ describe('sleep safety and routing',()=>{
     const r=await new ActiveRecallService(db).recall({query:'Project Aurora',scope:'all',retrievalMode:'balanced'});
     expect(r.items[0].metadata?.unitId).toBe(n.id);expect(r.items[0].id).toBe(`unit:${n.id}`);
     expect(r.channels).toContain('entity_anchor');
+  });
+  it('current two-lane recall suppresses chunks linked to a superseded source and retains source navigation',async()=>{
+    vi.stubEnv('MEMORY_READ_TWO_LANES','true');
+    const o=seed('Project Aurora waiting for design',{observed:at-3600,created:at-3600});
+    const n=seed('Project Aurora development started',{observed:at-300,created:at-300});
+    const c=db.prepare(`INSERT INTO chunks(file_path,line_start,line_end,content,content_hash,source_type,related_entity_id,scope,created_at)
+      VALUES (?,1,1,?,'old-chunk','glip',?,'work',?)`).run(`messages/${o.ep}`,'Project Aurora waiting for design',o.ep,at-3600);
+    truth().applyReconcileDecision(receipt(n.id,o.id,'supersede'),at);
+    const r=await new ActiveRecallService(db).recall({query:'Project Aurora',scope:'work',retrievalMode:'balanced'});
+    expect(r.items.some(item=>item.id===String(c.lastInsertRowid)&&item.type==='chunk')).toBe(false);
+    expect(r.items.find(item=>item.metadata?.unitId===n.id)?.exploreLink).toContain(n.ep);
   });
   it('reverts a reconciliation atomically and preserves monotonic revisions',()=>{
     const o=seed('old',{observed:at-3*86400,created:at-3*86400}),n=seed('new',{observed:at-86400});

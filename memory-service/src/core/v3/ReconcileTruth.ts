@@ -12,8 +12,19 @@ export interface ReconcileUnit {
 }
 export interface ReconcileSource { evidence_key: string; provenance_family: string; evidence_class: string }
 export function sourcesFor(db: Database.Database, id: string): ReconcileSource[] {
-  return db.prepare(`SELECT evidence_key,provenance_family,evidence_class FROM memory_unit_sources
-    WHERE unit_id=? AND promotion_eligible=1 ORDER BY evidence_key,provenance_family,evidence_class`).all(id) as ReconcileSource[];
+  const rows=db.prepare(`SELECT s.evidence_key,s.provenance_family,s.evidence_class,s.episode_id,s.span_start_byte,s.span_end_byte,m.content
+    FROM memory_unit_sources s JOIN messages_raw m ON m.id=s.episode_id
+    WHERE s.unit_id=? AND s.promotion_eligible=1 ORDER BY s.evidence_key,s.provenance_family,s.evidence_class`).all(id) as Array<ReconcileSource&{
+      episode_id:string;span_start_byte:number;span_end_byte:number;content:string}>;
+  return rows.map(s=>{
+    // A trusted owner episode may contain an AI-authored quote. Authority is
+    // attached to the actual support span, not inherited from the container.
+    const ai=db.prepare("SELECT span_start,span_end FROM memory_claims WHERE source_message_id=? AND owner_kind='ai_agent' AND status='active'")
+      .all(s.episode_id) as Array<{span_start:number;span_end:number}>;
+    const inferred=ai.some(c=>Buffer.byteLength(s.content.slice(0,c.span_start),'utf8')<s.span_end_byte
+      && Buffer.byteLength(s.content.slice(0,c.span_end),'utf8')>s.span_start_byte);
+    return {evidence_key:s.evidence_key,provenance_family:s.provenance_family,evidence_class:inferred?'system_inference':s.evidence_class};
+  });
 }
 const authority: Record<string, number> = { self_statement: 5, first_party_record: 4,
   official_source: 3, third_party_report: 2, system_inference: 1 };
@@ -65,7 +76,8 @@ export function applyReconciliation(db: Database.Database, receiptId: string, at
       const oldSources = sourcesFor(db,older.id), newSources = sourcesFor(db,newer.id);
       const keys = new Set(oldSources.map(s => s.evidence_key));
       const families = new Set(oldSources.map(s => s.provenance_family));
-      const independent = new Set(newSources.filter(s => !keys.has(s.evidence_key) && !families.has(s.provenance_family)).map(s => s.provenance_family)).size;
+      const independent = new Set(newSources.filter(s => s.evidence_class!=='system_inference'
+        && !keys.has(s.evidence_key) && !families.has(s.provenance_family)).map(s => s.provenance_family)).size;
       db.prepare(`INSERT OR IGNORE INTO memory_unit_sources
         (unit_id,episode_id,span_start_byte,span_end_byte,span_text_hash,source_role,evidence_key,provenance_family,origin_type,evidence_class,created_at)
         SELECT ?,episode_id,span_start_byte,span_end_byte,span_text_hash,source_role,evidence_key,provenance_family,origin_type,evidence_class,created_at

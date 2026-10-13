@@ -2,7 +2,7 @@
 
 Production readonly baseline: `phase0.json` (no text or source ids).
 
-Deterministic boundary suite: `npm run eval:run -- --suite sleep-time-reconciliation --no-repair`. Five required groups execute 67 checks; the complete test file has 87 checks, including real nightly wiring, provenance/ACL, source independence, rollback, live qualification, parent/child gift recall and expired leases.
+Deterministic boundary suite: `npm run eval:run -- --suite sleep-time-reconciliation --no-repair`. Five required groups execute 67 checks; the complete test file has 89 checks, including real nightly wiring, provenance/ACL, source independence, rollback, live qualification, parent/child gift recall and expired leases.
 
 Actual configured model: `memory-service/node_modules/.bin/tsx memory-service/evals/sleep-time-reconciliation/quality.ts`. `quality-report.json` contains 50 controlled anonymous fixtures grounded in the issue scenarios, not a representative human-labeled production sample. Latest accuracy 1, both-valid false-positive 0, authority violations 0, agreement .98. It does not qualify a production user for live B/C.
 
