@@ -46,6 +46,7 @@ import {
   chunk,
   parentKeysNeedingQuarter,
 } from './roadmapImportQuarter';
+import { buildChildTaskSearchJql } from './roadmapChildTaskJql';
 import { handleLLMRequest } from './llm';
 import {
   readTeamId,
@@ -516,17 +517,6 @@ export type RemoteChildTask = {
   originalEstimateDays: number | null;
 };
 
-function childLinkClause(linkField: string | null, epicKeys: string[]): string {
-  const quoted = epicKeys.map((k) => `"${k.replace(/"/g, '\\"')}"`).join(', ');
-  if (linkField === JIRA_FIELD_PARENT_LINK) {
-    return `"Parent Link" in (${quoted})`;
-  }
-  if (linkField === 'parent') {
-    return `parent in (${quoted})`;
-  }
-  return `"Epic Link" in (${quoted})`;
-}
-
 function resolveChildEpicKey(
   fields: Record<string, unknown>,
   candidates: string[],
@@ -546,7 +536,7 @@ function resolveChildEpicKey(
 }
 
 /**
- * Search Tasks under scheduled Epics using Options JIRA_API_TOKEN.
+ * Search child issues under scheduled Epics using Options JIRA_API_TOKEN.
  * Requires an explicit token (no cookie fallback) so missing Options config
  * can fall through to server PAT elsewhere.
  */
@@ -582,10 +572,7 @@ async function handleSearchChildTasks(
   // Chunk epic keys to keep JQL reasonable.
   for (let i = 0; i < unique.length; i += 40) {
     const group = unique.slice(i, i + 40);
-    const jql =
-      `${childLinkClause(linkField, group)} ` +
-      `AND issuetype = Task AND status not in (Cancelled, Closed) ` +
-      `ORDER BY key ASC`;
+    const jql = buildChildTaskSearchJql(linkField, group);
     let startAt = 0;
     const maxResults = 100;
     let total = Infinity;

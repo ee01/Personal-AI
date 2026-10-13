@@ -586,7 +586,7 @@ RC 的 JQL 把季度条件写在**父层**子查询里（`portfolioChildrenOf('�
 
 | 能力 | 凭据优先级 | 展示 / 行为 |
 |---|---|---|
-| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展搜 Task → `POST /import-tasks` 带 `tasks[]` 落库去重（含 `originalEstimateDays`） |
+| **导入 Task** | **仅**扩展 Options `JIRA_API_TOKEN`（`authMode: token-only`） | 任务视图 + 甘特上有 Jira Epic 才显示；无扩展时显示为**锁定态**（见下节），不再隐藏。扩展按 Epic Link / Parent Link / `parent` 搜索该 Epic 下全部未取消、未关闭子项（不限 `issuetype`，User Story、QA sub-task 等一并纳入）→ `POST /import-tasks` 带 `tasks[]` 落库去重（含 `originalEstimateDays`） |
 | **拖动回写 Target** | **仅**扩展 Options token（无扩展不走服务端 PAT） | 主任务与**子任务**排期/拖动/伸缩成功后前端 1.5s 防抖：先 `pai-roadmap-update-target-dates`，成功则 `POST /sync-target` `mode=confirm`（`itemKey` 或 `subId`）；confirm 会把 `target_*` **以及**甘特 `start_date`/`days` 对齐到刚写进 Jira 的日期。扩展在但 token 失败才 `mode=queue` 走服务端 PAT。**未装扩展**：Roadmap 排期照常保存，不写 Jira，底部一行「这次改动只保存在 Roadmap，没有同步到 Jira。」+ 文本按钮「安装插件开启同步」（点开与创建 Jira 同一套安装弹窗）。成功回写才 toast |
 | **打开页补回写未同步排期** | **仅**扩展 Options token | 有扩展打开页：在静默刷新前扫描 Gantt（主任务 `start`/`days` ≠ 上次镜像的 `targetStart`/`targetEnd`；子任务同理，需已镜像过 Target）。命中则先排队 Target 回写，并跳过这些 key 的 Jira 拉取，避免旧 Target 盖掉无扩展用户的本地改动。刷新结束后若仍有未同步条，再补一次。 |
 | **子任务 Owner → assignee** | **仅**扩展 Options token | 非 draft 改 Owner：有映射则 `pai-roadmap-update-assignee`；未映射 toast「未回写 assignee」；置空先 confirm。**未装扩展**：Roadmap Owner 已改，同一行安装提示，不再单独 toast |
@@ -668,7 +668,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - `roadmap-service/web/src/components/ResourceView.vue`（人员视图：车道装箱、Epic 归属可视化、时间窗平移、聚焦顺延）
 - `roadmap-service/web/src/components/GanttPanel.vue`（缩放手势、工具栏图例、Jira Target 回写队列）
 - `roadmap-service/web/src/components/TopBar.vue`
-- `src/contentScriptRoadmap.ts`、`src/roadmapAgentMappings.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
+- `src/contentScriptRoadmap.ts`、`src/roadmapChildTaskJql.ts`、`src/roadmapAgentMappings.ts`、`src/roadmapFocusContract.ts`、`src/jiraCreateMeta.ts`
 - `src/watchRules.ts`（`source: 'project'`）
 - `memory-service/src/core/FocusProjectSyncService.ts`
 - `memory-service/src/core/FocusProjectContextBuilder.ts`
@@ -683,6 +683,7 @@ Intent：`update_jql` 可顺带带 `releaseSheet`；独立 `update_release_sheet
 - AI Draft 规划体验 eval：`npm run eval:validate` 与 `npm run eval:run -- --suite roadmap-ai-draft-planning --no-repair`（合成计划契约，不跑真实 Jira / Memory / 付费模型质量）
 - 页面↔扩展↔memory 接缝：`npm run verify:roadmap-focus-contract`（页面构造的 state 消息必须能被扩展读到；`team`/`teamId` 那次改名就是在这里漏掉的）
 - Jira 创建 payload：`npm run verify:roadmap-jira-create-fields`（三档层级的 issuetype / 链接字段 / Epic Name / fixVersions 后缀匹配 / createmeta 不支持的字段必须缺席——生产 Jira 上没法试错）
+- 导入 Task 子项 JQL：`npm run verify:roadmap-child-task-jql`（先 `npm run build` 或 `npm start` 产出 `dist/`）。断言不按 `issuetype` 过滤，且源码与 `dist/contentScriptRoadmap.js` 都不再出现 `issuetype = Task`；`Cancelled` / `Closed` 仍排除
 - Roadmap 契约：在 personal-roadmap 仓库运行 `npm test -- roadmapContract`（含 fixVersion 透传、缺版本留空继续、失败重试不重建已成功 ticket）
 - Agent mappings：`TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/__tests__/roadmapAgentMappings.test.ts`（partial / warning / jiraKey+error 折叠）
 - 线上 draft → memory：`npm run verify:roadmap-draft-focus:e2e`（打真实服务，只读 roadmap、按团队覆盖写 memory）

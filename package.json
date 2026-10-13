@@ -112,6 +112,7 @@
     "verify:roadmap-draft-focus:e2e": "node tools/verify-roadmap-draft-focus-e2e.mjs",
     "verify:roadmap-service": "node tools/verify-roadmap-service.mjs",
     "verify:roadmap-dep-jira-status": "node tools/verify-roadmap-dep-jira-status.mjs",
+    "verify:roadmap-child-task-jql": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/__tests__/roadmapChildTaskJql.test.ts && node tools/verify-roadmap-child-task-jql.mjs",
     "verify:agent-workflow-replay": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-agent-workflow-replay.ts",
     "verify:agent-workflow": "npm run verify:agent-workflow-replay && TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-agent-workflow-diagnostics.ts && TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-memory-entry-agent-workflow.ts",
     "verify:scheduled-messages-one-click-setup": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-scheduled-messages-one-click-setup.ts",
