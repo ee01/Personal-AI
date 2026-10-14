@@ -632,6 +632,13 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
             'keystone brief matching failed; returning ordinary recall',
           );
         }
+        if(process.env.MEMORY_READ_TWO_LANES==='true') {
+          try {
+            db.prepare(`INSERT INTO recall_lane_metrics(owner_user_id,tenant_id,surface,lane,elapsed_ms,candidate_count,created_at,traffic_class)
+              VALUES (?,'default','passive','fast',?,?,?,'production')`)
+              .run(request.userId??request.userContext.userId,Date.now()-startedAt,result.matches?.length??0,Math.floor(Date.now()/1000));
+          } catch { /* Telemetry cannot change a passive response. */ }
+        }
         return reply.send(result);
       } catch (err) {
         routeReturned = true;

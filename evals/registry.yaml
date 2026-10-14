@@ -1154,6 +1154,9 @@ suites:
       rubric: evals/workflows/sleep-time-reconciliation/experience.md
     readerProof:
       claims:
+        - id: deep-passive-receipts
+          statement: 深车道有界且不跨隐藏节点，被动面过滤旧真值，回执与偏好确认有版本门
+          caseIds: [sr-continuation]
         - id: latest
           statement: 同 key 最新一手版本替代旧值并保留历史
           caseIds: [sr-latest]

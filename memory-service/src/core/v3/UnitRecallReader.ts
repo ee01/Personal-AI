@@ -19,6 +19,7 @@
 
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
+import { rerankDeepRecall } from './DeepRecallReranker.js';
 
 export interface UnitRecallCandidate {
   unitId: string;
@@ -46,6 +47,8 @@ const RECALLABLE_STATUSES = "('provisional', 'active', 'disputed')";
  * must receive before being wired into user-visible paths.
  */
 export interface ReadPolicyContext {
+  /** Evaluation reads must not pollute production rollout statistics. */
+  recordMetrics?: boolean;
   egressDestination?: 'local' | 'llm';
   ownerUserId?: string;
   tenantId?: string;
@@ -78,7 +81,11 @@ export class UnitRecallReader {
     if (getUnitVectorChannel() === 'e5') {
       try {
         const started = Date.now();
-        const embedding = await embedWithE5(queryText, 'query:');
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const embedding = await Promise.race([
+          embedWithE5(queryText,'query:'),
+          new Promise<never>((_,reject)=>{timeout=setTimeout(()=>reject(new Error('v3_vector_read_deadline')),400);}),
+        ]).finally(()=>{if(timeout)clearTimeout(timeout);});
         const rows = this.db
           .prepare(
             `SELECT v.view_id, v.unit_id
@@ -253,11 +260,17 @@ export class UnitRecallReader {
     if(kinship) {
       const parents=entities.filter(e=>keys.has(e.id)).map(e=>e.id);
       for(const parent of parents) {
-        const relations=this.db.prepare(`SELECT to_entity_id AS child FROM relationships WHERE from_entity_id=?
+        const relations=this.db.prepare(`SELECT to_entity_id AS child,relation_type AS relationType FROM relationships WHERE from_entity_id=?
           AND relation_type IN ('parent_of','has_child','has_daughter','has_son','father_of','mother_of') AND valid_to IS NULL
-          UNION SELECT from_entity_id AS child FROM relationships WHERE to_entity_id=?
-          AND relation_type IN ('child_of','daughter_of','son_of') AND valid_to IS NULL`).all(parent,parent) as Array<{child:string}>;
-        for(const {child} of relations) {keys.add(child);const entity=entities.find(e=>e.id===child);if(entity) keys.add(entity.name);}
+          UNION SELECT from_entity_id AS child,relation_type AS relationType FROM relationships WHERE to_entity_id=?
+          AND relation_type IN ('child_of','daughter_of','son_of') AND valid_to IS NULL`).all(parent,parent) as Array<{child:string;relationType:string}>;
+        for(const {child,relationType} of relations) {
+          const entity=entities.find(e=>e.id===child);
+          const daughter=/女儿|\bdaughter\b/i.test(query),son=/儿子|\bson\b/i.test(query);
+          if(daughter&&!son && !['has_daughter','daughter_of'].includes(relationType) && !/女儿|\bdaughter\b/i.test(entity?.name??'')) continue;
+          if(son&&!daughter && !['has_son','son_of'].includes(relationType) && !/儿子|\bson\b/i.test(entity?.name??'')) continue;
+          keys.add(child);if(entity) keys.add(entity.name);
+        }
       }
     }
     // Named subject keys also work before entity projection catches up.
@@ -271,10 +284,23 @@ export class UnitRecallReader {
 
   async recallLanes(query: string, limit: number, options: {policy?:ReadPolicyContext;explicitDeep?:boolean;deepQuestion?:boolean}={}) {
     const started=Date.now();
+    const finish = (result: UnitRecallResult & {lane:'fast'|'deep';escalated:boolean}) => {
+      if(options.policy?.ownerUserId && options.policy.recordMetrics!==false) {
+        try {
+        this.db.prepare(`INSERT INTO recall_lane_metrics(owner_user_id,tenant_id,surface,lane,elapsed_ms,candidate_count,created_at,traffic_class)
+          VALUES (?,?,?,?,?,?,?,'production')`).run(options.policy.ownerUserId,options.policy.tenantId??'default',
+            options.policy.accessibilityMode==='passive'?'passive':'active',result.lane,Date.now()-started,result.candidates.length,Math.floor(Date.now()/1000));
+        this.db.prepare('DELETE FROM recall_lane_metrics WHERE created_at<?').run(Math.floor(Date.now()/1000)-30*86400);
+        } catch {
+          // Observability must never fail retrieval during a concurrent writer.
+        }
+      }
+      return {...result,queryTimeMs:Date.now()-started};
+    };
     const fast=await this.recallAsync(query,limit,options.policy);
     const strong=fast.candidates.some(c=>c.status==='active' && (c.channels.includes('entity_anchor') || c.channels.length>=2));
     if (options.policy?.accessibilityMode==='passive' || !(options.explicitDeep || options.deepQuestion && !strong)) {
-      return {...fast,lane:'fast' as const,escalated:false};
+      return finish({...fast,lane:'fast',escalated:false});
     }
     // Bounded deterministic decomposition and temporal expansion. Every read
     // uses the same ACL/status gates; deep failure returns the fast evidence.
@@ -282,12 +308,44 @@ export class UnitRecallReader {
       const pieces=query.split(/[。？！?;；\n]/).map(s=>s.trim()).filter(Boolean).slice(0,3);
       pieces.push(query.replace(/(?:去年|前年|今年|三年前|上个月|最近|last year|last month|recently)/gi,' ').trim());
       const results=pieces.map(q=>this.recall(q,limit,undefined,options.policy));
+      // Expand at most two explicit relationship hops. Every intermediate
+      // entity must have readable evidence under the same policy; no hidden
+      // intermediary is used to bridge into an otherwise allowed result.
+      const seen = new Set<string>();
+      let frontier = [...new Set(fast.candidates.flatMap(c=>{
+        const r=this.db.prepare('SELECT subject_key FROM memory_units WHERE id=?').get(c.unitId) as {subject_key:string|null};
+        return r.subject_key?[r.subject_key]:[];
+      }))].slice(0,20);
+      const graph = new Map<string,number>();
+      for(let depth=0;depth<2 && frontier.length;depth++) {
+        const next:string[]=[];
+        for(const entity of frontier) {
+          if(seen.has(entity)) continue;
+          seen.add(entity);
+          const edges=this.db.prepare(`SELECT to_entity_id AS id,relation_type AS type FROM relationships WHERE from_entity_id=? AND valid_to IS NULL
+            UNION SELECT from_entity_id AS id,relation_type AS type FROM relationships WHERE to_entity_id=? AND valid_to IS NULL LIMIT 20`).all(entity,entity) as Array<{id:string;type:string}>;
+          for(const edge of edges) {
+            if(/女儿|\bdaughter\b/i.test(query) && !/儿子|\bson\b/i.test(query) && ['has_son','son_of'].includes(edge.type)) continue;
+            if(/儿子|\bson\b/i.test(query) && !/女儿|\bdaughter\b/i.test(query) && ['has_daughter','daughter_of'].includes(edge.type)) continue;
+            const units=this.db.prepare(`SELECT id FROM memory_units WHERE subject_key=? AND status IN ${RECALLABLE_STATUSES} LIMIT 50`).all(edge.id) as Array<{id:string}>;
+            const channel=new Map(units.map((u,i)=>[u.id,i]));
+            const allowed=this.recall('',50,new Map([['graph_deep',channel]]),options.policy);
+            if(!allowed.candidates.length) continue;
+            for(const c of allowed.candidates) if(graph.size<100 && !graph.has(c.unitId)) graph.set(c.unitId,graph.size);
+            if(!seen.has(edge.id) && next.length<20) next.push(edge.id);
+          }
+        }
+        frontier=[...new Set(next)];
+      }
+      results.push(this.recall('',Math.max(limit,20),new Map([['graph_deep',graph]]),options.policy));
       const candidates=new Map<string,{candidate:UnitRecallCandidate;score:number}>();
       for(const r of [fast,...results]) r.candidates.forEach((c,rank)=>{
         const entry=candidates.get(c.unitId)??{candidate:c,score:0};entry.score+=1/(60+rank);candidates.set(c.unitId,entry);
       });
-      return {...fast,candidates:[...candidates.values()].sort((a,b)=>b.score-a.score).slice(0,limit).map(e=>e.candidate),queryTimeMs:Date.now()-started,lane:'deep' as const,escalated:true};
-    } catch { return {...fast,lane:'fast' as const,escalated:false}; }
+      const merged=[...candidates.values()].sort((a,b)=>b.score-a.score).slice(0,Math.max(limit,20)).map(e=>e.candidate);
+      const ranked=await rerankDeepRecall(query,merged,options.policy);
+      return finish({...fast,candidates:ranked.slice(0,limit),lane:'deep',escalated:true});
+    } catch { return finish({...fast,lane:'fast',escalated:false}); }
   }
 
   /**

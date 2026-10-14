@@ -7581,7 +7581,9 @@ function escapeAttr(value) {
 async function runWriteProvenanceCase({ suite, caseItem, runDir }) {
   const reportPath = resolveRepoPath(path.join(runDir, `${caseItem.id}.vitest.json`));
   const command = await runProcess('npm', ['--prefix', 'memory-service', 'test', '--', '--run',
-    suite.id === 'sleep-time-reconciliation' ? 'src/__tests__/sleepReconciliation.test.ts' : 'src/__tests__/writeProvenanceGate.test.ts', '--testNamePattern', caseItem.testNamePattern,
+    suite.id === 'sleep-time-reconciliation'
+      ? (caseItem.id === 'sr-continuation' ? 'src/__tests__/reconciliationContinuation.test.ts' : 'src/__tests__/sleepReconciliation.test.ts')
+      : 'src/__tests__/writeProvenanceGate.test.ts', '--testNamePattern', caseItem.testNamePattern,
     '--reporter=json', `--outputFile=${reportPath}`], {cwd: repoRoot, timeoutMs: 60_000});
   let report = {};
   try { report = JSON.parse(await fs.readFile(reportPath, 'utf8')); } catch { /* command failure is evidence */ }

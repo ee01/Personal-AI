@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { ConsolidationEngine } from '../core/ConsolidationEngine.js';
 import { GenerativeReplay } from '../core/GenerativeReplay.js';
+import { reconciliationRoutes } from './reconciliation.js';
 
 // ---------------------------------------------------------------------------
 // Request / response types
@@ -40,6 +41,7 @@ const consolidateBodySchema = {
 export async function consolidateRoutes(
   app: FastifyInstance,
 ): Promise<void> {
+  await app.register(reconciliationRoutes);
   // POST /consolidate — Trigger consolidation manually
   app.post<{ Body: ConsolidateBody }>(
     '/consolidate',

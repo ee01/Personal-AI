@@ -12,6 +12,7 @@
       </router-link>
     </div>
 
+    <SleepReconciliationReceipts />
     <div v-if="loading" class="loading-container">
       <div class="loading-spinner"></div>
       <p>正在加载梦境重放...</p>
@@ -364,6 +365,7 @@
 import { computed, ref, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { getMemoryServiceClient } from '../../services/MemoryServiceClient';
+import SleepReconciliationReceipts from './SleepReconciliationReceipts.vue';
 
 interface DreamItem {
   filename: string;

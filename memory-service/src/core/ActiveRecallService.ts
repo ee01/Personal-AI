@@ -50,7 +50,7 @@ import {
 const ACTIVE_OVER_FETCH_FACTOR = 1.5;
 const BALANCED_OVER_FETCH_FACTOR = 1.25;
 const EVIDENCE_ONLY_DEFAULT_CHANNELS: RecallChannelName[] = ['fts'];
-function passesCurrentTruth(db:Database.Database,item:RecallItem):boolean {
+export function passesCurrentTruth(db:Database.Database,item:RecallItem):boolean {
   if(item.id.startsWith('unit:')) {
     const row=db.prepare('SELECT status FROM memory_units WHERE id=?').get(item.id.slice(5)) as {status:string}|undefined;
     return !!row && ['active','provisional','disputed'].includes(row.status);
@@ -134,6 +134,7 @@ export interface ActiveRecallOptions {
    * callers that already pay the LLM cost downstream (for example `/ask`).
    */
   skipAnalysis?: boolean;
+  recordMetrics?: boolean;
   runtimePolicy?: 'default' | 'safe_fts';
 }
 
@@ -191,6 +192,7 @@ export class ActiveRecallService {
     if (process.env.MEMORY_READ_TWO_LANES === 'true' && options.runtimePolicy!=='safe_fts') {
       const deepQuestion=/为什么|怎么变化|综合|不同对话|比较|回顾|why|how.*changed|compare|across.*(?:sources|conversations)/i.test(query.query);
       const policy = { ownerUserId:getUsageContext()?.userId,egressDestination:'llm' as const,
+        recordMetrics:options.recordMetrics,
         scopeLocator:query.scope==='work'||query.scope==='personal'?query.scope:undefined,
         maxSensitivity:'private' as const, temporalMode:query.lifecycleMode==='historical'?'audit' as const:'current' as const,
         accessibilityMode:'active' as const };
@@ -221,7 +223,11 @@ export class ActiveRecallService {
           queryTimeMs:Date.now()-startedAt,channels:[...new Set([...legacy.channels,...v3.channelStats.filter(c=>c.candidateCount>0).map(c=>c.channel)])]};
       }
     }
-    baseResult ??= await this.engine.recall(baseQuery);
+    // Even an empty v3 result must not re-enter the legacy dense channel:
+    // otherwise a cold e5 read also starts a second model and exceeds the
+    // two-lane latency/cost contract. Raw FTS remains the migration fallback.
+    baseResult ??= await this.engine.recall(process.env.MEMORY_READ_TWO_LANES==='true'
+      ? {...baseQuery,channels:['fts']} : baseQuery);
     if(process.env.MEMORY_READ_TWO_LANES==='true' && query.lifecycleMode!=='historical') {
       baseResult={...baseResult,items:baseResult.items.filter(item=>passesCurrentTruth(this.db,item))};
     }

@@ -149,7 +149,7 @@ tenant × owner × requesting_agent × scope
 
 B 默认每用户每晚最多 120 调用、120,000 token 预留上界；C 为 60 调用、60,000 token；D 最多 5 次 insight、12,000 token。A–E 新阶段的合计默认上界 192,000；按 B→C 顺序分配，A 永不停。`reconcile_nightly_budgets` 的预留先于调用且持久化，失败调用不返还，禁用 provider fallback/重试以免跨预算放大。预留按 prompt UTF-8 字节数加输出上限计算，是保守上界；真实调用由 `usage_events` 的 `reconcile_b/c/d` feature 归属统计。
 
-预算参数为 `RECONCILE_LLM_BUDGET_PER_NIGHT`、`RECONCILE_C_PAIRS_PER_NIGHT`、`RECONCILE_B_TOKEN_CAP`、`RECONCILE_C_TOKEN_CAP`、`RECONCILE_TOTAL_TOKEN_CAP`。B/C 可用 `RECONCILE_CHEAP_MODEL` 指定当前 provider 支持的小模型；未指定时沿用用户现有模型路由，不隐式换 provider。D 使用现有主模型。
+预算参数为 `RECONCILE_LLM_BUDGET_PER_NIGHT`、`RECONCILE_C_PAIRS_PER_NIGHT`、`RECONCILE_B_TOKEN_CAP`、`RECONCILE_C_TOKEN_CAP`、`RECONCILE_TOTAL_TOKEN_CAP`。B/C 优先使用 `RECONCILE_CHEAP_TARGET=provider/model`，否则复用 `MEMORY_EXTRACTION_LLM_FALLBACKS` 首个已配置目标；无低成本配置时才使用主模型。`RECONCILE_CHEAP_MODEL` 保留为当前 provider 的显式模型覆盖。模型资格包含 provider/model，更换任何一项均需重新人工验证。要求推理的既有 GLM/Kimi 目标使用 minimal 与 2048 输出上限，其他目标使用 none 与 768，预留包含完整上限；禁用重试和 fallback。D 使用现有主模型。
 
 ### Shadow → live 与回滚
 
@@ -159,11 +159,17 @@ B 默认每用户每晚最多 120 调用、120,000 token 预留上界；C 为 60
 
 关闭阶段开关停止后续工作；`review-sleep-reconciliation.ts revert <db> <decision-id>` 可在后续 revision 未变时恢复状态、confidence、有效期和派生来源拷贝；revision 仍单调递增，原始 source 与 episode 不删除。
 
+Memory Explorer 的“梦境重放”页展示夜间整理回执：较早/较新值、来源数量和原文时间线入口；shadow 明确标为“未改真值”。已应用且没有后续修订的判决可“撤销这次整理”，版本变更返回 409。这里是操作记录，不要求用户逐条审核内部整理。长期自身偏好单独显示待确认提案，确认后才激活 profile slot、产生用户修订并进入同 scope 的回答偏好；拒绝不会每晚重建同一提案。
+
+上线人工验收可在同页导出当前模型的更新/矛盾样本。每组最多 50 个不同 pair，隐藏模型判决、`expectedDecision` 留空，附支持片段和有效来源分类。文件含私人内容，只在本地保管，不提交仓库或作为公开附件。填完由操作员通过上述 CLI 导入，导入不会自动切 live。`GET /api/v1/reconciliation`、`/samples?phase=B|C`、`/profiles` 按当前用户隔离，restricted 来源不从该普通面显示。profile 确认与 receipt 回滚均使用版本检查的 POST 端点。
+
 ### 遗忘与读取
 
 A 开启后，实体锚定 semantic preference/fact 的 metadata salience 最低 .15，只归档为 `archive_only`；procedural 不按时间衰减。关联的原始 message/chunk 也受到保护。其他 episodic 保持原策略；不自动复活历史软删条目，不覆盖 privacy_delete。`FORGETTING_KIND_POLICY=off` 可恢复旧衰减。
 
-`MEMORY_READ_TWO_LANES=true` 接入 ActiveRecallService（Ask/主动 recall）。快车道为实体+alias（含明确 parent/child 边的一跳）、lexical、一个 e5 dense（启用时）和 RRF，均无在线 LLM。迁移期仍补充 legacy lexical，显式过滤关联已 superseded/retracted 等 unit 的原文，避免 v3 语料不完整导致历史证据缺失。读取完整执行 owner、scope、sensitivity、evidence-class、有效期及状态门，再截断 Top-K。Passive 不升级深车道，也不展示 archived 生命周期 unit。深车道是有界的确定性拆问/时间词扩展；本次没有新增在线 reranker 模型。
+`MEMORY_READ_TWO_LANES=true` 接入 ActiveRecallService（Ask/主动 recall）与 ContextRecallService（Lens/被动面）。主动快车道为实体+alias、lexical、最多一个 e5 dense 和 RRF，无在线 LLM；e5 冷启动/读取有 400ms 降级期限，按进程 single-flight 加载。v3 无命中时 legacy 也仅补 FTS，不启动第二 dense 模型。Passive 的 v3 补充只用确定性实体/lexical，不启动模型、不升级深车道，也不展示 archived 生命周期 unit。当前面过滤关联已 superseded/retracted 等 unit 的原文；完整执行 owner、scope、sensitivity、evidence-class、有效期及状态门，再截断 Top-K。明确问女儿时不混入已知儿子的偏好。
+
+深车道进行有界拆问/时间词扩展，最多两跳、每跳 20 个实体、最多 100 个 unit；中间实体必须具有同策略下可读证据。对已批准发往模型的最多 20 个候选做一次低成本重排，3s 超时、无重试/目标 fallback；输出必须是原候选的唯一完整排列，异常保留确定性顺序。`MEMORY_DEEP_RERANKER=false` 关闭重排，`MEMORY_DEEP_RERANK_MODEL` 可覆盖模型。
 
 A 开启后 OnlineReflection 持久计数每 5 次交互抽样 1 次，并关闭 ingestion 内联 merge；D 开启后偏好候选交给 nightly profile proposal。反思研究循环不在本任务恢复。
 
@@ -174,5 +180,13 @@ A 开启后 OnlineReflection 持久计数每 5 次交互抽样 1 次，并关闭
 确定性 suite 位于 `memory-service/src/__tests__/sleepReconciliation.test.ts` 和 `evals/cases/sleep-time-reconciliation/`；真实配置模型的 50 对匿名场景结果见 `memory-service/evals/sleep-time-reconciliation/quality-report.json`，覆盖最新值、互补和来源权威。六能力报告的本地服务将回答超时预算设为 60s，线上默认 9s 的延迟表现未由该报告证明。生产 50 对人工资格、Passive p95 <500ms、Ask 深车道率 <20% 与实际 /ask p95、每日 token 降幅需随真实 rollout 观测，不能由合成压力条件证明。源码：`SleepReconciliation.ts`、`TruthCandidatePlan.ts`、`ReconcileTruth.ts`、migration 075。执行 `npm run eval:validate`、`npm run eval:run -- --suite sleep-time-reconciliation --no-repair`、`quality.ts`，以及指向本分支的 `npm run eval:memory-abilities`。
 
 两车道回答阶段关闭额外推理开销。同步/流式模型若返回空文本，使用现有确定性证据摘要，并明确说明模型未返回有效回答；不把空字符串作为成功答案。
+
+`ASK_ANSWER_MODEL_TARGET=provider/model` 可显式配置回答目标，未配置仍使用原主模型。2026-10-14 rollout 使用既有 Flash 目标，未提高默认 9s 回答预算；该参数只影响回答调用。
+
+### Rollout 可观测性
+
+`GET /api/v1/reconciliation/metrics` 返回近七日生产读取样本、active/passive p95、深车道率、预算预留、判决状态和执行日期。read_only 评测不写生产统计；升级前 unknown 记录不用于当前 p95。Passive 记录整个 Context Recall service 链路，active 记录读取链路，不代表整个 Ask 回答耗时；最多使用最新 10,000 样本。空样本返回 null，不能用合成成绩填充。
+
+`reconcile_nightly_runs.trigger_kind` 区分 nightly 与 manual，手动首轮不能充当七晚证据。候选扫描小批事务落库、批次间让出事件循环；统计失败不影响召回。真实人工资格、七晚成本与生产性能门槛仍须真实 rollout 观测。
 
 当前两车道读取同时检查 message 与关联 chunk 的 unit 状态；被替代来源的旧 chunk 不会混入当前答案，历史读取仍保留。unit 回执提供原 episode 的 timeline 跳转。来源权威按实际支持 span 复核：owner/observed 消息中已标为 AI 作者的片段只能作为 system_inference，不能继承消息容器的一手权威，也不能成为 profile/attention 的唯一来源或独立来源加固。

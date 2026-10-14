@@ -2,13 +2,14 @@ import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 import { LLMClient } from '../../llm/LLMClient.js';
 import { getConfig } from '../../config.js';
-import { runWithUsageContext } from '../../analytics/usageContext.js';
+import { runWithUsageContext,getUsageContext } from '../../analytics/usageContext.js';
 import { unitPromotionEligible } from '../WriteProvenanceGate.js';
 import { isConsolidationPhaseEnabled } from './ConsolidationPhases.js';
 import { sourcesFor, type ReconcileDecision, type ReconcileUnit } from './ReconcileTruth.js';
 import { UnitTruthMaintainer } from './UnitTruthMaintainer.js';
 import { EpisodeRepository } from './EpisodeRepository.js';
 import { truthCandidates } from './TruthCandidatePlan.js';
+import { reconcileModelConfig,reconcileModelVersion,reconcileModelOptions } from './ReconcileModel.js';
 
 type Phase = 'B' | 'C' | 'D';
 export interface JudgeResult { decision: ReconcileDecision; reason: string }
@@ -21,12 +22,10 @@ const cap = (key: string, fallback: number) => {
 };
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function judgeConfig() {
-  const config=getConfig(), model=process.env.RECONCILE_CHEAP_MODEL;
-  return {...config,...(model?{openaiModel:model,claudeModel:model,ollamaModel:model}:{}),llmFallbacks:[]};
+  return reconcileModelConfig();
 }
 function judgeModel() {
-  const c=judgeConfig();
-  return process.env.RECONCILE_CHEAP_MODEL || (c.llmProvider==='claude'?c.claudeModel:c.llmProvider==='ollama'?c.ollamaModel:c.openaiModel);
+  return reconcileModelVersion();
 }
 
 export function protectedUnit(unit: Pick<ReconcileUnit,'memory_form'|'kind'|'subject_key'>): boolean {
@@ -41,6 +40,10 @@ export class SleepReconciliation {
   async run(at = Math.floor(Date.now()/1000)) {
     const result: Record<string, unknown> = {};
     if (!isConsolidationPhaseEnabled('A')) return result;
+    const night=new Date(at*1000).toISOString().slice(0,10);
+    const trigger=getUsageContext()?.feature==='daily_consolidation'?'nightly':'manual';
+    this.db.prepare(`INSERT INTO reconcile_nightly_runs(night,started_at,trigger_kind) VALUES (?,?,?)
+      ON CONFLICT(night) DO UPDATE SET started_at=excluded.started_at,trigger_kind=excluded.trigger_kind,finished_at=NULL,result_json=NULL`).run(night,at,trigger);
     result.A = this.deterministic(at);
     for (const phase of ['B','C','D','E'] as const) {
       if (!isConsolidationPhaseEnabled(phase)) break;
@@ -53,6 +56,8 @@ export class SleepReconciliation {
         console.error(`[sleep-reconcile:${phase}]`, error);
       }
     }
+    this.db.prepare('UPDATE reconcile_nightly_runs SET finished_at=?,result_json=? WHERE night=?')
+      .run(Math.floor(Date.now()/1000),JSON.stringify(result),night);
     return result;
   }
 
@@ -123,7 +128,7 @@ export class SleepReconciliation {
     return this.db.prepare(`SELECT u.* FROM promotion_eligible_units u WHERE status IN ('provisional','active','disputed') ORDER BY created_at,id`).all() as ReconcileUnit[];
   }
 
-  private enqueue(phase: 'B'|'C', at: number) {
+  private async enqueue(phase: 'B'|'C', at: number) {
     const units = this.units();
     const watermark=this.db.prepare('SELECT last_created_at FROM reconcile_scan_state WHERE phase=?').get(phase) as {last_created_at:number}|undefined;
     const since=watermark?.last_created_at??at-86400;
@@ -133,9 +138,14 @@ export class SleepReconciliation {
     const insert = this.db.prepare(`INSERT OR IGNORE INTO unit_reconcile_decisions
       (id,tenant_id,owner_user_id,phase,unit_id,candidate_unit_id,evidence_digest,evidence_keys_json,expected_revisions_json,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?)`);
-    this.db.transaction(() => {
+    let batch:Array<Array<string|number>>=[];
+    const flush=()=>{
+      this.db.transaction(()=>{for(const args of batch) insert.run(...args);})();
+      batch=[];
+    };
       const incoming=phase==='B'?units.filter(n=>n.created_at>=since && n.created_at<=at):units;
-      for (const n of incoming) for (const o of truthCandidates(this.db,n)) {
+      for (const [index,n] of incoming.entries()) {
+        for (const o of truthCandidates(this.db,n)) {
         if (!n.subject_key || !o.subject_key || n.owner_user_id!==o.owner_user_id || n.tenant_id!==o.tenant_id
           || n.scope_locator!==o.scope_locator || n.sensitivity!==o.sensitivity || n.egress_policy!==o.egress_policy) continue;
         const sameKey = subject(n)===subject(o) && !!n.predicate_key && n.predicate_key===o.predicate_key;
@@ -146,11 +156,16 @@ export class SleepReconciliation {
         const cooldown = this.db.prepare(`SELECT 1 FROM unit_reconcile_decisions WHERE phase=? AND unit_id=?
           AND candidate_unit_id=? AND cooldown_until>? AND state IN ('applied','shadow')`).get(phase,n.id,o.id,at);
         if (cooldown) continue;
-        insert.run(randomUUID(),n.tenant_id,n.owner_user_id,phase,n.id,o.id,evidenceDigest,JSON.stringify(evidence),JSON.stringify([n.current_revision,o.current_revision]),at);
+        batch.push([randomUUID(),n.tenant_id,n.owner_user_id,phase,n.id,o.id,evidenceDigest,JSON.stringify(evidence),JSON.stringify([n.current_revision,o.current_revision]),at]);
+        if(batch.length>=50) flush();
+        }
+        // Candidate reads are outside the write transaction. Let interactive
+        // requests run between bounded chunks; CAS protects intervening edits.
+        if(index%5===4) {flush();await new Promise<void>(resolve=>setImmediate(resolve));}
       }
+      flush();
       this.db.prepare(`INSERT INTO reconcile_scan_state(phase,last_created_at) VALUES (?,?)
         ON CONFLICT(phase) DO UPDATE SET last_created_at=max(last_created_at,excluded.last_created_at)`).run(phase,at);
-    })();
   }
 
   /** Persistent reservation precedes the external call. Retries never exceed the nightly cap. */
@@ -179,11 +194,11 @@ export class SleepReconciliation {
     if (rows.length<50) return false;
     if (rows.filter(r=>r.decision===r.expected_decision).length/rows.length<0.85) return false;
     const bothValid=rows.filter(r=>r.expected_decision==='noop'||r.expected_decision==='refine');
-    return phase!=='C' || bothValid.length>=15 && bothValid.filter(r=>r.decision==='dispute').length/bothValid.length<=0.1;
+    return phase!=='C' || bothValid.length>=15 && bothValid.filter(r=>r.decision==='dispute'||r.decision==='supersede').length/bothValid.length<=0.1;
   }
 
   async reconcile(phase: 'B'|'C', at: number) {
-    this.enqueue(phase,at);
+    await this.enqueue(phase,at);
     this.db.prepare("UPDATE unit_reconcile_decisions SET state='failed',leased_until=NULL,lease_token=NULL WHERE state='judging' AND leased_until<?").run(at);
     const pending = this.db.prepare(`SELECT * FROM unit_reconcile_decisions WHERE phase=? AND state IN ('deferred','failed') ORDER BY created_at,id`).all(phase) as any[];
       let judged=0, applied=0;
@@ -203,7 +218,8 @@ Different values alone are NOT a contradiction. Inference must never replace fir
 Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>({
   id:u.id,text:u.text,kind:u.kind,subject:u.subject_key,predicate:u.predicate_key,observedAt:u.observed_at,
   sources:sourcesFor(this.db,u.id),confirmed:u.confirmation_state==='user_confirmed'})))}`;
-      const tokens=Buffer.byteLength(prompt,'utf8')+768;
+      const modelOptions=reconcileModelOptions();
+      const tokens=Buffer.byteLength(prompt,'utf8')+modelOptions.maxTokens;
       const leaseToken=randomUUID();
       const claimed=this.db.transaction(()=>{
         const current=this.db.prepare('SELECT state FROM unit_reconcile_decisions WHERE id=?').get(job.id) as {state:string};
@@ -215,7 +231,7 @@ Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>
       try {
         const result = await runWithUsageContext({userId:n.owner_user_id,capability:'background_jobs',feature:`reconcile_${phase.toLowerCase()}`,side:'backend'},
           () => this.judge ? this.judge(n,o,phase,prompt) : new LLMClient(judgeConfig())
-            .generateJSON<JudgeResult>(prompt,{maxTokens:768,temperature:0,retryCount:0,reasoningEffort:'none'}));
+            .generateJSON<JudgeResult>(prompt,{...modelOptions,temperature:0,retryCount:0}));
         if (!decisions.includes(result.decision) || typeof result.reason!=='string') throw new Error('invalid_judge_schema');
         const saved=this.db.prepare(`UPDATE unit_reconcile_decisions SET decision=?,reason=?,model_version=?,state='shadow',leased_until=NULL,lease_token=NULL,
           expected_revisions_json=?,decided_at=?,cooldown_until=? WHERE id=? AND state='judging' AND lease_token=?`).run(result.decision,result.reason.slice(0,500),judgeModel(),
@@ -259,6 +275,8 @@ Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>
       for (const pref of units.filter(x=>x.kind==='preference' && (x.subject_key===x.owner_user_id || x.subject_key==='self'
         || sourcesFor(this.db,x.id).some(s=>s.evidence_class==='self_statement')))) {
         const slotKey=`sleep:${pref.id}`;
+        if(this.db.prepare('SELECT 1 FROM profile_slots WHERE tenant_id=? AND owner_user_id=? AND slot_key=? LIMIT 1')
+          .get(pref.tenant_id,pref.owner_user_id,slotKey)) continue;
         const inserted=this.db.prepare(`INSERT OR IGNORE INTO profile_slots(id,tenant_id,owner_user_id,slot_key,slot_value,sensitivity,status,source_unit_ids,created_at,updated_at)
           VALUES (?,?,?,?,?,'durable','pending_confirmation',?,?,?)`).run(randomUUID(),pref.tenant_id,pref.owner_user_id,slotKey,pref.text,JSON.stringify([pref.id]),at,at);
         profiles+=inserted.changes;

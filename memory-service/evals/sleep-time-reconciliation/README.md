@@ -6,7 +6,7 @@ Production readonly baseline: `phase0.json` (no text or source ids).
 
 Deterministic boundary suite: `npm run eval:run -- --suite sleep-time-reconciliation --no-repair`. Five required groups execute 67 checks; the complete test file has 89 checks, including real nightly wiring, provenance/ACL, source independence, rollback, live qualification, parent/child gift recall and expired leases.
 
-Actual configured model: `memory-service/node_modules/.bin/tsx memory-service/evals/sleep-time-reconciliation/quality.ts`. `quality-report.json` contains 50 controlled anonymous fixtures grounded in the issue scenarios, not a representative human-labeled production sample. Latest accuracy 1, both-valid false-positive 0, authority violations 0, agreement .98. It does not qualify a production user for live B/C.
+Actual model: `RECONCILE_CHEAP_TARGET=openai/deepseek/deepseek-v4.1-flash memory-service/node_modules/.bin/tsx memory-service/evals/sleep-time-reconciliation/quality.ts`. The 2026-10-14 report uses the rollout's cheap target: latest accuracy 1, both-valid false-positive 0, authority violations 0, agreement 1. These 50 controlled anonymous fixtures do not qualify production B/C live or replace human labels.
 
 `abilities-report.json` is a content-free summary of the six-ability benchmark against a local branch service with a private readonly production snapshot. All six scores are 1, no regression. Local answer timeout was 60 seconds; this does not establish production p95 at the default 9-second budget. The temporary server was stopped and its private snapshot removed.
 

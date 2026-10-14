@@ -4992,7 +4992,29 @@ export class MemoryServiceError extends Error {
 // Client class
 // ============================================================================
 
+export interface SleepReconciliationReceipt {
+  id:string;phase:string;decision:string|null;state:string;reason:string|null;createdAt:number;
+  units:Array<{id:string;text:string;status:string;observedAt:number|null;revision:number;sourceCount:number;
+    sources:Array<{episodeId:string;evidenceClass:string}>}>;
+}
+
 export class MemoryServiceClient {
+  async getSleepProfileProposals():Promise<{proposals:Array<{id:string;value:string;revision:number}>}> {
+    return this.request('GET','/reconciliation/profiles');
+  }
+  async confirmSleepProfileProposal(id:string,accept:boolean,revision:number):Promise<{confirmed:boolean}> {
+    return this.request('POST',`/reconciliation/profiles/${encodeURIComponent(id)}/confirm`,{accept,revision});
+  }
+  async getReconciliationSamples(phase:'B'|'C'): Promise<{availablePairs:number;requiredPairs:number;labels:unknown[]}> {
+    return this.request('GET',`/reconciliation/samples?phase=${phase}`);
+  }
+  async getReconciliationReceipts(unitId?: string): Promise<{receipts: SleepReconciliationReceipt[]}> {
+    return this.request('GET',`/reconciliation${unitId?`?unitId=${encodeURIComponent(unitId)}`:''}`);
+  }
+
+  async revertReconciliationReceipt(id: string): Promise<{reverted:boolean}> {
+    return this.request('POST',`/reconciliation/${encodeURIComponent(id)}/revert`,{});
+  }
   private baseUrl: string;
   private apiKey: string | undefined;
   private bootstrapKey: string | undefined;

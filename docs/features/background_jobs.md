@@ -328,6 +328,10 @@ Popup 还提供可展开的后台作业概览：
 
 既有 daily consolidation cron 在 synonym 边生成后、遗忘前调用 v3 A–E：确定性按 kind 归档和 alias 归一 → 新旧真值判决 → 14 天冷却的矛盾扫描 → one-pager/低权威 insight/待确认 profile → attention 候选。SQLite 仍是真源；原文不删，不新建 cron，不启动 reflection 研究循环。
 
+runner 指服务内 `SleepReconciliation` 模块。既有日巩固、每周 `GenerativeReplay` Dreaming 和每日 Reflect 原先就有；新模块用受预算约束的模型 API 做 B/C 判决与 D insight，不调用 Codex CLI，不开放任意工具循环或 shell 权限。既有 agent tasks / 外部 executor 是另外的能力，“Dreaming”名称本身不授予工具权限。
+
+扫描小批提交、批次间让出事件循环；revision/lease 校验保护并发修改。nightly 与手动 rollout 分别记录，手动运行不充当七晚验收。真实判决在 shadow 积累，B/C live 仍须人工资格；样本与指标通过 `/api/v1/reconciliation/*` 和 Memory Explorer 梦境页查看。
+
 `MEMORY_CONSOLIDATION_V3` 按 `A,B,C,D,E` 前序白名单开启；B/C 默认 shadow，live 需要当前模型、同 owner/tenant 的 50 对不同 pair 人工标签一致率 >=.85，C 加 15 对 both-valid 误判 <=.1。调用预算在 `reconcile_nightly_budgets` 中持久预留，超帽或 provider 失败留 deferred/failed，下次优先。A 与确定性 one-pager 无模型调用；每阶段失败不阻断后续允许阶段。
 
 用量记录标为 `reconcile_b/c/d` feature；结果带 judged/applied/deferred、aliases、units 与 attention candidate 数。确认只用于自身长期偏好、已确认事实或 restricted 争议；一般矛盾自行标 disputed。attention 当前只落候选，不代表执行/外发。关闭开关停止运行，带 revision 校验的回执支持逐项回滚。具体预算、读取与回滚命令见 [memory_foundation.md](./memory_foundation.md#睡眠期整理与两车道读取)。

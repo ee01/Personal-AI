@@ -14,6 +14,7 @@ import { resetConfigForTests, getConfig } from '../config.js';
 import { isConsolidationPhaseEnabled } from '../core/v3/ConsolidationPhases.js';
 import { MemoryClaimAttributionService } from '../core/MemoryClaimAttributionService.js';
 import type { ReconcileUnit } from '../core/v3/ReconcileTruth.js';
+import { reconcileModelVersion } from '../core/v3/ReconcileModel.js';
 
 const llmMock=vi.hoisted(()=>vi.fn());
 vi.mock('../llm/LLMClient.js',()=>({getLLMClient:()=>({generateJSON:llmMock}),LLMClient:class {generateJSON=llmMock;}}));
@@ -195,7 +196,7 @@ describe('sleep safety and routing',()=>{
   });
   it('qualified live applies correct shadows, retains a reviewed mismatch, and a model change resets qualification',async()=>{
     vi.stubEnv('RECONCILE_B_MODE','live');vi.stubEnv('RECONCILE_LLM_BUDGET_PER_NIGHT','0');
-    const config=getConfig(),model=config.llmProvider==='claude'?config.claudeModel:config.llmProvider==='ollama'?config.ollamaModel:config.openaiModel;
+    const model=reconcileModelVersion();
     let mismatch='';
     for(let i=0;i<50;i++) {
       const o=seed(`old${i}`,{subject:`slot${i}`,observed:at-3600,created:at-3600});

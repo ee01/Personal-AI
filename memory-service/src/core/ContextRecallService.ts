@@ -33,6 +33,8 @@ import type {
   SceneFrame,
 } from '../types/index.js';
 import { RecallEngine } from './RecallEngine.js';
+import { passesCurrentTruth } from './ActiveRecallService.js';
+import { UnitRecallReader } from './v3/UnitRecallReader.js';
 import {
   RecallContextExpansionService,
   type RecallContextExpansion,
@@ -470,7 +472,7 @@ export class ContextRecallService {
 
   constructor(
     private db: Database.Database,
-    userId = 'default',
+    private userId = 'default',
   ) {
     this.engine = new RecallEngine(db);
     this.contextExpansion = new RecallContextExpansionService(db);
@@ -759,6 +761,29 @@ export class ContextRecallService {
           reinforceAccess: false,
           allowEmbeddingColdStart: false,
         });
+    if(process.env.MEMORY_READ_TWO_LANES==='true' && !sourceMemoryOnly) {
+      result.items=result.items.filter(item=>passesCurrentTruth(this.db,item));
+      // Passive never escalates or starts a model: deterministic entity/alias
+      // and lexical truth projections join the existing surface filters.
+      const policy={ownerUserId:this.userId,scopeLocator:recallQuery.scope==='work'||recallQuery.scope==='personal'?recallQuery.scope:undefined,
+        maxSensitivity:'private' as const,accessibilityMode:'passive' as const,temporalMode:'current' as const};
+      const units=new UnitRecallReader(this.db).recall(recallQueryText,limit*2,undefined,policy);
+      const projected:RecallItem[]=[];
+      const sources=new Set<string>();
+      for(const unit of units.candidates) {
+        const source=this.db.prepare(`SELECT m.id,m.scope,m.source_type,m.source_url FROM memory_unit_sources s
+          JOIN messages_raw m ON m.id=s.episode_id WHERE s.unit_id=? AND s.promotion_eligible=1 ORDER BY s.created_at DESC LIMIT 1`)
+          .get(unit.unitId) as {id:string;scope:'work'|'personal';source_type:string;source_url:string|null}|undefined;
+        if(!source)continue;
+        sources.add(source.id);
+        projected.push({id:`unit:${unit.unitId}`,type:'message',content:unit.text,scope:source.scope,
+          score:unit.status==='disputed'?.45:unit.channels.includes('entity_anchor')?.8:.55,
+          source:source.source_type,sourceUrl:source.source_url??undefined,timestamp:unit.observedAt??0,
+          exploreLink:`#/timeline?focus=${encodeURIComponent(source.id)}`,
+          metadata:{unitId:unit.unitId,unitKind:unit.kind,sourceEpisodeId:source.id,recallLane:'fast'}});
+      }
+      result.items=[...projected,...result.items.filter(item=>!sources.has(item.id))];
+    }
     if (debug) debug.channelsHit = result.channels;
 
     const sceneAnchors = extractSceneAnchors(expandedRequest, normalized.query);

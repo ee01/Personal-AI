@@ -28,6 +28,7 @@ export function getUnitVectorChannel(): UnitVectorChannel {
  * next call (no permanent-unavailable caching — §9.6).
  */
 let e5Pipeline: Awaited<ReturnType<typeof loadE5Pipeline>> | null | undefined;
+let e5Loading: Promise<Awaited<ReturnType<typeof loadE5Pipeline>> | null> | undefined;
 
 async function loadE5Pipeline() {
   const { pipeline } = await import('@xenova/transformers');
@@ -38,17 +39,17 @@ async function loadE5Pipeline() {
 
 async function getE5() {
   if (e5Pipeline !== undefined) return e5Pipeline;
-  try {
-    e5Pipeline = await loadE5Pipeline();
-    console.log('[UnitEmbeddingWorker] multilingual-e5-small loaded');
-  } catch (err) {
-    e5Pipeline = null;
-    console.warn(
-      '[UnitEmbeddingWorker] e5 load failed; vector channel unavailable this round:',
-      (err as Error).message,
-    );
-  }
-  return e5Pipeline;
+  e5Loading ??= (async()=>{
+    try {
+      e5Pipeline=await loadE5Pipeline();
+      console.log('[UnitEmbeddingWorker] multilingual-e5-small loaded');
+      return e5Pipeline;
+    } catch(err) {
+      console.warn('[UnitEmbeddingWorker] e5 load failed; vector channel unavailable this round:',(err as Error).message);
+      return null;
+    } finally { e5Loading=undefined; }
+  })();
+  return e5Loading;
 }
 
 export async function embedWithE5(text: string, prefix: 'query:' | 'passage:'): Promise<number[]> {
@@ -60,9 +61,10 @@ export async function embedWithE5(text: string, prefix: 'query:' | 'passage:'): 
 
 /** Test hook: inject a fake pipeline so tests never download the model. */
 export function setE5PipelineForTesting(
-  fn: ((text: string, opts?: Record<string, unknown>) => Promise<{ tolist(): number[][] }>) | null,
+  fn: ((text: string, opts?: Record<string, unknown>) => Promise<{ tolist(): number[][] }>) | null | undefined,
 ): void {
   e5Pipeline = fn as never;
+  e5Loading=undefined;
 }
 
 export class UnitEmbeddingWorker {

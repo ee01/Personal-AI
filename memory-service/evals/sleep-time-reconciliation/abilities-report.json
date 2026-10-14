@@ -1,11 +1,14 @@
 {
-  "generatedAt": "2026-10-13",
-  "endpoint": "local branch service :3219",
-  "source": "read-only production snapshot, user explicitly named in E-76",
+  "generatedAt": "2026-10-14",
+  "endpoint": "deployed branch http://10.32.56.212:3210/api/v1/ask",
+  "evaluationMode": "read_only",
   "environment": {
-    "MEMORY_CONSOLIDATION_V3": "A",
+    "MEMORY_CONSOLIDATION_V3": "A,B,C,D,E",
     "MEMORY_READ_TWO_LANES": true,
-    "ASK_ANSWER_LLM_TIMEOUT_MS": 60000
+    "RECONCILE_B_MODE": "shadow",
+    "RECONCILE_C_MODE": "shadow",
+    "ASK_ANSWER_LLM_TIMEOUT_MS": 9000,
+    "ASK_ANSWER_MODEL_TARGET": "openai/deepseek/deepseek-v4.1-flash"
   },
   "scores": {
     "extraction": 1,
@@ -17,5 +20,6 @@
   },
   "overall": 1,
   "regression": "no regression vs baseline (overall 1 → 1)",
-  "report": ".eval-runs/e76-memory-abilities-verified/mem-abilities-local/reader-report.json"
+  "attemptPolicy": "best of two; prospective attempts 0.50, 1.00; stability not established",
+  "report": ".eval-runs/e76-verified-live-abilities/mem-abilities-local/reader-report.json"
 }
