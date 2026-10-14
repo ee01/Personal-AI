@@ -1,5 +1,7 @@
 # Sleep-time Reconciliation
 
+Acceptance audit (2026-10-14): `acceptance-audit.md`. Code-level passing evidence is not full rollout/UX acceptance. Reproduce an isolated, visible before/after with `memory-service/node_modules/.bin/tsx memory-service/tools/demo-sleep-reconciliation.ts` from the repository root. It uses the actual reconciliation/reader code with a fixed gold judge in an in-memory database; no production data or live qualification is touched.
+
 Production readonly baseline: `phase0.json` (no text or source ids).
 
 Deterministic boundary suite: `npm run eval:run -- --suite sleep-time-reconciliation --no-repair`. Five required groups execute 67 checks; the complete test file has 89 checks, including real nightly wiring, provenance/ACL, source independence, rollback, live qualification, parent/child gift recall and expired leases.
