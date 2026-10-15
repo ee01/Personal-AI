@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-15",
+  "suite": "markdown-git-mirror",
+  "testFile": "memory-service/src/__tests__/markdownGitMirror.test.ts",
+  "plan": "docs/progressing/memory-markdown-git-mirror-plan.md §7",
+  "fixture": "deterministic in-memory SQLite fixture + fake GitHub Git Data API; no live network, no real user data",
+  "groups": [
+    {
+      "id": "redaction",
+      "name": "投影不含原文 / token / 密钥 / restricted 字段",
+      "cases": 2,
+      "threshold": "违规 0",
+      "result": "pass"
+    },
+    {
+      "id": "self_only",
+      "name": "self_only 范围不含他人敏感事实",
+      "cases": 2,
+      "threshold": "违规 0",
+      "result": "pass"
+    },
+    {
+      "id": "increment",
+      "name": "增量：未变文件不重传（5 晚）",
+      "cases": 2,
+      "threshold": "重传 0",
+      "result": "pass"
+    },
+    {
+      "id": "conflict",
+      "name": "冲突：远端手改后不被覆盖且生成 conflict 目录",
+      "cases": 1,
+      "threshold": "覆盖 0",
+      "result": "pass"
+    },
+    {
+      "id": "rebuild",
+      "name": "可重建：删掉本地投影后重渲染 diff 0",
+      "cases": 2,
+      "threshold": "diff 0",
+      "result": "pass"
+    },
+    {
+      "id": "interop",
+      "name": "互通：confirmed 偏好可读 + pai:unit 回声 + 无提权",
+      "cases": 3,
+      "threshold": "命中 ≥ 0.8；新 unit 0；违规 0",
+      "result": "pass"
+    }
+  ],
+  "notCovered": [
+    "测试仓库连续 7 晚 commit 成功（需要真实 GitHub 仓库与 token，离线不可跑）",
+    "真实 esone.qiu 快照人工检查（属于 Phase 0 人工门槛，需在有数据的服务上运行 preview）"
+  ]
+}

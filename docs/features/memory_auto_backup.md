@@ -1,6 +1,6 @@
 # 记忆自动备份 / Memory Auto Backup
 
-_最后更新: 2026-08-25_
+_最后更新: 2026-10-15_
 
 ## 是什么
 
@@ -85,6 +85,10 @@ Options 写入既有 `PUT /config`：`autoBackupEnabled`、周期（daily / ever
 | `POST /api/v1/backup/test-connection` | 探针写→读→删 |
 | `POST /api/v1/backup/pull-receipt` | 桌面拉取回执 |
 | `GET /api/v1/backup/remote` | 列远端对象（恢复 UI 尚未接） |
+| `GET /api/v1/backup/mirror/status` | 镜像配置（脱敏）、上次运行回执、manifest 文件数 |
+| `POST /api/v1/backup/mirror/preview` | 渲染投影并返回将推送的文件清单（不写远端） |
+| `POST /api/v1/backup/mirror/test-connection` | 读 ref 探活 |
+| `POST /api/v1/backup/mirror/run` | 手动镜像一次 |
 | `POST /api/v1/export` | 同步小库导出，兼容保留 |
 
 ## 入口
@@ -94,6 +98,41 @@ Options 写入既有 `PUT /config`：`autoBackupEnabled`、周期（daily / ever
 - Desktop 拉取：`desktop-app/src/backupPuller.ts`、`#backup-pull-settings`
 - 导出管线：`memory-service/src/core/MemoryBackupService.ts` `exportMemoryBackupToFile`
 - 解密 CLI：`memory-service/tools/backup-crypt.ts`
+- GitHub 镜像：`memory-service/src/core/MirrorService.ts`、`memory-service/src/core/mirror/MirrorProjectionService.ts`、`memory-service/src/integrations/backupStorage/GitHubProvider.ts`
+
+## GitHub 镜像通道（Markdown Git Mirror）
+
+这是第三个 provider（WebDAV / S3 之外），但语义不同：它推的是**人类可读的 Markdown 投影**，不是全量快照。SQLite 仍是唯一真源；全量恢复仍走加密 zip。每晚巩固后渲染一次投影，经 egress 过滤后以**一次 commit**推到用户在 Options 填写的 GitHub 仓库；token 只存服务端，永不 force push。
+
+大白话：本地投影是视图、可重建；镜像仓库是给人和别的 agent 读的，不是拿来恢复全量库的。
+
+- 认证：fine-grained PAT，只勾目标仓库 `Contents: Read and write`；`config.json` 存 token，GET 只回 `autoBackupGithubTokenConfigured`。
+- 写入：Git Data API 单 commit（blobs → tree → commit → update ref），按内容哈希增量，未变文件不重传；commit 后读回 ref 校验，对不上判失败。
+- 分支：默认 `main`，可配；永不 force push。远端手改不被覆盖，冲突版本保留到 `conflict-<date>/`（本地版本另存 `.local`）。
+- 范围：`all`（全部已确认内容）或 `self_only`（只镜像关于我的内容）；`entities/people` 默认只出有已确认关系的人。
+- 模式：`markdown`（可读）或 `encrypted`（整个投影打成 zip 再 PABK1 加密成单个 `.zip.enc`，仓库里只有密文）。
+- 每份投影含 `MIRROR.md`，声明包含/未包含什么与恢复入口。
+
+### 投影目录
+
+| 目录 / 文件 | 内容 | 过滤 |
+|---|---|---|
+| `profile/USER_CORE.md` | 画像视图 | `user_confirmed=1` |
+| `profile/one-pager.md` | 常驻一页纸 | `reconcile_artifacts(kind=one_pager)`，缺失时用已确认画像回退 |
+| `entities/{people,orgs,projects,topics,technologies}/<slug>.md` | 实体 frontmatter + 属性 + 关系 | 他人只出已确认关系；`self_only` 全不出 |
+| `knowledge/{facts,preferences,decisions}/<id>.md` | 原子 unit | `status ∈ {active,superseded}`、`promotion_eligible=1` |
+| `workstreams/{active,completed}/<slug>.md` | 关注项 + 注意力账本 | — |
+| `timeline/daily/YYYY-MM-DD.md` | 每日派生 unit 链接 | **不含原文**；同样经过 egress 过滤 |
+| `consolidation/DIARY.md` | 夜间判决计数 | `unit_reconcile_decisions(phase=B)` |
+| `interop/openclaw/{PERSONAL_AI,USER,MEMORY}.md` | OpenClaw 只读互通子集 | 一律 `scope=self`、confirmed；每行带 `<!-- pai:unit:<id> -->` 回声标记 |
+| `MIRROR.md` | 生成时间/范围/过滤策略/未包含声明 | — |
+
+### 明确不做
+
+- 不把 Markdown 变真源；不从镜像仓库反向导入（手改只留 conflict 副本）。
+- 不推原文、SQLite、`config.json`、token/密钥、`local_only`/`private`/`restricted` 条目。
+- 不支持 force push、不自动合并冲突、不做多端同步。
+- 不让 OpenClaw / Hermes 的 workspace 直接指向镜像目录（互通走 `interop/` 只读子集）。
 
 ## 边界
 
@@ -104,5 +143,6 @@ Options 写入既有 `PUT /config`：`autoBackupEnabled`、周期（daily / ever
 ## 验证
 
 - `npx vitest --run src/__tests__/backupCrypto.test.ts src/__tests__/backupSchedule.test.ts src/__tests__/api-backup.test.ts`（memory-service）
+- GitHub 镜像：`npm run eval:markdown-git-mirror`（六组离线 case；真实 7 晚 commit 与 esone.qiu 快照人工检查需在有数据的服务上跑 `POST /backup/mirror/preview`）
 - Desktop：`NODE_ENV=test npx tsx --test src/__tests__/settings.test.ts`（含 `backupPull` 持久化）
 - 线上未部署时 Options 仍应打开；`GET /backup/status` 404 只让状态卡为空，不崩页

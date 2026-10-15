@@ -76,7 +76,7 @@
 | 外部 AI 历史基础录入 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | 用户主动上传 ChatGPT / Claude `conversations.json` zip；提交中/完成后显示写入与事实边界回执 |
 | Coverage 质量分 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | 平台状态、新鲜度和健康贡献项计算 `qualityScore`，详情与排序 / 查看 / 切片刷新控件都标明当前快照和只读边界 |
 | 备份下载与恢复入口 | Memory Coverage Map | [memory_coverage_map.md](./features/memory_coverage_map.md) | Coverage 页面经 `/export/jobs` 下载前/提交中/下载后都有边界回执，抽屉内识别备份 zip、archive 指纹并 merge/replace |
-| 记忆自动备份 | Memory Coverage Map / Doubao Bridge | [memory_auto_backup.md](./features/memory_auto_backup.md) | 流式导出作业、WebDAV/S3 加密推送、Desktop 拉取、Coverage 状态中心；口令不回传前端 |
+| 记忆自动备份 | Memory Coverage Map / Doubao Bridge | [memory_auto_backup.md](./features/memory_auto_backup.md) | 流式导出作业、WebDAV/S3 加密推送、GitHub Markdown 镜像、Desktop 拉取、Coverage 状态中心；口令与 token 不回传前端 |
 | 记忆捕捉 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 选区/网页/外部输入的低打扰入库层 |
 | 选中文字保存为资料记忆 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 右侧半露出 `+ 记住`，复核面板显示选区快照、保存 `source_memory_capsule` 和 `web` 记忆信号 |
 | 整页资料保存 | Memory Capture | [memory_capture.md](./features/memory_capture.md) | 确定性候选后由 memory-service 专用路由做单次无工具 LLM 筛选；内容 hash、阈值评分、single-flight、成功缓存和 5/10/15 分钟失败退避覆盖 DOM 抖动/刷新/多标签页，写入仍只走 `+ 记住` 复核或强意图自动入库 |

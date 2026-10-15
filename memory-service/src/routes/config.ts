@@ -87,7 +87,7 @@ interface UpdatableConfig {
   autoBackupScheduleType?: 'daily' | 'every_x_hours' | 'weekly';
   autoBackupPreferredHour?: number;
   autoBackupIntervalHours?: number;
-  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupProvider?: 'webdav' | 's3' | 'github';
   autoBackupWebdavUrl?: string;
   autoBackupWebdavUsername?: string;
   autoBackupWebdavPassword?: string;
@@ -106,6 +106,14 @@ interface UpdatableConfig {
   clearAutoBackupS3AccessKeyId?: boolean;
   clearAutoBackupS3SecretAccessKey?: boolean;
   clearAutoBackupEncryptionPassphrase?: boolean;
+  autoBackupGithubEnabled?: boolean;
+  autoBackupGithubRepo?: string;
+  autoBackupGithubBranch?: string;
+  autoBackupGithubToken?: string;
+  autoBackupGithubMode?: 'markdown' | 'encrypted';
+  autoBackupGithubScope?: 'all' | 'self_only';
+  autoBackupGithubPrefix?: string;
+  clearAutoBackupGithubToken?: boolean;
 }
 
 /** Keys that must never be returned to the client. */
@@ -123,6 +131,7 @@ const SENSITIVE_KEYS = new Set([
   'autoBackupS3AccessKeyId',
   'autoBackupS3SecretAccessKey',
   'autoBackupEncryptionPassphrase',
+  'autoBackupGithubToken',
 ]);
 
 function normalizePushTarget(
@@ -261,6 +270,9 @@ function sanitizeConfig(raw: Record<string, unknown>): Record<string, unknown> {
   clean.autoBackupEncryptionPassphraseConfigured =
     typeof raw.autoBackupEncryptionPassphrase === 'string' &&
     raw.autoBackupEncryptionPassphrase.trim().length > 0;
+  clean.autoBackupGithubTokenConfigured =
+    typeof raw.autoBackupGithubToken === 'string' &&
+    raw.autoBackupGithubToken.trim().length > 0;
 
   // Expand agentExecutors with legacy OpenClaw synthesis + strip apiKeys.
   const openClawExecutorType: AgentExecutorType =
@@ -414,7 +426,7 @@ const updateConfigBodySchema = {
     },
     autoBackupPreferredHour: { type: 'number' as const, minimum: 0, maximum: 23 },
     autoBackupIntervalHours: { type: 'number' as const, minimum: 1 },
-    autoBackupProvider: { type: 'string' as const, enum: ['webdav', 's3'] },
+    autoBackupProvider: { type: 'string' as const, enum: ['webdav', 's3', 'github'] },
     autoBackupWebdavUrl: { type: 'string' as const },
     autoBackupWebdavUsername: { type: 'string' as const },
     autoBackupWebdavPassword: { type: 'string' as const },
@@ -429,6 +441,17 @@ const updateConfigBodySchema = {
     autoBackupRetentionCount: { type: 'number' as const, minimum: 1 },
     autoBackupIncludeDerived: { type: 'boolean' as const },
     autoBackupIncludeVectors: { type: 'boolean' as const },
+    autoBackupGithubEnabled: { type: 'boolean' as const },
+    autoBackupGithubRepo: { type: 'string' as const },
+    autoBackupGithubBranch: { type: 'string' as const },
+    autoBackupGithubToken: { type: 'string' as const },
+    autoBackupGithubMode: {
+      type: 'string' as const,
+      enum: ['markdown', 'encrypted'],
+    },
+    autoBackupGithubScope: { type: 'string' as const, enum: ['all', 'self_only'] },
+    autoBackupGithubPrefix: { type: 'string' as const },
+    clearAutoBackupGithubToken: { type: 'boolean' as const },
     clearAutoBackupWebdavPassword: { type: 'boolean' as const },
     clearAutoBackupS3AccessKeyId: { type: 'boolean' as const },
     clearAutoBackupS3SecretAccessKey: { type: 'boolean' as const },
@@ -754,6 +777,38 @@ export async function configRoutes(
       }
       if (updates.clearAutoBackupEncryptionPassphrase === true) {
         delete persisted.autoBackupEncryptionPassphrase;
+      }
+      if (updates.autoBackupGithubEnabled !== undefined) {
+        persisted.autoBackupGithubEnabled = updates.autoBackupGithubEnabled;
+      }
+      if (updates.autoBackupGithubRepo !== undefined) {
+        persisted.autoBackupGithubRepo = updates.autoBackupGithubRepo.trim();
+      }
+      if (updates.autoBackupGithubBranch !== undefined) {
+        persisted.autoBackupGithubBranch =
+          updates.autoBackupGithubBranch.trim() || 'main';
+      }
+      if (updates.autoBackupGithubToken !== undefined) {
+        const trimmed = updates.autoBackupGithubToken.trim();
+        if (trimmed.length > 0) {
+          persisted.autoBackupGithubToken = trimmed;
+        }
+      }
+      if (updates.autoBackupGithubMode !== undefined) {
+        persisted.autoBackupGithubMode =
+          updates.autoBackupGithubMode === 'encrypted' ? 'encrypted' : 'markdown';
+      }
+      if (updates.autoBackupGithubScope !== undefined) {
+        persisted.autoBackupGithubScope =
+          updates.autoBackupGithubScope === 'self_only' ? 'self_only' : 'all';
+      }
+      if (updates.autoBackupGithubPrefix !== undefined) {
+        persisted.autoBackupGithubPrefix = updates.autoBackupGithubPrefix
+          .trim()
+          .replace(/^\/+|\/+$/g, '');
+      }
+      if (updates.clearAutoBackupGithubToken === true) {
+        delete persisted.autoBackupGithubToken;
       }
 
       // One-time / keep-alive import of legacy OpenClaw into agentExecutors.

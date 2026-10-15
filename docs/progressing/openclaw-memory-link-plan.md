@@ -5,7 +5,7 @@
 > 代码核查基线：工作区 `develop` 分支，引用均为 `path:line`。
 > Demo：[`openclaw-memory-link-demo.html`](./openclaw-memory-link-demo.html)（Options 的 OpenClaw 执行器卡片新增「联动记忆」区块）
 > 来源：E-72 第四轮。用户问：互通的 A（只读）与 B（导入）能否同时开；B 是否需要给本项目加 importer 接口；能否在用户配置 OpenClaw 执行器时一键完成记忆联动。
-> 从 `memory-markdown-git-mirror-plan.md` §4.8 拆出：联动不依赖 GitHub 镜像，镜像只是 A 通道的离线形态之一。
+> 从已合并的 `docs/features/memory_auto_backup.md`（GitHub 镜像通道，原 markdown-git-mirror plan §4.8）拆出：联动不依赖 GitHub 镜像，镜像只是 A 通道的离线形态之一。
 
 ## 1. 一句话结论
 
@@ -94,7 +94,7 @@ B 写通道（OpenClaw → 我们）
 
 | plan / 能力 | 关系 |
 |---|---|
-| `memory-markdown-git-mirror-plan.md` §4.8 | 本方案是其互通模式 A / B 的独立落地；§4.8 保留判定（不做共享读写），实现引用本方案 |
+| `docs/features/memory_auto_backup.md`（GitHub 镜像通道） | 本方案是其互通模式 A / B 的独立落地；原 plan §4.8 的判定（不做共享读写）保留，实现引用本方案 |
 | `memory-share-with-openclaw.md` | 其架构 A + C 的执行版；其架构 B 不做 |
 | `memory-mcp-server-plan.md` | 不改 MCP schema；只加 OpenClaw 注册、scope 收紧、egress 评估与回声标记 |
 | `memory-write-provenance-gate-plan.md` | 导入固定 `untrusted`；回声标记识别；前置 |

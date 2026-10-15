@@ -1,19 +1,39 @@
 import type { BackupStorageProvider } from './types.js';
+import { GitHubProvider, type GitHubProviderOptions } from './GitHubProvider.js';
 import { S3Provider, type S3ProviderOptions } from './S3Provider.js';
 import { WebdavProvider, type WebdavProviderOptions } from './WebdavProvider.js';
 
 export type { BackupObjectInfo, BackupPutInput, BackupStorageProvider } from './types.js';
+export { GitHubProvider } from './GitHubProvider.js';
+export type { GitHubProviderOptions, MirrorPushFile, MirrorPushResult } from './GitHubProvider.js';
 export { LocalDirProvider } from './LocalDirProvider.js';
 export { S3Provider } from './S3Provider.js';
 export { WebdavProvider } from './WebdavProvider.js';
 
-export type AutoBackupProviderKind = 'webdav' | 's3';
+export type AutoBackupProviderKind = 'webdav' | 's3' | 'github';
 
 export function createBackupStorageProvider(input: {
   provider: AutoBackupProviderKind;
   webdav?: Partial<WebdavProviderOptions> & { url?: string };
   s3?: Partial<S3ProviderOptions>;
+  github?: Partial<GitHubProviderOptions>;
 }): BackupStorageProvider {
+  if (input.provider === 'github') {
+    const github = input.github;
+    if (!github?.repo || !github.token) {
+      throw new Error('GitHub mirror is missing repository or token');
+    }
+    return new GitHubProvider({
+      repo: github.repo,
+      branch: github.branch || 'main',
+      token: github.token,
+      apiBaseUrl: github.apiBaseUrl,
+      authorName: github.authorName,
+      authorEmail: github.authorEmail,
+      fetchImpl: github.fetchImpl,
+    });
+  }
+
   if (input.provider === 's3') {
     const s3 = input.s3;
     if (!s3?.endpoint || !s3.bucket || !s3.accessKeyId || !s3.secretAccessKey) {

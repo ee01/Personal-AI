@@ -12,7 +12,7 @@ export interface BackupPutInput {
 }
 
 export interface BackupStorageProvider {
-  readonly kind: 'webdav' | 's3' | 'local';
+  readonly kind: 'webdav' | 's3' | 'local' | 'github';
   put(input: BackupPutInput): Promise<void>;
   head(key: string): Promise<BackupObjectInfo>;
   list(prefix: string): Promise<BackupObjectInfo[]>;

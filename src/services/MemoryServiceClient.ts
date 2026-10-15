@@ -3635,7 +3635,7 @@ export interface RuntimeConfigResponse {
   autoBackupScheduleType?: 'daily' | 'every_x_hours' | 'weekly';
   autoBackupPreferredHour?: number;
   autoBackupIntervalHours?: number;
-  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupProvider?: 'webdav' | 's3' | 'github';
   autoBackupWebdavUrl?: string;
   autoBackupWebdavUsername?: string;
   autoBackupWebdavPasswordConfigured?: boolean;
@@ -3650,6 +3650,13 @@ export interface RuntimeConfigResponse {
   autoBackupRetentionCount?: number;
   autoBackupIncludeDerived?: boolean;
   autoBackupIncludeVectors?: boolean;
+  autoBackupGithubEnabled?: boolean;
+  autoBackupGithubRepo?: string;
+  autoBackupGithubBranch?: string;
+  autoBackupGithubTokenConfigured?: boolean;
+  autoBackupGithubMode?: 'markdown' | 'encrypted';
+  autoBackupGithubScope?: 'all' | 'self_only';
+  autoBackupGithubPrefix?: string;
 }
 
 export interface UpdateRuntimeConfigPayload {
@@ -3711,7 +3718,7 @@ export interface UpdateRuntimeConfigPayload {
   autoBackupScheduleType?: 'daily' | 'every_x_hours' | 'weekly';
   autoBackupPreferredHour?: number;
   autoBackupIntervalHours?: number;
-  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupProvider?: 'webdav' | 's3' | 'github';
   autoBackupWebdavUrl?: string;
   autoBackupWebdavUsername?: string;
   autoBackupWebdavPassword?: string;
@@ -3730,6 +3737,14 @@ export interface UpdateRuntimeConfigPayload {
   clearAutoBackupS3AccessKeyId?: boolean;
   clearAutoBackupS3SecretAccessKey?: boolean;
   clearAutoBackupEncryptionPassphrase?: boolean;
+  autoBackupGithubEnabled?: boolean;
+  autoBackupGithubRepo?: string;
+  autoBackupGithubBranch?: string;
+  autoBackupGithubToken?: string;
+  autoBackupGithubMode?: 'markdown' | 'encrypted';
+  autoBackupGithubScope?: 'all' | 'self_only';
+  autoBackupGithubPrefix?: string;
+  clearAutoBackupGithubToken?: boolean;
 }
 
 // ============================================================================
@@ -4516,6 +4531,57 @@ export interface MemoryBackupStatusResponse {
     tables: Array<{ name: string; bytes: number }>;
     vectorBytes: number;
     vectorShare: number;
+  };
+}
+
+export interface MemoryMirrorRunSummary {
+  id: string;
+  status: 'running' | 'success' | 'failed' | 'skipped';
+  mode: 'markdown' | 'encrypted';
+  scope: 'all' | 'self_only';
+  filesTotal: number;
+  filesChanged: number;
+  bytesTotal: number;
+  excludedByPolicy: number;
+  conflictPaths: string[];
+  commitSha: string | null;
+  commitUrl: string | null;
+  error: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+  trigger: 'scheduled' | 'manual';
+}
+
+export interface MemoryMirrorStatusResponse {
+  enabled: boolean;
+  repo: string;
+  branch: string;
+  tokenConfigured: boolean;
+  mode: 'markdown' | 'encrypted';
+  scope: 'all' | 'self_only';
+  prefix: string;
+  encryptionConfigured: boolean;
+  manifestFiles: number;
+  lastRun: MemoryMirrorRunSummary | null;
+}
+
+export interface MemoryMirrorPreviewResponse {
+  files: Array<{ path: string; bytes: number; hash: string }>;
+  receipt: {
+    generatedAt: string;
+    scope: 'all' | 'self_only';
+    filesTotal: number;
+    excludedByPolicy: number;
+    excludedByScope: number;
+    exclusions: Array<{ reason: string; count: number }>;
+    counts: {
+      preferences: number;
+      facts: number;
+      decisions: number;
+      superseded: number;
+      openLoopsClosed: number;
+    };
+    commitMessage: string;
   };
 }
 
@@ -7625,6 +7691,32 @@ export class MemoryServiceClient {
 
   async testBackupConnection(): Promise<{ ok: true; detail: string }> {
     return this.request('POST', '/backup/test-connection');
+  }
+
+  async getMirrorStatus(): Promise<MemoryMirrorStatusResponse> {
+    return this.request<MemoryMirrorStatusResponse>('GET', '/backup/mirror/status');
+  }
+
+  async previewMirror(): Promise<MemoryMirrorPreviewResponse> {
+    return this.request<MemoryMirrorPreviewResponse>('POST', '/backup/mirror/preview');
+  }
+
+  async testMirrorConnection(): Promise<{ ok: true; detail: string }> {
+    return this.request('POST', '/backup/mirror/test-connection');
+  }
+
+  async runMirror(): Promise<{
+    status: 'success' | 'failed' | 'skipped';
+    filesTotal: number;
+    filesChanged: number;
+    excludedByPolicy: number;
+    commitSha?: string;
+    commitUrl?: string | null;
+    conflictPaths: string[];
+    durationMs: number;
+    error?: string;
+  }> {
+    return this.request('POST', '/backup/mirror/run');
   }
 
   async importMemory(

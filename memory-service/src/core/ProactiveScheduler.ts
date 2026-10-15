@@ -26,7 +26,7 @@ import { UserContextManager } from './UserContextManager.js';
 import { getAnalyticsStore } from '../analytics/AnalyticsStore.js';
 import { runWithUsageContext } from '../analytics/usageContext.js';
 import { KeystoneBriefComposerService } from './KeystoneBriefComposerService.js';
-import { tickAutoBackups } from './AutoBackupService.js';
+import { tickAutoBackups, tickMirrors } from './AutoBackupService.js';
 import { sweepExpiredExportJobs } from './ExportJobService.js';
 import { TaskCenterMaintenanceService } from './TaskCenterMaintenanceService.js';
 import { ActionExecutor } from './actions/ActionExecutor.js';
@@ -304,6 +304,7 @@ export class ProactiveScheduler {
   private async runAutoBackupCycle(): Promise<void> {
     await sweepExpiredExportJobs();
     await tickAutoBackups(this.ucm);
+    await tickMirrors(this.ucm);
   }
 
   // ---- Daily consolidation (all users) -----------------------------------

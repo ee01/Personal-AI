@@ -9,7 +9,10 @@ import {
   readAutoBackupConfig,
   resolveAutoBackupConfig,
   runAutoBackupOnce,
+  runGithubMirrorOnce,
 } from '../core/AutoBackupService.js';
+import { createGitHubMirrorProvider, previewMirror } from '../core/MirrorService.js';
+import { MirrorManifestStore } from '../core/mirror/MirrorManifestStore.js';
 
 interface PullReceiptBody {
   jobId?: string;
@@ -103,6 +106,71 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       },
     );
     return reply.send({ ok: true, consecutiveFailures: state.consecutiveFailures });
+  });
+
+  app.get('/backup/mirror/status', async (request, reply) => {
+    const raw = readAutoBackupConfig(request.userContext.userDataManager);
+    const config = resolveAutoBackupConfig(raw);
+    const store = new MirrorManifestStore(request.userContext.db, request.userId);
+    const lastRun = store.lastRun();
+    const manifest = store.load();
+    return reply.send({
+      enabled: config.github.enabled,
+      repo: config.github.repo,
+      branch: config.github.branch,
+      tokenConfigured: Boolean(config.github.token),
+      mode: config.github.mode,
+      scope: config.github.scope,
+      prefix: config.github.prefix,
+      encryptionConfigured: Boolean(config.github.passphrase),
+      manifestFiles: manifest.size,
+      lastRun,
+      objects: [],
+    });
+  });
+
+  app.post('/backup/mirror/preview', async (request, reply) => {
+    const raw = readAutoBackupConfig(request.userContext.userDataManager);
+    const config = resolveAutoBackupConfig(raw);
+    const scope = config.github.scope;
+    const preview = previewMirror(request.userContext.db, request.userId, {
+      scope,
+      prefix: config.github.prefix,
+    });
+    return reply.send(preview);
+  });
+
+  app.post('/backup/mirror/test-connection', async (request, reply) => {
+    try {
+      const raw = readAutoBackupConfig(request.userContext.userDataManager);
+      const config = resolveAutoBackupConfig(raw);
+      if (!config.github.repo || !config.github.token) {
+        return reply.status(400).send({ ok: false, error: '请先填写仓库地址与 token' });
+      }
+      const provider = createGitHubMirrorProvider(config.github);
+      const result = await provider.test();
+      return reply.send(result);
+    } catch (error) {
+      return reply.status(400).send({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post('/backup/mirror/run', async (request, reply) => {
+    try {
+      const result = await runGithubMirrorOnce(request.userContext, {
+        trigger: 'manual',
+      });
+      const status = result.status === 'failed' ? 500 : 200;
+      return reply.status(status).send(result);
+    } catch (error) {
+      if (error instanceof ExportLockBusyError) {
+        return reply.status(409).send({ error: error.message });
+      }
+      throw error;
+    }
   });
 
   app.get('/backup/remote', async (request, reply) => {

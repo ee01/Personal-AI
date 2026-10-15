@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export type BackupChannel = 'webdav' | 's3' | 'desktop_pull' | 'manual_export';
+export type BackupChannel =
+  | 'webdav'
+  | 's3'
+  | 'github_mirror'
+  | 'desktop_pull'
+  | 'manual_export';
 export type BackupRunStatus = 'success' | 'failed';
 
 export interface BackupHistoryEntry {
@@ -114,6 +119,7 @@ function isChannel(value: unknown): value is BackupChannel {
   return (
     value === 'webdav' ||
     value === 's3' ||
+    value === 'github_mirror' ||
     value === 'desktop_pull' ||
     value === 'manual_export'
   );

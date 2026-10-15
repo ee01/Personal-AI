@@ -98,7 +98,7 @@ OpenViking 的三级上下文（一句话/概览/全文）。本系统 chunks �
 | 建议 | 归属 | 状态 |
 |---|---|---|
 | A1 写入侧 provenance 闭集 / session-kind 门控 / 召回回路防护 | [memory-write-provenance-gate-plan](./memory-write-provenance-gate-plan.md)（E-75） | 仅规划 |
-| A2 可编辑 Markdown 工作区（视图，round-trip） | [memory-markdown-git-mirror-plan](./memory-markdown-git-mirror-plan.md) 投影层（E-79）；回写 proposal 留给 one-pager plan §4.3 | 仅规划 |
+| A2 可编辑 Markdown 工作区（视图，round-trip） | [memory_auto_backup.md](../features/memory_auto_backup.md) GitHub 镜像通道（E-79）；回写 proposal 留给 one-pager plan §4.3 | 投影层已落地，回写仅规划 |
 | A3 常驻用户 one-pager | [memory-resident-one-pager-plan](./memory-resident-one-pager-plan.md)（E-78） | 仅规划 |
 | A4 投入从检索转向写入侧 curation（alias / supersession / 矛盾扫描） | [memory_foundation](../features/memory_foundation.md#睡眠期整理与两车道读取) 阶段 A / C（E-76） | 已实现，B/C 生产 live 仍须人工 shadow 资格 |
 | A5 前瞻记忆生命周期（standing intents） | [Task Center 注意力账本](../features/task_center.md#从消息到待办提案attention-triage)（E-77） | 已实现，默认 shadow |

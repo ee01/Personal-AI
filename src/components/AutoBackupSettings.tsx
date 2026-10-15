@@ -3,6 +3,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import type {
   MemoryBackupStatusResponse,
+  MemoryMirrorPreviewResponse,
+  MemoryMirrorStatusResponse,
   RuntimeConfigResponse,
   UpdateRuntimeConfigPayload,
 } from '../services/MemoryServiceClient';
@@ -12,7 +14,7 @@ const DESKTOP_RELEASES_URL =
   'https://github.com/ee01/Personal-AI/releases?q=desktop-v';
 const DESKTOP_BACKUP_LINK = 'personal-ai://settings/backup';
 
-type ChannelTab = 'webdav' | 's3' | 'local';
+type ChannelTab = 'webdav' | 's3' | 'local' | 'github';
 
 type Draft = {
   autoBackupEnabled: boolean;
@@ -37,10 +39,19 @@ type Draft = {
   clearAutoBackupEncryptionPassphrase: boolean;
   autoBackupRetentionCount: number;
   autoBackupIncludeVectors: boolean;
+  autoBackupGithubEnabled: boolean;
+  autoBackupGithubRepo: string;
+  autoBackupGithubBranch: string;
+  autoBackupGithubToken: string;
+  autoBackupGithubMode: 'markdown' | 'encrypted';
+  autoBackupGithubScope: 'all' | 'self_only';
+  autoBackupGithubPrefix: string;
+  clearAutoBackupGithubToken: boolean;
   webdavPasswordConfigured: boolean;
   s3AccessConfigured: boolean;
   s3SecretConfigured: boolean;
   passphraseConfigured: boolean;
+  githubTokenConfigured: boolean;
 };
 
 const emptyDraft = (): Draft => ({
@@ -66,10 +77,19 @@ const emptyDraft = (): Draft => ({
   clearAutoBackupEncryptionPassphrase: false,
   autoBackupRetentionCount: 7,
   autoBackupIncludeVectors: true,
+  autoBackupGithubEnabled: false,
+  autoBackupGithubRepo: '',
+  autoBackupGithubBranch: 'main',
+  autoBackupGithubToken: '',
+  autoBackupGithubMode: 'markdown',
+  autoBackupGithubScope: 'all',
+  autoBackupGithubPrefix: '',
+  clearAutoBackupGithubToken: false,
   webdavPasswordConfigured: false,
   s3AccessConfigured: false,
   s3SecretConfigured: false,
   passphraseConfigured: false,
+  githubTokenConfigured: false,
 });
 
 function draftFromConfig(config: RuntimeConfigResponse): Draft {
@@ -89,10 +109,19 @@ function draftFromConfig(config: RuntimeConfigResponse): Draft {
     autoBackupEncryptionEnabled: config.autoBackupEncryptionEnabled !== false,
     autoBackupRetentionCount: Number(config.autoBackupRetentionCount) || 7,
     autoBackupIncludeVectors: config.autoBackupIncludeVectors !== false,
+    autoBackupGithubEnabled: Boolean(config.autoBackupGithubEnabled),
+    autoBackupGithubRepo: config.autoBackupGithubRepo || '',
+    autoBackupGithubBranch: config.autoBackupGithubBranch || 'main',
+    autoBackupGithubMode:
+      config.autoBackupGithubMode === 'encrypted' ? 'encrypted' : 'markdown',
+    autoBackupGithubScope:
+      config.autoBackupGithubScope === 'self_only' ? 'self_only' : 'all',
+    autoBackupGithubPrefix: config.autoBackupGithubPrefix || '',
     webdavPasswordConfigured: Boolean(config.autoBackupWebdavPasswordConfigured),
     s3AccessConfigured: Boolean(config.autoBackupS3AccessKeyIdConfigured),
     s3SecretConfigured: Boolean(config.autoBackupS3SecretAccessKeyConfigured),
     passphraseConfigured: Boolean(config.autoBackupEncryptionPassphraseConfigured),
+    githubTokenConfigured: Boolean(config.autoBackupGithubTokenConfigured),
   };
 }
 
@@ -143,16 +172,20 @@ function AutoBackupSettingsForm(): React.ReactElement {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [desktopInstalled, setDesktopInstalled] = useState<boolean | null>(null);
+  const [mirrorStatus, setMirrorStatus] = useState<MemoryMirrorStatusResponse | null>(null);
+  const [mirrorPreview, setMirrorPreview] = useState<MemoryMirrorPreviewResponse | null>(null);
 
   const load = useCallback(async (alive?: () => boolean) => {
     const client = getMemoryServiceClient();
-    const [config, backupStatus] = await Promise.all([
+    const [config, backupStatus, mirror] = await Promise.all([
       client.getRuntimeConfig(),
       client.getBackupStatus().catch(() => null),
+      client.getMirrorStatus().catch(() => null),
     ]);
     if (alive && !alive()) return;
     setDraft(draftFromConfig(config));
     setStatus(backupStatus);
+    setMirrorStatus(mirror);
     setTab(
       config.autoBackupProvider === 's3' ? 's3' : 'webdav',
     );
@@ -187,7 +220,7 @@ function AutoBackupSettingsForm(): React.ReactElement {
     autoBackupScheduleType: draft.autoBackupScheduleType,
     autoBackupPreferredHour: draft.autoBackupPreferredHour,
     autoBackupIntervalHours: draft.autoBackupIntervalHours,
-    autoBackupProvider: tab === 's3' ? 's3' : 'webdav',
+    autoBackupProvider: tab === 's3' ? 's3' : tab === 'webdav' ? 'webdav' : draft.autoBackupProvider,
     autoBackupWebdavUrl: draft.autoBackupWebdavUrl,
     autoBackupWebdavUsername: draft.autoBackupWebdavUsername,
     autoBackupWebdavPassword: draft.autoBackupWebdavPassword || undefined,
@@ -206,6 +239,14 @@ function AutoBackupSettingsForm(): React.ReactElement {
     clearAutoBackupEncryptionPassphrase: draft.clearAutoBackupEncryptionPassphrase,
     autoBackupRetentionCount: draft.autoBackupRetentionCount,
     autoBackupIncludeVectors: draft.autoBackupIncludeVectors,
+    autoBackupGithubEnabled: draft.autoBackupGithubEnabled,
+    autoBackupGithubRepo: draft.autoBackupGithubRepo,
+    autoBackupGithubBranch: draft.autoBackupGithubBranch,
+    autoBackupGithubToken: draft.autoBackupGithubToken || undefined,
+    autoBackupGithubMode: draft.autoBackupGithubMode,
+    autoBackupGithubScope: draft.autoBackupGithubScope,
+    autoBackupGithubPrefix: draft.autoBackupGithubPrefix,
+    clearAutoBackupGithubToken: draft.clearAutoBackupGithubToken,
   });
 
   const save = async () => {
@@ -263,6 +304,57 @@ function AutoBackupSettingsForm(): React.ReactElement {
     [status],
   );
 
+  const persistMirror = async () => {
+    await getMemoryServiceClient().updateRuntimeConfig(savePayload());
+  };
+
+  const testMirror = async () => {
+    setBusy(true);
+    try {
+      await persistMirror();
+      const result = await getMemoryServiceClient().testMirrorConnection();
+      setMessage(result.detail);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const previewMirror = async () => {
+    setBusy(true);
+    try {
+      await persistMirror();
+      const result = await getMemoryServiceClient().previewMirror();
+      setMirrorPreview(result);
+      setMessage(`将推送 ${result.files.length} 个文件`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runMirror = async () => {
+    setBusy(true);
+    try {
+      await persistMirror();
+      const result = await getMemoryServiceClient().runMirror();
+      setMessage(
+        result.status === 'success'
+          ? `镜像完成，变更 ${result.filesChanged} 个文件`
+          : result.status === 'skipped'
+            ? '没有变更，跳过 commit'
+            : result.error || '镜像失败',
+      );
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openDesktop = () => {
     window.location.href = DESKTOP_BACKUP_LINK;
     setTimeout(() => {
@@ -290,14 +382,14 @@ function AutoBackupSettingsForm(): React.ReactElement {
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {(['webdav', 's3', 'local'] as ChannelTab[]).map((item) => (
+        {(['webdav', 's3', 'local', 'github'] as ChannelTab[]).map((item) => (
           <button
             key={item}
             type="button"
             className={tab === item ? 'primary' : undefined}
             onClick={() => {
               setTab(item);
-              if (item !== 'local') {
+              if (item === 's3' || item === 'webdav') {
                 patch({ autoBackupProvider: item });
               }
             }}
@@ -306,7 +398,9 @@ function AutoBackupSettingsForm(): React.ReactElement {
               ? 'WebDAV 推送'
               : item === 's3'
                 ? 'S3 兼容推送'
-                : '个人电脑拉取'}
+                : item === 'local'
+                  ? '个人电脑拉取'
+                  : 'GitHub 镜像'}
           </button>
         ))}
       </div>
@@ -350,6 +444,184 @@ function AutoBackupSettingsForm(): React.ReactElement {
                 )}`
               : '尚未配置'}
           </div>
+        </div>
+      ) : tab === 'github' ? (
+        <div
+          style={{
+            border: '1px solid #e5e7eb',
+            borderRadius: 8,
+            padding: 16,
+            background: '#fafbfc',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <label style={{ minWidth: 110, color: '#666' }}>GitHub 镜像</label>
+            <input
+              type="checkbox"
+              checked={draft.autoBackupGithubEnabled}
+              onChange={(event) =>
+                patch({ autoBackupGithubEnabled: event.target.checked })
+              }
+            />
+            <span style={{ color: '#888', fontSize: 12 }}>
+              每晚巩固后把 Markdown 投影提交一次
+            </span>
+          </div>
+          <p style={{ color: '#666', fontSize: 13, marginTop: 0 }}>
+            只推送投影（画像 / entities / knowledge / timeline / DIARY / interop），
+            <strong>不含原文、SQLite、config.json</strong>。本地 Markdown 是视图不是真源；
+            全量恢复仍走加密 zip。
+          </p>
+          <div className="form-group">
+            <label>仓库（owner/name）</label>
+            <input
+              type="text"
+              value={draft.autoBackupGithubRepo}
+              placeholder="esone/memory-mirror"
+              onChange={(event) => patch({ autoBackupGithubRepo: event.target.value })}
+            />
+          </div>
+          <div className="form-group">
+            <label>分支</label>
+            <input
+              type="text"
+              value={draft.autoBackupGithubBranch}
+              onChange={(event) => patch({ autoBackupGithubBranch: event.target.value })}
+            />
+          </div>
+          <div className="form-group">
+            <label>Fine-grained token（仅该仓库 Contents: Read and write）</label>
+            <input
+              type="password"
+              value={draft.autoBackupGithubToken}
+              placeholder={draft.githubTokenConfigured ? '已配置（不回显）' : ''}
+              onChange={(event) =>
+                patch({
+                  autoBackupGithubToken: event.target.value,
+                  clearAutoBackupGithubToken: false,
+                })
+              }
+            />
+            {draft.githubTokenConfigured ? (
+              <label style={{ fontSize: 12, color: '#666', display: 'block', marginTop: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={draft.clearAutoBackupGithubToken}
+                  onChange={(event) =>
+                    patch({ clearAutoBackupGithubToken: event.target.checked })
+                  }
+                />{' '}
+                清除已保存的 token
+              </label>
+            ) : null}
+          </div>
+          <div className="form-group">
+            <label>模式</label>
+            <select
+              value={draft.autoBackupGithubMode}
+              onChange={(event) =>
+                patch({
+                  autoBackupGithubMode: event.target.value as Draft['autoBackupGithubMode'],
+                })
+              }
+            >
+              <option value="markdown">可读 Markdown</option>
+              <option value="encrypted">加密包（.zip.enc）</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>范围</label>
+            <select
+              value={draft.autoBackupGithubScope}
+              onChange={(event) =>
+                patch({
+                  autoBackupGithubScope: event.target.value as Draft['autoBackupGithubScope'],
+                })
+              }
+            >
+              <option value="all">全部已确认内容</option>
+              <option value="self_only">只镜像关于我的内容</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>仓库内子目录（可选）</label>
+            <input
+              type="text"
+              value={draft.autoBackupGithubPrefix}
+              placeholder="mirror"
+              onChange={(event) => patch({ autoBackupGithubPrefix: event.target.value })}
+            />
+          </div>
+          {draft.autoBackupGithubMode === 'encrypted' && !draft.passphraseConfigured ? (
+            <p style={{ color: '#b42318', fontSize: 13 }}>
+              加密包模式需要先在下方配置加密口令。
+            </p>
+          ) : null}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            <button type="button" onClick={save} disabled={busy}>
+              保存
+            </button>
+            <button type="button" onClick={testMirror} disabled={busy}>
+              测试连接
+            </button>
+            <button type="button" onClick={previewMirror} disabled={busy}>
+              预览推送清单
+            </button>
+            <button type="button" className="primary" onClick={runMirror} disabled={busy}>
+              立即镜像一次
+            </button>
+          </div>
+          {mirrorStatus?.lastRun ? (
+            <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7 }}>
+              <div>
+                上次运行：{new Date(mirrorStatus.lastRun.startedAt * 1000)
+                  .toISOString()
+                  .slice(0, 16)
+                  .replace('T', ' ')}{' '}
+                · {mirrorStatus.lastRun.status} · 变更 {mirrorStatus.lastRun.filesChanged} / 共{' '}
+                {mirrorStatus.lastRun.filesTotal} · 被过滤{' '}
+                {mirrorStatus.lastRun.excludedByPolicy}
+              </div>
+              {mirrorStatus.lastRun.commitUrl ? (
+                <div>
+                  上次 commit：
+                  <a href={mirrorStatus.lastRun.commitUrl} target="_blank" rel="noreferrer">
+                    {mirrorStatus.lastRun.commitSha?.slice(0, 7)} ↗
+                  </a>
+                </div>
+              ) : null}
+              {mirrorStatus.lastRun.conflictPaths.length > 0 ? (
+                <div style={{ color: '#b54708' }}>
+                  远端手改 {mirrorStatus.lastRun.conflictPaths.length} 个文件，已保留并在
+                  conflict-&lt;date&gt;/ 存档，未覆盖。
+                </div>
+              ) : null}
+              {mirrorStatus.lastRun.error ? (
+                <div style={{ color: '#b42318' }}>{mirrorStatus.lastRun.error}</div>
+              ) : null}
+            </div>
+          ) : null}
+          {mirrorPreview ? (
+            <div
+              style={{
+                marginTop: 12,
+                maxHeight: 220,
+                overflow: 'auto',
+                background: '#fff',
+                border: '1px solid #e5e7eb',
+                borderRadius: 6,
+                padding: 10,
+                fontSize: 12,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              }}
+            >
+              {mirrorPreview.files.map((file) => (
+                <div key={file.path}>
+                  {file.path} · {formatBytes(file.bytes)}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : (
         <>

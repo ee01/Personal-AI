@@ -25,6 +25,7 @@ import {
 } from '../integrations/backupStorage/index.js';
 import { LocalDirProvider } from '../integrations/backupStorage/LocalDirProvider.js';
 import { exportMemoryBackupToFile } from './MemoryBackupService.js';
+import { runMirrorOnce, type MirrorPusher } from './MirrorService.js';
 import type { UserContext } from './UserContextManager.js';
 import type { UserContextManager } from './UserContextManager.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
@@ -34,7 +35,7 @@ export interface AutoBackupPersistedConfig {
   autoBackupScheduleType?: AutoBackupScheduleType;
   autoBackupPreferredHour?: number;
   autoBackupIntervalHours?: number;
-  autoBackupProvider?: 'webdav' | 's3';
+  autoBackupProvider?: 'webdav' | 's3' | 'github';
   autoBackupWebdavUrl?: string;
   autoBackupWebdavUsername?: string;
   autoBackupWebdavPassword?: string;
@@ -49,6 +50,24 @@ export interface AutoBackupPersistedConfig {
   autoBackupRetentionCount?: number;
   autoBackupIncludeDerived?: boolean;
   autoBackupIncludeVectors?: boolean;
+  autoBackupGithubEnabled?: boolean;
+  autoBackupGithubRepo?: string;
+  autoBackupGithubBranch?: string;
+  autoBackupGithubToken?: string;
+  autoBackupGithubMode?: 'markdown' | 'encrypted';
+  autoBackupGithubScope?: 'all' | 'self_only';
+  autoBackupGithubPrefix?: string;
+}
+
+export interface ResolvedGithubMirrorConfig {
+  enabled: boolean;
+  repo: string;
+  branch: string;
+  token: string;
+  mode: 'markdown' | 'encrypted';
+  scope: 'all' | 'self_only';
+  prefix: string;
+  passphrase: string;
 }
 
 export interface TableVolume {
@@ -80,13 +99,14 @@ export function resolveAutoBackupConfig(raw: AutoBackupPersistedConfig): {
   scheduleType: AutoBackupScheduleType;
   preferredHour: number;
   intervalHours: number;
-  provider: 'webdav' | 's3';
+  provider: 'webdav' | 's3' | 'github';
   prefix: string;
   encryptionEnabled: boolean;
   passphrase: string;
   retentionCount: number;
   includeDerived: boolean;
   includeVectors: boolean;
+  github: ResolvedGithubMirrorConfig;
 } {
   const scheduleType: AutoBackupScheduleType =
     raw.autoBackupScheduleType === 'every_x_hours' ||
@@ -98,7 +118,12 @@ export function resolveAutoBackupConfig(raw: AutoBackupPersistedConfig): {
     scheduleType,
     preferredHour: normalizePreferredHour(raw.autoBackupPreferredHour, 3),
     intervalHours: normalizeIntervalHours(raw.autoBackupIntervalHours, 24),
-    provider: raw.autoBackupProvider === 's3' ? 's3' : 'webdav',
+    provider:
+      raw.autoBackupProvider === 's3'
+        ? 's3'
+        : raw.autoBackupProvider === 'github'
+          ? 'github'
+          : 'webdav',
     prefix: (raw.autoBackupPrefix || 'personal-ai-backups').replace(/\/+$/, ''),
     encryptionEnabled: raw.autoBackupEncryptionEnabled !== false,
     passphrase:
@@ -108,6 +133,22 @@ export function resolveAutoBackupConfig(raw: AutoBackupPersistedConfig): {
     retentionCount: Math.max(1, Math.floor(Number(raw.autoBackupRetentionCount) || 7)),
     includeDerived: raw.autoBackupIncludeDerived !== false,
     includeVectors: raw.autoBackupIncludeVectors !== false,
+    github: {
+      enabled: raw.autoBackupGithubEnabled === true,
+      repo: typeof raw.autoBackupGithubRepo === 'string' ? raw.autoBackupGithubRepo.trim() : '',
+      branch:
+        typeof raw.autoBackupGithubBranch === 'string' && raw.autoBackupGithubBranch.trim()
+          ? raw.autoBackupGithubBranch.trim()
+          : 'main',
+      token: typeof raw.autoBackupGithubToken === 'string' ? raw.autoBackupGithubToken : '',
+      mode: raw.autoBackupGithubMode === 'encrypted' ? 'encrypted' : 'markdown',
+      scope: raw.autoBackupGithubScope === 'self_only' ? 'self_only' : 'all',
+      prefix: (raw.autoBackupGithubPrefix || '').replace(/^\/+|\/+$/g, ''),
+      passphrase:
+        typeof raw.autoBackupEncryptionPassphrase === 'string'
+          ? raw.autoBackupEncryptionPassphrase
+          : '',
+    },
   };
 }
 
@@ -132,6 +173,11 @@ export function createProviderFromConfig(
       bucket: raw.autoBackupS3Bucket || '',
       accessKeyId: raw.autoBackupS3AccessKeyId || '',
       secretAccessKey: raw.autoBackupS3SecretAccessKey || '',
+    },
+    github: {
+      repo: resolved.github.repo,
+      branch: resolved.github.branch,
+      token: resolved.github.token,
     },
   });
 }
@@ -264,7 +310,8 @@ export async function runAutoBackupOnce(
   return withUserExportLock(userContext.userId, async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'personal-ai-autobackup-'));
     const zipPath = path.join(tempDir, 'archive.zip');
-    const channel: BackupChannel = config.provider;
+    const channel: BackupChannel =
+      config.provider === 'github' ? 'manual_export' : config.provider;
     try {
       const exported = await exportMemoryBackupToFile(userContext, zipPath, {
         includeDerived: config.includeDerived,
@@ -377,6 +424,81 @@ export async function tickAutoBackups(ucm: UserContextManager): Promise<void> {
     } catch (error) {
       console.error(
         `[AutoBackup] tick failed for ${userId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+}
+
+export async function runGithubMirrorOnce(
+  userContext: UserContext,
+  options: {
+    trigger?: 'scheduled' | 'manual';
+    pusher?: MirrorPusher;
+    now?: Date;
+  } = {},
+): Promise<Awaited<ReturnType<typeof runMirrorOnce>>> {
+  const raw = readAutoBackupConfig(userContext.userDataManager);
+  const config = resolveAutoBackupConfig(raw);
+  if (!config.github.enabled && options.trigger !== 'manual') {
+    return {
+      status: 'skipped',
+      filesTotal: 0,
+      filesChanged: 0,
+      excludedByPolicy: 0,
+      conflictPaths: [],
+      durationMs: 0,
+    };
+  }
+  const result = await runMirrorOnce(userContext, config.github, options);
+  if (result.status === 'failed') {
+    try {
+      const state = await readBackupState(userContext.userDataManager.rootDir);
+      insertFailureNotification(
+        userContext.db,
+        state.consecutiveFailures,
+        result.error || 'GitHub mirror failed',
+      );
+    } catch {
+      // notification insert is best-effort
+    }
+  }
+  return result;
+}
+
+export async function tickMirrors(ucm: UserContextManager): Promise<void> {
+  const now = new Date();
+  for (const userId of ucm.getRegisteredUserIds()) {
+    try {
+      const ctx = ucm.getContext(userId);
+      const raw = readAutoBackupConfig(ctx.userDataManager);
+      const config = resolveAutoBackupConfig(raw);
+      if (!config.github.enabled) continue;
+      if (!config.github.repo || !config.github.token) continue;
+      const state = await readBackupState(ctx.userDataManager.rootDir);
+      const lastMirrorSuccess = [...state.history]
+        .filter((entry) => entry.channel === 'github_mirror' && entry.status === 'success')
+        .map((entry) => entry.at)
+        .sort()
+        .pop();
+      if (
+        !isBackupDue(
+          {
+            enabled: true,
+            scheduleType: config.scheduleType,
+            preferredHour: config.preferredHour,
+            intervalHours: config.intervalHours,
+          },
+          lastMirrorSuccess,
+          now,
+        )
+      ) {
+        continue;
+      }
+      await runGithubMirrorOnce(ctx, { trigger: 'scheduled' });
+    } catch (error) {
+      console.error(
+        `[Mirror] tick failed for ${userId}:`,
         error instanceof Error ? error.message : error,
       );
     }
