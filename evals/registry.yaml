@@ -1236,6 +1236,9 @@ suites:
         - id: kinds
           statement: 不同关注项种类使用各自的默认到期语义。
           caseIds: [attention-kinds]
+        - id: scenario
+          statement: 原始消息经真实 ingest/API、策略筛选、通知落库及夜间 E 证据闭环，模拟时钟不需等待数天。
+          caseIds: [attention-scenario]
       boundaries:
         - 本套件执行内存数据库与真实业务函数；浏览器交互由独立 Playwright 检查证明。
         - 60条种子为代码代理审阅后的脱敏语义复述，未声称独立人工复核或线上误报率。

@@ -14,3 +14,15 @@ the coding agent, not an independent human annotator. Do not claim production qu
 from this small, negative-heavy sample. Report date recall, audience, false-positive,
 dedup and lifecycle boundaries separately. E2E must also demonstrate four buttons,
 identity confirmation, failures/retry and host read/reply boundaries in fresh dist.
+
+
+## Isolated full scenario
+
+`npm run verify:attention-triage` also executes `attentionScenario.test.ts`:
+real ingest and decision routes → ProactivityPolicy → Heartbeat notification insert
+→ SleepReconciliation E-phase evidence completion. It uses an in-memory database
+and a frozen clock, not production conversation data, external replies or system
+clock changes. It calls the notification persistence method and the E-phase method
+directly to exclude unrelated planner/LLM work; it does not prove cron scheduling or
+an installed Chrome profile. Run `npm run verify:attention-triage:e2e` against fresh
+`dist/` for the separate Glip UI contract (its HTTP backend is a fixture).

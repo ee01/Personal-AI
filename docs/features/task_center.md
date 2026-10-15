@@ -188,3 +188,54 @@ npm run verify:task-center-ui
 - 接受、完成、不相关等写 `attention_feedback` 和 `memory_feedback_events`；同一事项的负反馈会阻止再次出卡。没有外发、WD 提交、日历或 Jira 写回。
 
 表结构：`078_attention_triage.sql`；逻辑：`AttentionService`、`HeartbeatLoop`、`SleepReconciliation.attention`。本地验证：`npm --prefix memory-service test -- --run src/__tests__/attentionTriage.test.ts src/__tests__/api-attention.test.ts`。
+
+
+## Attention Triage 验证与阶段验收（2026-10-15 复核）
+
+**不必往真实工作群造数据。** 仓库提供隔离测试，自动构造请求、确认、完成和取消消息，并推进测试时钟；不会向 RingCentral 发消息、修改系统时间或写入线上记忆。已有实现和原计划的验收门槛要分别记录：
+
+| 阶段 | 已实现 / 已验证 | 尚未满足的原计划验收 |
+|---|---|---|
+| Phase 0 | 近 90 天只读统计、60 条代理审阅的脱敏语义种子 | 尚无独立人工标注；仅 4 个正例，不能宣称已证明线上召回与误报质量 |
+| Phase 1 | 表、纯函数、ingest/v3 挂钩和 shadow | shadow 真实命中质量仍需用人工标签复核 |
+| Phase 2 | 四按钮、上级/角色确认、视口门槛、fresh-dist Glip fixture E2E | 当前线上 shadow 不出卡；fixture 不是用户已安装 Chrome / 真实 Glip 的验收证据 |
+| Phase 3 | 真实策略筛选与通知落库；三次提醒、冷却、预算、取消和过期自动测试 | 当前线上 shadow 不发提醒；模拟时钟不是 cron 按真实时间运行的证明 |
+| Phase 4 | 去重、夜间 E 方法按关联回复完成、Day Pilot 接线、隔离 open-loops API | 独立常驻一页纸的消费端尚未落地；不能把供数 API 写成已完成的一页纸接线 |
+
+因此在这些验收项仍未满足时，整卡应保留 `in_review`，不能据“测试通过”标记全部 phase 完成。
+
+### 最快复现：无需真人对话或等待三天
+
+在仓库根目录运行：
+
+```bash
+npm run verify:attention-triage
+npm run eval:validate
+npm run eval:run -- --suite attention-triage --no-repair
+```
+
+第一条同时覆盖纯函数、用户隔离 API 和 `attentionScenario.test.ts`。完整场景经过真实 `/ingest` 入库和 `/attention` 决策 API，再走 `ProactivityPolicy` 和 Heartbeat 的通知落库方法，最后调用夜间 E 阶段方法核对 owner 的同线程 `done`。模拟 10/11、10/12、10/13 三个早晨，检查恰好三条通知；另一个场景在第一次提醒后回复 `done`，检查第二次提醒被停止。取消场景检查再次接受也不能重启。均使用内存数据库，跳过无关后台 LLM 作业。
+
+要看真实扩展代码的卡片点击效果，先 `npm start`，待首次编译成功后 Ctrl-C 停止 watch，再运行：
+
+```bash
+npm run verify:attention-triage:e2e
+```
+
+它启动一份全新的 Chromium 扩展实例，加载 `dist/`，用本地 Glip 页面和 HTTP fixture 验证四按钮、失败重试、取消、一次性身份 chip 与 Lens 开关。成功后截图为 `test-results/attention-triage.png`。它证明 UI 交互，后台业务链由上一组独立场景证明。
+
+### 可选的真实体验验证
+
+线上 `ATTENTION_TRIAGE_ENABLED=shadow` 时，造消息也不会出现卡片。先完成上述质量复核，并在服务端选择 `lens`（只看卡片）或 `remind`（同时验证用户接受后的提醒）；身份 chip 还需 `ATTENTION_MANAGER_CHIP_ENABLED=true`。扩展 Options 要开启 Memory Lens，重新加载最新扩展后刷新 Glip。
+
+选择允许个人验收的私聊或测试群，使用一个未来日期，且消息必须通过现有捕获/分析路径入库。别人发送请求可以用：
+
+> @Team 请大家在 2026-10-19 前提交 AT-E77 验收目标。Deadline 10/19/2026
+
+如果是自己发送，改成承诺，避免把发给别人的请求误认成自己的任务：
+
+> 我会在 2026-10-19 前提交 AT-E77 验收目标。Deadline 10/19/2026
+
+日期过了就换成未来日期。确认消息至少一半可见并停留 1.5 秒，查询每 5 秒执行一次，等一个查询周期；原消息下方应显示截止日和四按钮。点击前 Task Center 没有新任务；点击「创建待办」后只有一个 `remind` 账本记录。分别用不同标题测试「只创建提醒」「不相关」「已完成」，避免幂等去重影响观察。
+
+完成证据必须是**账号本人对原消息的关联回复** `done`，不是在群里任意新发一条 `done`。此证据入库后由夜间 E 阶段处理，不能承诺点击发送后立即变 completed；单纯打开 `remind` 也不会绕过 `MEMORY_CONSOLIDATION_V3` 原有 A→E 门禁，不要为体验测试跳过其他阶段的质量门。短时人工体验可以直接点「已完成」验证停提醒；三次提醒和 E 阶段逻辑优先用隔离测试，不必真实等数天。

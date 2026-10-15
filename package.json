@@ -126,7 +126,9 @@
     "verify:scheduled-messages-queue-suggestion:e2e": "node tools/verify-scheduled-messages-queue-suggestion-e2e.mjs",
     "verify:scheduled-messages-crud-focus:e2e": "node tools/verify-scheduled-messages-crud-focus-e2e.mjs",
     "verify:task-center-ui": "node desktop-app/scripts/task-center-ui-check.mjs",
-    "eval:write-provenance-gate": "npm --prefix memory-service test -- --run src/__tests__/writeProvenanceGate.test.ts --reporter=json --outputFile=evals/write-provenance-gate/report.json"
+    "eval:write-provenance-gate": "npm --prefix memory-service test -- --run src/__tests__/writeProvenanceGate.test.ts --reporter=json --outputFile=evals/write-provenance-gate/report.json",
+    "verify:attention-triage": "npm --prefix memory-service test -- --run src/__tests__/attentionTriage.test.ts src/__tests__/api-attention.test.ts src/__tests__/attentionScenario.test.ts",
+    "verify:attention-triage:e2e": "node tools/verify-attention-triage-e2e.mjs"
   },
   "type": "module",
   "license": "MIT",

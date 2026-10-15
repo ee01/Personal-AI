@@ -316,5 +316,5 @@
 | 小能力 | 所属能力 | 所在文档 |
 |---|---|---|
 | 消息旁分诊卡、四个决策、明确确认上级/角色 | Memory Lens | [memory_lens.md](./features/memory_lens.md#注意力分诊消息旁的-attention-卡) |
-| 接受后落账、三次提醒、冷却/到期/取消、证据完成 | Task Center | [task_center.md](./features/task_center.md#从消息到待办提案attention-triage) |
+| 接受后落账、三次提醒、冷却/到期/取消、证据完成、隔离场景验证与阶段验收 | Task Center | [task_center.md](./features/task_center.md#从消息到待办提案attention-triage) |
 | 关注项 open loops、原消息证据和待办压力 | Today Pilot | [today_pilot.md](./features/today_pilot.md#注意力分诊-open-loops) |

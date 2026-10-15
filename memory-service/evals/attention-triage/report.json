@@ -7,8 +7,8 @@
   "recall": 1,
   "falsePositiveRate": 0.017857142857142856,
   "annotation": "Coding-agent semantic review; independent human adjudication pending",
-  "experienceReport": ".eval-runs/20261015T040912Z-attention-triage-5t1jb6/report.html",
-  "experienceCases": 12,
+  "experienceReport": ".eval-runs/20261015T094708Z-attention-triage-udk870/report.html",
+  "experienceCases": 13,
   "targetedRegressionTests": 288,
   "glipE2E": "fresh dist: four decisions, retry, cancellation, identity chips, Lens switch; host clicks/replies 0",
   "rollout": "shadow; independent human seed review required before production Lens/remind rollout",
@@ -27,5 +27,24 @@
     "attentionApi": 200,
     "mode": "shadow",
     "migration": "078_attention_triage.sql"
+  },
+  "followupVerification": {
+    "command": "npm run verify:attention-triage",
+    "tests": 101,
+    "backendBuild": "passed",
+    "productionReadOnly": {
+      "health": 200,
+      "attentionApi": 200,
+      "mode": "shadow"
+    },
+    "phaseAudit": {
+      "phase0": "Independent human labels pending",
+      "phase1": "Implemented; real shadow quality adjudication pending",
+      "phase2": "Fixture UI verified; installed real Glip acceptance pending",
+      "phase3": "Clock-driven lifecycle and real notification insert verified; online rollout remains shadow",
+      "phase4": "E method and Day Pilot implemented; resident one-pager consumer not integrated"
+    },
+    "scope": "No runtime code or production flags changed in this follow-up; prior six-ability results above are historical evidence from the original implementation.",
+    "freshDistGlipE2E": "passed; four decisions, retry, cancellation, once-only identity chips, Lens toggle, host clicks/replies 0"
   }
 }

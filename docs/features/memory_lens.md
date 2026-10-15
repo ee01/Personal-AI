@@ -20,7 +20,7 @@
 
 分诊默认 `ATTENTION_TRIAGE_ENABLED=shadow`（只记候选）；`lens` 展示卡片，`remind` 加开提醒，其他值关闭。回滚保留已接受的任务账本。已关联 v3 单元时记录 `memory_exposures`；原始消息候选不伪造单元或确认记录。
 
-源码：`src/context-lens/attentionCards.ts`、`memory-service/src/core/AttentionTriage.ts`、`AttentionService.ts`、`routes/attention.ts`。`GET /attention?postIds=...` 只返回当前用户的来源卡；决策与身份分别 POST `/attention/:id/decision`、`/attention/:id/identity`。示例见 [分诊 demo](../demo/memory-attention-triage-demo.html)。验证：`node tools/verify-attention-triage-e2e.mjs`，及 `npm run eval:run -- --suite attention-triage --no-repair`。
+源码：`src/context-lens/attentionCards.ts`、`memory-service/src/core/AttentionTriage.ts`、`AttentionService.ts`、`routes/attention.ts`。`GET /attention?postIds=...` 只返回当前用户的来源卡；决策与身份分别 POST `/attention/:id/decision`、`/attention/:id/identity`。示例见 [分诊 demo](../demo/memory-attention-triage-demo.html)。验证：`node tools/verify-attention-triage-e2e.mjs`，及 `npm run eval:run -- --suite attention-triage --no-repair`。完整阶段验收与无需造真实对话的步骤见 [任务中心验证说明](task_center.md#attention-triage-验证与阶段验收2026-10-15-复核)。
 
 ## 概述
 
