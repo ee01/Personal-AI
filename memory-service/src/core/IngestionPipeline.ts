@@ -1,3 +1,4 @@
+import { AttentionService } from './AttentionService.js';
 import { classifyWrite, recalledIds, recordRecallExposures, applyTurnTaint, gateEnabled } from './WriteProvenanceGate.js';
 import { isConsolidationPhaseEnabled } from './v3/ConsolidationPhases.js';
 /**
@@ -706,6 +707,10 @@ export class IngestionPipeline {
         (err as Error).message,
       );
     }
+
+    // Thin deterministic triage consumes only admitted owner/observed episodes.
+    try { new AttentionService(this.db, this.v3UserId ?? 'default').capture(id); }
+    catch (error) { console.warn('[attention] triage skipped', error); }
 
     // ---- 7b. Focus project timeline extraction (best-effort, non-blocking) ----
     if (matchedProjects.length > 0) {

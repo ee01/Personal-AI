@@ -101,7 +101,7 @@ OpenViking 的三级上下文（一句话/概览/全文）。本系统 chunks �
 | A2 可编辑 Markdown 工作区（视图，round-trip） | [memory-markdown-git-mirror-plan](./memory-markdown-git-mirror-plan.md) 投影层（E-79）；回写 proposal 留给 one-pager plan §4.3 | 仅规划 |
 | A3 常驻用户 one-pager | [memory-resident-one-pager-plan](./memory-resident-one-pager-plan.md)（E-78） | 仅规划 |
 | A4 投入从检索转向写入侧 curation（alias / supersession / 矛盾扫描） | [memory_foundation](../features/memory_foundation.md#睡眠期整理与两车道读取) 阶段 A / C（E-76） | 已实现，B/C 生产 live 仍须人工 shadow 资格 |
-| A5 前瞻记忆生命周期（standing intents） | [memory-attention-triage-plan](./memory-attention-triage-plan.md) §5.1（E-77） | 仅规划 |
+| A5 前瞻记忆生命周期（standing intents） | [Task Center 注意力账本](../features/task_center.md#从消息到待办提案attention-triage)（E-77） | 已实现，默认 shadow |
 | A6 事件唤醒补充轮询 | attention-triage plan Phase 3 的 Heartbeat 读 ledger；扩展侧事件触发留作其 Phase 2 之后的增量 | 部分覆盖 |
 | A7 后台成本分级 | reconciliation plan §5.5 预算制度 | 仅规划 |
 | A8 记忆场景评测进 CI | 各 plan 的 Evals 节 + [memory-longmemeval-benchmark-plan](./memory-longmemeval-benchmark-plan.md) 回归门 | 已有框架 |

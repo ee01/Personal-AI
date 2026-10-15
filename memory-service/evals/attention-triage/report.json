@@ -1,0 +1,31 @@
+{
+  "seeds": 60,
+  "positive": 4,
+  "negative": 56,
+  "tp": 4,
+  "fp": 1,
+  "recall": 1,
+  "falsePositiveRate": 0.017857142857142856,
+  "annotation": "Coding-agent semantic review; independent human adjudication pending",
+  "experienceReport": ".eval-runs/20261015T040912Z-attention-triage-5t1jb6/report.html",
+  "experienceCases": 12,
+  "targetedRegressionTests": 288,
+  "glipE2E": "fresh dist: four decisions, retry, cancellation, identity chips, Lens switch; host clicks/replies 0",
+  "rollout": "shadow; independent human seed review required before production Lens/remind rollout",
+  "memoryAbilities": {
+    "extraction": 1,
+    "multi_session": 1,
+    "temporal": 1,
+    "knowledge_update": 1,
+    "abstention": 1,
+    "prospective": 1
+  },
+  "memoryRegression": "no regression vs baseline (overall 1 → 1)",
+  "memoryReport": ".eval-runs/memory-abilities-e77-final/mem-abilities-local/reader-report.json",
+  "productionChecks": {
+    "health": 200,
+    "attentionApi": 200,
+    "mode": "shadow",
+    "migration": "078_attention_triage.sql"
+  }
+}

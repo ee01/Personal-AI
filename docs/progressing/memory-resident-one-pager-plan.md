@@ -46,7 +46,7 @@ Instinct 每次对话都带着一页约 4k token 的「关于你」的一页纸�
 | `preferences` | 500 | confirmed 偏好 + 睡眠期 D 阶段 proposal（标 `provisional`） | 每晚 | Ask / Compose；Passive 只用 confirmed |
 | `people` | 400 | 关系雷达中高频协作者、上级、直接汇报 | 每晚 | Compose 用于语气与称呼；不含敏感字段 |
 | `active_workstreams` | 800 | watched projects + 近 14 天 salience ≥ 0.35 的主题（QW-1） | 每晚 + 事件触发 | 所有 surface |
-| `open_loops` | 600 | attention ledger 中 open 的等待项 / 截止项（见 `memory-attention-triage-plan.md`） | 事件触发 | Ask / Compose / Day Pilot |
+| `open_loops` | 600 | attention ledger 中 open 的等待项 / 截止项（见 [Task Center 注意力账本](../features/task_center.md#从消息到待办提案attention-triage)） | 事件触发 | Ask / Compose / Day Pilot |
 | `recent_corrections` | 200 | Teach Once / Lexicon 的 scoped 纠正 | 变更即刷 | 所有 surface |
 | `meta` | 100 | 每段 `generated_at`、`source_count`、`staleness`、`budget_used` | 每次渲染 | 回执显示 |
 
@@ -74,7 +74,7 @@ Instinct 每次对话都带着一页约 4k token 的「关于你」的一页纸�
 | `memory-foundation-rearchitecture-plan.md` §6.6 / §8.3 / §10 | 遵守 durable 必须确认、T0 ≤ 40 slot；不做「固定数量 core slots」的硬约束，用 token 预算替代 |
 | `ai-context-passport-plan.md` / `ContextPackService` | 对外导出继续走 ContextPack；one-pager 是其内部输入之一，经 `PersonaProjectionService` 投影 |
 | `memory-write-provenance-gate-plan.md` | 只有 `promotion_eligible=true` 的 unit 能进 one-pager |
-| `memory-attention-triage-plan.md` | `open_loops` 段的数据来源 |
+| [Task Center 注意力账本](../features/task_center.md#从消息到待办提案attention-triage) | `open_loops` 段的数据来源 |
 
 ### 4.5 明确不做
 

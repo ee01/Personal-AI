@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-10-14*
+*最后更新: 2026-10-15*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -309,3 +309,12 @@
 4. 若一个 `docs/progressing/*.md` 规划已经落地到源码，迁入 `docs/features` 或在现有主文档补齐后，再从本索引引用。仅创建或修改 progressing 规划本身时不更新本索引。
 5. 主功能文档不能只列功能点；应在前部保留大白话运行逻辑、主要影响因素和必要实现/门控/数据来源逻辑，详细标准见 [`AGENT.md`](../AGENT.md)。
 6. 完成功能并更新 `docs/features/` 主文档后，必须同步更新本索引（小功能行、`所在文档`、必要时主功能列表 / 平台层能力节与最后更新日期）；`AGENT.md` Documentation 节已把这作为交付要求。
+
+
+## 注意力分诊小能力
+
+| 小能力 | 所属能力 | 所在文档 |
+|---|---|---|
+| 消息旁分诊卡、四个决策、明确确认上级/角色 | Memory Lens | [memory_lens.md](./features/memory_lens.md#注意力分诊消息旁的-attention-卡) |
+| 接受后落账、三次提醒、冷却/到期/取消、证据完成 | Task Center | [task_center.md](./features/task_center.md#从消息到待办提案attention-triage) |
+| 关注项 open loops、原消息证据和待办压力 | Today Pilot | [today_pilot.md](./features/today_pilot.md#注意力分诊-open-loops) |

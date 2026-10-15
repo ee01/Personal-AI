@@ -1,6 +1,26 @@
 # Memory Lens
 
-*最后更新: 2026-08-29（含 Options `CONTEXT_LENS_ENABLED` 用户总开关、两层被动召回门禁、Lens 展示地图、关键简报自动生成、Options 语言同步链路、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
+*最后更新: 2026-10-15（含 Options `CONTEXT_LENS_ENABLED` 用户总开关、两层被动召回门禁、Lens 展示地图、关键简报自动生成、Options 语言同步链路、简报 > 变化脉络首屏优先级、Scene Memory Autopilot、Rest / Hover Peek / Expanded Card、Rehearsal、划词记忆检索、变化脉络、Compose Assist 互斥与 AR 数据边界）*
+
+## 注意力分诊：消息旁的 attention 卡
+
+### 大白话运行逻辑
+
+在 Glip 中看到一条明确要求自己或所在团队完成的消息时，系统用已写入的原文和已有 v3 抽取结果，检查请求词、截止日期、受众和发送者关系。命中关注规则优先；已确认上级、社交关系和近 30 天互动频率作为补充。转发、新闻、会议邀请模板、他人的请求和系统生成内容保持安静，不新增模型调用。
+
+消息至少一半进入视口并停留 1.5 秒，才会查询它对应的分诊项。卡片标出截止日、给我/群发含我及命中原因，提供「创建待办」「只创建提醒」「已完成」「不相关」。前两个按钮才会写任务中心；另外两个留下持久反馈。卡片上的点击不传给宿主消息，代码不写已读状态、不发回复。关闭 Options 的 `CONTEXT_LENS_ENABLED` 会移除卡片。
+
+### 决策和身份确认
+
+- 只有 `origin_class=owner/observed` 可以参与；自己写的消息还必须是承诺或等待回复，发给 agent 的命令不会变成自己的承诺。
+- 受众先检查明确 @ 我、回复我或私聊，再检查团队称呼；其他 @ 人且没有团队受众时过滤，无法判定时不出卡。使用已采集消息数据，不扩大采集范围。
+- 日期支持中英数字日期、英文月份和相对星期，按消息时间及画像时区解析；明确过去日期不滚到下一次。没有日期的请求/承诺按 3 个工作日，等待按 2 个工作日，已有 v3 标签且没有请求词的 open_question 按 7 个自然日设置到期。默认时区为 Asia/Shanghai。
+- 置信度由截止日、受众和发送者信号组成，阈值 0.75。相同标题/截止日保持稳定幂等；相同发送者、群和截止日的近似主题合并。候选只在原消息出一张卡，后续来源保留为证据别名。
+- manager/role 只在 `ATTENTION_MANAGER_CHIP_ENABLED=true` 时提供确认按钮。确认上级绑定服务器已经识别的发送者实体，不采信客户端另给的实体；画像与社交镜像在同一事务写入。展示和推断不会自动确认身份。
+
+分诊默认 `ATTENTION_TRIAGE_ENABLED=shadow`（只记候选）；`lens` 展示卡片，`remind` 加开提醒，其他值关闭。回滚保留已接受的任务账本。已关联 v3 单元时记录 `memory_exposures`；原始消息候选不伪造单元或确认记录。
+
+源码：`src/context-lens/attentionCards.ts`、`memory-service/src/core/AttentionTriage.ts`、`AttentionService.ts`、`routes/attention.ts`。`GET /attention?postIds=...` 只返回当前用户的来源卡；决策与身份分别 POST `/attention/:id/decision`、`/attention/:id/identity`。示例见 [分诊 demo](../demo/memory-attention-triage-demo.html)。验证：`node tools/verify-attention-triage-e2e.mjs`，及 `npm run eval:run -- --suite attention-triage --no-repair`。
 
 ## 概述
 

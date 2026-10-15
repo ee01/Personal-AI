@@ -5759,6 +5759,18 @@ export class MemoryServiceClient {
    * memory-exploring (Vue UI). Designed for surface-attached "you've seen this
    * before" bubbles in web/meeting/popup surfaces.
    */
+  async listAttention(postIds: string[]): Promise<any> {
+    return this.request('GET', `/attention?postIds=${encodeURIComponent(postIds.join(','))}`);
+  }
+
+  async decideAttention(id: string, verdict: string): Promise<any> {
+    return this.request('POST', `/attention/${encodeURIComponent(id)}/decision`, { verdict });
+  }
+
+  async confirmAttentionIdentity(id: string, key: string, value: string): Promise<any> {
+    return this.request('POST', `/attention/${encodeURIComponent(id)}/identity`, { key, value });
+  }
+
   async contextRecall(
     request: ContextRecallRequest,
   ): Promise<ContextRecallResponse> {

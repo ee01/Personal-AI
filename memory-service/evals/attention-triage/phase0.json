@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-15",
+  "user": "esone.qiu",
+  "readOnly": true,
+  "windowDays": 90,
+  "scope": "Glip owner/observed, timestamp <= scan time",
+  "scanned": 4310,
+  "requestAndDateLexicalHits": 72,
+  "fromSendersWithAtLeast20Messages": 43,
+  "highFrequencyRatio": 0.597222,
+  "warning": "Lexical hits are NOT validated future deadlines. Dates include past dates, quoted threads, version numbers and reports. Raw source text is deliberately excluded.",
+  "annotation": "60 ordered seeds reviewed by the coding agent; no independent human adjudication claimed. Semantic paraphrases retained; names, links, IDs and business details removed.",
+  "futureDateHitsAtScan": 0,
+  "futureDateNote": "Deterministic date parser over the 72 lexical hits, relative dates anchored to source timestamps. Not a production precision estimate."
+}

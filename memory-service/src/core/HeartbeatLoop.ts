@@ -1,3 +1,4 @@
+import { AttentionService } from './AttentionService.js';
 import { SystemWriteContext, gateEnabled } from './WriteProvenanceGate.js';
 /**
  * HeartbeatLoop -- micro-consolidation and proactive notification engine.
@@ -321,6 +322,8 @@ export class HeartbeatLoop {
         allCandidates.push(...projectCandidates);
         actions.push(`found ${projectCandidates.length} project update(s)`);
       }
+
+      allCandidates.push(...new AttentionService(this.db, this.userId ?? 'default').dueCandidates());
 
       // 4. Check upcoming deadlines
       const deadlineCandidates = await this.checkUpcomingDeadlines();
@@ -977,17 +980,24 @@ export class HeartbeatLoop {
     for (const notif of notifications) {
       try {
         const notificationId = randomUUID();
-        insertStmt.run(
-          notificationId,
-          notif.type,
-          notif.title,
-          notif.body,
-          notif.payload ? JSON.stringify(notif.payload) : null,
-          notif.topicId ?? null,
-          notif.relatedEntityId ?? null,
-          currentTime,
-          currentTime,
-        );
+        this.db.transaction(() => {
+          if (notif.payload?.attentionItemId && !new AttentionService(
+            this.db, this.userId ?? 'default',
+          ).recordFire(String(notif.payload.attentionItemId), currentTime)) {
+            throw new Error('attention_not_armed');
+          }
+          insertStmt.run(
+            notificationId,
+            notif.type,
+            notif.title,
+            notif.body,
+            notif.payload ? JSON.stringify(notif.payload) : null,
+            notif.topicId ?? null,
+            notif.relatedEntityId ?? null,
+            currentTime,
+            currentTime,
+          );
+        })();
         delivered.push({
           id: notificationId,
           type: notif.type,

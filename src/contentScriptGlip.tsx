@@ -1,3 +1,4 @@
+import { initAttentionCards } from './context-lens/attentionCards';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { App } from './container/App';
@@ -35,6 +36,8 @@ import {
   shouldPreserveDefaultNativeJoinClick,
   watchRingCentralNativeJoinEnabled,
 } from './ringcentralNativeJoin';
+
+initAttentionCards();
 
 initContentScriptI18n(() => {
   void decorateFollowThreadMessages();

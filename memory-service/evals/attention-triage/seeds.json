@@ -1,0 +1,542 @@
+[
+  {
+    "id": "real-seed-01",
+    "text": "@Team Goal setting deadline是明天，请大家完成并提交。",
+    "expected": true,
+    "origin": "observed",
+    "rationale": "明确所在团队的行动请求",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1791780555
+  },
+  {
+    "id": "real-seed-02",
+    "text": "Example Prompt Please use task-estimate skill. Example date 2026/10/13.",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1791439469
+  },
+  {
+    "id": "real-seed-03",
+    "text": "脚本在9/18运行失败，请修复文件找不到的问题。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1791427985
+  },
+  {
+    "id": "real-seed-04",
+    "text": "新闻：2026/10/13 安全通告，请防范身份冒充。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1791232489
+  },
+  {
+    "id": "real-seed-05",
+    "text": "<standalone><message>@Team 请在10/08假期结束后联系我们。</message></standalone>",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790780169
+  },
+  {
+    "id": "real-seed-06",
+    "text": "AI Service 已在群中发布：9/25项目报告已完成。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790673072
+  },
+  {
+    "id": "real-seed-07",
+    "text": "AI Service 已在群中发布：9/25项目报告已完成。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790672594
+  },
+  {
+    "id": "real-seed-08",
+    "text": "<root>@Other 请在10/13完成这个任务。</root>",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790564773
+  },
+  {
+    "id": "real-seed-09",
+    "text": "9/25质量报告已完成：剩余项目需要检查。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790301958
+  },
+  {
+    "id": "real-seed-10",
+    "text": "请把季度数据匹配进表格，2026-Q3用于示例。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790129977
+  },
+  {
+    "id": "real-seed-11",
+    "text": "AI 晨报：9/23研究发现返工增加，请参考。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1790125239
+  },
+  {
+    "id": "real-seed-12",
+    "text": "请在幻灯片说明9月21号交付的文档情况。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789979405
+  },
+  {
+    "id": "real-seed-13",
+    "text": "Owner posted in group > @Other Please reply by 10/13.",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789953441
+  },
+  {
+    "id": "real-seed-14",
+    "text": "请整理这周和下周的交付任务到幻灯片。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789915592
+  },
+  {
+    "id": "real-seed-15",
+    "text": "<standalone><message>@Other wrote: 请完成9/18发布。</message></standalone>",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789718057
+  },
+  {
+    "id": "real-seed-16",
+    "text": "@Other Can we mark the document approved? 10/13 is in its title.",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789694608
+  },
+  {
+    "id": "real-seed-17",
+    "text": "@Team Q3数据持平，9月初做了调整。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789628180
+  },
+  {
+    "id": "real-seed-18",
+    "text": "@Bot wrote: AI 晨报 9/16 请参考。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789624909
+  },
+  {
+    "id": "real-seed-19",
+    "text": "AI 晨报9/17：上下文文件请参考。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789606836
+  },
+  {
+    "id": "real-seed-20",
+    "text": "<standalone><message>@Other 请在9/16查看任务。</message></standalone>",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789517945
+  },
+  {
+    "id": "real-seed-21",
+    "text": "帮我修改skill，2026-7-31作为查询示例。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789465792
+  },
+  {
+    "id": "real-seed-22",
+    "text": "帮我创建轮换skill，至少间隔两周。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789111728
+  },
+  {
+    "id": "real-seed-23",
+    "text": "Someone posted in group > 请完成9/15规划。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789003727
+  },
+  {
+    "id": "real-seed-24",
+    "text": "<reply>@Other 请完成9/10任务。</reply>",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789003356
+  },
+  {
+    "id": "real-seed-25",
+    "text": "AI 晨报9/10：请参考工具介绍。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1789002151
+  },
+  {
+    "id": "real-seed-26",
+    "text": "<root>@Team 请在今天会议前检查任务。</root>",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788936981
+  },
+  {
+    "id": "real-seed-27",
+    "text": "AI Service 已在私信中发布：已完成9/09权限更新。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788917303
+  },
+  {
+    "id": "real-seed-28",
+    "text": "Hi folks, could you update the error text? Error 402/403.",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788796624
+  },
+  {
+    "id": "real-seed-29",
+    "text": "AI 晨报9/07：请参考行业分析。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788742877
+  },
+  {
+    "id": "real-seed-30",
+    "text": "@Other 项目状态报告2025-08-06：请完成已逾期任务。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788501390
+  },
+  {
+    "id": "real-seed-31",
+    "text": "__原文__：4月17日培训欢迎报名。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788501390
+  },
+  {
+    "id": "real-seed-32",
+    "text": "Someone posted in group > @Team 请查看9/01录像。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788501390
+  },
+  {
+    "id": "real-seed-33",
+    "text": "Someone posted in group > @Team 请在9/15前共享计划。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788411558
+  },
+  {
+    "id": "real-seed-34",
+    "text": "@Other Could you let me know? Deadline is Friday.",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788228443
+  },
+  {
+    "id": "real-seed-35",
+    "text": "AI 晨报9/01：请参考自动化规则。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1788224453
+  },
+  {
+    "id": "real-seed-36",
+    "text": "项目状态Closed，8/26评论：请确认。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787788804
+  },
+  {
+    "id": "real-seed-37",
+    "text": "Someone posted in group > @Owner wrote: 8/28交付吗？",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787708048
+  },
+  {
+    "id": "real-seed-38",
+    "text": "AI Service 已在私信中发布：8/25已完成修复。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787652904
+  },
+  {
+    "id": "real-seed-39",
+    "text": "本周完成了review，等8/28发布。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787644367
+  },
+  {
+    "id": "real-seed-40",
+    "text": "@Other Is 8/28 the delivery date?",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787642892
+  },
+  {
+    "id": "real-seed-41",
+    "text": "done 更新完成，9/01版本支持新选项。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787219065
+  },
+  {
+    "id": "real-seed-42",
+    "text": "Bot posted in a direct conversation > 已完成8/20清理。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787188426
+  },
+  {
+    "id": "real-seed-43",
+    "text": "AI Service 已在私信中发布：2026-Q3查询已完成。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787118699
+  },
+  {
+    "id": "real-seed-44",
+    "text": "帮我修改skill，季度2026-Q3作为模板。",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787023498
+  },
+  {
+    "id": "real-seed-45",
+    "text": "@Team Voice Agent分享，请参加8/20活动。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787020000
+  },
+  {
+    "id": "real-seed-46",
+    "text": "Someone posted in group > @Team 请在May 5完成问卷。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1787018144
+  },
+  {
+    "id": "real-seed-47",
+    "text": "Bot 已在私信中发布：8/19已完成查询。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786964591
+  },
+  {
+    "id": "real-seed-48",
+    "text": "@Other We cannot meet tomorrow deadline, please deploy.",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786954234
+  },
+  {
+    "id": "real-seed-49",
+    "text": "@Other Could you share an update? Tomorrow is deadline.",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786927025
+  },
+  {
+    "id": "real-seed-50",
+    "text": "@Team Q4方向调整，我们需要聚焦12月份的目标。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786686483
+  },
+  {
+    "id": "real-seed-51",
+    "text": "大家注意，请在9/18之前完成提交，下周明确提出风险。",
+    "expected": true,
+    "origin": "observed",
+    "rationale": "明确所在团队的行动请求",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786602138
+  },
+  {
+    "id": "real-seed-52",
+    "text": "@Other 请在8/14确认这个任务。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786589572
+  },
+  {
+    "id": "real-seed-53",
+    "text": "Someone posted in group > @Other 请在8/13完成估算。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786584708
+  },
+  {
+    "id": "real-seed-54",
+    "text": "@Team 请在下周四完成timeline update。",
+    "expected": true,
+    "origin": "observed",
+    "rationale": "明确所在团队的行动请求",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786527306
+  },
+  {
+    "id": "real-seed-55",
+    "text": "@Other 请查看thread，8/13有设计疑问。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786521657
+  },
+  {
+    "id": "real-seed-56",
+    "text": "@Team 今天的weekly agenda：明天demo，有risk请确认。",
+    "expected": true,
+    "origin": "observed",
+    "rationale": "明确所在团队的行动请求",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786517165
+  },
+  {
+    "id": "real-seed-57",
+    "text": "大家，8/13完成分析，8/14进行review，是我们的状态更新。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786469549
+  },
+  {
+    "id": "real-seed-58",
+    "text": "@Other Could you deploy by Friday?",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786432542
+  },
+  {
+    "id": "real-seed-59",
+    "text": "Someone posted in group > hi @Owner 请在8/05确认。",
+    "expected": false,
+    "origin": "observed",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786412573
+  },
+  {
+    "id": "real-seed-60",
+    "text": "我上周五有通知，这周一要完成，你有看到吗？",
+    "expected": false,
+    "origin": "owner",
+    "rationale": "过滤：转述/新闻/他人受众/无行动或发给agent的命令",
+    "privacy": "semantic paraphrase; no raw identifiers",
+    "timestamp": 1786344351
+  }
+]

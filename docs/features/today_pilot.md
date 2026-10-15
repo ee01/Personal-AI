@@ -1,6 +1,6 @@
 # Today Pilot / 今日领航
 
-_最后更新: 2026-09-17_
+_最后更新: 2026-10-15_
 
 ## 是什么
 
@@ -363,3 +363,10 @@ Compose Assist 负责：
 - 不自动替用户发送消息、创建动作或把私有内容发给外部 AI。
 - 首页反馈可以先做乐观隐藏，但写入失败必须恢复卡片并提示用户。
 - 首页是导航和提醒层，强状态处理留给对应子页面。
+
+
+## 注意力分诊 open loops
+
+已展示（proposed）和已接受（armed）的关注项作为 Today Pilot 的 open loop 来源。`DayPilotService.scanCandidates` 从相同用户的 attention 账本读取它们，复用原消息证据和聚类，设置 `dueAt`，把 `openLoopPressure` 提升至 0.95，并按原公式更新候选得分。它们继续经过现有 mission 聚类、隐私过滤与每日注意力预算，不单独再推一条通知。
+
+完成、取消、不相关和过期项不再进入这个来源；shadow 不提供 open loops。`GET /attention/open-loops` 提供同一用户隔离的数据（含原消息 ID 和 accepted_action_id），作为常驻一页纸尚未落地时的供数契约；这里不宣称已有常驻一页纸页面或 identity 消费者。

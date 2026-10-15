@@ -93,7 +93,7 @@ SQLite 真源 ──每晚巩固后──▶ Markdown 投影（本地 data/users
 | `docs/features/memory_auto_backup.md` | 本方案是其第三 provider；全量恢复仍走 zip；共用调度、互斥、失败通知 |
 | [已落地睡眠期整理](../features/memory_foundation.md#睡眠期整理与两车道读取) | 投影是其 D 阶段的确定性输出；`consolidation/DIARY.md` 来自 `unit_reconcile_decisions` |
 | `memory-resident-one-pager-plan.md` | `profile/one-pager.md` 直接复用 |
-| `memory-attention-triage-plan.md` | `workstreams/` 的 open / completed 来自 `attention_items` |
+| [Task Center 注意力账本](../features/task_center.md#从消息到待办提案attention-triage) | `workstreams/` 的 open / completed 来自 `attention_items` |
 | `memory-write-provenance-gate-plan.md` | 只镜像 `promotion_eligible=true` 的 unit |
 | `memory-architecture-analysis.md`（第一轮） | 其「适配器 / MCP 互操作」建议落为 `interop/openclaw/` 目录 |
 | `ai-memory-portability-ledger-plan.md`（搁置） | 不复活对账台；镜像的 `MIRROR.md` 只做单向声明 |

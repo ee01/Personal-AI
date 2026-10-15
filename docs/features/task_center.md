@@ -170,3 +170,21 @@ npm run verify:task-center-ui
 | **4 收敛** ⏸ | Sheet 降只读镜像、GAS access 降 `DOMAIN`、升级通道解冻 | **暂缓**：现网无法发新 App Script；切断 Jira→GAS 会停 ☁️ 24/7 |
 
 每期独立可验收、独立可停；Phase 1 与"方案 B 最小化"完全重合，最坏情况零浪费。
+
+
+## 从消息到待办提案（Attention Triage）
+
+### 大白话运行逻辑
+
+分诊认为消息重要时只写 `attention_items`，没有用户动作就没有任务。用户在原消息旁点「创建待办」或「只创建提醒」，才会创建一条 `task_kind=remind`、`source_kind=attention` 的 `proposed_actions`；两者均保留来源，后者的 `params.reminderOnly=true` 明确提醒意图。创建动作具有稳定幂等键，重复点击不会产生多个任务。
+
+### 提醒与闭环
+
+这类任务由 Heartbeat 单独读关注项账本，任务队列行保持 manual/paused，避免 ActionExecutor 再发一次。`recurrence_spec` 保存三次计划：到期前两天、前一天、当天的当地早晨 9 点。所有通知先经 ProactivityPolicy；只有通知成功写入 `notification_records` 才在同一事务扣一次预算。每项两次间隔至少 24 小时、最多 3 次；每日 attention 通知上限 3 条，晚恢复时不补发一串已错过的提醒。
+
+- 状态：candidate → proposed → armed（点击接受）→ done（提醒预算耗尽）；也可以 completed、dismissed、cancelled、expired。到期后 7 天 expired；到期当天结束后不再发送提醒。
+- 「不相关」和取消均为持久状态；重入库和重复点击不会重新激活。Task Center 的取消/完成用数据库 trigger 立即同步关注项，Heartbeat 再维护过期项。
+- 夜间 E 阶段只核对同群、显式关联原消息的后续证据：deadline/commitment 需要 owner 回复明确完成词；request 需要 owner 回复，waiting 需要对方回复。无关联的 done、别人的 done、否定完成和聊天里的取消都不改变状态。完成保留 `completed_evidence_id` 并停止剩余提醒。
+- 接受、完成、不相关等写 `attention_feedback` 和 `memory_feedback_events`；同一事项的负反馈会阻止再次出卡。没有外发、WD 提交、日历或 Jira 写回。
+
+表结构：`078_attention_triage.sql`；逻辑：`AttentionService`、`HeartbeatLoop`、`SleepReconciliation.attention`。本地验证：`npm --prefix memory-service test -- --run src/__tests__/attentionTriage.test.ts src/__tests__/api-attention.test.ts`。

@@ -59,6 +59,7 @@ import { weeklyReportRoutes } from './routes/weeklyReport.js';
 import { reflectionThreadRoutes } from './routes/reflectionThreads.js';
 import { actionRoutes } from './routes/actions.js';
 import { agentTaskRoutes } from './routes/agentTasks.js';
+import { attentionRoutes } from './routes/attention.js';
 import { taskCenterRoutes } from './routes/taskCenter.js';
 import { agentExecutorRoutes } from './routes/agentExecutors.js';
 import { agentWorkerRoutes } from './routes/agentWorkers.js';
@@ -354,6 +355,7 @@ export async function buildApp(
       await instance.register(actionRoutes);
       await instance.register(agentTaskRoutes);
       await instance.register(taskCenterRoutes);
+      await instance.register(attentionRoutes);
       await instance.register(agentExecutorRoutes);
       await instance.register(agentWorkerRoutes);
       await instance.register(messageRuleRoutes);

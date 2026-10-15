@@ -1,3 +1,4 @@
+import { AttentionService } from './AttentionService.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
@@ -973,6 +974,23 @@ export class DayPilotService {
   ): { candidates: Candidate[]; sourceStats: DayPilotSourceStats } {
     const candidates: Candidate[] = [];
     const messages = this.scanMessages(horizonStart, horizonEnd, currentTime);
+    const loops = new AttentionService(this.db, this.userId).openLoops(currentTime) as Array<{
+      source_message_id: string; due_at: number; title: string; id: string;
+    }>;
+    for (const loop of loops) {
+      const existing = messages.candidates.find(c => c.sourceId === loop.source_message_id);
+      const row = existing ? undefined : this.db.prepare('SELECT * FROM messages_raw WHERE id=?')
+        .get(loop.source_message_id) as MessageCandidateRow | undefined;
+      const candidate = existing ?? (row ? this.messageCandidate(row, currentTime) : null);
+      if (!candidate) continue;
+      candidate.score += (0.95 - candidate.openLoopPressure) * 0.18;
+      candidate.openLoopPressure = 0.95;
+      candidate.dueAt = loop.due_at;
+      if (!existing) {
+        candidate.title = loop.title;
+        messages.candidates.push(candidate);
+      }
+    }
     const calendar = this.scanCalendar(currentTime, horizonEnd);
     const notifications = this.scanNotifications(currentTime);
     const actions = this.scanActions(currentTime);

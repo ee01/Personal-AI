@@ -78,7 +78,7 @@ describe('Ingest API', () => {
     expect(body.decision).toMatchObject({
       storage: 'indexed',
       reason: 'salience_indexed',
-      extractionStatus: 'unavailable',
+      extractionStatus: 'skipped',
       shouldIndex: true,
       indexed: true,
     });
@@ -398,8 +398,8 @@ describe('Ingest API', () => {
       },
       extractionStatus: {
         extracted: 0,
-        skipped: 0,
-        unavailable: 3,
+        skipped: 3,
+        unavailable: 0,
         unknown: 0,
       },
       indexing: {
@@ -504,14 +504,14 @@ describe('Ingest API', () => {
     expect(body.decisionSummary).toMatchObject({
       totalItems: 2,
       storage: {
-        indexed: 0,
-        stored_unindexed: 1,
+        indexed: 1,
+        stored_unindexed: 0,
         duplicate: 1,
         error: 0,
         unknown: 0,
       },
       reasons: {
-        extraction_skipped: 1,
+        salience_indexed: 1,
         duplicate_content_source_sender: 1,
         unknown: 0,
       },
@@ -522,9 +522,9 @@ describe('Ingest API', () => {
         unknown: 1,
       },
       indexing: {
-        requested: 0,
-        completed: 0,
-        notRequested: 1,
+        requested: 1,
+        completed: 1,
+        notRequested: 0,
         failedAfterRequest: 0,
         unknown: 1,
       },

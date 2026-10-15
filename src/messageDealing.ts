@@ -594,6 +594,7 @@ async function ingestOwnerSpeechForLearning(
             groupId,
             threadRootPostId,
             parentId: sourcePost.parentId,
+            replyToPostId: sourcePost.parentId,
             creatorId: sourcePost.creatorId,
             creatorUsername: sourcePost.creatorUsername,
             captureReason: 'owner_speech_learning',
@@ -1269,6 +1270,10 @@ export async function analyzeMessagesInBackground(
             // 构建消息元数据
             const messageMetadata = {
               sender: originalMessage.sender || 'unknown',
+              postId: String(postId),
+              attentionMatchedRule: Boolean(result.matchedRule),
+              replyToPostId: sourcePostIndex.get(String(postId))?.parentId,
+              isDirectMessage: sourcePostIndex.get(String(postId))?.isDirectMessage === true,
               datetime:
                 new Date(originalMessage.datetime).getTime() || Date.now(),
               matchedRules: result.matchedRule
@@ -1891,6 +1896,10 @@ async function reviewMessageByLLMAndSendToBot(body: any) {
             ? matched_rule.split('\n').map((rule: string) => rule.trim())
             : [],
           summary: json.summary || '',
+          postId: String(json.post_id),
+          attentionMatchedRule: Boolean(matched_rule),
+          replyToPostId: sourcePostIndex.get(String(json.post_id))?.parentId,
+          isDirectMessage: sourcePostIndex.get(String(json.post_id))?.isDirectMessage === true,
           groupName: json.team_name,
           groupId: json.team_id,
           groupUrl:

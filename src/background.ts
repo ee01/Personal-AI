@@ -2361,6 +2361,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (['ATTENTION_LIST', 'ATTENTION_DECISION', 'ATTENTION_IDENTITY'].includes(request.type)) {
+    // Only our Glip content script can mutate this passive suggestion surface.
+    if (!sender.url || !/^https:\/\/app\.ringcentral\.com\//.test(sender.url)) {
+      sendResponse({ success: false, error: 'invalid_attention_origin' });
+      return false;
+    }
+    const client = getMemoryServiceClient();
+    const operation = request.type === 'ATTENTION_LIST'
+      ? client.listAttention(Array.isArray(request.postIds) ? request.postIds.slice(0, 50) : [])
+      : request.type === 'ATTENTION_IDENTITY'
+      ? client.confirmAttentionIdentity(String(request.id), String(request.key), String(request.value))
+      : client.decideAttention(String(request.id), String(request.verdict));
+    operation.then(result => sendResponse({ success: true, ...result }))
+      .catch(error => sendResponse({ success: false, error: String(error.message) }));
+    return true;
+  }
+
   if (request.type === 'KNOWLEDGE_QUERY') {
     const client = getMemoryServiceClient();
     client

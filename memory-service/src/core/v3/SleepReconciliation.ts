@@ -1,3 +1,4 @@
+import { AttentionService } from '../AttentionService.js';
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 import { LLMClient } from '../../llm/LLMClient.js';
@@ -294,7 +295,9 @@ Phase ${phase}. New and old claims with evidence: ${JSON.stringify([n,o].map(u=>
         VALUES (?,?,?,'attention',?,?,?,?,?,?,?)`).run(`attention:${u.id}:${u.current_revision}`,u.tenant_id,u.owner_user_id,u.text,JSON.stringify([u.id]),u.scope_locator,u.sensitivity,u.egress_policy,eventExpiry??at+7*86400,at);
       candidates+=inserted.changes;
     }
-    return {candidates,llmCalls:0};
+    const owners=this.db.prepare('SELECT DISTINCT user_id FROM attention_items').all() as Array<{user_id:string}>;
+    const completed=owners.reduce((n,r)=>n+new AttentionService(this.db,r.user_id).reconcile(at).completed,0);
+    return {candidates,completed,llmCalls:0};
   }
 
   async insights(at:number) {

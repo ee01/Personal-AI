@@ -1182,3 +1182,61 @@ suites:
         - memory-service/evals/sleep-time-reconciliation/**
       validate:
         - npm --prefix memory-service test -- --run src/__tests__/sleepReconciliation.test.ts
+
+  - id: attention-triage
+    title: Attention Triage
+    description: 确定性分诊和提醒生命周期；真实消息语义种子加边界变体。
+    enabled: true
+    workflow: evals/workflows/attention-triage/experience.md
+    cases: evals/cases/attention-triage/cases.jsonl
+    runMode: manual
+    schedule:
+      enabled: false
+      every: 14d
+      action: report
+    judge:
+      heuristic: true
+      llm: false
+      rubric: evals/workflows/attention-triage/experience.md
+    readerProof:
+      claims:
+        - id: deadline
+          statement: 中英混合截止日与三次早晨提醒
+          caseIds: [attention-deadline]
+        - id: negative
+          statement: 过滤过去日期、转述、新闻及非用户来源
+          caseIds: [attention-negative]
+        - id: audience
+          statement: 仅对自己或所在团队的请求分诊
+          caseIds: [attention-audience]
+        - id: dedup
+          statement: 跨消息只产生一张卡与一个账本任务
+          caseIds: [attention-dedup]
+        - id: lifecycle
+          statement: 确认、冷却、预算、到期、取消与完成证据
+          caseIds: [attention-lifecycle]
+        - id: safety
+          statement: 分诊不创建动作、不确认耐久身份
+          caseIds: [attention-safety]
+        - id: seeds
+          statement: 60条真实语义种子满足召回与误报门槛
+          caseIds: [attention-seeds]
+        - id: date-edges
+          statement: 相对日期和无效日期遵守明确的时间语义。
+          caseIds: [attention-date-edges]
+        - id: identity
+          statement: 耐久身份只由明确确认写入。
+          caseIds: [attention-identity]
+        - id: api
+          statement: API 保持用户隔离并拒绝越界决策。
+          caseIds: [attention-api]
+        - id: persistence
+          statement: 通知事务与次数预算保持一致，每日最多3条 attention 提醒。
+          caseIds: [attention-persistence]
+        - id: kinds
+          statement: 不同关注项种类使用各自的默认到期语义。
+          caseIds: [attention-kinds]
+      boundaries:
+        - 本套件执行内存数据库与真实业务函数；浏览器交互由独立 Playwright 检查证明。
+        - 60条种子为代码代理审阅后的脱敏语义复述，未声称独立人工复核或线上误报率。
+        - 不执行外发、WD提交或日历写入；一页纸尚未落地，通过 scoped open-loops API 供未来消费。

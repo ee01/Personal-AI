@@ -263,7 +263,7 @@ async function runCase({ suite, caseItem, runDir }) {
   if (suite.id === 'write-provenance-gate') {
     return runWriteProvenanceCase({ suite, caseItem, runDir });
   }
-  if (suite.id === 'sleep-time-reconciliation') {
+  if (suite.id === 'attention-triage' || suite.id === 'sleep-time-reconciliation') {
     return runWriteProvenanceCase({ suite, caseItem, runDir });
   }
 
@@ -7581,7 +7581,7 @@ function escapeAttr(value) {
 async function runWriteProvenanceCase({ suite, caseItem, runDir }) {
   const reportPath = resolveRepoPath(path.join(runDir, `${caseItem.id}.vitest.json`));
   const command = await runProcess('npm', ['--prefix', 'memory-service', 'test', '--', '--run',
-    suite.id === 'sleep-time-reconciliation'
+    suite.id === 'attention-triage' ? (caseItem.id === 'attention-api' ? 'src/__tests__/api-attention.test.ts' : 'src/__tests__/attentionTriage.test.ts') : suite.id === 'sleep-time-reconciliation'
       ? (caseItem.id === 'sr-continuation' ? 'src/__tests__/reconciliationContinuation.test.ts' : 'src/__tests__/sleepReconciliation.test.ts')
       : 'src/__tests__/writeProvenanceGate.test.ts', '--testNamePattern', caseItem.testNamePattern,
     '--reporter=json', `--outputFile=${reportPath}`], {cwd: repoRoot, timeoutMs: 60_000});

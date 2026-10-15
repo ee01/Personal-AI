@@ -1,3 +1,4 @@
+import { AttentionService } from '../AttentionService.js';
 import { MemoryClaimAttributionService } from '../MemoryClaimAttributionService.js';
 import { episodePromotionEligible } from '../WriteProvenanceGate.js';
 /**
@@ -380,6 +381,7 @@ export class ExtractionWorker {
     }
     const claims = attribution.getClaimsForMessage(job.episodeId, {ensure:false});
     let integrated = 0;
+    let attentionUnitId: string | undefined;
     for (const [ordinal, candidate] of parsed.batch.candidates.entries()) {
       const workUnitKey = `${job.jobId}:${resultHash}:${ordinal}`;
       const provenance = this.db.prepare('SELECT origin_class,origin_family FROM messages_raw WHERE id=?').get(job.episodeId) as {origin_class:string;origin_family:string};
@@ -422,9 +424,13 @@ export class ExtractionWorker {
         },
         workUnitKey,
       );
+      if (['action_item','event','open_question'].includes(candidate.kind) && result.unitId) attentionUnitId ??= result.unitId;
       void result;
       integrated += 1;
     }
+
+    try { new AttentionService(this.db, this.userId).capture(job.episodeId, parsed.batch.candidates.map(c => c.kind), attentionUnitId); }
+    catch (error) { console.warn('[attention] v3 triage skipped', error); }
 
     this.finishJob(job.jobId, 'integrated', `${integrated} units`);
     return 'integrated';
