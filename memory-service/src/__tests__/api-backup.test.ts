@@ -96,6 +96,69 @@ describe('backup export jobs and auto backup', () => {
     expect(preview.restoredLayers).toEqual(['A', 'B']);
   });
 
+  it('persists GitHub mirror config on PUT /config and exposes the mirror routes', async () => {
+    const userId = 'mirror-config-user';
+    // The user-visible failure this guards against: an old deployed service
+    // strips unknown autoBackupGithub* fields on save and 404s the mirror
+    // routes, so the Options tab appears to lose everything it saved.
+    const putRes = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/config',
+      headers: { 'x-user-id': userId },
+      payload: {
+        autoBackupGithubEnabled: true,
+        autoBackupGithubRepo: 'esone/memory-mirror',
+        autoBackupGithubBranch: 'main',
+        autoBackupGithubToken: 'github_pat_mirror_secret',
+        autoBackupGithubMode: 'markdown',
+        autoBackupGithubScope: 'self_only',
+        autoBackupGithubPrefix: 'mirror',
+      },
+    });
+    expect(putRes.statusCode).toBe(200);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/config',
+      headers: { 'x-user-id': userId },
+    });
+    expect(getRes.statusCode).toBe(200);
+    const config = getRes.json();
+    expect(config.autoBackupGithubEnabled).toBe(true);
+    expect(config.autoBackupGithubRepo).toBe('esone/memory-mirror');
+    expect(config.autoBackupGithubBranch).toBe('main');
+    expect(config.autoBackupGithubMode).toBe('markdown');
+    expect(config.autoBackupGithubScope).toBe('self_only');
+    expect(config.autoBackupGithubPrefix).toBe('mirror');
+    const configBody = JSON.stringify(config);
+    expect(configBody).not.toContain('github_pat_mirror_secret');
+    expect(config.autoBackupGithubTokenConfigured).toBe(true);
+
+    const statusRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/backup/mirror/status',
+      headers: { 'x-user-id': userId },
+    });
+    expect(statusRes.statusCode).toBe(200);
+    const mirror = statusRes.json();
+    expect(mirror.repo).toBe('esone/memory-mirror');
+    expect(mirror.tokenConfigured).toBe(true);
+    expect(mirror.enabled).toBe(true);
+
+    const previewRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/backup/mirror/preview',
+      headers: { 'x-user-id': userId },
+    });
+    expect(previewRes.statusCode).toBe(200);
+    const preview = previewRes.json();
+    expect(Array.isArray(preview.files)).toBe(true);
+    expect(
+      preview.files.some((file: { path: string }) => file.path === 'mirror/MIRROR.md'),
+    ).toBe(true);
+    expect(preview.receipt.scope).toBe('self_only');
+  });
+
   it('sanitizes auto backup secrets on GET /config', async () => {
     const userId = 'backup-config-user';
     const putRes = await app.inject({

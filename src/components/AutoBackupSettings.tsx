@@ -174,21 +174,43 @@ function AutoBackupSettingsForm(): React.ReactElement {
   const [desktopInstalled, setDesktopInstalled] = useState<boolean | null>(null);
   const [mirrorStatus, setMirrorStatus] = useState<MemoryMirrorStatusResponse | null>(null);
   const [mirrorPreview, setMirrorPreview] = useState<MemoryMirrorPreviewResponse | null>(null);
+  const [mirrorUnsupported, setMirrorUnsupported] = useState(false);
+  // Once the user picks a tab this session, keep it across reloads (saves,
+  // refreshes) instead of snapping back to the object-storage provider tab.
+  const tabTouched = React.useRef(false);
 
   const load = useCallback(async (alive?: () => boolean) => {
     const client = getMemoryServiceClient();
+    const mirrorPromise = client
+      .getMirrorStatus()
+      .then((value) => {
+        setMirrorUnsupported(false);
+        return value;
+      })
+      .catch((error: unknown) => {
+        // 404 means the deployed memory-service predates the mirror channel;
+        // in that case the server also strips the github config fields on save.
+        const status =
+          typeof error === 'object' && error && 'status' in error
+            ? Number((error as { status?: number }).status)
+            : 0;
+        if (status === 404 || status === 501) setMirrorUnsupported(true);
+        return null;
+      });
     const [config, backupStatus, mirror] = await Promise.all([
       client.getRuntimeConfig(),
       client.getBackupStatus().catch(() => null),
-      client.getMirrorStatus().catch(() => null),
+      mirrorPromise,
     ]);
     if (alive && !alive()) return;
     setDraft(draftFromConfig(config));
     setStatus(backupStatus);
     setMirrorStatus(mirror);
-    setTab(
-      config.autoBackupProvider === 's3' ? 's3' : 'webdav',
-    );
+    setTab((current) => {
+      if (tabTouched.current) return current;
+      if (config.autoBackupGithubEnabled) return 'github';
+      return config.autoBackupProvider === 's3' ? 's3' : 'webdav';
+    });
   }, []);
 
   useEffect(() => {
@@ -388,6 +410,7 @@ function AutoBackupSettingsForm(): React.ReactElement {
             type="button"
             className={tab === item ? 'primary' : undefined}
             onClick={() => {
+              tabTouched.current = true;
               setTab(item);
               if (item === 's3' || item === 'webdav') {
                 patch({ autoBackupProvider: item });
@@ -472,6 +495,21 @@ function AutoBackupSettingsForm(): React.ReactElement {
             <strong>不含原文、SQLite、config.json</strong>。本地 Markdown 是视图不是真源；
             全量恢复仍走加密 zip。
           </p>
+          {mirrorUnsupported ? (
+            <p
+              style={{
+                color: '#b42318',
+                fontSize: 13,
+                border: '1px solid #f04438',
+                borderRadius: 6,
+                padding: 10,
+                background: '#fef3f2',
+              }}
+            >
+              当前连接的 Memory Service 还没有部署「GitHub 镜像」通道（接口 404）。
+              在服务端升级之前，「测试连接」会一直 404，而且这里保存的镜像配置不会被服务端接受——旧服务会把未知的镜像字段直接丢弃，所以刷新后会消失。请先部署服务端，再回来填写。
+            </p>
+          ) : null}
           <div className="form-group">
             <label>仓库（owner/name）</label>
             <input
