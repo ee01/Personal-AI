@@ -996,6 +996,174 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 .ext-sim.on{border-color:#CDE8D2;color:#2E8540;background:#F5FBF6}
 .ext-sim .sim-dot{width:6px;height:6px;border-radius:50%;background:#C6B79B}
 .ext-sim.on .sim-dot{background:#4FA95F}
+
+/* ============ 从 Jira 拉取（Backlog 头部入口 + 浮层） ============ */
+.bl-sync{position:relative;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:7px;
+  font-size:11.5px;font-weight:600;color:var(--muted);border:1px solid var(--line);background:var(--panel);
+  transition:color .13s,background .13s,border-color .13s}
+.bl-sync:hover,.bl-sync[aria-expanded="true"]{color:var(--ink);background:var(--bg);border-color:#C9C6BB}
+.bl-sync:focus-visible,.sp-link:focus-visible,.chip:focus-visible{outline:2px solid var(--cur);outline-offset:2px}
+.bl-sync svg{transition:transform .4s cubic-bezier(.2,.8,.2,1)}
+.bl-sync:hover svg{transform:rotate(-120deg)}
+.bl-sync.spin svg{animation:spSpin .8s linear infinite}
+@keyframes spSpin{to{transform:rotate(-360deg)}}
+.bl-sync-dot{position:absolute;top:-3px;right:-3px;width:7px;height:7px;border-radius:50%;background:var(--cur);
+  box-shadow:0 0 0 2px var(--panel);display:none}
+.bl-sync.pending .bl-sync-dot{display:block}
+.bl-sync.empty{color:var(--cur-deep);background:#FFF4E5;border-color:#FFD9A8}
+.sync-pop{position:fixed;z-index:60;width:360px;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  box-shadow:var(--sh-lg);opacity:0;transform:translateY(-6px) scale(.985);transform-origin:top left;pointer-events:none;
+  transition:opacity .18s cubic-bezier(.2,.8,.2,1),transform .22s cubic-bezier(.2,.8,.2,1)}
+.sync-pop.show{opacity:1;transform:none;pointer-events:auto}
+.sp-head{padding:14px 16px 4px}
+.sp-title{font-weight:700;font-size:13.5px}
+.sp-sub{font-size:11.5px;color:var(--muted);margin-top:3px}
+.sp-sub b{font-family:var(--mono);font-weight:600;color:var(--ink)}
+.sp-sec{padding:12px 16px 4px}
+.sp-lbl{font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:8px;flex:none}
+.sync-pop .chip{padding:5px 10px;font-size:11.5px}
+.chip .got{font-size:9px;font-family:var(--sans);font-weight:600;color:var(--muted);letter-spacing:.03em}
+.sp-src{display:flex;align-items:center;gap:8px;margin:8px 16px 0;padding:8px 10px;border-radius:9px;background:var(--bg)}
+.sp-src .sp-lbl{margin:0}
+.sp-jql{flex:1;min-width:0;font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-link{font-size:11.5px;font-weight:600;color:var(--fut-deep);flex:none;border-radius:5px;padding:1px 4px}
+.sp-link:hover{text-decoration:underline}
+.sp-foot{display:flex;align-items:center;gap:12px;padding:14px 16px;margin-top:12px;border-top:1px solid var(--line2)}
+.sp-foot .btn{margin-left:auto}
+.sp-foot .btn[disabled]{background:var(--line2);color:var(--muted);box-shadow:none;transform:none;cursor:default}
+@media (prefers-reduced-motion:reduce){ .sync-pop,.bl-sync svg{transition:none!important;animation:none!important} }
+
+/* ============ Milestone 过滤（Custom Labels · 统一作用于 Backlog + 甘特） ============ */
+:root{ --ms:#6D4FA3; --ms-soft:#F3EEFA; --ms-line:#D9CCEE; --ease:cubic-bezier(.2,.8,.2,1) }
+.ms-filter{flex:1;display:flex;align-items:center;gap:8px;min-width:0}
+.ms-filter .ms-stat{margin-left:auto}
+.ms-trigger{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 11px;border-radius:9px;
+  border:1.5px solid var(--line);background:var(--bg);font-size:12.5px;font-weight:600;white-space:nowrap;
+  transition:border-color .15s var(--ease),background .15s var(--ease)}
+.ms-trigger:hover{border-color:#C9C6BB;background:#EFEEE8}
+.ms-trigger:focus-visible,.ms-opt:focus-visible,.ms-tok-x:focus-visible,.ms-mode button:focus-visible,
+.ms-foot button:focus-visible,.ms-more:focus-visible{outline:2px solid var(--ms);outline-offset:2px}
+.ms-trigger.on{border-color:var(--ms);background:var(--ms-soft);color:var(--ms)}
+.ms-trigger .ms-n{font-family:var(--mono);font-size:10.5px;background:var(--ms);color:#fff;border-radius:99px;padding:0 6px;line-height:16px}
+.ms-trigger .car{transition:transform .18s var(--ease);color:var(--muted)}
+.ms-trigger[aria-expanded="true"] .car{transform:rotate(180deg)}
+.ms-dia{width:9px;height:9px;transform:rotate(45deg);border-radius:2px;background:var(--ms);flex:none}
+.ms-dia.hollow{background:transparent;border:1.5px solid var(--ms)}
+.ms-tokens{display:flex;gap:6px;min-width:0;overflow:hidden}
+.ms-tok{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 9px;border-radius:99px;
+  background:var(--panel);border:1px solid var(--ms-line);font-size:11.5px;white-space:nowrap;
+  animation:chipIn .22s var(--ease)}
+.ms-tok b{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.ms-tok .d{font-family:var(--mono);font-size:10.5px;color:var(--ms)}
+.ms-tok .d.unk{color:var(--muted)}
+.ms-tok-x{width:18px;height:18px;border-radius:50%;color:var(--muted);font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}
+.ms-tok-x:hover{background:var(--ms-soft);color:var(--ms)}
+.ms-tok.more{padding:0 9px;color:var(--muted);font-family:var(--mono);font-size:11px;cursor:pointer}
+.ms-mode{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:2px;flex:none}
+.ms-mode span{font-size:11px;color:var(--muted);padding:0 6px 0 5px;align-self:center}
+.ms-mode button{font-size:11.5px;padding:3px 9px;border-radius:6px;color:var(--muted);font-weight:500}
+.ms-mode button.on{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(32,36,42,.1)}
+.ms-stat{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.ms-stat .late{color:var(--danger);font-weight:600}
+
+/* 选择浮层：搜索 → 迷你时间轴 → 按日期排序的列表 → 描述详情（渐进披露） */
+.ms-pop{position:fixed;z-index:60;width:400px;max-height:min(620px,calc(100vh - 120px));display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--sh-lg);
+  opacity:0;transform:translateY(-6px) scale(.985);transform-origin:top left;pointer-events:none;
+  transition:opacity .18s var(--ease),transform .22s var(--ease)}
+.ms-pop.show{opacity:1;transform:none;pointer-events:auto}
+.ms-pop-head{padding:12px 12px 0}
+.ms-src{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--muted);
+  letter-spacing:.02em;margin:0 2px 8px}
+.ms-src a{color:var(--ms);text-decoration:none}
+.ms-src a:hover{text-decoration:underline}
+.ms-search{width:100%;border:1.5px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;background:var(--bg);outline:none;
+  transition:border-color .13s,background .13s}
+.ms-search:focus{border-color:var(--ms);background:var(--panel)}
+.ms-tl{position:relative;height:48px;margin:10px 4px 2px}
+.ms-tl-axis{position:absolute;left:0;right:0;top:22px;height:1px;background:var(--line)}
+.ms-tl-tick{position:absolute;top:28px;font-family:var(--mono);font-size:9.5px;color:var(--muted);transform:translateX(-50%);white-space:nowrap}
+.ms-tl-tick::before{content:"";position:absolute;left:50%;top:-9px;width:1px;height:5px;background:var(--line)}
+.ms-tl-today{position:absolute;top:10px;width:2px;height:20px;background:var(--danger);border-radius:1px;transform:translateX(-1px)}
+.ms-tl-today::after{content:"今天";position:absolute;top:-11px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--danger);font-weight:600;white-space:nowrap}
+.ms-tl-dot{position:absolute;top:17px;width:11px;height:11px;margin-left:-5.5px;transform:rotate(45deg);border-radius:2px;
+  background:var(--panel);border:1.5px solid #B9A9D6;transition:all .16s var(--ease)}
+.ms-tl-dot.sel{background:var(--ms);border-color:var(--ms)}
+.ms-tl-dot.hot{transform:rotate(45deg) scale(1.45);border-color:var(--ms);box-shadow:0 0 0 4px rgba(109,79,163,.14)}
+.ms-tl-dot.past{opacity:.45}
+.ms-list{flex:1;overflow-y:auto;padding:6px 6px 4px;min-height:80px}
+.ms-sec{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--muted);margin:10px 8px 4px;display:flex;align-items:center;gap:8px}
+.ms-sec::after{content:"";flex:1;height:1px;background:var(--line2)}
+.ms-opt{display:grid;grid-template-columns:16px 1fr auto;align-items:center;column-gap:10px;width:100%;text-align:left;
+  padding:8px 8px;border-radius:9px;transition:background .12s}
+.ms-opt:hover,.ms-opt.kb{background:#F6F4FA}
+.ms-opt .box{width:16px;height:16px;border-radius:4px;border:1.5px solid #B8BFC7;background:#fff;display:flex;align-items:center;justify-content:center;transition:all .14s var(--ease)}
+.ms-opt .box svg{opacity:0;transform:scale(.5);transition:all .14s var(--ease)}
+.ms-opt[aria-selected="true"] .box{background:var(--ms);border-color:var(--ms)}
+.ms-opt[aria-selected="true"] .box svg{opacity:1;transform:none}
+.ms-opt .nm{font-size:12.5px;font-weight:500;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ms-opt .sub{display:flex;gap:8px;font-size:10.5px;color:var(--muted);margin-top:1px}
+.ms-opt .sub .src{font-family:var(--mono);color:#9B8BC0}
+.ms-opt .rt{text-align:right}
+.ms-opt .dt{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink)}
+.ms-opt .dt.unk{color:var(--muted);font-weight:500;font-family:var(--sans);font-size:11px}
+.ms-opt .rel{font-family:var(--mono);font-size:10px;color:var(--muted)}
+.ms-opt .cnt{display:inline-block;min-width:18px;font-family:var(--mono);font-size:10px;text-align:center;border-radius:99px;
+  background:var(--bg);color:var(--past-ink);padding:0 5px;margin-left:6px}
+.ms-opt.zero{opacity:.55}
+.ms-opt.past .dt{color:var(--past-deep)}
+.ms-more{display:block;margin:6px 8px 4px;font-size:11.5px;font-weight:600;color:var(--ms)}
+.ms-none{padding:26px 16px;text-align:center;font-size:12px;color:var(--muted);line-height:1.7}
+.ms-detail{border-top:1px solid var(--line2);padding:10px 14px 11px;font-size:11.5px;line-height:1.55;color:var(--muted);min-height:74px}
+.ms-detail .dk{font-family:var(--mono);font-size:10.5px;color:var(--ms);display:flex;gap:6px;align-items:center;margin-bottom:3px}
+.ms-detail .dk .tag{font-family:var(--sans);font-size:9.5px;font-weight:600;border-radius:4px;padding:0 5px;background:var(--ms-soft)}
+.ms-detail .dk .tag.warn{background:#FFF1DB;color:#9A5B00}
+.ms-detail .ds{color:var(--ink);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ms-detail .ds mark{background:#EDE5F8;color:var(--ms);border-radius:3px;padding:0 2px;font-family:var(--mono);font-size:11px}
+.ms-foot{display:flex;align-items:center;gap:8px;padding:9px 12px;border-top:1px solid var(--line2)}
+.ms-foot .hint{font-size:10.5px;color:var(--muted);flex:1}
+.ms-foot .hint kbd{font-family:var(--mono);font-size:9.5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--bg)}
+.ms-foot .clr{font-size:12px;font-weight:600;color:var(--muted);padding:5px 8px;border-radius:7px}
+.ms-foot .clr:hover{background:var(--bg);color:var(--ink)}
+.ms-foot .clr[disabled]{opacity:.4;pointer-events:none}
+
+/* Backlog 卡片上的 milestone 标签 */
+.card-ms{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
+.card-ms span{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--ms);background:var(--ms-soft);
+  border-radius:5px;padding:1px 6px 1px 5px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.card-ms span i{width:6px;height:6px;transform:rotate(45deg);background:currentColor;border-radius:1px;flex:none}
+.card-ms span em{font-style:normal;font-family:var(--mono);font-size:10px;opacity:.8}
+.card-ms span.hit{background:var(--ms);color:#fff}
+.card-ms span.more{color:var(--muted);background:var(--bg)}
+.card-ms span.late em{color:var(--danger);opacity:1;font-weight:600}
+.card-ms span.hit.late{background:var(--ms)}
+.card-ms span.hit.late em{color:#FFD3C8}
+.bl-count.ms-on{background:var(--ms-soft);color:var(--ms)}
+
+/* 甘特：未匹配行淡化 / 隐藏，milestone 竖线 + 旗标，晚于 milestone 的条目给出差值 */
+.g-row{transition:opacity .24s var(--ease),filter .24s var(--ease)}
+.g-row.ms-dim{opacity:.22;filter:grayscale(1)}
+.g-row.ms-dim:hover{opacity:.6}
+.g-row.ms-hide{display:none}
+.ms-line{position:absolute;top:0;bottom:0;width:0;border-left:1.5px dashed var(--ms);z-index:4;pointer-events:none;opacity:.85;
+  animation:msLineIn .32s var(--ease) backwards}
+@keyframes msLineIn{from{opacity:0;transform:scaleY(.6);transform-origin:top}to{opacity:.85}}
+.ms-flag{position:sticky;top:68px;display:inline-flex;align-items:center;gap:5px;margin-left:-1px;pointer-events:auto;
+  background:var(--ms);color:#fff;font-size:10.5px;font-weight:600;border-radius:0 6px 6px 0;padding:2px 8px 2px 6px;
+  white-space:nowrap;box-shadow:0 2px 8px rgba(109,79,163,.28)}
+.ms-flag .d{font-family:var(--mono);font-weight:500;opacity:.85}
+.rel-on .ms-flag{top:98px}
+.ms-late{position:absolute;top:19px;z-index:4;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;
+  font-size:10.5px;font-weight:600;color:var(--danger);background:#FDECE8;border:1px solid #F6C4B8;border-radius:6px;padding:2px 7px;
+  animation:chipIn .25s var(--ease) backwards}
+.ms-late::before{content:"";position:absolute;right:100%;top:50%;width:6px;border-top:1.5px solid #F6C4B8}
+.ms-late i{width:6px;height:6px;transform:rotate(45deg);background:var(--danger);border-radius:1px}
+.g-empty.ms-empty{pointer-events:auto}
+.g-empty.ms-empty button{margin-top:6px;font-size:12px;font-weight:600;color:var(--ms);text-decoration:underline;text-underline-offset:2px}
+@media (prefers-reduced-motion: reduce){
+  .ms-pop,.ms-tok,.ms-line,.ms-late,.g-row,.ms-opt .box svg,.ms-tl-dot{animation:none!important;transition:none!important}
+}
+@media (max-width: 1100px){ .ms-tokens,.ms-stat{display:none} }
 </style>
 </head>
 <body>
@@ -1028,16 +1196,47 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
   <span class="demo-tag">STATIC DEMO</span>
 </header>
 
-<!-- ===================== Quarter 导入栏 ===================== -->
-<div class="import-bar">
-  <span class="ib-label">QUARTERS</span>
-  <div class="chips" id="chips"></div>
-  <div class="import-actions" id="importActions" style="display:none">
+<!-- ===================== 视图过滤栏（原 Quarter 导入栏）=====================
+     这一行横跨 Backlog 与甘特，只放「影响看什么」的过滤；「拉什么数据」的 Quarter 导入移到 Backlog 头部 -->
+<div class="import-bar filter-bar">
+  <!-- Milestone 过滤：放在横跨两栏的这一行，表达「一个过滤，同时作用于 Backlog 与甘特」 -->
+  <div class="ms-filter" id="msFilter">
+    <span class="ib-label">MILESTONE</span>
+    <button class="ms-trigger" id="msTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="msPop">
+      <span class="ms-dia hollow" aria-hidden="true"></span><span id="msTriggerText">全部</span>
+      <svg class="car" width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <div class="ms-tokens" id="msTokens"></div>
+    <div class="ms-mode" id="msMode" style="display:none" role="group" aria-label="甘特中未匹配的条目"
+      data-tip="甘特中未匹配的条目||淡化：保留排期上下文，便于看清前后挤占 · 隐藏：只看相关条目||Backlog 始终只列出匹配条目">
+      <span>其余</span><button type="button" data-m="dim" class="on">淡化</button><button type="button" data-m="hide">隐藏</button>
+    </div>
+    <span class="ms-stat" id="msStat"></span>
+  </div>
+</div>
+<div class="ms-pop" id="msPop" role="dialog" aria-label="按 Milestone 过滤"></div>
+
+<!-- 从 Jira 拉取：Quarter 是「数据源 JQL 的参数」，和 JQL、导入动作放在一起；锚定在 Backlog——结果落在哪，入口就在哪 -->
+<div class="sync-pop" id="syncPop" role="dialog" aria-labelledby="spTitle">
+  <div class="sp-head">
+    <div class="sp-title" id="spTitle">从 Jira 拉取到 Backlog</div>
+    <div class="sp-sub" id="spSub"></div>
+  </div>
+  <div class="sp-sec">
+    <div class="sp-lbl">QUARTERS</div>
+    <div class="chips" id="chips"></div>
+  </div>
+  <div class="sp-src">
+    <span class="sp-lbl">JQL</span>
+    <span class="sp-jql" id="spJql"></span>
+    <button class="sp-link" id="spEditJql" type="button">编辑</button>
+  </div>
+  <div class="sp-foot" id="importActions">
     <label class="ow-label"><input type="checkbox" id="owCheck">覆盖已有数据</label>
     <button class="btn btn-primary" id="importBtn">
       <svg class="ico" width="13" height="13" viewBox="0 0 14 14"><path d="M7 1v8M3.5 6L7 9.5 10.5 6M2 12.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <svg class="lock" width="12" height="13" viewBox="0 0 14 15"><rect x="2.4" y="6.2" width="9.2" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.7 6.2V4.4a2.3 2.3 0 014.6 0v1.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      导入 <span id="importBtnN"></span>
+      <span id="importBtnLabel">拉取</span> <span id="importBtnN"></span>
     </button>
   </div>
 </div>
@@ -1047,6 +1246,10 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
   <aside class="backlog">
     <div class="bl-head">
       <div class="bl-title">Backlog <span class="bl-count" id="blCount">0</span>
+        <button class="bl-sync" id="blSyncBtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="syncPop">
+          <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true"><path d="M11.6 5.2A4.9 4.9 0 003 4.4M2.4 8.8A4.9 4.9 0 0011 9.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3 1.9v2.6h2.6M11 12.1V9.5H8.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="blSyncText">拉取</span><span class="bl-sync-dot" id="blSyncDot"></span>
+        </button>
         <button class="bl-add" id="blAddBtn" data-tip="手动新建一个 Backlog 条目（不需要 Jira）">
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M7 2.5v9M2.5 7h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           新建条目
@@ -1406,6 +1609,8 @@ textarea.f-input{resize:vertical;min-height:96px;font-family:var(--mono);font-si
 <div class="help-pop" id="helpPop">
   <h4>Demo 说明</h4>
   <ul>
+    <li><b>从 Jira 拉取（调整位置）</b>：Quarter 勾选 + 导入从顶部移到 <b>Backlog 标题旁「↻ 拉取」</b>。浮层里是 Quarter、团队 JQL（可直接跳到编辑）和拉取按钮；结果落在 Backlog，入口就在 Backlog。有勾选但未拉取的 quarter 时按钮亮橙点；没有可拉取的内容时按钮显示「已是最新」</li>
+    <li><b>Milestone 过滤（新）</b>：顶部过滤行（原 QUARTERS 行）「MILESTONE」多选，数据来自 Jira Custom Labels（<code>customfield_33875</code> → LBL-288 AIR 2.0 Milestones）。<b>一个过滤同时作用于 Backlog 与甘特</b>：Backlog 只列匹配条目；甘特中未匹配行可<b>淡化 / 隐藏</b>，选中的 milestone 画紫色旗标线，晚于 milestone 的条目在 bar 末端标出天数。日期解析自 LBL description 首行「Milestone: 11/30/26」，识别不到时展示原描述</li>
     <li><b>Jira 查询 / 创建（直连 API 与 Agent 执行器双路径）/ AI 缩写 / 协作同步均为模拟</b></li>
     <li><b>需要 Jira 权限的操作要装 Personal AI 扩展</b>：锁定按钮点击弹出安装引导；拖动排期 / 改 Owner 会先保存在 Roadmap，并出现一行「没有同步到 Jira」+「安装插件开启同步」。打开页拉取在未安装时保持静默（顶栏 <b>扩展未安装 / 已安装</b> 可切换）<a class="help-install" href="https://chromewebstore.google.com/detail/personal-ai/kefnadjndpllbibeklhajjddgmlbafel" target="_blank" rel="noopener">前往安装 ↗</a></li>
     <li><b>创建 Jira 双路径</b>：Prompt <b>留空</b>＝按下方字段直连 Jira API（串行）；<b>填写</b>＝按 Epic 最多 <b>2 路并行</b>交给所选 <b>Agent 执行器</b>（每路只含该组 draft；部分成功也会回写已有 key）。此时下方字段占位变「自动」，已填的值作为约束带给 Agent；执行器无配置时展示引导入口。<b>fixVersion</b>：按各任务 Target End 在发布时间表上的<strong>落点列</strong>匹配（半开区间，压在分割竖线上属于下一列——和 hover「可赶 Sprint」不是同一口径）。同一列直接填入共享字段；跨列时共享字段<strong>留空</strong>，交给 Agent 按行 `suggestedFixVersion` 判断，列表内仍逐行显示绿色 chip；输入固定值可覆盖全部。<b>Jira 尚无此版本时留空 fixVersion 继续创建</b>（行上显示 warning），不会因此拒绝整行。<b>失败行展示完整原因</b>，可改字段后点重试，已成功的 ticket 不会再创建</li>
@@ -1514,6 +1719,55 @@ const RCV_POOL = {
       [9505,'Live translated captions for 12 languages on device',5] ],
   3:[ [9601,'AR business card exchange in hybrid meetings (exploration)',4] ],
 };
+/* ---------- Milestone（Jira Custom Labels） ----------
+   结构：Group → Label（LBL-288 "AIR 2.0 Milestones"）→ Value（LBL-291 "AIR 2.0 Beta"，sub-task）。
+   issue 上 customfield_33875 存 "LBL-288:LBL-291"，多个值以 \n 分隔。
+   Value 没有独立日期字段（duedate / Target start/end / Planned Release Date 均为空），
+   日期只写在 description 首行 "Milestone: 11/30/26." —— 由服务端解析后缓存，解析不到就回落展示描述。
+   以下名称与描述取自真实 LBL-288 下的值；日期按相对今天的偏移生成，Demo 常青。
+   Dogfood / Partner Pilot 两项为 Demo 虚构，用于演示「晚于 milestone」与「日期未识别」两种状态。 */
+const MS_LABEL = { key:'LBL-288', name:'AIR 2.0 Milestones', group:'AI Milestones', field:'customfield_33875' };
+const mdy = d => `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
+const MS_DEFS = [
+  ['LBL-291','AIR 2.0 Beta', 45, 'The first external release of AIR 2.0 to a limited set of early participants. It exists to validate core functionality and stability and to gather feedback before wider rollout.'],
+  ['LBL-300','AI Agent Builder Beta', 45, 'Beta release of the tooling that lets customers and partners create and configure their own AI agents. It’s timed with the AIR 2.0 Beta.'],
+  ['LBL-292','AIR 2.0 Controlled Availability', 66, 'Expands AIR 2.0 from beta to a controlled set of selected customers, which may include existing AIR 1.0 and AIR Pro customers. It is a gated rollout ahead of GA.'],
+  ['LBL-296','Building AI Agents from Call Records and Recordings', 66, 'By this pre-GA milestone, AIR 2.0 lets customers generate AI agents from their existing call records and recordings (REX, then RCX).'],
+  ['LBL-297','Advance Analytics and Integration with ACE Phase 1', 66, ''],
+  ['LBL-293','AIR 2.0 GA', 107, 'General availability of AIR 2.0 to all eligible customers. It requires GA readiness across product, billing, support, and go-to-market.'],
+  ['LBL-295','Human and AI Orchestration with RCX Phase 1', 107, '', '-'],
+  ['LBL-298','Shift to AI Credit Billing', 107, ''],
+  ['LBL-299','AI Agent Assist and Supervisor Assist Converge with AIR 2.0', 107, ''],
+  ['LBL-305','AI Agent Builder GA', 107, 'GA release of the Agent Builder, taking beta learnings to a supported, generally available product. It’s timed with AIR 2.0 GA.'],
+  ['LBL-294','AIR 2.0 Flywheel', 166, ''],
+  ['LBL-304','Advance Analytics and Integration with ACE Phase 2', 166, ''],
+  ['LBL-303','Human and AI Orchestration with RCX Phase 2', 257, ''],
+  ['LBL-290','AIR 2.0 Internal Dogfood', 1, 'Internal rollout to RingCentral support teams before the external beta.'],
+  ['LBL-301','AIR 2.0 Partner Pilot', null, 'Timing to be agreed with the two launch partners after Beta exit review. Target window will be posted here.'],
+];
+/* 服务端解析规则（与真实描述格式对齐："Milestone: 11/30/26." / "Milestone - 1/31/27"） */
+const MS_DATE_RE = /^\s*Milestone\s*[:\-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/i;
+function parseMilestoneDate(desc){
+  const m = MS_DATE_RE.exec(desc || '');
+  if (!m) return null;
+  const y = +m[3] < 100 ? 2000 + +m[3] : +m[3];
+  return new Date(y, +m[1]-1, +m[2]);
+}
+const MILESTONES = MS_DEFS.map(([key, name, off, body, sep]) => {
+  const d0 = off == null ? null : addD(today, off);
+  const description = (d0 ? `Milestone${sep === '-' ? ' -' : ':'} ${mdy(d0)}${body ? '.\n\n' + body : ''}` : body);
+  const date = parseMilestoneDate(description);
+  return { key, name, label: MS_LABEL.name, description, date, dateSource: date ? 'description' : null, status:'Open' };
+});
+const msByKey = k => MILESTONES.find(m => m.key === k);
+/* 条目上的 customfield_33875（演示用映射；真实数据随 Jira 同步写入 item.ms） */
+const MS_ASSIGN = {
+  'NOVA-18102':['LBL-291','LBL-300'], 'NOVA-18124':['LBL-291','LBL-297'], 'NOVA-18117':['LBL-292'],
+  'NOVA-18210':['LBL-290','LBL-291'], 'NOVA-18131':['LBL-291'], 'NOVA-18140':['LBL-296'],
+  'NOVA-18146':['LBL-292'], 'NOVA-18150':['LBL-293','LBL-291'], 'NOVA-18155':['LBL-297','LBL-301'],
+  'NOVA-18207':['LBL-293'], 'NOVA-18213':['LBL-295'], 'NOVA-18219':['LBL-299'], 'NOVA-18230':['LBL-305'],
+  'NOVA-18301':['LBL-294'], 'NOVA-18320':['LBL-304'],
+};
 const GENERIC_TITLES = [
   'Unified notification preferences across mobile and desktop clients',
   'Self-service data export with scheduled delivery to cloud storage',
@@ -1553,7 +1807,8 @@ function mkItem(key, type, title, quarter, estW, tOff){
   const it = { key, type, title, quarter, estW, alias:null, tStart:null, tEnd:null, desc:null,
                scheduled:false, start:null, days:0, expanded:false, subs:[],
                phases:[], deps:[],           // phases: 阶段节点；deps: 外部依赖
-               manual:false, jiraKey:key };  // 手动条目 jiraKey 为空，显示 DRAFT
+               manual:false, jiraKey:key,    // 手动条目 jiraKey 为空，显示 DRAFT
+               ms: MS_ASSIGN[key] ? [...MS_ASSIGN[key]] : [] };   // Custom Label milestone value keys
   if (tOff != null){ it.tStart = addD(qStart(quarter), tOff); it.tEnd = addD(it.tStart, estW*7 - 3); }
   return it;
 }
@@ -2002,7 +2257,8 @@ function renderChips(){
     const ghost = latestChecked ? qCmp(q, latestChecked) > 0 : q !== CURQ;
     const c = document.createElement('button');
     c.className = 'chip' + (on?' on':'') + (ghost?' ghost':'');
-    c.innerHTML = `<span class="box"><svg width="9" height="9" viewBox="0 0 10 10"><path d="M1.5 5.5L4 8l4.5-6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>${q}${q===CURQ?'<span class="now-tag">当前</span>':''}`;
+    c.innerHTML = `<span class="box"><svg width="9" height="9" viewBox="0 0 10 10"><path d="M1.5 5.5L4 8l4.5-6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>${q}${q===CURQ?'<span class="now-tag">当前</span>':''}${t.imported.includes(q)?'<span class="got">已拉取</span>':''}`;
+    c.setAttribute('aria-pressed', on);
     if (ghost && !on) c.dataset.tip = '自动追加：勾选的最晚 quarter 的下一个';
     c.onclick = () => {
       if (on) t.checked = t.checked.filter(x => x!==q);
@@ -2018,11 +2274,51 @@ function syncImportActions(){
   const pend = pendingQs(t);
   const ow = $('#owCheck').checked;
   const show = t.checked.length > 0 && (pend.length > 0 || ow);
-  $('#importActions').style.display = t.checked.length ? 'flex' : 'none';
-  $('#importBtn').style.display = show ? 'inline-flex' : 'none';
   const qs = ow ? t.checked : pend;
-  $('#importBtnN').textContent = qs.length ? qs.join(' / ') : '';
+  /* 没有要拉的 quarter 时不隐藏按钮，而是给出「已是最新」的明确结论（即时反馈） */
+  $('#importBtn').disabled = !show;
+  $('#importBtnLabel').textContent = show ? (ow ? '重新拉取' : '拉取') : (t.checked.length ? '已是最新' : '先选择 quarter');
+  $('#importBtnN').textContent = show && qs.length ? qs.join(' / ') : '';
+  $('#spSub').innerHTML = t.imported.length
+    ? `Backlog 已包含 <b>${t.imported.join(' / ')}</b> · 已存在的 issue 不会重复导入`
+    : '尚未拉取任何 quarter · 勾选后按团队 JQL 导入';
+  $('#spJql').textContent = t.jql;
+  $('#spJql').dataset.tip = '数据源 JQL||' + t.jql;
+  const btn = $('#blSyncBtn');
+  btn.classList.toggle('empty', !t.imported.length);
+  /* 有「勾选但未拉取」的 quarter（例如下个季度已开始）时亮点：未完成任务提示 */
+  btn.classList.toggle('pending', t.imported.length > 0 && pend.length > 0);
+  $('#blSyncText').textContent = t.imported.length ? '拉取' : '从 Jira 拉取';
+  btn.dataset.tip = t.imported.length
+    ? `从 Jira 拉取||已拉取 ${t.imported.join(' / ')}${pend.length ? ` · 待拉取 ${pend.join(' / ')}` : ''}`
+    : '从 Jira 拉取||按团队 JQL + 勾选的 quarter 导入到 Backlog';
 }
+/* ---------- 拉取浮层 ---------- */
+function placeSyncPop(){
+  const r = $('#blSyncBtn').getBoundingClientRect(), pop = $('#syncPop');
+  pop.style.top = r.bottom + 8 + 'px';
+  pop.style.left = clamp(r.left - 12, 12, innerWidth - 372) + 'px';
+}
+function openSyncPop(){
+  renderChips(); placeSyncPop();
+  $('#syncPop').classList.add('show');
+  $('#blSyncBtn').setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => { const b = $('#importBtn'); (b.disabled ? $('#chips .chip') : b).focus(); });
+}
+function closeSyncPop(refocus){
+  $('#syncPop').classList.remove('show');
+  $('#blSyncBtn').setAttribute('aria-expanded', 'false');
+  if (refocus) $('#blSyncBtn').focus();
+}
+$('#blSyncBtn').onclick = () => $('#syncPop').classList.contains('show') ? closeSyncPop() : openSyncPop();
+$('#syncPop').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.stopPropagation(); closeSyncPop(true); } });
+document.addEventListener('pointerdown', e => {
+  if (!$('#syncPop').classList.contains('show')) return;
+  if (e.target.closest('#syncPop, #blSyncBtn')) return;
+  closeSyncPop();
+}, true);
+addEventListener('resize', () => { if ($('#syncPop').classList.contains('show')) placeSyncPop(); });
+$('#spEditJql').onclick = () => { closeSyncPop(); $('#jqlEditBtn').click(); };
 $('#owCheck').onchange = syncImportActions;
 
 /* ---------- 导入 ---------- */
@@ -2036,6 +2332,7 @@ function effectiveJql(jql, quarters){
   return html;
 }
 $('#importBtn').onclick = () => {
+  closeSyncPop();
   if (!extGate('import')) return;
   const t = team();
   const ow = $('#owCheck').checked;
@@ -2090,19 +2387,28 @@ function renderBacklog(newKeys){
   const t = team(), body = $('#blBody'); body.innerHTML = '';
   const all = t.items.filter(i => !i.scheduled);
   const q = state.search.trim();
-  const items = all.filter(i => itemMatchesQuery(i, q));
-  $('#blCount').textContent = q ? `${items.length}/${all.length}` : all.length;
+  const msOn = msActive();
+  const items = all.filter(i => itemMatchesQuery(i, q) && msMatch(i));
+  $('#blCount').textContent = (q || msOn) ? `${items.length}/${all.length}` : all.length;
+  $('#blCount').classList.toggle('ms-on', msOn);
   $('#blSearchClear').style.display = state.search ? 'flex' : 'none';
   if (!items.length){
-    if (q && all.length){
+    if (msOn && all.length && !all.some(i => itemMatchesQuery(i, q) && msMatch(i))){
+      /* 由 milestone 过滤导致的空：说清楚是哪个过滤生效，并给出最短的撤销路径 */
+      body.innerHTML = `<div class="bl-empty">Backlog 中没有属于<br><b>${esc(msSelNames())}</b><br>的未排期条目${q ? `（且匹配「${esc(q)}」）` : ''}<br>
+        <button class="bl-empty-link" id="blClearMs">清除 milestone 过滤</button></div>`;
+      $('#blClearMs').onclick = () => setMsSel([]);
+    } else if (q && all.length){
       body.innerHTML = `<div class="bl-empty">没有匹配「${esc(q)}」的条目<br>
         <button class="bl-empty-link" id="blClearInline">清除搜索</button></div>`;
       $('#blClearInline').onclick = clearBlSearch;
     } else {
       body.innerHTML = t.imported.length
         ? `<div class="bl-empty">Backlog 已清空<br>所有 issue 均已排期 🎉</div>`
-        : `<div class="bl-empty">尚未导入数据<br>请在上方勾选 Quarter 后点击<br><b>「导入」</b><br>
+        : `<div class="bl-empty">尚未导入数据<br>
+           <button class="bl-empty-link" id="blEmptySync">从 Jira 拉取</button><br>
            或点右上角<b>「新建条目」</b>手动添加</div>`;
+      const es = $('#blEmptySync'); if (es) es.onclick = e => { e.stopPropagation(); openSyncPop(); };
     }
     return;
   }
@@ -2127,7 +2433,7 @@ function renderBacklog(newKeys){
           <span class="card-est">${it.estW}w</span>
         </div>
         <div class="card-title">${esc(it.title)}</div>
-        ${(it.tStart || it.tEnd) ? `<span class="card-target">${targetLabel(it)}</span>` : ''}${it.subs.length ? `<span class="card-subs" style="${(it.tStart||it.tEnd)?'':'margin-left:0'}">↺ ${it.subs.length} 个子任务记录</span>` : ''}`;
+        ${(it.tStart || it.tEnd) ? `<span class="card-target">${targetLabel(it)}</span>` : ''}${it.subs.length ? `<span class="card-subs" style="${(it.tStart||it.tEnd)?'':'margin-left:0'}">↺ ${it.subs.length} 个子任务记录</span>` : ''}${cardMsHtml(it)}`;
       c.dataset.tip = itemDisplayKey(it) + ' · 预估 ' + it.estW + 'w' + (it.tStart || it.tEnd ? '' : ' · 无 Target 日期')
         + '||' + it.title
         + '||' + (it.desc ? clipTxt(it.desc) : ('拖到右侧时间轴排期' + (it.tStart || it.tEnd ? '（按 Target 日期落位）' : '')));
@@ -2444,7 +2750,14 @@ function renderGantt(){
     tl.style.left = X(today) + DAY_W/2 + 'px';
     gb.appendChild(tl);
   }
+  renderMsLines(gb);
   const rows = t.order.map(k => t.items.find(i => i.key===k)).filter(Boolean);
+  if (rows.length && msActive() && state.msMode === 'hide' && !rows.some(msMatch)){
+    const e = document.createElement('div'); e.className='g-empty ms-empty';
+    e.innerHTML = `时间轴上没有属于 <b>${esc(msSelNames())}</b> 的条目<br>可从左侧 Backlog 拖入，或<br><button type="button" id="gClearMs">清除 milestone 过滤</button>`;
+    gb.appendChild(e);
+    e.querySelector('#gClearMs').onclick = () => setMsSel([]);
+  }
   if (!rows.length){
     const e = document.createElement('div'); e.className='g-empty';
     e.innerHTML = '时间轴还是空的<br>把左侧 <b>Backlog</b> 的卡片拖进来开始排期';
@@ -2606,6 +2919,7 @@ function jiraLinkBtn(key){
 
 function rowEl(it){
   const row = document.createElement('div'); row.className='g-row'; row.dataset.key = it.key;
+  if (msActive() && !msMatch(it)) row.classList.add(state.msMode === 'hide' ? 'ms-hide' : 'ms-dim');
   const lane = document.createElement('div'); lane.className='g-lane';
   const bar = document.createElement('div');
   const w = it.days*DAY_W - 2;
@@ -2669,6 +2983,15 @@ function rowEl(it){
   bar.appendChild(bx);
   if (!isDraftItem(it)) bar.appendChild(jiraLinkBtn(itemDisplayKey(it)));
   lane.appendChild(bar);
+  /* Milestone 过滤生效时：结束日晚于所属 milestone 的条目，在 bar 末端给出差值 */
+  const late = msLateOf(it);
+  if (late){
+    const lt = document.createElement('span'); lt.className = 'ms-late';
+    lt.style.left = X(addD(it.start, it.days - 1)) + DAY_W + 10 + 'px';
+    lt.innerHTML = `<i></i>晚于 ${esc(msShort(late.ms))} ${late.days}d`;
+    lt.dataset.tip = `${late.ms.key} · ${late.ms.name}||Milestone ${fmtMD(late.ms.date)}，本条结束于 ${fmtMD(addD(it.start, it.days-1))}，晚 ${late.days} 天||拖动或缩短排期到旗标线之前即可消除`;
+    lane.appendChild(lt);
+  }
   /* bar 左侧 ＋：添加任务 */
   const bp = document.createElement('button'); bp.className = 'bar-plus';
   bp.style.left = Math.max(2, X(it.start) - 33) + 'px';
@@ -5281,10 +5604,245 @@ function silentJiraRefresh(){
   }, 1200);
 }
 
+/* ---------- Milestone 过滤 ----------
+   一个过滤状态（按团队记忆），一个谓词 msMatch，Backlog / 甘特 / 统计共用：
+   - Backlog：只列匹配条目（与搜索框 AND 组合）
+   - 甘特：未匹配行「淡化」（默认，保留排期上下文）或「隐藏」；选中 milestone 画旗标竖线；
+           结束日晚于所属 milestone 的条目在 bar 末端标出差值
+   多选之间为 OR（命中任一即可）。 */
+state.msMode = localStorage.getItem('personalroadmap.msMode') || 'dim';
+const MS_SEL_KEY = t => 'personalroadmap.msSel.' + t.name;
+function msSel(t = team()){
+  if (!t.msSel){
+    try { t.msSel = JSON.parse(localStorage.getItem(MS_SEL_KEY(t)) || '[]').filter(msByKey); } catch { t.msSel = []; }
+  }
+  return t.msSel;
+}
+const itemMs = it => it.ms || [];
+const msActive = () => msSel().length > 0;
+const msMatch = it => !msActive() || itemMs(it).some(k => msSel().includes(k));
+const msSelNames = () => msSel().map(k => msByKey(k).name).join(' / ');
+const msShort = ms => ms.name.length > 22 ? ms.name.slice(0, 21) + '…' : ms.name;
+const msCount = (t, key) => t.items.filter(i => itemMs(i).includes(key)).length;
+function msRel(d){
+  if (!d) return '';
+  const n = diffD(today, d);
+  return n === 0 ? '今天' : n > 0 ? `${n} 天后` : `${-n} 天前`;
+}
+function setMsSel(keys){
+  const t = team(); t.msSel = [...new Set(keys)];
+  localStorage.setItem(MS_SEL_KEY(t), JSON.stringify(t.msSel));
+  renderMsBar(); renderBacklog(); renderGantt();
+  if ($('#msPop').classList.contains('show')) renderMsPop();
+}
+/* 本条所属且已选中的 milestone 中，结束日超出最多的那个 */
+function msLateOf(it){
+  if (!msActive() || !it.scheduled || isDoneStatus(it)) return null;
+  const end = addD(it.start, it.days - 1);
+  let worst = null;
+  itemMs(it).filter(k => msSel().includes(k)).map(msByKey).forEach(ms => {
+    if (!ms.date) return;
+    const d = diffD(ms.date, end);
+    if (d > 0 && (!worst || d > worst.days)) worst = { ms, days: d };
+  });
+  return worst;
+}
+function cardMsHtml(it){
+  const list = itemMs(it).map(msByKey).filter(Boolean);
+  if (!list.length) return '';
+  const sel = msSel();
+  /* 命中的排在前面；最多展示 2 个，其余折叠为 +N（hover 卡片 tooltip 已有完整信息） */
+  list.sort((a, b) => sel.includes(b.key) - sel.includes(a.key));
+  const shown = list.slice(0, 2), rest = list.length - shown.length;
+  return `<div class="card-ms">${shown.map(ms =>
+    { const late = it.tEnd && ms.date ? diffD(ms.date, it.tEnd) : 0;
+      return `<span class="${sel.includes(ms.key) ? 'hit' : ''}${late > 0 ? ' late' : ''}" data-tip="${esc(ms.key)} · ${ms.date ? 'Milestone ' + fmtMD(ms.date) : '日期未识别'}||${esc(ms.name)}||${late > 0
+        ? `Jira Target End ${fmtMD(it.tEnd)} 晚于 milestone ${late} 天，拖入时间轴前就值得留意` : (ms.date ? msRel(ms.date) : '日期未写在 description 首行，详见 milestone 描述')}"><i></i>${esc(msShort(ms))}<em>${ms.date ? fmtMD(ms.date) : '日期?'}${late > 0 ? ` · 晚 ${late}d` : ''}</em></span>`; }).join('')}${rest ? `<span class="more">+${rest}</span>` : ''}</div>`;
+}
+function renderMsLines(gb){
+  if (!msActive()) return;
+  const byDate = new Map();
+  msSel().map(msByKey).forEach(ms => {
+    if (!ms.date || ms.date < TL.start || ms.date > TL.end) return;
+    const k = toISOInput(ms.date);
+    (byDate.get(k) || byDate.set(k, []).get(k)).push(ms);
+  });
+  byDate.forEach(list => {
+    const d = list[0].date;
+    const l = document.createElement('div'); l.className = 'ms-line';
+    l.style.left = X(d) + DAY_W - 1 + 'px';      // 旗标线落在 milestone 当天的结束边界
+    const flag = document.createElement('span'); flag.className = 'ms-flag';
+    flag.innerHTML = `${list.length > 1 ? list.length + ' 个 milestone' : esc(msShort(list[0]))}<span class="d">${fmtMD(d)}</span>`;
+    flag.dataset.tip = `Milestone · ${fmtMD(d)} · ${msRel(d)}||${list.map(m => m.name).join(' / ')}||日期解析自 LBL description 首行`;
+    l.appendChild(flag);
+    gb.appendChild(l);
+  });
+}
+function renderMsBar(){
+  const sel = msSel(), on = sel.length > 0, t = team();
+  const trg = $('#msTrigger');
+  trg.classList.toggle('on', on);
+  trg.querySelector('.ms-dia').classList.toggle('hollow', !on);
+  $('#msTriggerText').innerHTML = on ? `已选 <span class="ms-n">${sel.length}</span>` : '全部';
+  const toks = $('#msTokens');
+  const list = sel.map(msByKey).sort((a, b) => (a.date || 9e15) - (b.date || 9e15));
+  toks.innerHTML = list.slice(0, 2).map(ms =>
+    `<span class="ms-tok" data-tip="${esc(ms.key)} · ${esc(MS_LABEL.name)}||${esc(ms.name)}||${ms.date ? 'Milestone ' + fmtMD(ms.date) + ' · ' + msRel(ms.date) : '描述中未识别到日期'}">
+      <b>${esc(ms.name)}</b><span class="d${ms.date ? '' : ' unk'}">${ms.date ? fmtMD(ms.date) : '日期?'}</span>
+      <button type="button" class="ms-tok-x" data-k="${ms.key}" aria-label="移除 ${esc(ms.name)}">×</button></span>`).join('')
+    + (list.length > 2 ? `<span class="ms-tok more" role="button" tabindex="0">+${list.length - 2}</span>` : '');
+  toks.querySelectorAll('.ms-tok-x').forEach(b => b.onclick = () => setMsSel(sel.filter(k => k !== b.dataset.k)));
+  const more = toks.querySelector('.more'); if (more) more.onclick = () => openMsPop();
+  $('#msMode').style.display = on ? 'flex' : 'none';
+  $('#msMode').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === state.msMode));
+  if (!on){ $('#msStat').innerHTML = ''; return; }
+  const hits = t.items.filter(msMatch);
+  const late = hits.filter(msLateOf).length;
+  const sched = hits.filter(i => i.scheduled).length;
+  $('#msStat').innerHTML = `${hits.length} 项 · 已排期 ${sched}${late ? ` · <span class="late">${late} 项晚于 milestone</span>` : ''}`;
+}
+$('#msMode').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.msMode = b.dataset.m; localStorage.setItem('personalroadmap.msMode', state.msMode);
+  renderMsBar(); renderGantt();
+};
+
+/* 选择浮层 */
+let msQuery = '', msKb = -1, msShowZero = false, msHot = null;
+function msOptions(){
+  const t = team(), q = msQuery.trim().toLowerCase();
+  return MILESTONES
+    .filter(ms => !q || (ms.name + ' ' + ms.key + ' ' + ms.description).toLowerCase().includes(q))
+    .map(ms => ({ ms, n: msCount(t, ms.key) }))
+    .sort((a, b) => (a.ms.date || 9e15) - (b.ms.date || 9e15) || a.ms.name.localeCompare(b.ms.name));
+}
+function msTimeline(opts){
+  const dated = MILESTONES.filter(m => m.date);
+  if (!dated.length) return '';
+  const lo = addD([today, ...dated.map(m => m.date)].reduce((a, b) => a < b ? a : b), -10);
+  const hi = addD(dated.map(m => m.date).reduce((a, b) => a > b ? a : b), 14);
+  const span = diffD(lo, hi), pct = d => (diffD(lo, d) / span * 100).toFixed(2) + '%';
+  const sel = msSel(), seen = new Set(opts.map(o => o.ms.key));
+  let ticks = '';
+  for (let d = new Date(lo.getFullYear(), lo.getMonth() + 1, 1); d < hi; d = new Date(d.getFullYear(), d.getMonth() + 1, 1))
+    ticks += `<span class="ms-tl-tick" style="left:${pct(d)}">${d.getMonth() === 0 ? `1月 '${String(d.getFullYear()).slice(2)}` : (d.getMonth() + 1) + '月'}</span>`;
+  const dots = dated.filter(m => seen.has(m.key)).map(m =>
+    `<span class="ms-tl-dot${sel.includes(m.key) ? ' sel' : ''}${m.date < today ? ' past' : ''}" data-k="${m.key}" style="left:${pct(m.date)}"></span>`).join('');
+  return `<div class="ms-tl" aria-hidden="true"><div class="ms-tl-axis"></div>${ticks}<span class="ms-tl-today" style="left:${pct(today)}"></span>${dots}</div>`;
+}
+function msDetailHtml(ms){
+  if (!ms) return `<div class="dk">${esc(MS_LABEL.key)} · ${esc(MS_LABEL.name)}</div>
+    <div class="ds" style="color:var(--muted)">悬停或用 ↑↓ 选中某个 milestone，查看它在 Jira 中的描述与日期来源。</div>`;
+  const desc = esc(ms.description || '（无描述）').replace(MS_DATE_RE, s => `<mark>${s.trim()}</mark>`).replace(/\n+/g, ' ');
+  return `<div class="dk">${esc(ms.key)}<span class="tag${ms.date ? '' : ' warn'}">${ms.date ? '日期来自 description' : '未识别到日期 · 展示原描述'}</span></div>
+    <div class="ds">${desc}</div>`;
+}
+function renderMsPop(){
+  const pop = $('#msPop'), sel = msSel();
+  const opts = msOptions();
+  const live = opts.filter(o => o.n > 0 || sel.includes(o.ms.key));
+  const zero = opts.filter(o => !(o.n > 0 || sel.includes(o.ms.key)));
+  const showZero = msShowZero || !!msQuery.trim() || !live.length;
+  const sections = [
+    ['即将到来', live.filter(o => o.ms.date && o.ms.date >= today)],
+    ['已过', live.filter(o => o.ms.date && o.ms.date < today)],
+    ['日期未识别', live.filter(o => !o.ms.date)],
+    ['当前团队无条目', showZero ? zero : []],
+  ];
+  const optHtml = o => {
+    const on = sel.includes(o.ms.key);
+    return `<button type="button" class="ms-opt${o.n ? '' : ' zero'}${o.ms.date && o.ms.date < today ? ' past' : ''}" role="option" aria-selected="${on}" data-k="${o.ms.key}">
+      <span class="box"><svg width="10" height="10" viewBox="0 0 12 12"><path d="M2.5 6.2l2.4 2.4 4.6-5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span style="min-width:0"><div class="nm">${esc(o.ms.name)}</div>
+        <div class="sub"><span class="src">${o.ms.key}</span><span>${o.n} 个条目</span></div></span>
+      <span class="rt">${o.ms.date ? `<div class="dt">${fmtMD(o.ms.date)}</div><div class="rel">${msRel(o.ms.date)}</div>` : `<div class="dt unk">日期未知</div><div class="rel">见描述</div>`}</span>
+    </button>`;
+  };
+  const body = sections.filter(([, l]) => l.length).map(([h, l]) => `<div class="ms-sec">${h}</div>${l.map(optHtml).join('')}`).join('')
+    + (!showZero && zero.length ? `<button type="button" class="ms-more" id="msShowZero">显示其余 ${zero.length} 个（当前团队无条目）</button>` : '');
+  const hadFocus = document.activeElement && document.activeElement.id === 'msSearch';
+  const focusOpt = document.activeElement && document.activeElement.classList.contains('ms-opt') ? document.activeElement.dataset.k : null;
+  const keepScroll = $('#msList') ? $('#msList').scrollTop : 0;
+  pop.innerHTML = `
+    <div class="ms-pop-head">
+      <div class="ms-src"><span class="ms-dia" aria-hidden="true"></span>Custom Labels · ${esc(MS_LABEL.group)} ›
+        <a href="${JIRA_BROWSE}${MS_LABEL.key}" target="_blank" rel="noopener">${esc(MS_LABEL.name)}</a></div>
+      <input class="ms-search" id="msSearch" type="search" placeholder="搜索 milestone 名称 / Key / 描述…" value="${esc(msQuery)}" spellcheck="false"
+        role="combobox" aria-expanded="true" aria-controls="msList" aria-autocomplete="list">
+      ${msTimeline(opts)}
+    </div>
+    <div class="ms-list" id="msList" role="listbox" aria-multiselectable="true">${body || `<div class="ms-none">没有匹配「${esc(msQuery)}」的 milestone</div>`}</div>
+    <div class="ms-detail" id="msDetail">${msDetailHtml(msHot && msByKey(msHot))}</div>
+    <div class="ms-foot">
+      <span class="hint">多选 = 命中任一 · <kbd>↑</kbd><kbd>↓</kbd> 移动 <kbd>Enter</kbd> 勾选 <kbd>Esc</kbd> 关闭</span>
+      <button type="button" class="clr" id="msClear"${sel.length ? '' : ' disabled'}>清除</button>
+      <button type="button" class="btn btn-primary" id="msDone" style="padding:5px 14px;font-size:12px">完成</button>
+    </div>`;
+  const inp = $('#msSearch');
+  $('#msList').scrollTop = keepScroll;
+  if (focusOpt){ const f = pop.querySelector(`.ms-opt[data-k="${focusOpt}"]`); if (f) f.focus({ preventScroll:true }); }
+  if (hadFocus){ inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  inp.oninput = () => { msQuery = inp.value; msKb = -1; renderMsPop(); };
+  const optEls = () => [...pop.querySelectorAll('.ms-opt')];
+  const setHot = k => {
+    msHot = k;
+    $('#msDetail').innerHTML = msDetailHtml(k && msByKey(k));
+    pop.querySelectorAll('.ms-tl-dot').forEach(d => d.classList.toggle('hot', d.dataset.k === k));
+  };
+  const toggle = k => setMsSel(sel.includes(k) ? sel.filter(x => x !== k) : [...sel, k]);
+  optEls().forEach((el, i) => {
+    el.onmouseenter = () => setHot(el.dataset.k);
+    el.onfocus = () => { msKb = i; setHot(el.dataset.k); };
+    el.onclick = () => { msKb = i; toggle(el.dataset.k); };
+  });
+  if (msKb >= 0 && !focusOpt){ const el = optEls()[msKb]; if (el){ el.classList.add('kb'); el.scrollIntoView({ block:'nearest' }); } }
+  inp.onkeydown = e => {
+    const els = optEls();
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      e.preventDefault(); if (!els.length) return;
+      msKb = (msKb + (e.key === 'ArrowDown' ? 1 : -1) + els.length) % els.length;
+      els.forEach((x, i) => x.classList.toggle('kb', i === msKb));
+      els[msKb].scrollIntoView({ block:'nearest' }); setHot(els[msKb].dataset.k);
+    } else if (e.key === 'Enter' && msKb >= 0 && els[msKb]){
+      e.preventDefault(); toggle(els[msKb].dataset.k);
+    }
+  };
+  const sz = $('#msShowZero'); if (sz) sz.onclick = () => { msShowZero = true; renderMsPop(); };
+  $('#msClear').onclick = () => setMsSel([]);
+  $('#msDone').onclick = () => closeMsPop(true);
+}
+function placeMsPop(){
+  const r = $('#msTrigger').getBoundingClientRect(), pop = $('#msPop');
+  pop.style.top = r.bottom + 8 + 'px';
+  pop.style.left = clamp(r.left, 12, innerWidth - 412) + 'px';
+}
+function openMsPop(){
+  const pop = $('#msPop');
+  msQuery = ''; msKb = -1; msHot = null; msShowZero = false;
+  renderMsPop(); placeMsPop();
+  pop.classList.add('show');
+  $('#msTrigger').setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => $('#msSearch').focus());
+}
+function closeMsPop(refocus){
+  $('#msPop').classList.remove('show');
+  $('#msTrigger').setAttribute('aria-expanded', 'false');
+  if (refocus) $('#msTrigger').focus();
+}
+$('#msTrigger').onclick = () => $('#msPop').classList.contains('show') ? closeMsPop() : openMsPop();
+$('#msPop').addEventListener('keydown', e => { if (e.key === 'Escape'){ e.stopPropagation(); closeMsPop(true); } });
+document.addEventListener('pointerdown', e => {
+  if (!$('#msPop').classList.contains('show')) return;
+  if (e.target.closest('#msPop, #msTrigger, #msTokens .more')) return;
+  closeMsPop();
+}, true);
+addEventListener('resize', () => { if ($('#msPop').classList.contains('show')) placeMsPop(); });
+
 /* ---------- 总渲染 ---------- */
 function renderAll(newKeys){
   renderTeamUI();
   renderChips();
+  renderMsBar();
   renderBacklog(newKeys);
   renderGantt();
   if (state.view === 'resource') renderResource();

@@ -34,6 +34,7 @@ import {
   listIssueTypeNames,
   listMissingRequiredFields,
   looksLikeSubtaskName,
+  parentLinkForCreate,
   softenFixVersionName,
   scrubOmittedFixVersionsFromPrompt,
   supportsField,
@@ -61,6 +62,8 @@ const SYNC_ENABLED_KEY = 'roadmapFocusSyncEnabled';
 /** RingCentral Jira custom fields used by Roadmap import only. */
 const JIRA_FIELD_END_DATE = 'customfield_14354';
 const JIRA_FIELD_DEV_ESTIMATE = 'customfield_25757';
+/** Jira "Custom Labels" field: `LabelKey:ValueKey` pairs, newline separated. */
+const JIRA_FIELD_CUSTOM_LABELS = 'customfield_33875';
 
 type ImportItemPayload = {
   key: string;
@@ -70,7 +73,33 @@ type ImportItemPayload = {
   estimate?: number;
   targetStart?: string;
   targetEnd?: string;
+  /** Jira Custom Labels (`customfield_33875`) mirrored from the issue. */
+  customLabels?: Array<{ labelKey: string; valueKey: string }>;
 };
+
+/**
+ * Parse the raw Custom Labels field ("LBL-288:LBL-291\nLBL-288:LBL-297") into
+ * de-duplicated `LabelKey:ValueKey` pairs. Lines without a well-formed value
+ * issue key are dropped.
+ */
+function parseCustomLabelsField(
+  raw: unknown,
+): Array<{ labelKey: string; valueKey: string }> {
+  const text = String(raw ?? '').trim();
+  if (!text) return [];
+  const keyRe = /^[A-Za-z][A-Za-z0-9]+-\d+$/;
+  const out: Array<{ labelKey: string; valueKey: string }> = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const idx = line.indexOf(':');
+    const label = (idx >= 0 ? line.slice(0, idx) : '').trim();
+    const value = (idx >= 0 ? line.slice(idx + 1) : line).trim();
+    if (!keyRe.test(value) || seen.has(value)) continue;
+    seen.add(value);
+    out.push({ labelKey: keyRe.test(label) ? label : '', valueKey: value });
+  }
+  return out;
+}
 
 function isBuiltinRoadmapHost(): boolean {
   const host = location.hostname;
@@ -423,6 +452,7 @@ function mapIssueToImportItem(
       estimate: estimateWeeks(fields),
       targetStart: toIsoDate(fields[JIRA_FIELD_TARGET_START]),
       targetEnd,
+      customLabels: parseCustomLabelsField(fields[JIRA_FIELD_CUSTOM_LABELS]),
     },
     parentKey: typeof parentLink === 'string' && parentLink.trim()
       ? parentLink.trim()
@@ -663,6 +693,8 @@ type JiraRefreshIssue = {
   assignee: string | null;
   status: string | null;
   originalEstimateDays: number | null;
+  /** Jira Custom Labels (`customfield_33875`) mirrored from the issue. */
+  customLabels: Array<{ labelKey: string; valueKey: string }>;
   fetchedAt: number;
 };
 
@@ -699,6 +731,7 @@ function mapIssueToRefreshPayload(
     assignee: jiraAssigneeDisplay(f.assignee),
     status: jiraStatusName(f.status),
     originalEstimateDays: originalEstimateToManDays(f),
+    customLabels: parseCustomLabelsField(f[JIRA_FIELD_CUSTOM_LABELS]),
     fetchedAt,
   };
 }
@@ -740,6 +773,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     'assignee',
     'status',
     'timeoriginalestimate',
+    JIRA_FIELD_CUSTOM_LABELS,
   ];
   const fetchedAt = Date.now();
   const out: JiraRefreshIssue[] = [];
@@ -783,6 +817,101 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
       if (solo) {
         out.push(mapIssueToRefreshPayload(solo, requestedKey, fetchedAt));
       }
+    }
+  }
+  return out;
+}
+
+export type CustomLabelValueFetch = {
+  key: string;
+  name: string;
+  description: string | null;
+  dueDate: string | null;
+  targetEnd: string | null;
+  labelKey: string | null;
+  labelName: string | null;
+  status: string | null;
+};
+
+/**
+ * Fetch Custom Label value details (LBL sub-tasks) for the given value keys:
+ * name / description / Due Date / Target End / status, plus the parent Label
+ * issue key and name (the value's category, e.g. "AIR 2.0 Milestones"). The
+ * server resolves the milestone date from these raw fields and caches them.
+ */
+async function handleFetchCustomLabelValues(
+  keys: string[],
+): Promise<CustomLabelValueFetch[]> {
+  const keyRe = /^[A-Za-z][A-Za-z0-9]+-\d+$/;
+  const unique = [
+    ...new Set(keys.map((k) => String(k || '').trim()).filter((k) => keyRe.test(k))),
+  ].slice(0, 100);
+  if (!unique.length) return [];
+
+  const baseUrl = await getJiraBaseUrl();
+  const out: CustomLabelValueFetch[] = [];
+  for (let i = 0; i < unique.length; i += 40) {
+    const group = unique.slice(i, i + 40);
+    const jql = `key in (${group.join(',')})`;
+    const response = await jiraFetchViaBackground(`${baseUrl}/rest/api/2/search`, {
+      method: 'POST',
+      body: {
+        jql,
+        startAt: 0,
+        maxResults: group.length,
+        fields: [
+          'summary',
+          'description',
+          'duedate',
+          'status',
+          'parent',
+          JIRA_FIELD_TARGET_END,
+        ],
+      },
+      requestLabel: 'roadmap custom label values',
+    });
+    if (!response.ok) {
+      // A missing label only costs the filter list, so never fail the whole call.
+      console.warn('[pai-roadmap] custom label lookup failed', response.status, jql);
+      continue;
+    }
+    const data = await response.json();
+    for (const issue of Array.isArray(data.issues) ? data.issues : []) {
+      const f = (issue?.fields || {}) as Record<string, unknown>;
+      const parent = f.parent as { key?: unknown } | null;
+      out.push({
+        key: String(issue.key || '').trim(),
+        name: String(f.summary || issue.key),
+        description: jiraDescriptionToPlain(f.description) || null,
+        dueDate: toIsoDate(f.duedate) || null,
+        targetEnd: toIsoDate(f[JIRA_FIELD_TARGET_END]) || null,
+        labelKey: String(parent?.key || '').trim() || null,
+        labelName: null,
+        status: jiraStatusName(f.status),
+      });
+    }
+  }
+
+  // Resolve the Label (category) names in one extra query.
+  const labelKeys = [...new Set(out.map((v) => v.labelKey).filter((k): k is string => Boolean(k)))];
+  if (labelKeys.length) {
+    const labelNames = new Map<string, string>();
+    for (const batch of chunk(labelKeys)) {
+      const jql = `key in (${batch.join(', ')})`;
+      const response = await jiraFetchViaBackground(`${baseUrl}/rest/api/2/search`, {
+        method: 'POST',
+        body: { jql, startAt: 0, maxResults: batch.length, fields: ['summary'] },
+        requestLabel: 'roadmap custom label parents',
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      for (const issue of Array.isArray(data.issues) ? data.issues : []) {
+        const key = String(issue?.key || '').trim();
+        if (key) labelNames.set(key, String(issue?.fields?.summary || key));
+      }
+    }
+    for (const value of out) {
+      if (value.labelKey) value.labelName = labelNames.get(value.labelKey) || null;
     }
   }
   return out;
@@ -839,6 +968,7 @@ async function handleImportJql(
     JIRA_FIELD_QUARTER,
     JIRA_FIELD_PARENT_LINK,
     JIRA_FIELD_DEV_ESTIMATE,
+    JIRA_FIELD_CUSTOM_LABELS,
   ];
 
   const items: ImportItemPayload[] = [];
@@ -908,6 +1038,10 @@ type CreateJiraParentInput = {
   fixVersion?: string | null;
   suggestedFixVersion?: string | null;
   description?: string | null;
+  /** INIT (or other parent) issue key. Direct create writes it to Parent Link. */
+  parentLink?: string | null;
+  /** Jira username (firstname.lastname). Empty leaves the epic assignee unset. */
+  assignee?: string | null;
 };
 
 type CreateJiraChildInput = {
@@ -1282,6 +1416,7 @@ async function handleCreateJiraBatch(
           parent.projectKey,
           parent.issueType,
         );
+        const parentLink = parentLinkForCreate(parent.parentLink, typeMeta);
         const created = await createJiraIssue({
           projectKey: parent.projectKey,
           typeName,
@@ -1292,13 +1427,19 @@ async function handleCreateJiraBatch(
           quarter: itemsByKey.get(parent.itemKey)?.quarter || null,
           fixVersion: parent.fixVersion,
           description: parent.description || null,
+          assignee: parent.assignee || null,
+          link: parentLink.link,
           requestLabel: 'roadmap create jira item',
         });
+        const warnings = [
+          ...(parentLink.warning ? [parentLink.warning] : []),
+          ...created.warnings,
+        ];
         parentKeys.set(parent.itemKey, created.jiraKey);
         result.parent = {
           itemKey: parent.itemKey,
           jiraKey: created.jiraKey,
-          warnings: created.warnings.length ? created.warnings : undefined,
+          warnings: warnings.length ? warnings : undefined,
         };
         try {
           // Persisted before any child work: a child failure or a closed tab
@@ -1741,10 +1882,12 @@ function buildAgentCreateTaskText(
     '8. artifact metadata 至少带一个 entityKey（任意一个新建的 Jira key；若完全失败可省略）。',
     '9. 不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建。',
     '10. 若 Jira 工具因版本不存在而失败，去掉 fixVersions 后立即重试创建，不要把整组标成失败。',
+    '11. 若 parent 索引里的 parentLink 非空，创建该主任务时必须写入 Jira Parent Link，值与 parentLink 一致（对应 INIT）。不要留空，不要改成别的 issue。已有 parentJiraKey 的子任务不要改父票的 Parent Link。',
+    '12. 若 parent 索引里的 assignee 非空，创建该主任务时必须写入该 Jira assignee（firstname.lastname）。为空则留空，不要回落到创建人，也不要改写已有父票的 assignee。',
     '',
     '## draftId 索引（便于核对）',
     payload.parent
-      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''}`
+      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} parentLink=${payload.parent.parentLink || ''} assignee=${payload.parent.assignee || ''} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''}`
       : '（无 parent draft）',
     ...(payload.children || []).map(
       (c) =>
@@ -2631,6 +2774,40 @@ function injectBridge(): void {
             requestId: data.requestId,
             ok: false,
             error: error?.code || error?.message || String(error),
+          },
+          '*',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'pai-roadmap-custom-labels') {
+      window.postMessage(
+        {
+          type: 'pai-roadmap-custom-labels-ack',
+          requestId: data.requestId,
+        },
+        '*',
+      );
+      try {
+        const keys = Array.isArray(data.keys) ? data.keys.map(String) : [];
+        const values = await handleFetchCustomLabelValues(keys);
+        window.postMessage(
+          {
+            type: 'pai-roadmap-custom-labels-result',
+            requestId: data.requestId,
+            ok: true,
+            values,
+          },
+          '*',
+        );
+      } catch (error: any) {
+        window.postMessage(
+          {
+            type: 'pai-roadmap-custom-labels-result',
+            requestId: data.requestId,
+            ok: false,
+            error: error?.message || String(error),
           },
           '*',
         );

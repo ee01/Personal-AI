@@ -246,6 +246,33 @@ export function supportsField(
 }
 
 /**
+ * Direct-create link for a draft Epic's stored Parent Link (usually an INIT).
+ * Unknown createmeta still sends the RingCentral field id. A known screen that
+ * does not expose Parent Link omits it so Jira does not reject the whole create.
+ */
+export function parentLinkForCreate(
+  parentLink: string | null | undefined,
+  typeMeta: JiraIssueTypeMeta | null,
+): { link?: ChildLink & { parentKey: string }; warning?: string } {
+  const key = String(parentLink || '').trim();
+  if (!key) return {};
+  if (!typeMeta) {
+    return {
+      link: { mode: 'field', fieldId: JIRA_FIELD_PARENT_LINK, parentKey: key },
+    };
+  }
+  const fieldId = supportsField(typeMeta, JIRA_FIELD_PARENT_LINK)
+    ? JIRA_FIELD_PARENT_LINK
+    : findFieldIdByName(typeMeta, 'Parent Link');
+  if (!fieldId) {
+    return {
+      warning: `Parent Link ${key} 不在该类型的创建界面，未写入`,
+    };
+  }
+  return { link: { mode: 'field', fieldId, parentKey: key } };
+}
+
+/**
  * Agent-path counterpart of `buildFixVersionsValue`: drop the name when a known
  * catalog (createmeta allowedValues and/or `/project/versions`) has no unique
  * match, so the Agent never sees a missing version as a hard gate.

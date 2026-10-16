@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildJiraCreateFields,
+  parentLinkForCreate,
   JIRA_FIELD_EPIC_LINK,
   JIRA_FIELD_EPIC_NAME,
   JIRA_FIELD_FIX_VERSIONS,
@@ -407,4 +408,40 @@ test('description is passed through as a system field', () => {
       }),
     false,
   );
+});
+
+test('direct create fills Parent Link when the screen exposes it', () => {
+  const epic = issueType('Epic', [JIRA_FIELD_PARENT_LINK]);
+  assert.deepEqual(parentLinkForCreate('INIT-12', epic), {
+    link: { mode: 'field', fieldId: JIRA_FIELD_PARENT_LINK, parentKey: 'INIT-12' },
+  });
+  assert.deepEqual(
+    buildJiraCreateFields({
+      projectKey: 'NOVA',
+      typeName: 'Epic',
+      typeMeta: epic,
+      summary: '播放器重构',
+      link: parentLinkForCreate('INIT-12', epic).link,
+    })[JIRA_FIELD_PARENT_LINK],
+    'INIT-12',
+  );
+});
+
+test('direct create still sends Parent Link when createmeta is unavailable', () => {
+  assert.deepEqual(parentLinkForCreate('INIT-3', null).link, {
+    mode: 'field',
+    fieldId: JIRA_FIELD_PARENT_LINK,
+    parentKey: 'INIT-3',
+  });
+});
+
+test('direct create skips Parent Link when the create screen has no such field', () => {
+  const task = issueType('Task', []);
+  const resolved = parentLinkForCreate('INIT-3', task);
+  assert.equal(resolved.link, undefined);
+  assert.match(String(resolved.warning), /INIT-3/);
+});
+
+test('an empty Parent Link is omitted', () => {
+  assert.deepEqual(parentLinkForCreate('  ', issueType('Epic', [JIRA_FIELD_PARENT_LINK])), {});
 });
