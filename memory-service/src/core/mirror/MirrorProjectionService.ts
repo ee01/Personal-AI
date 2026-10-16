@@ -67,6 +67,24 @@ const MIRROR_DESTINATION = {
   purpose: 'backup_mirror',
 } as const;
 
+const KNOWN_SENSITIVITIES: readonly string[] = ['public', 'internal', 'private', 'restricted'];
+const KNOWN_EGRESS_POLICIES: readonly string[] = [
+  'local_only',
+  'approved_destinations',
+  'user_selected',
+];
+
+/** Keys whose values must never leave the boundary, however they were confirmed. */
+const SECRET_KEY_PATTERN =
+  /(password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|jwt|cookie|authorization|bearer)/i;
+/** Common credential value shapes (GitHub PATs, OpenAI/Anthropic keys, PAKs, AWS, Google). */
+const SECRET_VALUE_PATTERN =
+  /\b(ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9]{16,}|sk_ant-[A-Za-z0-9_]{16,}|pak\.[A-Za-z0-9._-]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})/;
+
+export function looksLikeSecret(key: string, value: string): boolean {
+  return SECRET_KEY_PATTERN.test(key) || SECRET_VALUE_PATTERN.test(value);
+}
+
 const KNOWLEDGE_KINDS: Record<string, string> = {
   fact: 'facts',
   preference: 'preferences',
@@ -133,30 +151,36 @@ function jsonArray(raw: unknown): string[] {
 
 /**
  * Evaluate one row against the shared egress gate. Fail-closed: a row with a
- * missing/unknown policy is denied rather than leaked.
+ * missing or unknown sensitivity/egress policy is DENIED, never defaulted
+ * through (plan §4.4, EgressPolicyEngine I10).
  */
 export function evaluateMirrorEgress(
   userId: string,
   row: { sensitivity?: string | null; egressPolicy?: string | null; status?: string | null },
   tenantId = 'default',
 ): AclCheckResult {
-  const sensitivity = (
-    ['public', 'internal', 'private', 'restricted'].includes(row.sensitivity ?? '')
-      ? row.sensitivity
-      : 'internal'
-  ) as Sensitivity;
-  const egressPolicy = (
-    ['local_only', 'approved_destinations', 'user_selected'].includes(row.egressPolicy ?? '')
-      ? row.egressPolicy
-      : 'approved_destinations'
-  ) as EgressPolicy;
+  const sensitivity = row.sensitivity ?? null;
+  const egressPolicy = row.egressPolicy ?? null;
+  if (
+    !sensitivity ||
+    !KNOWN_SENSITIVITIES.includes(sensitivity) ||
+    !egressPolicy ||
+    !KNOWN_EGRESS_POLICIES.includes(egressPolicy)
+  ) {
+    return {
+      allowed: false,
+      reason: 'fail_closed_missing_or_unknown_policy',
+      sensitivity: 'restricted',
+      effectiveEgress: 'local_only',
+    };
+  }
   return EgressPolicyEngine.checkRead(
     { tenantId, userId, scope: 'user' },
     {
       tenantId,
       ownerUserId: userId,
-      sensitivity,
-      egressPolicy,
+      sensitivity: sensitivity as Sensitivity,
+      egressPolicy: egressPolicy as EgressPolicy,
       scopeLocator: null,
       status: row.status ?? 'active',
     },
@@ -177,6 +201,7 @@ interface UnitRow {
   created_at: number;
   sensitivity: string;
   egress_policy: string;
+  confirmation_state: string;
   confidence: number;
   superseded_by: string | null;
   source_count: number;
@@ -261,7 +286,7 @@ export class MirrorProjectionService {
 
     // -- entities ----------------------------------------------------------
     for (const entity of this.loadEntities(scope, recordExclusion)) {
-      const file = this.renderEntity(entity, scope);
+      const file = this.renderEntity(entity, scope, recordExclusion);
       if (file) {
         push(`entities/${file.dir}/${file.slug}.md`, file.content);
       }
@@ -358,7 +383,7 @@ export class MirrorProjectionService {
 
   private renderUserCore(
     scope: MirrorScope,
-    generatedAt: string,
+    _generatedAt: string,
     exclude: (r: string) => void,
   ): string {
     const rows = safeAll<ProfileRow>(
@@ -371,7 +396,6 @@ export class MirrorProjectionService {
     const body: string[] = [
       '---',
       'view: user_core',
-      `generated_at: ${generatedAt}`,
       'source: sqlite://user_profile_items (user_confirmed=1)',
       '---',
       '',
@@ -395,6 +419,11 @@ export class MirrorProjectionService {
       if (scope === 'self_only' && row.item_type === 'fact' && /other|他人/.test(row.item_key)) {
         continue;
       }
+      if (looksLikeSecret(row.item_key, row.item_value)) {
+        // user_confirmed=1 is NOT egress authorization for credential fields.
+        exclude('secret_field_redacted');
+        continue;
+      }
       rendered += 1;
       body.push(`- **${row.item_key}** (${row.item_type}): ${row.item_value}`);
     }
@@ -403,12 +432,11 @@ export class MirrorProjectionService {
     return body.join('\n');
   }
 
-  private renderOnePager(scope: MirrorScope, generatedAt: string): string {
+  private renderOnePager(scope: MirrorScope, _generatedAt: string): string {
     void scope;
     const header = [
       '---',
       'view: one_pager',
-      `generated_at: ${generatedAt}`,
       'source: reconcile_artifacts(kind=one_pager)',
       '---',
       '',
@@ -452,6 +480,7 @@ export class MirrorProjectionService {
       body.push('_一页纸尚未生成；睡眠期整理产出后会自动填充。_');
     } else {
       for (const row of rows) {
+        if (looksLikeSecret(row.item_key, row.item_value)) continue;
         body.push(`- ${row.item_key}: ${row.item_value}`);
       }
     }
@@ -512,6 +541,7 @@ export class MirrorProjectionService {
   private renderEntity(
     entity: EntityRow,
     _scope: MirrorScope,
+    exclude: (r: string) => void,
   ): { dir: string; slug: string; content: string } | null {
     const dir = ENTITY_DIRS[(entity.type || '').toLowerCase()];
     if (!dir) return null;
@@ -541,10 +571,18 @@ export class MirrorProjectionService {
       `# ${entity.name}`,
       '',
     ].filter((line): line is string => line !== null);
-    if (entity.description) lines.push(entity.description, '');
+    if (entity.description && !looksLikeSecret('description', entity.description)) {
+      lines.push(entity.description, '');
+    }
     if (latest.size > 0) {
       lines.push('## 属性', '');
       for (const [key, value] of latest) {
+        // A confirmed relationship does not authorize exporting credential
+        // fields of another person (or of the user) to the mirror.
+        if (looksLikeSecret(key, value.property_value)) {
+          exclude('secret_field_redacted');
+          continue;
+        }
         lines.push(`- **${key}**: ${value.property_value}`);
       }
       lines.push('');
@@ -583,7 +621,8 @@ export class MirrorProjectionService {
       `SELECT u.id, u.kind, u.status, u.subject_key, u.predicate_key, u.text,
               MAX(s.evidence_class) AS evidence_class,
               MAX(s.origin_class) AS origin_class,
-              u.observed_at, u.created_at, u.sensitivity, u.egress_policy, u.confidence,
+              u.observed_at, u.created_at, u.sensitivity, u.egress_policy,
+              u.confirmation_state, u.confidence,
               u.superseded_by,
               COUNT(DISTINCT s.episode_id) AS source_count
          FROM memory_units u
@@ -811,7 +850,7 @@ export class MirrorProjectionService {
 
   private renderInterop(
     scope: MirrorScope,
-    generatedAt: string,
+    _generatedAt: string,
     exclude: (r: string) => void,
   ): MirrorFile[] {
     // Interop is always self_only by contract regardless of the global scope.
@@ -821,6 +860,12 @@ export class MirrorProjectionService {
     const memories: Array<{ id: string; text: string }> = [];
     for (const unit of units) {
       if (unit.status !== 'active') continue;
+      // Interop carries only explicitly user-confirmed self facts (plan §4.8
+      // mode A): unconfirmed inferences must not reach another agent.
+      if (unit.confirmation_state !== 'user_confirmed') {
+        exclude('interop_requires_user_confirmation');
+        continue;
+      }
       const gate = evaluateMirrorEgress(this.userId, {
         sensitivity: unit.sensitivity,
         egressPolicy: unit.egress_policy,
@@ -840,7 +885,6 @@ export class MirrorProjectionService {
       '---',
       'view: openclaw_interop',
       'scope: self_only',
-      `generated_at: ${generatedAt}`,
       '---',
       '',
       `# ${title}`,
@@ -876,14 +920,16 @@ export class MirrorProjectionService {
 
   private renderMirrorDoc(
     scope: MirrorScope,
-    generatedAt: string,
+    _generatedAt: string,
     projectionVersion?: string,
   ): string {
+    // No runtime timestamp here: MIRROR.md must be byte-stable across
+    // re-renders of the same truth (plan §7 rebuild case). The generation
+    // time lives only in the run receipt (mirror_runs), not in any file.
     const scopeLabel = scope === 'self_only' ? '只镜像关于我的内容' : '全部已确认内容';
     return [
       '---',
       'view: mirror_declaration',
-      `generated_at: ${generatedAt}`,
       `scope: ${scope}`,
       `projection_version: ${projectionVersion ?? '1'}`,
       '---',

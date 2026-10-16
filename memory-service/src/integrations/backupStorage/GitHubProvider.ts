@@ -131,7 +131,7 @@ export class GitHubProvider implements BackupStorageProvider {
     method: string,
     urlPath: string,
     body?: unknown,
-    allow404 = false,
+    allowStatuses: number[] = [],
   ): Promise<T | null> {
     const response = await this.fetchImpl(`${this.apiBaseUrl}${urlPath}`, {
       method,
@@ -144,7 +144,7 @@ export class GitHubProvider implements BackupStorageProvider {
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    if (allow404 && response.status === 404) return null;
+    if (allowStatuses.includes(response.status)) return null;
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(
@@ -156,11 +156,14 @@ export class GitHubProvider implements BackupStorageProvider {
   }
 
   async getRefSha(): Promise<string | null> {
+    // 404 = branch does not exist; 409 = repository is empty (GitHub returns
+    // 409 Conflict with "Git Repository is empty" for refs on empty repos).
+    // Both mean "no ref yet" and must take the initial-commit path.
     const data = await this.request<{ object: { sha: string } }>(
       'GET',
       `/repos/${this.repo}/git/ref/heads/${encodeURIComponent(this.branch)}`,
       undefined,
-      true,
+      [404, 409],
     );
     return data?.object?.sha ?? null;
   }
@@ -248,13 +251,21 @@ export class GitHubProvider implements BackupStorageProvider {
     };
   }
 
-  private async updateRef(sha: string): Promise<void> {
-    // force=false: a moved ref rejects the update rather than clobbering it.
-    await this.request(
-      'PATCH',
-      `/repos/${this.repo}/git/refs/heads/${encodeURIComponent(this.branch)}`,
-      { sha, force: false },
-    );
+  private async updateRef(sha: string, refExisted: boolean): Promise<void> {
+    if (refExisted) {
+      // force=false: a moved ref rejects the update rather than clobbering it.
+      await this.request(
+        'PATCH',
+        `/repos/${this.repo}/git/refs/heads/${encodeURIComponent(this.branch)}`,
+        { sha, force: false },
+      );
+      return;
+    }
+    // Creating a ref requires POST /git/refs; PATCH on a missing ref 404s.
+    await this.request('POST', `/repos/${this.repo}/git/refs`, {
+      ref: `refs/heads/${this.branch}`,
+      sha,
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -389,7 +400,7 @@ export class GitHubProvider implements BackupStorageProvider {
       treeSha,
       parentCommit ? [refSha!] : [],
     );
-    await this.updateRef(commit.sha);
+    await this.updateRef(commit.sha, refSha !== null);
 
     // Verification: read the ref back. A mismatch fails the run.
     const verified = await this.getRefSha();
@@ -433,7 +444,7 @@ export class GitHubProvider implements BackupStorageProvider {
       'GET',
       `/repos/${this.repo}/contents/${key}?ref=${encodeURIComponent(this.branch)}`,
       undefined,
-      true,
+      [404],
     );
     if (!data?.sha) return null;
     return { sha: data.sha, size: Number(data.size ?? 0) };
@@ -451,7 +462,7 @@ export class GitHubProvider implements BackupStorageProvider {
       'GET',
       `/repos/${this.repo}/contents/${dir}?ref=${encodeURIComponent(this.branch)}`,
       undefined,
-      true,
+      [404],
     );
     if (!Array.isArray(data)) return [];
     return data

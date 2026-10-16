@@ -37,6 +37,16 @@ proof that all possible source rows satisfy the contract:
 6. **interop** — `interop/openclaw/USER.md` exposes confirmed preferences with
    `<!-- pai:unit:<id> -->` echo markers and excludes unconfirmed, other-person,
    and observed content.
+7. **readiness-regressions** — the 2026-10-16 acceptance-audit gaps that are
+   fixed: first push to an empty repository (409 → create ref via POST),
+   fail-closed on missing/unknown sensitivity or egress policy, credential-like
+   profile/entity fields redacted, byte-stable projection across generation
+   times (no runtime `generated_at` inside files), and interop requiring
+   `confirmation_state=user_confirmed`.
+
+Known remaining gaps (tracked on the issue): `self_only` subject boundaries
+(audit #4/#5/#6) and first-push / subsequent-run conflict preservation
+(audit #10/#11).
 
 A fake in-memory GitHub server implements the Git Data API
 (`blobs → trees → commits → refs`) so the suite exercises the real provider

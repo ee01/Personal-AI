@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import type BetterSqlite3 from 'better-sqlite3';
 
 import { cleanupTestDb, getTestDb } from './setup.js';
-import { renderMirrorProjection } from '../core/mirror/MirrorProjectionService.js';
+import { renderMirrorProjection, evaluateMirrorEgress } from '../core/mirror/MirrorProjectionService.js';
 import { GitHubProvider } from '../integrations/backupStorage/GitHubProvider.js';
 
 const RAW_SENTINEL = 'RAW-CONFIDENTIAL-MESSAGE-BODY-DO-NOT-MIRROR';
@@ -41,6 +41,8 @@ class FakeGitHub {
   blobs = new Map<string, { content: string; encoding: string }>();
   blobUploads = 0;
   forceAttempted = false;
+  /** When true, GET ref answers 409 "Git Repository is empty" like real GitHub. */
+  repoEmpty = false;
   readonly repo = 'owner/mirror';
 
   fetchImpl: typeof fetch = async (input, init) => {
@@ -56,13 +58,18 @@ class FakeGitHub {
         headers: { 'Content-Type': 'application/json' },
       });
 
-    if (method === 'GET' && path === '') return json(200, { full_name: this.repo });
+    if (method === 'GET' && path === '') {
+      if (this.repoEmpty) return json(409, { message: 'Git Repository is empty.' });
+      return json(200, { full_name: this.repo });
+    }
 
     if (method === 'GET' && path.startsWith('/git/ref/heads/')) {
       const branch = decodeURIComponent(path.split('/').pop()!);
       const sha = this.refs.get(branch);
-      return sha
-        ? json(200, { object: { sha } })
+      if (sha) return json(200, { object: { sha } });
+      // Real GitHub: 409 for an empty repository, 404 for a missing branch.
+      return this.repoEmpty
+        ? json(409, { message: 'Git Repository is empty.' })
         : json(404, { message: 'Not Found' });
     }
 
@@ -133,8 +140,22 @@ class FakeGitHub {
     if (method === 'PATCH' && path.startsWith('/git/refs/heads/')) {
       if (body.force === true) this.forceAttempted = true;
       const branch = decodeURIComponent(path.split('/').pop()!);
+      // Real GitHub: PATCH cannot create a ref; a missing ref is 404/422.
+      if (!this.refs.has(branch)) {
+        return json(404, { message: 'Reference does not exist' });
+      }
       this.refs.set(branch, body.sha);
       return json(200, { object: { sha: body.sha } });
+    }
+
+    if (method === 'POST' && path === '/git/refs') {
+      const ref = String(body.ref || '');
+      const branch = ref.replace(/^refs\/heads\//, '');
+      if (!branch || this.refs.has(branch)) {
+        return json(422, { message: 'Reference already exists' });
+      }
+      this.refs.set(branch, body.sha);
+      return json(201, { ref, object: { sha: body.sha } });
     }
 
     if (method === 'GET' && path.startsWith('/git/blobs/')) {
@@ -259,13 +280,14 @@ function unit(input: {
   egressPolicy?: string;
   episodeId: string;
   evidenceClass?: string;
+  confirmed?: boolean;
 }): void {
   const at = Math.floor(now.getTime() / 1000);
   db.prepare(
     `INSERT INTO memory_units
        (id, tenant_id, owner_user_id, memory_form, kind, status, text, sensitivity,
-        egress_policy, confidence, tx_start, created_at, updated_at)
-     VALUES (?, 'default', ?, 'semantic', ?, ?, ?, ?, ?, 0.9, ?, ?, ?)`,
+        egress_policy, confirmation_state, confidence, tx_start, created_at, updated_at)
+     VALUES (?, 'default', ?, 'semantic', ?, ?, ?, ?, ?, ?, 0.9, ?, ?, ?)`,
   ).run(
     input.id,
     OWNER,
@@ -274,6 +296,7 @@ function unit(input: {
     input.text,
     input.sensitivity ?? 'internal',
     input.egressPolicy ?? 'approved_destinations',
+    input.confirmed ? 'user_confirmed' : 'unconfirmed',
     at,
     at,
     at,
@@ -306,6 +329,13 @@ function seedAuditedFixture(): void {
     text: '偏好：深色模式',
     episodeId: 'm-owner-pref',
     evidenceClass: 'self_statement',
+    confirmed: true,
+  });
+  unit({
+    id: 'u-unconfirmed-active',
+    kind: 'preference',
+    text: '未确认的活跃偏好：想学贝斯',
+    episodeId: 'm-owner-fact',
   });
   unit({
     id: 'u-fact',
@@ -646,5 +676,102 @@ describe('openclaw interop', () => {
       (f) => f.path === 'interop/openclaw/PERSONAL_AI.md',
     );
     expect(personal!.content).toContain('scope: self_only');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readiness regressions (2026-10-16 acceptance audit)
+// ---------------------------------------------------------------------------
+
+describe('readiness regressions (2026-10-16 audit)', () => {
+  it('succeeds on the first push to an empty repository (409) by creating the ref', async () => {
+    const mock = new FakeGitHub();
+    mock.repoEmpty = true; // real GitHub answers 409 "Git Repository is empty"
+    const provider = newProvider(mock);
+    const result = renderMirrorProjection(db, OWNER, { now });
+    const files = result.files.map((f) => ({
+      path: f.path,
+      content: f.content,
+      hash: f.hash,
+    }));
+    const push = await provider.putTree(files, 'initial commit', {
+      manifest: new Map(),
+      now,
+    });
+    expect(push.status).toBe('success');
+    expect(push.commitSha).toBeTruthy();
+    expect(mock.refs.get('main')).toBe(push.commitSha);
+    expect(mock.forceAttempted).toBe(false);
+    // The tree is readable back through the created ref.
+    expect(mock.remoteContent('MIRROR.md')).toBeTruthy();
+  });
+
+  it('fails closed on missing or unknown sensitivity / egress policy', () => {
+    const missing = evaluateMirrorEgress(OWNER, {});
+    expect(missing.allowed).toBe(false);
+    expect(missing.reason).toBe('fail_closed_missing_or_unknown_policy');
+
+    const unknown = evaluateMirrorEgress(OWNER, {
+      sensitivity: 'top_secret',
+      egressPolicy: 'send_everything',
+      status: 'active',
+    });
+    expect(unknown.allowed).toBe(false);
+    expect(unknown.reason).toBe('fail_closed_missing_or_unknown_policy');
+  });
+
+  it('redacts credential-like profile items and entity properties', () => {
+    const at = Math.floor(now.getTime() / 1000);
+    db.prepare(
+      `INSERT INTO user_profile_items
+         (id, item_type, item_key, item_value, source_kind, confidence, user_confirmed,
+          status, salience_score, mention_count, last_seen, created_at, updated_at, fingerprint)
+       VALUES ('p-token', 'fact', 'github_token', 'ghp_redactedsecret0000000000', 'explicit',
+               0.9, 1, 'active', 1, 1, ?, ?, ?, 'fp3')`,
+    ).run(at, at, at);
+    db.prepare(
+      `INSERT INTO entity_properties
+         (entity_id, property_key, property_value, source_authority, valid_from, tx_start, status)
+       VALUES ('e-peer', 'password', 'sk-redactedsecret0000000000000', 'self', ?, ?, 'active')`,
+    ).run(at, at);
+
+    const result = renderMirrorProjection(db, OWNER, { scope: 'all', now });
+    const blob = allContent(result.files);
+    expect(blob).not.toContain('ghp_redactedsecret');
+    expect(blob).not.toContain('sk-redactedsecret');
+    expect(blob).not.toContain('github_token');
+    expect(blob).not.toContain('password');
+    expect(
+      result.receipt.exclusions.some((e) => e.reason === 'secret_field_redacted'),
+    ).toBe(true);
+  });
+
+  it('is byte-stable across generation times for the same truth', () => {
+    const first = renderMirrorProjection(db, OWNER, {
+      now: new Date('2026-10-09T15:30:00Z'),
+    });
+    const later = renderMirrorProjection(db, OWNER, {
+      now: new Date('2026-10-10T23:30:00Z'),
+    });
+    const fingerprint = (files: Array<{ path: string; hash: string }>) =>
+      files.map((f) => `${f.path}:${f.hash}`).sort();
+    expect(fingerprint(later.files)).toEqual(fingerprint(first.files));
+    for (const file of first.files) {
+      const match = later.files.find((f) => f.path === file.path);
+      expect(match?.content).toBe(file.content);
+    }
+  });
+
+  it('excludes active-but-unconfirmed units from the OpenClaw interop subset', () => {
+    const result = renderMirrorProjection(db, OWNER, { scope: 'all', now });
+    const interop = result.files.filter((f) => f.path.startsWith('interop/'));
+    const blob = allContent(interop);
+    expect(blob).toContain('偏好：深色模式'); // confirmed owner preference stays
+    expect(blob).not.toContain('想学贝斯'); // active but unconfirmed
+    expect(
+      result.receipt.exclusions.some(
+        (e) => e.reason === 'interop_requires_user_confirmation',
+      ),
+    ).toBe(true);
   });
 });

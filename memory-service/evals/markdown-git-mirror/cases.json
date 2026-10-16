@@ -47,8 +47,17 @@
       "threshold": "命中 ≥ 0.8；新 unit 0；违规 0",
       "result": "pass"
     }
+    {
+      "id": "readiness-regressions",
+      "name": "验收审计回归：空仓库首推 409、fail-closed、密钥字段、跨时钟确定性、interop 仅 confirmed",
+      "cases": 5,
+      "threshold": "全部通过",
+      "result": "pass"
+    }
   ],
   "notCovered": [
+    "self_only 的 subject 边界（他人主体事实仍可进入 self_only 投影，2026-10-16 审计 #4/#5/#6）",
+    "conflict 保护：首次同名文件与后续轮次的保留（审计 #10/#11）",
     "测试仓库连续 7 晚 commit 成功（需要真实 GitHub 仓库与 token，离线不可跑）",
     "真实 esone.qiu 快照人工检查（属于 Phase 0 人工门槛，需在有数据的服务上运行 preview）"
   ]
