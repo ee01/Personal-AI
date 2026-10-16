@@ -156,16 +156,53 @@ export class GitHubProvider implements BackupStorageProvider {
   }
 
   async getRefSha(): Promise<string | null> {
-    // 404 = branch does not exist; 409 = repository is empty (GitHub returns
-    // 409 Conflict with "Git Repository is empty" for refs on empty repos).
-    // Both mean "no ref yet" and must take the initial-commit path.
-    const data = await this.request<{ object: { sha: string } }>(
-      'GET',
-      `/repos/${this.repo}/git/ref/heads/${encodeURIComponent(this.branch)}`,
-      undefined,
-      [404, 409],
-    );
-    return data?.object?.sha ?? null;
+    return (await this.getRefState()).sha;
+  }
+
+  /**
+   * Distinguish "repository is empty" (409) from "branch does not exist"
+   * (404): an empty repository cannot accept Git Data API writes at all
+   * (blobs/trees/commits all 409 "Git Repository is empty"), while a missing
+   * branch in a non-empty repo just needs POST /git/refs.
+   */
+  private async getRefState(): Promise<{ sha: string | null; emptyRepo: boolean }> {
+    const urlPath = `/repos/${this.repo}/git/ref/heads/${encodeURIComponent(this.branch)}`;
+    const response = await this.fetchImpl(`${this.apiBaseUrl}${urlPath}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'personal-ai-memory-mirror',
+      },
+    });
+    if (response.ok) {
+      const data = (await response.json()) as { object?: { sha?: string } };
+      return { sha: data.object?.sha ?? null, emptyRepo: false };
+    }
+    if (response.status === 409) return { sha: null, emptyRepo: true };
+    if (response.status === 404) return { sha: null, emptyRepo: false };
+    const text = await response.text().catch(() => '');
+    throw new Error(`GitHub GET ${urlPath} failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+
+  /**
+   * Initialize an empty repository with one Contents-API commit. This is the
+   * documented way to make the first commit: the Git Data API cannot create
+   * blobs until the repository has at least one commit.
+   */
+  private async seedEmptyRepository(): Promise<void> {
+    const content = Buffer.from(
+      '# Personal AI Memory Mirror\n\n' +
+        'This repository receives nightly Markdown projections from Personal AI.\n' +
+        'It is a read-friendly projection, NOT a full backup — restore from the\n' +
+        'encrypted zip backup channel.\n',
+      'utf-8',
+    ).toString('base64');
+    await this.request('PUT', `/repos/${this.repo}/contents/README.md`, {
+      message: 'memory mirror: initialize repository',
+      content,
+    });
   }
 
   private async getCommit(sha: string): Promise<{ treeSha: string; parents: string[] }> {
@@ -289,7 +326,15 @@ export class GitHubProvider implements BackupStorageProvider {
     const now = options.now ?? new Date();
     const allowDeletions = options.allowDeletions !== false;
 
-    const refSha = await this.getRefSha();
+    const refState = await this.getRefState();
+    let refSha = refState.sha;
+    if (refSha === null && refState.emptyRepo) {
+      // Empty repository: seed one Contents-API commit so the Git Data API
+      // becomes usable, then re-read the ref (the seed lands on the default
+      // branch; a non-default configured branch is created via POST below).
+      await this.seedEmptyRepository();
+      refSha = await this.getRefSha();
+    }
     const emptyRepo = refSha === null;
     const parentCommit = emptyRepo ? null : await this.getCommit(refSha!);
     const remoteTree = parentCommit

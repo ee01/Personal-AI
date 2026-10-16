@@ -58,6 +58,31 @@ class FakeGitHub {
         headers: { 'Content-Type': 'application/json' },
       });
 
+    if (method === 'POST' && (path === '/git/blobs' || path === '/git/trees' || path === '/git/commits')) {
+      // Real GitHub: an empty repository rejects all Git Data API writes.
+      if (this.repoEmpty) {
+        return json(409, { message: 'Git Repository is empty.' });
+      }
+    }
+
+    if (method === 'PUT' && path.startsWith('/contents/')) {
+      // Contents API PUT initializes an empty repository with its first commit.
+      if (!this.repoEmpty) {
+        return json(409, { message: 'This file already exists.' });
+      }
+      const content = Buffer.from(String(body.content || ''), 'base64').toString('utf-8');
+      const blobSha = sha1(`utf-8:${content}`);
+      this.blobs.set(blobSha, { content, encoding: 'utf-8' });
+      const tree = new Map<string, string>([[path.slice('/contents/'.length), blobSha]]);
+      const treeSha = sha1(`tree:${JSON.stringify([...tree.entries()].sort())}`);
+      this.trees.set(treeSha, tree);
+      const commitSha = sha1(`commit:${body.message}:${treeSha}:`);
+      this.commits.set(commitSha, { tree: treeSha, parents: [], message: String(body.message) });
+      this.refs.set('main', commitSha);
+      this.repoEmpty = false;
+      return json(201, { content: { sha: blobSha }, commit: { sha: commitSha } });
+    }
+
     if (method === 'GET' && path === '') {
       if (this.repoEmpty) return json(409, { message: 'Git Repository is empty.' });
       return json(200, { full_name: this.repo });
