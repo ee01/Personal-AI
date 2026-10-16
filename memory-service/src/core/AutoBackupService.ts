@@ -50,6 +50,7 @@ export interface AutoBackupPersistedConfig {
   autoBackupRetentionCount?: number;
   autoBackupIncludeDerived?: boolean;
   autoBackupIncludeVectors?: boolean;
+  /** @deprecated mirror activation derives from autoBackupEnabled + repo/token; kept for back-compat reads of older config.json */
   autoBackupGithubEnabled?: boolean;
   autoBackupGithubRepo?: string;
   autoBackupGithubBranch?: string;
@@ -133,22 +134,31 @@ export function resolveAutoBackupConfig(raw: AutoBackupPersistedConfig): {
     retentionCount: Math.max(1, Math.floor(Number(raw.autoBackupRetentionCount) || 7)),
     includeDerived: raw.autoBackupIncludeDerived !== false,
     includeVectors: raw.autoBackupIncludeVectors !== false,
-    github: {
-      enabled: raw.autoBackupGithubEnabled === true,
-      repo: typeof raw.autoBackupGithubRepo === 'string' ? raw.autoBackupGithubRepo.trim() : '',
-      branch:
-        typeof raw.autoBackupGithubBranch === 'string' && raw.autoBackupGithubBranch.trim()
-          ? raw.autoBackupGithubBranch.trim()
-          : 'main',
-      token: typeof raw.autoBackupGithubToken === 'string' ? raw.autoBackupGithubToken : '',
-      mode: raw.autoBackupGithubMode === 'encrypted' ? 'encrypted' : 'markdown',
-      scope: raw.autoBackupGithubScope === 'self_only' ? 'self_only' : 'all',
-      prefix: (raw.autoBackupGithubPrefix || '').replace(/^\/+|\/+$/g, ''),
-      passphrase:
-        typeof raw.autoBackupEncryptionPassphrase === 'string'
-          ? raw.autoBackupEncryptionPassphrase
-          : '',
-    },
+    github: (() => {
+      // One master switch: the mirror channel rides the global autoBackupEnabled
+      // flag (Options exposes no per-channel mirror toggle). It is active when
+      // backup is on AND a repo + token are configured.
+      const repo =
+        typeof raw.autoBackupGithubRepo === 'string' ? raw.autoBackupGithubRepo.trim() : '';
+      const token =
+        typeof raw.autoBackupGithubToken === 'string' ? raw.autoBackupGithubToken : '';
+      return {
+        enabled: raw.autoBackupEnabled === true && Boolean(repo) && Boolean(token),
+        repo,
+        branch:
+          typeof raw.autoBackupGithubBranch === 'string' && raw.autoBackupGithubBranch.trim()
+            ? raw.autoBackupGithubBranch.trim()
+            : 'main',
+        token,
+        mode: raw.autoBackupGithubMode === 'encrypted' ? 'encrypted' : 'markdown',
+        scope: raw.autoBackupGithubScope === 'self_only' ? 'self_only' : 'all',
+        prefix: (raw.autoBackupGithubPrefix || '').replace(/^\/+|\/+$/g, ''),
+        passphrase:
+          typeof raw.autoBackupEncryptionPassphrase === 'string'
+            ? raw.autoBackupEncryptionPassphrase
+            : '',
+      };
+    })(),
   };
 }
 

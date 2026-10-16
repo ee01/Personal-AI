@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getMemoryServiceClient } from '../services/MemoryServiceClient';
 import type {
@@ -9,6 +9,7 @@ import type {
   UpdateRuntimeConfigPayload,
 } from '../services/MemoryServiceClient';
 import { DesktopAppClient } from '../services/DesktopAppClient';
+import { ToggleField } from './ToggleField';
 
 const DESKTOP_RELEASES_URL =
   'https://github.com/ee01/Personal-AI/releases?q=desktop-v';
@@ -39,7 +40,6 @@ type Draft = {
   clearAutoBackupEncryptionPassphrase: boolean;
   autoBackupRetentionCount: number;
   autoBackupIncludeVectors: boolean;
-  autoBackupGithubEnabled: boolean;
   autoBackupGithubRepo: string;
   autoBackupGithubBranch: string;
   autoBackupGithubToken: string;
@@ -77,7 +77,6 @@ const emptyDraft = (): Draft => ({
   clearAutoBackupEncryptionPassphrase: false,
   autoBackupRetentionCount: 7,
   autoBackupIncludeVectors: true,
-  autoBackupGithubEnabled: false,
   autoBackupGithubRepo: '',
   autoBackupGithubBranch: 'main',
   autoBackupGithubToken: '',
@@ -109,7 +108,6 @@ function draftFromConfig(config: RuntimeConfigResponse): Draft {
     autoBackupEncryptionEnabled: config.autoBackupEncryptionEnabled !== false,
     autoBackupRetentionCount: Number(config.autoBackupRetentionCount) || 7,
     autoBackupIncludeVectors: config.autoBackupIncludeVectors !== false,
-    autoBackupGithubEnabled: Boolean(config.autoBackupGithubEnabled),
     autoBackupGithubRepo: config.autoBackupGithubRepo || '',
     autoBackupGithubBranch: config.autoBackupGithubBranch || 'main',
     autoBackupGithubMode:
@@ -175,9 +173,23 @@ function AutoBackupSettingsForm(): React.ReactElement {
   const [mirrorStatus, setMirrorStatus] = useState<MemoryMirrorStatusResponse | null>(null);
   const [mirrorPreview, setMirrorPreview] = useState<MemoryMirrorPreviewResponse | null>(null);
   const [mirrorUnsupported, setMirrorUnsupported] = useState(false);
-  // Once the user picks a tab this session, keep it across reloads (saves,
-  // refreshes) instead of snapping back to the object-storage provider tab.
-  const tabTouched = React.useRef(false);
+  // Once the user picks a tab, remember it: for the rest of this session it
+  // wins over any config-derived default, and it persists across refreshes so
+  // the selected channel survives reloads.
+  const tabTouched = useRef(false);
+
+  const selectTab = (item: ChannelTab) => {
+    tabTouched.current = true;
+    setTab(item);
+    try {
+      window.localStorage.setItem('pai:autoBackupChannelTab', item);
+    } catch {
+      // storage may be unavailable (e.g. embedded webview); selection still works this session
+    }
+    if (item === 's3' || item === 'webdav') {
+      patch({ autoBackupProvider: item });
+    }
+  };
 
   const load = useCallback(async (alive?: () => boolean) => {
     const client = getMemoryServiceClient();
@@ -208,7 +220,25 @@ function AutoBackupSettingsForm(): React.ReactElement {
     setMirrorStatus(mirror);
     setTab((current) => {
       if (tabTouched.current) return current;
-      if (config.autoBackupGithubEnabled) return 'github';
+      // Prefer the channel the user last picked (persists across refreshes),
+      // then the GitHub mirror when a repo is configured, then the zip
+      // provider. Without this the tab snaps back to webdav/s3 after every
+      // save or reload because autoBackupProvider never becomes 'github'.
+      let remembered: string | null = null;
+      try {
+        remembered = window.localStorage.getItem('pai:autoBackupChannelTab');
+      } catch {
+        remembered = null;
+      }
+      if (
+        remembered === 'webdav' ||
+        remembered === 's3' ||
+        remembered === 'local' ||
+        remembered === 'github'
+      ) {
+        return remembered;
+      }
+      if (config.autoBackupGithubRepo) return 'github';
       return config.autoBackupProvider === 's3' ? 's3' : 'webdav';
     });
   }, []);
@@ -261,7 +291,6 @@ function AutoBackupSettingsForm(): React.ReactElement {
     clearAutoBackupEncryptionPassphrase: draft.clearAutoBackupEncryptionPassphrase,
     autoBackupRetentionCount: draft.autoBackupRetentionCount,
     autoBackupIncludeVectors: draft.autoBackupIncludeVectors,
-    autoBackupGithubEnabled: draft.autoBackupGithubEnabled,
     autoBackupGithubRepo: draft.autoBackupGithubRepo,
     autoBackupGithubBranch: draft.autoBackupGithubBranch,
     autoBackupGithubToken: draft.autoBackupGithubToken || undefined,
@@ -390,42 +419,62 @@ function AutoBackupSettingsForm(): React.ReactElement {
     <div className="form-section" style={{ marginTop: 24 }}>
       <h2>自动备份</h2>
       <p style={{ color: '#666', fontSize: 13, marginTop: 0 }}>
-        服务端按周期把加密快照推到 WebDAV / S3。状态看 Coverage 页；个人电脑拉取在桌面端配置。
+        服务端按周期把加密快照推到 WebDAV / S3，GitHub 镜像每晚巩固后提交 Markdown 投影。状态看 Coverage 页；个人电脑拉取在桌面端配置。
       </p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <label style={{ minWidth: 110, color: '#666' }}>自动备份</label>
-        <input
-          type="checkbox"
-          checked={draft.autoBackupEnabled}
-          onChange={(event) => patch({ autoBackupEnabled: event.target.checked })}
-        />
-        <span style={{ color: '#888', fontSize: 12 }}>关闭后调度器会跳过该用户</span>
-      </div>
+      <ToggleField
+        id="autoBackupEnabled"
+        name="autoBackupEnabled"
+        label="自动备份"
+        description="总开关：关闭后调度器会跳过该用户，所有通道都不会执行；开启后可配置下面各通道。"
+        checked={draft.autoBackupEnabled}
+        onChange={(event) => patch({ autoBackupEnabled: event.target.checked })}
+      />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {(['webdav', 's3', 'local', 'github'] as ChannelTab[]).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={tab === item ? 'primary' : undefined}
-            onClick={() => {
-              tabTouched.current = true;
-              setTab(item);
-              if (item === 's3' || item === 'webdav') {
-                patch({ autoBackupProvider: item });
-              }
-            }}
-          >
-            {item === 'webdav'
-              ? 'WebDAV 推送'
-              : item === 's3'
-                ? 'S3 兼容推送'
-                : item === 'local'
-                  ? '个人电脑拉取'
-                  : 'GitHub 镜像'}
-          </button>
-        ))}
+      {draft.autoBackupEnabled ? (
+        <>
+      <div
+        role="tablist"
+        aria-label="备份通道"
+        style={{
+          display: 'flex',
+          gap: 4,
+          marginBottom: 16,
+          borderBottom: '1px solid #e5e7eb',
+          flexWrap: 'wrap',
+        }}
+      >
+        {(['webdav', 's3', 'local', 'github'] as ChannelTab[]).map((item) => {
+          const active = tab === item;
+          return (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => selectTab(item)}
+              style={{
+                padding: '10px 14px',
+                fontSize: 13,
+                cursor: 'pointer',
+                border: 'none',
+                background: 'transparent',
+                color: active ? '#1f6feb' : '#57606a',
+                fontWeight: active ? 600 : 400,
+                borderBottom: active ? '2px solid #1f6feb' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              {item === 'webdav'
+                ? 'WebDAV 推送'
+                : item === 's3'
+                  ? 'S3 兼容推送'
+                  : item === 'local'
+                    ? '个人电脑拉取'
+                    : 'GitHub 镜像'}
+            </button>
+          );
+        })}
       </div>
 
       {tab === 'local' ? (
@@ -477,23 +526,13 @@ function AutoBackupSettingsForm(): React.ReactElement {
             background: '#fafbfc',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <label style={{ minWidth: 110, color: '#666' }}>GitHub 镜像</label>
-            <input
-              type="checkbox"
-              checked={draft.autoBackupGithubEnabled}
-              onChange={(event) =>
-                patch({ autoBackupGithubEnabled: event.target.checked })
-              }
-            />
-            <span style={{ color: '#888', fontSize: 12 }}>
-              每晚巩固后把 Markdown 投影提交一次
-            </span>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            GitHub 镜像 · 随「自动备份」总开关生效，无需单独开关
           </div>
           <p style={{ color: '#666', fontSize: 13, marginTop: 0 }}>
-            只推送投影（画像 / entities / knowledge / timeline / DIARY / interop），
-            <strong>不含原文、SQLite、config.json</strong>。本地 Markdown 是视图不是真源；
-            全量恢复仍走加密 zip。
+            每晚巩固后把 Markdown 投影提交一次。只推送投影（画像 / entities / knowledge /
+            timeline / DIARY / interop），<strong>不含原文、SQLite、config.json</strong>。本地
+            Markdown 是视图不是真源；全量恢复仍走加密 zip。
           </p>
           {mirrorUnsupported ? (
             <p
@@ -891,6 +930,8 @@ function AutoBackupSettingsForm(): React.ReactElement {
           </div>
         </>
       )}
+        </>
+      ) : null}
 
       {status ? (
         <p style={{ fontSize: 13, color: '#555', marginTop: 14 }}>

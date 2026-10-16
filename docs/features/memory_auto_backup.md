@@ -106,6 +106,8 @@ Options 写入既有 `PUT /config`：`autoBackupEnabled`、周期（daily / ever
 
 这是第三个 provider（WebDAV / S3 之外），但语义不同：它推的是**人类可读的 Markdown 投影**，不是全量快照。SQLite 仍是唯一真源；全量恢复仍走加密 zip。每晚巩固后渲染一次投影，经 egress 过滤后以**一次 commit**推到用户在 Options 填写的 GitHub 仓库；token 只存服务端，永不 force push。
 
+Options 交互：**只有一个「自动备份」总开关**（Toggle 样式，与其它设置页开关一致），镜像通道随总开关生效，没有镜像单独开关——总开关关闭时整个通道配置区隐藏；通道切换（WebDAV 推送 / S3 兼容推送 / 个人电脑拉取 / GitHub 镜像）用 Tab 栏样式，选中的 Tab 记忆在本地，刷新后保持。镜像在总开关开启且仓库 + token 都已配置时才会在夜间调度中执行；「测试连接 / 预览 / 立即镜像」随时可用（服务端未部署该通道时会显示红色提示条）。
+
 大白话：本地投影是视图、可重建；镜像仓库是给人和别的 agent 读的，不是拿来恢复全量库的。
 
 - 认证：fine-grained PAT，只勾目标仓库 `Contents: Read and write`；`config.json` 存 token，GET 只回 `autoBackupGithubTokenConfigured`。

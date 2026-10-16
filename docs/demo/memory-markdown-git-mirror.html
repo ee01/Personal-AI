@@ -26,9 +26,16 @@
     .panel-head h2 { font-size: 14px; font-weight: 600; }
     .sub { color: var(--muted); font-size: 12px; }
     .body { padding: 14px 16px; display: grid; gap: 12px; }
-    .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-    .tab { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: 12.5px; }
-    .tab.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+    .tab { padding: 8px 14px; border: none; background: transparent; font-size: 13px; color: #57606a; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tab.on { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    .toggle { position: relative; display: inline-flex; width: 46px; height: 28px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle .track { position: absolute; inset: 0; border-radius: 999px; background: #2ecc71; transition: background-color .2s ease; }
+    .toggle input:not(:checked) + .track { background: #c7ccd1; }
+    .toggle .knob { position: absolute; top: 3px; left: 21px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.24); transition: left .2s ease; }
+    .toggle input:not(:checked) ~ .knob { left: 3px; }
     .field { display: grid; gap: 4px; }
     .field label { font-size: 12.5px; color: var(--muted); }
     .field input, .field select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
@@ -63,10 +70,22 @@
         <span class="sub">memory-service · 每用户独立配置 · 密钥只存服务端</span>
       </div>
       <div class="body">
-        <div class="tabs">
-          <button class="tab">WebDAV</button>
-          <button class="tab">S3</button>
-          <button class="tab">本地目录</button>
+        <div class="toggle-row">
+          <div>
+            <strong>自动备份</strong>
+            <div class="sub">总开关：关闭后调度器跳过该用户，所有通道都不执行；开启后可配置各通道。</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" checked id="master">
+            <span class="track"></span>
+            <span class="knob"></span>
+          </label>
+        </div>
+        <div id="channel-config">
+        <div class="tabs" role="tablist">
+          <button class="tab">WebDAV 推送</button>
+          <button class="tab">S3 兼容推送</button>
+          <button class="tab">个人电脑拉取</button>
           <button class="tab on">GitHub 镜像</button>
         </div>
 
@@ -113,9 +132,10 @@
 
         <div class="actions">
           <button class="btn" id="btn-test">测试连接</button>
-          <button class="btn primary" id="btn-enable">开启镜像</button>
+          <button class="btn" id="btn-preview">预览推送清单</button>
+          <button class="btn primary" id="btn-run">立即镜像一次</button>
           <span class="pill" id="test-pill">未测试</span>
-          <span class="pill" id="egress-pill">egress：approved_destinations · github.com</span>
+          <span class="pill" id="egress-pill">随总开关生效 · 无单独开关</span>
         </div>
 
         <div>
@@ -134,8 +154,9 @@ consolidation/DIARY.md         +3 preferences · 1 superseded · 2 open loops cl
 interop/openclaw/USER.md · MEMORY.md · memory/2026-10-09.md
 <span class="ex">× messages_raw 原文 · × memory.db · × config.json · × restricted 字段</span></div>
         </div>
+        </div>
       </div>
-      <div class="legend">范围选「只镜像关于我的内容」时，entities/people 只保留你本人与 confirmed 关系的名字，不含他人事实。local_only 用户此 tab 置灰。</div>
+      <div class="legend">镜像随「自动备份」总开关生效（总开关 + 仓库 + token 齐备才在夜间调度执行）。范围选「只镜像关于我的内容」时，entities/people 只保留你本人与 confirmed 关系的名字，不含他人事实。</div>
     </section>
 
     <aside class="panel" aria-label="上次镜像回执">
@@ -171,11 +192,17 @@ interop/openclaw/USER.md · MEMORY.md · memory/2026-10-09.md
           ? '加密模式：整个投影目录打成 <strong>mirror.tar.enc</strong>（PABK1 · scrypt · AES-256-GCM）后提交，仓库里只有密文，可用于公开仓库；此模式下无法被 Obsidian / OpenClaw 直接读取。'
           : '这条通道推送的是<strong>人类可读的 Markdown 投影</strong>（画像、一页纸、实体、原子事实、进行中事务、每日摘要行），不是全量备份。原文、SQLite、config.json 永不推送。全量恢复请用加密 zip 备份。';
       });
+      $('btn-preview').addEventListener('click', function () {
+        $('tree').hidden = false;
+      });
+      $('master').addEventListener('change', function () {
+        $('channel-config').hidden = !$('master').checked;
+      });
       $('scope').addEventListener('change', function () {
         var self = $('scope').value === 'self';
         $('egress-pill').textContent = self ? 'egress：approved_destinations · github.com · self_only' : 'egress：approved_destinations · github.com';
       });
-      $('btn-enable').addEventListener('click', function () {
+      $('btn-run').addEventListener('click', function () {
         $('last-state').textContent = '2026-10-09 23:31 · 成功';
         $('commit').textContent = 'a41c9f2 · memory mirror 2026-10-09: +3 preferences, 1 superseded fact, 2 open loops closed';
         $('files').textContent = '142 个文件 · 本次变更 9 · 重传 0';

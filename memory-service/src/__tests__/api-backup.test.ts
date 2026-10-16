@@ -106,7 +106,7 @@ describe('backup export jobs and auto backup', () => {
       url: '/api/v1/config',
       headers: { 'x-user-id': userId },
       payload: {
-        autoBackupGithubEnabled: true,
+        autoBackupEnabled: true,
         autoBackupGithubRepo: 'esone/memory-mirror',
         autoBackupGithubBranch: 'main',
         autoBackupGithubToken: 'github_pat_mirror_secret',
@@ -124,7 +124,7 @@ describe('backup export jobs and auto backup', () => {
     });
     expect(getRes.statusCode).toBe(200);
     const config = getRes.json();
-    expect(config.autoBackupGithubEnabled).toBe(true);
+    expect(config.autoBackupEnabled).toBe(true);
     expect(config.autoBackupGithubRepo).toBe('esone/memory-mirror');
     expect(config.autoBackupGithubBranch).toBe('main');
     expect(config.autoBackupGithubMode).toBe('markdown');
@@ -143,7 +143,24 @@ describe('backup export jobs and auto backup', () => {
     const mirror = statusRes.json();
     expect(mirror.repo).toBe('esone/memory-mirror');
     expect(mirror.tokenConfigured).toBe(true);
+    // One master switch: enabled derives from autoBackupEnabled + repo + token.
     expect(mirror.enabled).toBe(true);
+
+    // Turning the master switch off deactivates the mirror channel too.
+    const offRes = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/config',
+      headers: { 'x-user-id': userId },
+      payload: { autoBackupEnabled: false },
+    });
+    expect(offRes.statusCode).toBe(200);
+    const offStatus = await app.inject({
+      method: 'GET',
+      url: '/api/v1/backup/mirror/status',
+      headers: { 'x-user-id': userId },
+    });
+    expect(offStatus.statusCode).toBe(200);
+    expect(offStatus.json().enabled).toBe(false);
 
     const previewRes = await app.inject({
       method: 'POST',
