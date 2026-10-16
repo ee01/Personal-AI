@@ -4334,6 +4334,14 @@ const Options = () => {
           label="启用「联动操作」功能"
           description="从消息快速创建带联动操作的记忆入口规则。"
         />
+        {renderPushTargetFields(
+          '决策中心推送',
+          'DECISION_CENTER_PUSH_TARGET',
+          'DECISION_CENTER_PUSH_GROUP_ID',
+          false,
+          '用于冲突/待确认类的决策中心提醒。默认推送给 Me。',
+          runtimeFieldsLocked,
+        )}
       </div>
 
       <div className="form-section">
@@ -4528,48 +4536,6 @@ const Options = () => {
           </small>
         </div>
         <AutoBackupSettings />
-        {currentUsername.toLowerCase() === 'esone.qiu' && (
-          <div className="form-group">
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const response = await chrome.runtime.sendMessage({
-                    type: 'FLUSH_USAGE_TELEMETRY',
-                  });
-                  const diag = response?.diagnostics;
-                  if (!response?.success) {
-                    setStatus({
-                      message: `用量上报失败：${
-                        response?.error ||
-                        diag?.lastFlushError ||
-                        '未知错误'
-                      }（缓冲 ${diag?.bufferSize ?? '?'} 条）`,
-                      type: 'error',
-                    });
-                    return;
-                  }
-                  setStatus({
-                    message: `用量上报成功：本次 ${
-                      diag?.lastFlushIngested ?? 0
-                    } 条，剩余缓冲 ${diag?.bufferSize ?? 0} 条`,
-                    type: 'success',
-                  });
-                } catch (error: any) {
-                  setStatus({
-                    message: `用量自检失败：${error?.message || String(error)}`,
-                    type: 'error',
-                  });
-                }
-              }}
-            >
-              立即上报并自检
-            </button>
-            <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
-              运维自检：立即 flush 前端用量缓冲。Admin 报表入口见页面底部「管理入口」。
-            </small>
-          </div>
-        )}
         <h3 style={{ margin: '16px 0 10px' }}>自我反思 / 场景预演生产</h3>
         <ToggleField
           id="SELF_REFLECTION_ENABLED"
@@ -4603,25 +4569,20 @@ const Options = () => {
             保存后会同步到 memory-service，按用户分别生效。
           </small>
         </div>
-        <h3 style={{ margin: '16px 0 10px' }}>网页分析</h3>
+      </div>
+
+      <div className="form-section">
+        <h2>{t('options.sections.dreamReplay')}</h2>
         <p style={{ color: '#666', fontSize: 13, margin: '0 0 10px' }}>
-          浏览网页触发的被动记忆分析始终使用下方「LLM」区块里配置的 key/模型（和消息分析共用同一份配置），不会经过后端服务。未配置时该功能不可用。
+          梦境重放由 Memory Service
+          持续生成；这里只控制报表推送位置和频率，不会停止梦境重放本身。
         </p>
-        <LlmConfigGuidance config={config} />
-        {renderPushTargetFields(
-          '决策中心推送',
-          'DECISION_CENTER_PUSH_TARGET',
-          'DECISION_CENTER_PUSH_GROUP_ID',
-          false,
-          '用于冲突/待确认类的决策中心提醒。默认推送给 Me。',
-          runtimeFieldsLocked,
-        )}
         {renderPushTargetFields(
           '梦境重放报表推送',
           'DREAM_INSIGHT_PUSH_TARGET',
           'DREAM_INSIGHT_PUSH_GROUP_ID',
           true,
-          '梦境重放会持续运行；这里仅控制报表推送到 Me、自定义群组，或完全不推送。',
+          '可选推送到 Me、自定义群组，或完全不推送。',
           runtimeFieldsLocked,
         )}
         <div className="form-group">
@@ -4678,6 +4639,14 @@ const Options = () => {
           </small>
           {renderDigestManualPushReceipt(dreamDigestPushReceipt)}
         </div>
+      </div>
+
+      <div className="form-section">
+        <h2>{t('options.sections.webpageAnalysis')}</h2>
+        <p style={{ color: '#666', fontSize: 13, margin: '0 0 10px' }}>
+          浏览网页触发的被动记忆分析始终使用下方「LLM」区块里配置的 key/模型（和消息分析共用同一份配置），不会经过后端服务。未配置时该功能不可用。
+        </p>
+        <LlmConfigGuidance config={config} />
       </div>
 
       <div className="form-section" id="roadmap-config">

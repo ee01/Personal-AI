@@ -111,7 +111,7 @@ Token 格式：`base64url({u,s,exp}).HMAC-SHA256`，密钥为 `ANALYTICS_TOKEN_S
 - `src/llm.ts`：`handleLLMRequest` 统一 try/catch 打点；provider 返回 `{content, model, usage}`；尊重 `body.model`（使 `OPENAI_REVIEW_MODEL` 生效）；usage 缺失时按字符估算并标 `tokensEstimated`。
 - `src/analytics/UsageTracker.ts`：缓冲 + 分批 flush；记录 `lastFlushAt` / `lastFlushError` / `lastFlushIngested`。
 - `src/background.ts`：每 5 分钟 flush；支持 `FLUSH_USAGE_TELEMETRY` / `GET_USAGE_TELEMETRY_STATUS` 消息。
-- Options（`esone.qiu`）：「立即上报并自检」按钮。
+- Options：前端用量上报全自动（定时 + 缓冲阈值触发），不再提供手动触发入口；曾用于运维排障的「立即上报并自检」按钮已移除。
 
 ### 后端打点
 
@@ -169,7 +169,7 @@ Token 格式：`base64url({u,s,exp}).HMAC-SHA256`，密钥为 `ANALYTICS_TOKEN_S
 - self token：`user=` 查询参数被忽略；无 byUser/matrix；看不到他人；页头显示“仅本人用量”提示
 - all / admin token：全体视图正常；`GET /usage/pricing` 可读；self token 访问 `/usage/pricing*` 应 401
 - 篡改/过期 token → 401
-- Options「立即上报并自检」→ dashboard 切「仅前端」看分功能 Token / 失败列
+- 等一次自动 flush（或由后台触发 `FLUSH_USAGE_TELEMETRY`）→ dashboard 切「仅前端」看分功能 Token / 失败列
 - 前端打点上线依赖重新构建并发布扩展；历史用量无法回溯
 - 补价验证：`PUT /usage/pricing` 后立刻查 `GET /usage/report`，之前 `flagged` 的模型应变成非零成本，无需重启/等 rollup
 - 有些效果需要生产数据沉淀才能验证（例如后台燃烧告警要等真的有一天超阈值、反思闲置安全网要等一个真实闲置用户）——用 `node tools/eval-usage-analytics-guardrails.mjs` 定期复核，它对"还没到时间"的检查报 `pending` 而不是 `fail`；待验证清单见 `docs/progressing/to-verify.md`
