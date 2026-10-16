@@ -1,6 +1,6 @@
 # 记忆自动备份 / Memory Auto Backup
 
-_最后更新: 2026-10-15_
+_最后更新: 2026-10-16_
 
 ## 是什么
 
@@ -102,6 +102,8 @@ Options 写入既有 `PUT /config`：`autoBackupEnabled`、周期（daily / ever
 
 ## GitHub 镜像通道（Markdown Git Mirror）
 
+**验收状态（2026-10-16）：尚未完成，未在本轮部署。** 已有离线 eval 12/12 通过，但补充上线断言 12/12 失败，涉及敏感字段外泄、`self_only`/confirmed 边界、后续运行覆盖手改、缺失分支初始化和跨时间重建。以下功能契约尚不能视为全部已实现的保证。逐项证据及修复后体验步骤见 [E-79 验收复核](../../memory-service/evals/markdown-git-mirror/readiness-review-2026-10-16.md)；运行 `node tools/verify-memory-mirror-readiness.mjs` 可复现。
+
 这是第三个 provider（WebDAV / S3 之外），但语义不同：它推的是**人类可读的 Markdown 投影**，不是全量快照。SQLite 仍是唯一真源；全量恢复仍走加密 zip。每晚巩固后渲染一次投影，经 egress 过滤后以**一次 commit**推到用户在 Options 填写的 GitHub 仓库；token 只存服务端，永不 force push。
 
 大白话：本地投影是视图、可重建；镜像仓库是给人和别的 agent 读的，不是拿来恢复全量库的。
@@ -144,5 +146,6 @@ Options 写入既有 `PUT /config`：`autoBackupEnabled`、周期（daily / ever
 
 - `npx vitest --run src/__tests__/backupCrypto.test.ts src/__tests__/backupSchedule.test.ts src/__tests__/api-backup.test.ts`（memory-service）
 - GitHub 镜像：`npm run eval:markdown-git-mirror`（六组离线 case；真实 7 晚 commit 与 esone.qiu 快照人工检查需在有数据的服务上跑 `POST /backup/mirror/preview`）
+- GitHub 上线验收：`node tools/verify-memory-mirror-readiness.mjs`（当前 12 条断言失败，不可当作上线通过）；preview 只返回路径/大小/哈希，内容隐私检查需要本地快照渲染。
 - Desktop：`NODE_ENV=test npx tsx --test src/__tests__/settings.test.ts`（含 `backupPull` 持久化）
 - 线上未部署时 Options 仍应打开；`GET /backup/status` 404 只让状态卡为空，不崩页

@@ -1,0 +1,105 @@
+// Audit probes: assertions are the requirement, failures are gaps.
+import { evaluateMirrorEgress } from '../core/mirror/MirrorProjectionService.js';
+import { MirrorManifestStore } from '../core/mirror/MirrorManifestStore.js';
+
+describe('E79 readiness audit', () => {
+  it('interop must exclude active but unconfirmed owner preferences', () => {
+    unit({id:'u-unconfirmed-active', kind:'preference', text:'AUDIT_UNCONFIRMED_PREFERENCE',
+      episodeId:'m-owner-pref'});
+    expect(db.prepare('SELECT confirmation_state FROM memory_units WHERE id=?')
+      .get('u-unconfirmed-active')).toMatchObject({confirmation_state:'unconfirmed'});
+    const files=renderMirrorProjection(db, OWNER, {now}).files.filter(f=>f.path.startsWith('interop/'));
+    expect(allContent(files)).not.toContain('AUDIT_UNCONFIRMED_PREFERENCE');
+  });
+
+  it('expired one-pager artifacts must not be exported', () => {
+    db.prepare("UPDATE reconcile_artifacts SET content='AUDIT_EXPIRED_PROFILE', expiry_at=1 WHERE artifact_key='a1'").run();
+    expect(allContent(renderMirrorProjection(db, OWNER, {now}).files)).not.toContain('AUDIT_EXPIRED_PROFILE');
+  });
+
+  it('unknown or missing egress metadata must fail closed', () => {
+    expect(evaluateMirrorEgress(OWNER, {}).allowed).toBe(false);
+  });
+
+  it('self_only and interop must exclude owner reports ABOUT another person', () => {
+    unit({id:'u-owner-about-other', kind:'fact', text:'AUDIT_COLLEAGUE_HEALTH',
+      episodeId:'m-owner-fact', evidenceClass:'third_party_report'});
+    db.prepare("UPDATE memory_units SET subject_key='person:colleague' WHERE id='u-owner-about-other'").run();
+    const result=renderMirrorProjection(db, OWNER, {scope:'self_only', now});
+    expect(allContent(result.files)).not.toContain('AUDIT_COLLEAGUE_HEALTH');
+  });
+
+  it('self_only one-pager must inspect source scope, not keywords', () => {
+    db.prepare("UPDATE reconcile_artifacts SET content='Sophia has AUDIT_PRIVATE_MEDICAL_DETAIL', source_unit_ids_json='[\"u-restricted\"]' WHERE artifact_key='a1'").run();
+    expect(allContent(renderMirrorProjection(db, OWNER, {scope:'self_only', now}).files))
+      .not.toContain('AUDIT_PRIVATE_MEDICAL_DETAIL');
+  });
+
+  it('attention projection must inherit restricted source policy', () => {
+    const at=Math.floor(now.getTime()/1000);
+    db.prepare(`INSERT INTO attention_items
+      (id,user_id,kind,title,normalized_title,due_at,addressed_to,source_unit_id,source_message_id,
+       weight,reasons_json,status,expires_at,reminder_plan_json,created_at,updated_at)
+      VALUES ('audit-attention',?,'follow_up','AUDIT_RESTRICTED_TITLE','audit',?,'self',
+        'u-restricted','m-observed-other',0.9,'[]','candidate',?,'{}',?,?)`).run(OWNER,at,at+3600,at,at);
+    expect(allContent(renderMirrorProjection(db, OWNER, {scope:'self_only', now}).files))
+      .not.toContain('AUDIT_RESTRICTED_TITLE');
+  });
+
+  it('entity projection must not export secret property values', () => {
+    db.prepare(`INSERT INTO entity_properties
+      (entity_id,property_key,property_value,source_message_id,source_authority,tx_start,status)
+      VALUES ('e-peer','password',?,'m-observed-other','inferred',1,'active')`).run(TOKEN_SENTINEL);
+    expect(allContent(renderMirrorProjection(db, OWNER, {now}).files)).not.toContain(TOKEN_SENTINEL);
+  });
+
+  it('profile projection must not export secret fields even when confirmed', () => {
+    db.prepare("UPDATE user_profile_items SET item_key='github_token', item_value=? WHERE id='p-confirmed'").run(TOKEN_SENTINEL);
+    expect(allContent(renderMirrorProjection(db, OWNER, {now}).files)).not.toContain(TOKEN_SENTINEL);
+  });
+
+  it('rebuilding unchanged truth at another wall-clock instant must preserve hashes', () => {
+    const first=renderMirrorProjection(db, OWNER, {now});
+    const next=renderMirrorProjection(db, OWNER, {now:new Date(now.getTime()+1000)});
+    expect(next.files.map(f=>[f.path,f.hash])).toEqual(first.files.map(f=>[f.path,f.hash]));
+  });
+
+  it('a pre-existing untracked remote file must survive the first mirror', async () => {
+    const mock=new FakeGitHub();
+    mock.setRemoteFile('profile/USER_CORE.md','AUDIT_EXISTING_USER_CONTENT');
+    const file={path:'profile/USER_CORE.md',content:'LOCAL',hash:sha1('LOCAL')};
+    await newProvider(mock).putTree([file],'initial',{now});
+    expect(mock.remoteContent(file.path)).toBe('AUDIT_EXISTING_USER_CONTENT');
+  });
+
+  it('a remote edit must survive later local changes after a conflict receipt', async () => {
+    const mock=new FakeGitHub();
+    const provider=newProvider(mock);
+    const file={path:'profile/USER_CORE.md',content:'LOCAL 1',hash:sha1('LOCAL 1')};
+    const store=new MirrorManifestStore(db,OWNER);
+    const first=await provider.putTree([file],'night1',{manifest:store.load(),now});
+    store.applyCommit([file],first.commitSha!,first.remoteShas);
+    mock.setRemoteFile(file.path,'AUDIT_USER_HAND_EDIT');
+    const conflict=await provider.putTree([file],'night2',{manifest:store.load(),now});
+    for(const path of conflict.conflictPaths){
+      store.markRemoteState(path,conflict.remoteShas.get(path)??null,conflict.commitSha);
+    }
+    const changed={...file,content:'LOCAL 2',hash:sha1('LOCAL 2')};
+    await provider.putTree([changed],'night3',{manifest:store.load(),now});
+    expect(mock.remoteContent(file.path)).toBe('AUDIT_USER_HAND_EDIT');
+  });
+
+  it('first push to a missing branch must create the ref, not PATCH a missing ref', async () => {
+    const mock=new FakeGitHub();
+    const provider=new GitHubProvider({repo:mock.repo,branch:'main',token:TOKEN_SENTINEL,
+      fetchImpl:async(input,init)=>{
+        const url=String(input);
+        if(init?.method==='PATCH' && url.includes('/git/refs/heads/') && !mock.refs.has('main')){
+          return new Response(JSON.stringify({message:'Reference does not exist'}),{status:422});
+        }
+        return mock.fetchImpl(input,init);
+      }});
+    await expect(provider.putTree([{path:'MIRROR.md',content:'mirror',hash:sha1('mirror')}],
+      'initial',{now})).resolves.toMatchObject({status:'success'});
+  });
+});
