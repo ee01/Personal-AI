@@ -1053,6 +1053,9 @@ type CreateJiraChildInput = {
   projectKey: string;
   parentItemKey: string;
   parentJiraKey: string | null;
+  /** Gantt bar dates written to Jira Target Start / Target End on direct create. */
+  targetStart?: string | null;
+  targetEnd?: string | null;
   fixVersion?: string | null;
   suggestedFixVersion?: string | null;
   assignee?: string | null;
@@ -1515,6 +1518,8 @@ async function handleCreateJiraBatch(
         typeName,
         typeMeta,
         summary: child.title,
+        targetStart: child.targetStart ?? null,
+        targetEnd: child.targetEnd ?? null,
         fixVersion: child.fixVersion,
         assignee: child.assignee || null,
         description: child.description || null,
@@ -1897,14 +1902,15 @@ function buildAgentCreateTaskText(
     '11. 若 parent 索引里的 parentLink 非空，创建该主任务时必须写入 Jira Parent Link，值与 parentLink 一致（对应 INIT）。不要留空，不要改成别的 issue。已有 parentJiraKey 的子任务不要改父票的 Parent Link。字段约束里给了 Parent Link 时，所有待创建主任务都必须写入该值。',
     '12. 若 parent 索引里的 assignee 非空，创建该主任务时必须写入该 Jira assignee（firstname.lastname）。为空则留空，不要回落到创建人，也不要改写已有父票的 assignee。',
     '13. 字段约束里给了 Team 时，每个新建 issue 都必须写入 Jira Team 字段，值与约束一致（多个 Team 时全部写入）；没给时由你自行判断，确定不了就留空，不要臆造。',
+    '14. 索引中的 targetStart / targetEnd 非空时，创建该 issue 必须写入 Jira 的 Target Start / Target End 字段（YYYY-MM-DD）；为空则留空，不要臆造。',
     '',
     '## draftId 索引（便于核对）',
     payload.parent
-      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} parentLink=${payload.parent.parentLink || ''} assignee=${payload.parent.assignee || ''} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''} teams=${(payload.parent.teams || []).join(',') || (payload.constraints?.teams || []).join(',')}`
+      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} parentLink=${payload.parent.parentLink || ''} assignee=${payload.parent.assignee || ''} targetStart=${payload.parent.targetStart || ''} targetEnd=${payload.parent.targetEnd || ''} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''} teams=${(payload.parent.teams || []).join(',') || (payload.constraints?.teams || []).join(',')}`
       : '（无 parent draft）',
     ...(payload.children || []).map(
       (c) =>
-        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} suggestedFixVersion=${c.suggestedFixVersion || c.fixVersion || ''} teams=${(c.teams || []).join(',') || (payload.constraints?.teams || []).join(',')} description=required`,
+        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} targetStart=${c.targetStart || ''} targetEnd=${c.targetEnd || ''} suggestedFixVersion=${c.suggestedFixVersion || c.fixVersion || ''} teams=${(c.teams || []).join(',') || (payload.constraints?.teams || []).join(',')} description=required`,
     ),
     ...formatFixVersionPreflight(omittedFixVersions),
   ].join('\n');
