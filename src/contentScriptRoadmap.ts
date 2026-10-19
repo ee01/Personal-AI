@@ -174,10 +174,16 @@ async function isParticipated(teamId: string): Promise<boolean> {
 const FOCUS_COUNT_KEY = 'pai.roadmap.lastFocusCount';
 const FOCUS_TITLES_KEY = 'pai.roadmap.lastFocusTitles';
 let badgeHideTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * "Personal AI 已连接" is a page-open greeting: it shows on the first sync of
+ * this page session only. Mid-session Gantt edits used to re-toast it on every
+ * debounced state push, which was noise rather than information.
+ */
+let connectionBadgeShown = false;
 
 function ensureBridgeBadge(
   focusCount: number,
-  opts?: { addedTitles?: string[]; forceShow?: boolean },
+  opts?: { addedTitles?: string[] },
 ): void {
   let badge = document.getElementById('pai-roadmap-bridge-badge');
   if (!badge) {
@@ -218,13 +224,17 @@ function ensureBridgeBadge(
   }
 
   const added = (opts?.addedTitles || []).filter(Boolean);
-  let text = `Personal AI 已连接 · ${focusCount} 个重点项目`;
   if (added.length) {
     const sample = added.slice(0, 2).join('、');
     const more = added.length > 2 ? ` 等 ${added.length} 个` : '';
-    text = `新加入的 ${sample}${more} 已纳入 Personal AI 重点项目`;
+    showBridgeBadge(`新加入的 ${sample}${more} 已纳入 Personal AI 重点项目`, 5000);
+    return;
   }
-  showBridgeBadge(text, added.length || opts?.forceShow ? 5000 : 3500);
+  // Greeting once per page session; later edits stay silent.
+  if (!connectionBadgeShown) {
+    connectionBadgeShown = true;
+    showBridgeBadge(`Personal AI 已连接 · ${focusCount} 个重点项目`, 3500);
+  }
 }
 
 function showBridgeBadge(text: string, hideAfterMs: number): void {
@@ -306,7 +316,6 @@ async function syncFocusSnapshot(state: RoadmapStateMessage): Promise<void> {
     FOCUS_COUNT_KEY,
     FOCUS_TITLES_KEY,
   ]);
-  const prevCount = Number(stored[FOCUS_COUNT_KEY] || 0);
   const prevTitles = Array.isArray(stored[FOCUS_TITLES_KEY])
     ? (stored[FOCUS_TITLES_KEY] as string[])
     : [];
@@ -338,7 +347,6 @@ async function syncFocusSnapshot(state: RoadmapStateMessage): Promise<void> {
 
   ensureBridgeBadge(focusCount, {
     addedTitles: firstPaint ? [] : addedTitles,
-    forceShow: firstPaint || focusCount !== prevCount,
   });
   void renderDriftBadges();
 }
