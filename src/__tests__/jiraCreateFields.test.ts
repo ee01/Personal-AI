@@ -445,3 +445,97 @@ test('direct create skips Parent Link when the create screen has no such field',
 test('an empty Parent Link is omitted', () => {
   assert.deepEqual(parentLinkForCreate('  ', issueType('Epic', [JIRA_FIELD_PARENT_LINK])), {});
 });
+
+test('teams are written onto a multi-value Team field, one option per team', () => {
+  const task = issueType('Task', []);
+  task.fields['customfield_99999'] = field('customfield_99999', {
+    name: 'Team',
+    schemaType: 'array',
+    allowedValues: [
+      { id: '71', value: 'Nova CA - Brandy' },
+      { id: '72', value: 'Nova CA - Tony' },
+    ],
+  });
+
+  const warnings: string[] = [];
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '带团队的任务',
+    teams: ['Nova CA - Brandy', 'Nova CA - Tony'],
+    warnings,
+  });
+
+  assert.deepEqual(fields['customfield_99999'], [
+    { id: '71' },
+    { id: '72' },
+  ]);
+  assert.deepEqual(warnings, []);
+});
+
+test('a single-value Team field takes the first team and warns about the rest', () => {
+  const task = issueType('Task', []);
+  task.fields['customfield_99999'] = field('customfield_99999', {
+    name: 'Team',
+    schemaType: 'option',
+    allowedValues: [{ id: '71', value: 'Nova CA - Brandy' }],
+  });
+
+  const warnings: string[] = [];
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '带团队的任务',
+    teams: ['Nova CA - Brandy', 'Nova CA - Tony'],
+    warnings,
+  });
+
+  assert.deepEqual(fields['customfield_99999'], { id: '71' });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /单选/);
+  assert.match(warnings[0]!, /其余 1 个/);
+});
+
+test('a team without a Jira option is dropped with a warning, not sent raw', () => {
+  const task = issueType('Task', []);
+  task.fields['customfield_99999'] = field('customfield_99999', {
+    name: 'Team',
+    schemaType: 'array',
+    allowedValues: [{ id: '71', value: 'Nova CA - Brandy' }],
+  });
+
+  const warnings: string[] = [];
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '带团队的任务',
+    teams: ['Ghost Team'],
+    warnings,
+  });
+
+  assert.equal('customfield_99999' in fields, false);
+  assert.match(warnings[0]!, /Ghost Team/);
+});
+
+test('teams are skipped with a warning when the screen has no Team field', () => {
+  const task = issueType('Task', []);
+  const warnings: string[] = [];
+  const fields = buildJiraCreateFields({
+    projectKey: 'NOVA',
+    typeName: 'Task',
+    typeMeta: task,
+    summary: '无团队字段的任务',
+    teams: ['Nova CA - Brandy'],
+    warnings,
+  });
+
+  assert.deepEqual(fields, {
+    project: { key: 'NOVA' },
+    issuetype: { name: 'Task' },
+    summary: '无团队字段的任务',
+  });
+  assert.match(warnings[0]!, /Team/);
+});

@@ -375,6 +375,8 @@ export interface JiraCreateFieldsInput {
   assignee?: string | null;
   /** Plain-text description; omitted when empty. System field — sent even without createmeta. */
   description?: string | null;
+  /** Jira Team names from the shared dialog field; matched against createmeta options. */
+  teams?: string[] | null;
   /** Optional mutable collector for non-fatal field warnings. */
   warnings?: string[];
   link?: ChildLink & { parentKey: string };
@@ -444,6 +446,26 @@ export function buildJiraCreateFields(
         input.warnings?.push(fixVersionsValue.warning);
       }
     }
+    const teams = (input.teams || [])
+      .map((t) => String(t || '').trim())
+      .filter(Boolean);
+    if (teams.length) {
+      const teamFieldId = findFieldIdByName(typeMeta, 'Team');
+      if (!teamFieldId) {
+        input.warnings?.push(
+          `Team（${teams.join('、')}）不在该类型的创建界面，未写入`,
+        );
+      } else {
+        const teamValue = buildTeamFieldValue(
+          typeMeta.fields[teamFieldId],
+          teams,
+        );
+        if (teamValue.value !== undefined) {
+          fields[teamFieldId] = teamValue.value;
+        }
+        input.warnings?.push(...(teamValue.warnings || []));
+      }
+    }
   }
 
   const assignee = String(input.assignee || '').trim();
@@ -502,6 +524,64 @@ export function buildFieldValue(
 
   const single = hit.id ? { id: hit.id } : { value: hit.value ?? hit.name };
   return field.schemaType === 'array' ? [single] : single;
+}
+
+/**
+ * Shape Jira Team values onto the create screen's Team field. A multi-value
+ * field takes every match; a single-value field takes the first and reports
+ * the rest as warnings. Unmatched names are dropped with a warning instead of
+ * being sent raw — an unknown option would reject the whole create.
+ */
+export function buildTeamFieldValue(
+  field: JiraFieldMeta | undefined,
+  teams: string[],
+): { value?: unknown; warnings?: string[] } {
+  const wanted = teams.map((t) => String(t || '').trim()).filter(Boolean);
+  if (!field || !wanted.length) return {};
+
+  const allowed = field.allowedValues || [];
+  if (!allowed.length) {
+    // No createmeta options — send the raw names and let Jira resolve/reject.
+    const raw = wanted.map((name) => ({ value: name }));
+    return { value: field.schemaType === 'array' ? raw : raw[0] };
+  }
+
+  const hits: Array<{ id?: string; value?: string; name?: string }> = [];
+  const warnings: string[] = [];
+  const single = field.schemaType !== 'array';
+  const targets = single ? wanted.slice(0, 1) : wanted;
+  if (single && wanted.length > 1) {
+    warnings.push(
+      `Team 字段为单选，只写入第一个（${wanted[0]}），其余 ${
+        wanted.length - 1
+      } 个未写入`,
+    );
+  }
+  for (const name of targets) {
+    const signature = tokenSignature(name);
+    const hit =
+      allowed.find(
+        (option) =>
+          String(option.value ?? option.name ?? '').trim().toLowerCase() ===
+          name.toLowerCase(),
+      ) ||
+      allowed.find(
+        (option) =>
+          tokenSignature(String(option.value ?? option.name ?? '')) ===
+          signature,
+      );
+    if (hit) hits.push(hit);
+    else warnings.push(`Team「${name}」在 Jira 中无匹配选项，未写入`);
+  }
+  if (!hits.length) return { warnings };
+
+  const shaped = hits.map((hit) =>
+    hit.id ? { id: hit.id } : { value: hit.value ?? hit.name },
+  );
+  if (field.schemaType === 'array') {
+    return { value: shaped, ...(warnings.length ? { warnings } : {}) };
+  }
+  return { value: shaped[0], ...(warnings.length ? { warnings } : {}) };
 }
 
 /**

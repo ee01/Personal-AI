@@ -1040,6 +1040,8 @@ type CreateJiraParentInput = {
   description?: string | null;
   /** INIT (or other parent) issue key. Direct create writes it to Parent Link. */
   parentLink?: string | null;
+  /** Jira Team names from the shared dialog field. */
+  teams?: string[] | null;
   /** Jira username (firstname.lastname). Empty leaves the epic assignee unset. */
   assignee?: string | null;
 };
@@ -1054,6 +1056,8 @@ type CreateJiraChildInput = {
   fixVersion?: string | null;
   suggestedFixVersion?: string | null;
   assignee?: string | null;
+  /** Jira Team names from the shared dialog field. */
+  teams?: string[] | null;
   description?: string | null;
 };
 
@@ -1085,6 +1089,10 @@ type AgentCreateConstraints = {
   subType?: string | null;
   fixVersion?: string | null;
   sprint?: string | null;
+  /** Shared Parent Link field; null = the Agent decides per item. */
+  parentLink?: string | null;
+  /** Shared Team values; null = the Agent decides. */
+  teams?: string[] | null;
 };
 
 type AgentCreateJiraPayload = {
@@ -1334,6 +1342,8 @@ async function createJiraIssue(input: {
   fixVersion?: string | null;
   assignee?: string | null;
   description?: string | null;
+  /** Jira Team names from the shared dialog field. */
+  teams?: string[] | null;
   link?: ChildLink & { parentKey: string };
   requestLabel: string;
 }): Promise<{ jiraKey: string; warnings: string[] }> {
@@ -1428,6 +1438,7 @@ async function handleCreateJiraBatch(
           fixVersion: parent.fixVersion,
           description: parent.description || null,
           assignee: parent.assignee || null,
+          teams: parent.teams || null,
           link: parentLink.link,
           requestLabel: 'roadmap create jira item',
         });
@@ -1507,6 +1518,7 @@ async function handleCreateJiraBatch(
         fixVersion: child.fixVersion,
         assignee: child.assignee || null,
         description: child.description || null,
+        teams: child.teams || null,
         link: { ...link, parentKey: parentJiraKey },
         requestLabel: 'roadmap create jira sub-task',
       });
@@ -1882,16 +1894,17 @@ function buildAgentCreateTaskText(
     '8. artifact metadata 至少带一个 entityKey（任意一个新建的 Jira key；若完全失败可省略）。',
     '9. 不要向用户索要 Jira token；使用你自己的 Jira 技能完成创建。',
     '10. 若 Jira 工具因版本不存在而失败，去掉 fixVersions 后立即重试创建，不要把整组标成失败。',
-    '11. 若 parent 索引里的 parentLink 非空，创建该主任务时必须写入 Jira Parent Link，值与 parentLink 一致（对应 INIT）。不要留空，不要改成别的 issue。已有 parentJiraKey 的子任务不要改父票的 Parent Link。',
+    '11. 若 parent 索引里的 parentLink 非空，创建该主任务时必须写入 Jira Parent Link，值与 parentLink 一致（对应 INIT）。不要留空，不要改成别的 issue。已有 parentJiraKey 的子任务不要改父票的 Parent Link。字段约束里给了 Parent Link 时，所有待创建主任务都必须写入该值。',
     '12. 若 parent 索引里的 assignee 非空，创建该主任务时必须写入该 Jira assignee（firstname.lastname）。为空则留空，不要回落到创建人，也不要改写已有父票的 assignee。',
+    '13. 字段约束里给了 Team 时，每个新建 issue 都必须写入 Jira Team 字段，值与约束一致（多个 Team 时全部写入）；没给时由你自行判断，确定不了就留空，不要臆造。',
     '',
     '## draftId 索引（便于核对）',
     payload.parent
-      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} parentLink=${payload.parent.parentLink || ''} assignee=${payload.parent.assignee || ''} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''}`
+      ? `parent draftId=${payload.parent.itemKey} title=${JSON.stringify(payload.parent.title)} parentLink=${payload.parent.parentLink || ''} assignee=${payload.parent.assignee || ''} suggestedFixVersion=${payload.parent.suggestedFixVersion || payload.parent.fixVersion || ''} teams=${(payload.parent.teams || []).join(',') || (payload.constraints?.teams || []).join(',')}`
       : '（无 parent draft）',
     ...(payload.children || []).map(
       (c) =>
-        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} suggestedFixVersion=${c.suggestedFixVersion || c.fixVersion || ''} description=required`,
+        `child draftId=${c.draftId} title=${JSON.stringify(c.title)} parentJiraKey=${c.parentJiraKey || ''} assignee=${c.assignee || ''} suggestedFixVersion=${c.suggestedFixVersion || c.fixVersion || ''} teams=${(c.teams || []).join(',') || (payload.constraints?.teams || []).join(',')} description=required`,
     ),
     ...formatFixVersionPreflight(omittedFixVersions),
   ].join('\n');
