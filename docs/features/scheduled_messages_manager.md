@@ -209,8 +209,8 @@
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '2.13.1';
-  var APP_SCRIPT_LAST_UPDATED = '2026-09-30';
+  var APP_SCRIPT_VERSION = '2.13.3';
+  var APP_SCRIPT_LAST_UPDATED = '2026-10-21';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -586,6 +586,8 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
 - 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` / `confirmBotMessageTriggered` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
 - Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。AgentTask 未确认可按 at-least-once 重领（memory-service 幂等吸收）；自定义 API 默认 at-most-once，claimed TTL（2h）后标 `trigger_delivery_failed`。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
+- Apps Script ≥ 2.13.3 不再根据 Config 中的 Executor 版本把 API 领取直接标成成功：Config 可能仍是旧版本，即使实际 Jira Rule 已升级。旧 Executor 也需要升级到支持 confirm 的版本；领取本身不是交付证据。
+- Executor Rule ≥ 1.7.4 在 `executed=true` 判断前记录拉取响应的 HTTP status、executed、message 和 error（不记录完整响应或凭据）。Audit 的 `SUCCESS / Successfully published webhook` 只证明请求动作完成；没有 `Claimed scheduled message` 时，应先看拉取结果，不能推断下游已调用。Messages 读取全表显示值，不受隐藏行或 Sheet 视图筛选影响；状态、推送方式、执行日期、当天成功/失败/待确认状态和时间窗口决定是否返回，`Next_Exec` 不是领取筛选输入。
 - Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.7.1 进一步区分 Dify workflow 成功与下游业务接受：只有 `data.outputs.accepted=true` 才确认成功，`accepted=false` 或缺失时把 `error/statusCode/queueStatus` 作为 `trigger_delivery_failed` 回写 Sheet。≥ 1.7.3 的 Bot 私发把 `inputs.email` 设为 Apps Script 返回的 `botmanEmail`，并兼容旧 Apps Script 的 `userName`，不再使用 `initiator.emailAddress`。≥ 1.6.1 的领取 audit Log 仍保留。
 - `cacheReleaseInfo` 按项目缓存并记录最近同步尝试摘要；`markBotMessageExecuted` 携带 `messageId` / `rowIndex` / `executionKey` 做行定位和幂等写回，避免 Sheet 行移动、Jira 重试或特殊字符导致误标记、重复记账或静默失败。
 - Timeline Sync Rule 逐项目调用内网 release info API 并通过 GET 写入 Script Properties；单个项目缓存失败不会阻断后续项目，Apps Script 会拒绝格式异常、未知项目、空 release info 或超出单值大小限制的写入，并返回可读错误。

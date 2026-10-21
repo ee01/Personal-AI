@@ -1589,7 +1589,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.7.3');
+  assert.equal(template._metadata.version, '1.7.4');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1663,6 +1663,20 @@ test('Executor rule marks sent messages through GET Apps Script callbacks with s
   }
   assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=true')).length, 4);
   assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=false')).length, 1);
+});
+
+test('Executor rule records fetch diagnostics before the executed condition', () => {
+  const template = JSON.parse(readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'));
+  const components = template.components;
+  const fetchIndex = components.findIndex((c: any) => c.value?.url?.includes('action=getBotMessageCurrentTime'));
+  const gateIndex = components.findIndex((c: any) => c.value?.first === '{{webhookResponse.body.executed}}');
+  const diagnostic = components[fetchIndex + 1];
+  assert.equal(diagnostic.type, 'codebarrel.action.log');
+  assert.ok(fetchIndex >= 0 && gateIndex > fetchIndex + 1);
+  for (const field of ['status', 'body.executed', 'body.message', 'body.error']) {
+    assert.ok(diagnostic.value.includes(`{{webhookResponse.${field}}}`));
+  }
+  assert.doesNotMatch(diagnostic.value, /aiHeaders|aiBody|Authorization|\{\{webhookResponse.body\}\}/);
 });
 
 test('Executor rule confirms AgentTask/API after downstream call instead of fetch-time final success', () => {
@@ -1968,7 +1982,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.13\.1';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.13\.3';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -2352,6 +2366,103 @@ result = getMessageCurrentTimeWithReleaseInfo({
   );
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Last_Exec') + 1 && update.value === '2026-05-03 12:00'));
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Log') + 1 && update.value === '⏳ API 已领取待确认'));
+});
+
+test('Apps Script keeps API claims pending when Config has stale legacy Executor metadata', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const headers = [
+    'ID',
+    'Topic',
+    'Content',
+    'Push_Method',
+    'Glip_Team_ID',
+    'AI_Endpoint',
+    'AI_Headers',
+    'AI_Body',
+    'Schedule_Date',
+    'Schedule_Time',
+    'Last_Exec',
+    'Exec_Count',
+    'Next_Exec',
+    'Exec_Log',
+    'Status',
+  ];
+  const data = [
+    headers,
+    [
+      'MSG-AI',
+      'AI topic',
+      'filter=130387',
+      'AI',
+      '54490570758',
+      'POST https://example.com/report',
+      '',
+      '',
+      '2026-05-03',
+      '12:00',
+      '',
+      '0',
+      '',
+      '',
+      'Active',
+    ],
+  ];
+  const updates: any[] = [];
+  const logs: any[] = [];
+  const properties: Record<string, string> = {};
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [
+    ['Key', 'Value'],
+    ['bot_automation_executor_rule_name', '[Esone] Scheduled Messages v1.4.3'],
+    ['bot_automation_executor_rule_version', '1.4.3'],
+  ]);
+
+  vm.runInNewContext(
+    `${appScript}
+result = getMessageCurrentTimeWithReleaseInfo({
+  currentTime: '2026-05-03 12:00',
+  releaseInfo: {},
+  autoMarkOnFetch: 'api'
+});`,
+    context,
+  );
+
+  assert.equal(context.result.executed, true);
+  assert.equal(context.result.requiresExecutionCallback, true);
+  assert.equal(context.result.autoMarkOnFetch.marked, false);
+  assert.equal(context.result.autoMarkOnFetch.claimed, true);
+  assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Log') + 1 && update.value === '⏳ API 已领取待确认'));
+  assert.equal(updates.some(update => update.col === headers.indexOf('Exec_Count') + 1), false);
+  assert.equal(logs.length, 0);
+});
+
+test('Apps Script filters the E119 daily JiraAutomation row by execution state rather than Next_Exec', () => {
+  const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
+  const row = {
+    ID: 'msg_1785839417405', Topic: 'Nova Initiative Missing Epics', Content: '',
+    Status: 'Active', Push_Method: 'JiraAutomation',
+    AI_Endpoint: 'POST https://example.com/hooks/test',
+    Schedule_Date: '2026-10-21', Schedule_Time: '16:19',
+    Repeat_Every: '1', Repeat_Unit: 'Day', Repeat_Days: '',
+    Last_Exec: '', Exec_Log: '', Next_Exec: '2026-10-22',
+  };
+  const headers = Object.keys(row);
+  const context = {
+    Logger: { log: () => undefined },
+    Session: { getScriptTimeZone: () => 'Asia/Shanghai' },
+    Utilities: { formatDate: () => '2026-10-21' },
+    result: null as any,
+  };
+  for (const [label, state, expected] of [
+    ['unexecuted', {}, true],
+    ['same-day success', { Last_Exec: '2026-10-21 16:19', Exec_Log: '✅ 推送成功' }, false],
+    ['same-day failure', { Last_Exec: '2026-10-21 15:33', Exec_Log: '❌ trigger_delivery_failed: claim TTL expired without confirm' }, false],
+    ['pending claim', { Last_Exec: '2026-10-21 16:19', Exec_Log: '⏳ API 已领取待确认' }, false],
+  ] as const) {
+    const candidate = { ...row, ...state };
+    const data = [headers, headers.map(key => candidate[key as keyof typeof candidate])];
+    vm.runInNewContext(`${appScript}\nresult = findMatchingMessage(${JSON.stringify(data)}, ${JSON.stringify(headers)}, new Date(2026, 9, 21, 16, 19), {}, 'CURRENT_MINUTE', '2026-10-21', 16, false);`, context);
+    assert.equal(Boolean(context.result), expected, label);
+  }
 });
 
 test('Apps Script confirm turns claimed API row into final success', () => {

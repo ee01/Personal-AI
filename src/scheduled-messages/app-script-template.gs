@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.13.1';
-var APP_SCRIPT_LAST_UPDATED = '2026-09-30';
+var APP_SCRIPT_VERSION = '2.13.3';
+var APP_SCRIPT_LAST_UPDATED = '2026-10-21';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -1395,6 +1395,8 @@ function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
     };
   }
 
+  // Config 元数据可能落后于实际 Jira Rule；不能据此把领取当成交付成功。
+  // API / AgentTask 必须收到明确的 confirm 回调后才能写最终成功。
   const claimResult = claimMessagePending(
     messageId,
     message.rowIndex,

@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.7.3",
-    "lastUpdated": "2026-09-30",
+    "version": "1.7.4",
+    "lastUpdated": "2026-10-21",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
       "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
@@ -72,6 +72,16 @@
         "responseEnabled": true,
         "usedSecretsKeys": []
       },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "codebarrel.action.log",
+      "value": "Scheduled message fetch: status={{webhookResponse.status}}, executed={{webhookResponse.body.executed}}, message={{webhookResponse.body.message}}, error={{webhookResponse.body.error}}",
       "children": [],
       "conditions": [],
       "optimisedIds": [],
