@@ -256,6 +256,18 @@ export class ScheduledMessagesUpgrade {
 
   private async performCutover(): Promise<void> {
     const source = normalizeSheetConfig(this.draft.source);
+    // Older clients saved the automatic HEAD test deployment as the candidate
+    // Web App URL. Adopt (or publish) a real versioned release before any Jira
+    // mutation so rules, Sheet Config and activation reference the same URL.
+    let webAppUrlChanged = false;
+    if (this.draft.candidate.scriptId && this.draft.candidate.webAppUrl) {
+      const deployed = await new SheetInitializer(this.token)
+        .ensureVersionedWebAppDeployment(this.draft.candidate.scriptId, this.draft.candidate.webAppUrl);
+      if (deployed.webAppUrl !== this.draft.candidate.webAppUrl) {
+        webAppUrlChanged = true;
+        await this.save({ candidate: { ...this.draft.candidate, webAppUrl: deployed.webAppUrl, deploymentId: deployed.deploymentId } });
+      }
+    }
     const candidate = this.draft.candidate;
     if (!candidate.sheetId || !candidate.webAppUrl || !source.webAppUrl) throw new Error('缺少部署配置');
     const jira = new JiraAutomationService();
@@ -305,8 +317,10 @@ export class ScheduledMessagesUpgrade {
       minute_trigger_id: undefined, daily_trigger_id: undefined,
       last_sync_time: undefined, created_at: new Date().toISOString() };
     // Persist target Config before activation, but keep the local active config untouched.
+    // A repaired deployment URL forces a rewrite even when an earlier failed
+    // attempt already stamped cutoverAt with the stale address.
     const sync = new ConfigSyncService(this.token);
-    if (!this.draft.cutoverAt) {
+    if (!this.draft.cutoverAt || webAppUrlChanged) {
       await sync.saveConfigToSheet(next, new Date().toISOString(), { syncAction: 'new_sheet_upgrade' });
       await this.save({ cutoverAt: new Date().toISOString() });
     }
