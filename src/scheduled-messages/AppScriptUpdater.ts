@@ -211,6 +211,15 @@ export function buildAppScriptManifestSource(input: {
     executeAs: existingExecuteAs || 'USER_DEPLOYING',
   };
 
+  // Existing explicit scope lists disable Apps Script's automatic inference.
+  // The ledger submits atomic batches through Sheets REST using the script token.
+  if (Array.isArray(existing.oauthScopes)) {
+    manifest.oauthScopes = Array.from(new Set([
+      ...existing.oauthScopes,
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/script.external_request',
+    ]));
+  }
   delete manifest.executionApi;
 
   return JSON.stringify(manifest, null, 2);

@@ -292,33 +292,31 @@ assert.ok(
   'Scheduled Messages UI should guide users to clean Project History when the version limit is reached',
 );
 assert.ok(
-  managerSource.includes('版本历史接近上限') &&
-    managerSource.includes('建议先打开 Project History 清理旧版本'),
+  managerSource.includes('appScriptVersionUsage?.nearLimit') &&
+    managerSource.includes('Project History 仅剩'),
   'Scheduled Messages UI should warn before Project History is completely full',
 );
 assert.ok(
   managerSource.includes('检查于') &&
-    managerSource.includes('失败回退旧部署') &&
+    managerSource.includes('deployment 生效失败会尝试回退') &&
     managerSource.includes('Web App URL 不变'),
   'Scheduled Messages UI should summarize update status, safety, and last check context',
 );
 assert.ok(
-  managerSource.includes('App Script 升级前检查') &&
-    managerSource.includes('重新确认线上版本') &&
-    managerSource.includes('匹配当前 Web App deployment') &&
+  managerSource.includes('先重新确认线上版本') &&
+    managerSource.includes('预检部署和 Web App URL 匹配') &&
     managerSource.includes('确认新版本已生效') &&
-    managerSource.includes('失败回退旧 deployment') &&
-    managerSource.includes('更新后同步 Sheet 配置'),
+    managerSource.includes('回退到升级前 deployment 版本') &&
+    managerSource.includes('只有 Web App 版本端点确认目标版本后才标记 Sheet/Storage 为最新'),
   'Scheduled Messages UI should show the preflight path before upgrade',
 );
 assert.ok(
-  managerSource.includes('appScriptUpgradeProofReceipt') &&
-    managerSource.includes('升级证明回执') &&
-    managerSource.includes('只有 getVersion 返回目标版本才把 Sheet/Storage 标记最新') &&
-    managerSource.includes('未确认时保留旧配置并走回退/检查页面') &&
-    managerSource.includes('aria-label="App Script 升级证明回执"') &&
-    managerSource.includes('title={appScriptUpgradeProofReceipt}'),
-  'Scheduled Messages update banner should expose the post-upgrade proof and recovery boundary before click',
+  managerSource.includes('appScriptUpgradeNotice') &&
+    managerSource.includes('App Script 升级结果回执') &&
+    managerSource.includes('尚未确认: Web App URL 返回新版本、Sheet/Storage 标记最新、Jira rule 更新完成') &&
+    managerSource.includes('appScriptUpgradeNotice.details.map') &&
+    managerSource.includes('appScriptUpgradeNotice.recoveryUrl'),
+  'Scheduled Messages should retain upgrade proof and recovery details in the result receipt',
 );
 assert.ok(
   managerSource.includes('提交后确认新版本已生效') &&
@@ -355,18 +353,11 @@ assert.ok(
     managerSource.includes('如果已是最新，会跳过脚本写入和版本创建'),
   'Scheduled Messages UI should explain that stale update state will not create duplicate script versions',
 );
-const updateAvailableBannerIndex = managerSource.indexOf('{updateAvailable && (');
-const updateAvailableBannerEnd = managerSource.indexOf('{/* Bot 配置失效警告 */}', updateAvailableBannerIndex);
-const updateAvailableBannerSource = managerSource.slice(
-  updateAvailableBannerIndex,
-  updateAvailableBannerEnd,
-);
 assert.ok(
-  updateAvailableBannerSource.includes('appScriptRecheckActionBoundary') &&
-    updateAvailableBannerSource.includes('aria-label={appScriptRecheckActionBoundary}') &&
-    updateAvailableBannerSource.includes('重新检查') &&
-    updateAvailableBannerSource.includes('isCheckingUpdates || isUpdating'),
-  'Scheduled Messages update banner should let users re-check after cleaning Project History without reloading',
+  managerSource.includes('title={appScriptCheckActionBoundary}') &&
+    managerSource.includes('aria-label={appScriptCheckActionBoundary}') &&
+    managerSource.includes('isCheckingUpdates || isUpdating'),
+  'Scheduled Messages maintenance controls should support safe rechecks without reloading',
 );
 assert.ok(
   managerSource.includes('buildAppScriptUpdateActionBoundary') &&
@@ -378,10 +369,8 @@ assert.ok(
 assert.ok(
   managerSource.includes('title={appScriptCheckActionBoundary}') &&
     managerSource.includes('aria-label={appScriptCheckActionBoundary}') &&
-    managerSource.includes('title={appScriptUpgradeActionBoundary}') &&
-    managerSource.includes('aria-label={appScriptUpgradeActionBoundary}') &&
-    managerSource.includes('title={appScriptProjectHistoryActionBoundary}') &&
-    managerSource.includes('aria-label={appScriptProjectHistoryActionBoundary}') &&
+    /title=\{isAppScriptVersionLimitReached\s*\? appScriptProjectHistoryActionBoundary\s*: appScriptUpgradeActionBoundary\}/.test(managerSource) &&
+    /aria-label=\{isAppScriptVersionLimitReached\s*\? appScriptProjectHistoryActionBoundary\s*: appScriptUpgradeActionBoundary\}/.test(managerSource) &&
     managerSource.includes('title={appScriptVersionProbeActionBoundary}') &&
     managerSource.includes('aria-label={appScriptVersionProbeActionBoundary}') &&
     managerSource.includes('title={appScriptRecoveryActionBoundary}') &&

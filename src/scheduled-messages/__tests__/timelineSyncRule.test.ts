@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { executionHarness } from '../../../tools/helpers/appscript-execution-harness.mjs';
 
 import {
   TIMELINE_PROJECTS,
@@ -569,7 +570,9 @@ result = getMessageCurrentTimeWithReleaseInfo({ currentTime: '2026-05-03 12:00',
   assert.equal(context.result.targetType, 'ringcentral_sender');
   assert.equal(context.result.messageId, 'MSG_ASME');
   assert.equal(context.result.chatId, 'esone.qiu');
-  assert.equal(updates.length, 0);
+  assert.equal(updates.length, 2);
+  assert.equal(context.testHarness.context.readExecutionStore().entries[0].record.state, 'CLAIMED');
+  assert.equal(updates.some(update => update.col === headers.indexOf('Exec_Count') + 1), false);
   assert.equal(logs.length, 0);
 });
 
@@ -1982,7 +1985,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '2\.13\.3';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.0\.0';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -2232,10 +2235,10 @@ test('Apps Script mark-executed accepts the last data row index without ID fallb
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-last-row']);
 
   vm.runInNewContext(
-    `${appScript}\nresult = markBotMessageExecuted('', 2, true, '', 'Sent topic', 'Sent content', 'exec-last-row');`,
+    `${appScript}\nresult = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent content', 'exec-last-row');`,
     context,
   );
 
@@ -2270,7 +2273,7 @@ test('Apps Script mark-executed records RingCentral post metadata in Logs for Gl
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-with-post-id']);
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent content', 'exec-with-post-id', 'chat-1', 'post-1', '2026-05-03T12:00:00Z');`,
@@ -2503,7 +2506,7 @@ test('Apps Script confirm turns claimed API row into final success', () => {
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-confirm-api']);
 
   vm.runInNewContext(
     `${appScript}
@@ -2561,7 +2564,7 @@ test('Apps Script records rejected AgentTask delivery as a Sheet failure without
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-agent-failed']);
   const error = 'trigger_delivery_failed: authentication_required (statusCode=401, queueStatus=failed)';
 
   vm.runInNewContext(
@@ -2637,7 +2640,9 @@ result = getMessageCurrentTimeWithReleaseInfo({
   assert.equal(context.result.requiresExecutionCallback, true);
   assert.equal(context.result.autoMarkOnFetch.marked, false);
   assert.equal(logs.length, 0);
-  assert.equal(updates.length, 0);
+  assert.equal(updates.length, 2);
+  assert.equal(context.testHarness.context.readExecutionStore().entries[0].record.state, 'CLAIMED');
+  assert.equal(updates.some(update => update.col === headers.indexOf('Exec_Count') + 1), false);
 });
 
 test('Apps Script mark-executed falls back to message ID when row index moved', () => {
@@ -2665,7 +2670,7 @@ test('Apps Script mark-executed falls back to message ID when row index moved', 
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-moved-row']);
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent content', 'exec-moved-row');`,
@@ -2704,7 +2709,7 @@ test('Apps Script mark-executed treats the header row as invalid and falls back 
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-header-row']);
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-1', 1, true, '', 'Sent topic', 'Sent content', 'exec-header-row');`,
@@ -2742,7 +2747,7 @@ test('Apps Script mark-executed skips duplicate execution keys without double lo
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-duplicate']);
 
   vm.runInNewContext(
     `${appScript}
@@ -2757,7 +2762,7 @@ second = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent conten
   assert.equal(context.second.duplicate, true);
   assert.equal(logs.length, 1);
   assert.equal(updates.filter(update => update.row === 2 && update.value === 'Done').length, 1);
-  assert.equal(Object.keys(properties).length, 1);
+  assert.equal(Object.keys(properties).length, 0);
 });
 
 test('Apps Script mark-executed returns duplicate before resolving changed sheet rows', () => {
@@ -2787,20 +2792,22 @@ test('Apps Script mark-executed returns duplicate before resolving changed sheet
   const firstLogs: any[] = [];
   const secondLogs: any[] = [];
   const properties: Record<string, string> = {};
-  const firstContext = createMarkExecutedVmContext(initialData, firstUpdates, firstLogs, properties);
-  const secondContext = createMarkExecutedVmContext(changedData, secondUpdates, secondLogs, properties);
+  const firstContext = createMarkExecutedVmContext(initialData, firstUpdates, firstLogs, properties, [], ['exec-row-deleted']);
+  const secondContext = firstContext;
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent content', 'exec-row-deleted');`,
     firstContext,
   );
+  const firstResult = firstContext.result;
+  firstContext.testHarness.table('Messages').rows = changedData;
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-1', 2, true, '', 'Sent topic', 'Sent content', 'exec-row-deleted');`,
     secondContext,
   );
 
   assert.equal(firstContext.result.success, true);
-  assert.equal(firstContext.result.duplicate, false);
+  assert.equal(firstResult.duplicate, false);
   assert.equal(secondContext.result.success, true);
   assert.equal(secondContext.result.duplicate, true);
   assert.equal(secondContext.result.messageId, 'MSG-1');
@@ -2834,7 +2841,7 @@ test('Apps Script clears stale Next_Exec when a one-time message is marked done'
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-clear-one-time']);
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-ONE', 2, true, '', 'Sent topic', 'Sent content', 'exec-clear-one-time');`,
@@ -2942,7 +2949,7 @@ test('Apps Script clears Next_Exec when a periodic message reaches End_Date', ()
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-clear-end-date']);
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-END', 2, true, '', 'Sent topic', 'Sent content', 'exec-clear-end-date');`,
@@ -2984,7 +2991,7 @@ test('Apps Script clears Next_Exec when a periodic message reaches Repeat_Count'
   const updates: any[] = [];
   const logs: any[] = [];
   const properties: Record<string, string> = {};
-  const context = createMarkExecutedVmContext(data, updates, logs, properties);
+  const context = createMarkExecutedVmContext(data, updates, logs, properties, [], ['exec-clear-repeat-count']);
 
   vm.runInNewContext(
     `${appScript}\nresult = markBotMessageExecuted('MSG-COUNT', 2, true, '', 'Sent topic', 'Sent content', 'exec-clear-repeat-count');`,
@@ -3016,93 +3023,34 @@ const PUSH_LOG_HEADERS = [
 ];
 
 function createMarkExecutedVmContext(
-  data: string[][],
-  updates: any[],
-  logs: any[],
-  properties: Record<string, string>,
-  configRows: string[][] = [],
-) {
-  const messageSheet = {
-    getDataRange: () => ({
-      getDisplayValues: () => data,
-    }),
-    getRange: (row: number, col: number) => ({
-      setValue: (value: unknown) => updates.push({ row, col, value }),
-    }),
-  };
-  const logsSheet = {
-    getDataRange: () => ({
-      getDisplayValues: () => [PUSH_LOG_HEADERS],
-    }),
-    insertRowAfter: () => undefined,
-    getRange: () => ({
-      setValues: (values: unknown[][]) => logs.push(values),
-    }),
-  };
-  const configSheet = {
-    getDataRange: () => ({
-      getDisplayValues: () => configRows,
-    }),
-  };
-
-  return {
-    Logger: { log: () => undefined },
-    Session: {
-      getScriptTimeZone: () => 'UTC',
+  data: string[][], updates: any[], logs: any[], properties: Record<string, string>,
+  configRows: string[][] = [], knownClaims: string[] = [],
+): any {
+  const h = executionHarness({ data, configRows, properties, now: '2026-05-03T12:00:00Z',
+    onDirectWrite(id: number, row: number, col: number, value: unknown) { if (id === 1) updates.push({ row, col, value }); },
+    onBatch(requests: any[]) {
+      for (const r of requests) {
+        if (!r.updateCells) continue;
+        const { start, rows } = r.updateCells;
+        if (start.sheetId === 1) rows.forEach((row: any, i: number) => row.values.forEach((cell: any, j: number) => {
+          const v = cell.userEnteredValue;
+          updates.push({ row: start.rowIndex + 1 + i, col: start.columnIndex + 1 + j, value: v.numberValue ?? v.stringValue });
+        }));
+        if (start.sheetId === 2 && start.rowIndex === 1) logs.push(rows.map((r: any) => r.values.map((c: any) => c.userEnteredValue.numberValue ?? c.userEnteredValue.stringValue)));
+      }
     },
-    Utilities: {
-      formatDate: (_date: Date, _timeZone: string, format: string) => {
-        if (format === 'yyyy-MM-dd HH:mm:ss') {
-          return '2026-05-03 12:00:00';
-        }
-        if (format === 'yyyy-MM-dd HH:mm') {
-          return '2026-05-03 12:00';
-        }
-        if (format === 'yyyy-MM-dd') {
-          return '2026-05-03';
-        }
-        return '202605031200';
-      },
-    },
-    SpreadsheetApp: {
-      getActiveSpreadsheet: () => ({
-        getSheetByName: (name: string) => {
-          if (name === 'Messages') {
-            return messageSheet;
-          }
-          if (name === 'Logs') {
-            return logsSheet;
-          }
-          if (name === 'Config') {
-            return configSheet;
-          }
-          return null;
-        },
-      }),
-    },
-    PropertiesService: {
-      getScriptProperties: () => ({
-        getProperty: (key: string) => properties[key] || null,
-        setProperty: (key: string, value: string) => {
-          properties[key] = value;
-        },
-        deleteProperty: (key: string) => {
-          delete properties[key];
-        },
-        getProperties: () => ({ ...properties }),
-      }),
-    },
-    LockService: {
-      getScriptLock: () => ({
-        waitLock: () => undefined,
-        releaseLock: () => undefined,
-      }),
-    },
-    result: null as any,
-    first: null as any,
-    second: null as any,
-    third: null as any,
-  };
+  });
+  h.initialize(); h.activate();
+  const ledger = h.table('_ExecutionMarks');
+  knownClaims.forEach(key => {
+    const executionKey = h.context.normalizeExecutionKey(key);
+    const record = { schemaVersion: 1, executionKey, messageId: key === 'exec-moved-row' ? 'MSG-1' : data[1][data[0].indexOf('ID')], rowHint: 2,
+      state: 'CLAIMED', claimAt: '2026-05-03T12:00:00Z', updatedAt: '2026-05-03T12:00:00Z',
+      retainUntil: '2026-05-05T12:00:00Z', accountingVersion: 0 };
+    ledger.rows.push([executionKey, JSON.stringify(record)]);
+  });
+  h.context.testHarness = h;
+  return h.context;
 }
 
 test('Apps Script parses schedule date strings as local calendar dates', () => {

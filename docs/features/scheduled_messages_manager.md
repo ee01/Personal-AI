@@ -203,14 +203,61 @@
 - 新增 / 编辑不会因为缓存缺失而阻止保存，但会明确说明执行后果：Timeline 触发会跳过到项目缓存可用且包含所选 Milestone，普通定时消息里的项目变量会在缓存不可用时保留原样
 - 如果看到 `INVALID_POST_JSON`，通常说明手工规则仍在用 POST 或 body 不是合法 JSON；当前修复方向是把 Apps Script 写缓存请求改回生成规则的 GET URL
 
+
+### execution / claim 持久账本（Apps Script 3.0.0）
+
+**大白话运行逻辑：** Jira 先挑选到期消息，再在同一脚本锁里复查消息和账本。只有“领取记录和 Messages 待确认状态一起保存成功”才返回可发送任务；收到已知 key 的确认后，把结果、次数和 Logs 一起保存。重复领取不给第二次发送许可，重复确认不再加次数。存储报错或结果不明时停止写入，留下可对账记录。
+
+这是需要维护窗口的协议升级，代码已实现不代表线上已迁移。升级前暂停所有领取来源、等待旧执行结束，升级或撤销所有旧 Web App/trigger 写入者，再执行下列编辑器维护入口。首版所有通道采用 `no_auto_retry`，包括 AgentTask；未确认任务不会自动重发。`autoMarkOnFetch=all` 也只登记领取，仍需确认；无 executionKey、没有登记的 key、ID 不匹配均拒绝记账。旧 Rule 必须保留现有 executionKey 回调。此版本因此升为 **3.0.0**。
+
+#### 权威存储与状态
+
+- 同一个 Spreadsheet 的 `_ExecutionMarks`：两列 `Execution_Key` / `Record_JSON`。JSON 保存 schemaVersion、writerEpoch、完整 key、messageId、rowHint、occurrenceId、state、deliveryPolicy、claimAt、deadlineAt、completedAt、updatedAt、retainUntil、accountingVersion；迁移记录另外保存每个来源属性的 SHA-256。没有正文、收件人、API 密钥或凭证。
+- `_ExecutionMarkControl`：`Control_JSON` 表头及单个控制记录，含 mode、epoch、迁移 manifest/cursor、pending operation、lastOperation、清理时间。启动和维护均不写 Script Properties；Properties 即使满额仍可复制与切换。没有 CacheService 依赖。
+- 状态为 `CLAIMED → CONFIRMED / FAILED`；超过 2 小时仅转 `UNKNOWN`，不推断外部失败、不累计失败次数。UNKNOWN 可在原 48 小时回调窗口内确认，超窗返回 `late_unknown`，继续保留待对账。已知终态重复确认无新增次数；相反结果返回 `execution_outcome_conflict`。
+- 当前调度器同日去重，occurrence 由消息 ID、脚本时区执行日和计划字段组成；行号/领取分钟不参与 occurrence。所有更早未决记录都阻止新领取，计划修改也不会隐式重放。旧数据标为 legacy，不猜测历史 occurrence。发送策略后续若支持多实例/更频繁计划，必须同步升级 occurrence 契约。
+- 领取锁内按 ID 唯一定位（rowHint 仅提示）、检查 Active、比对候选原始快照、核对当日成功和遗留 pending。终态确认首次增加 Exec_Count（包含真实失败尝试），重复不变。较新账本实例存在时，历史确认只增加次数并记历史 Logs，不覆盖当前展示。
+- 领取、确认、迁移、清理和维护共用 ScriptLock。对手动编辑、独立脚本项目与外部 Sheets 写入无隔离保证；必须收拢为单一写入项目。
+
+#### 原子提交与故障恢复
+
+锁内先用一次 Sheets REST `values.batchGet` 读取控制、账本、Messages 和 Logs 表头，避免沿用锁外 SpreadsheetApp 可能缓存的旧快照；空尾格采用统一指纹比较。通过 `spreadsheets.batchUpdate` 的 UpdateCells / InsertDimension 将 Messages、Logs 和账本一次提交；不会以多次 `setValue` 或 `flush` 冒充事务。先独立持久化 PREPARED operation，再提交业务更新并原子清除 pending、记录 lastOperation。准备阶段保留原 mode/cursor，因此失败不会提前跳过迁移批次。任何提交异常都不盲重试；若最终批次实际已成功，重取会看到权威结果；若 pending 仍存在，所有账本写入口返回 `unknown_commit:<operationId>`。
+
+操作员需检查 Apps Script 执行日志与 Sheet，确认原执行结束、远端请求不会晚到，再在编辑器调用 `maintenanceResolveExecutionCommit({operationId, originalExecutionStopped:true, remoteRequestSettled:true})`。它仅解除 pending 并暂停领取；不是“查不到就重发”，仍需对账、复验再激活。不要通过匿名 Web App 暴露迁移、切换或恢复入口。
+
+Sheet 不可写、表头损坏、重复 key / 消息 ID、坏记录和锁超时都应显式停止，不能当空队列。确认回调需由调用方持久重试或人工对账。批次成功而 HTTP 发送许可响应丢失时，no_auto_retry 不重发，可能需要人工恢复；本地存储不能使第三方外部发送具备绝对 exactly-once。
+
+#### 迁移、清理与回滚操作
+
+只在隔离 Spreadsheet 验证后由操作员执行；本次交付没有部署、清理或重放真实消息。
+
+1. 备份同权限 Sheet/属性，清点 deployment URL、Jira Rule 和触发器，暂停新领取、排空旧执行并撤销/升级旧写入者。确保 Google Sheets API 已启用、执行者授权有效；REST 使用 ScriptApp token，需要 spreadsheets / script.external_request scope。模板升级保留已有 scope，并对显式 scope 列表补齐这两项。
+2. 编辑器运行 `maintenanceInitializeExecutionStore()`：原子建两张隐藏表、加警告保护，补齐 Logs 表头；进入 legacy_drain。新领取关闭，已知旧 claim/exec 的确认可按需导入并只写 Sheet。隐藏和警告保护都不是访问控制，仍需检查共享编辑者。
+3. 重复运行 `maintenanceMigrateExecutionMarks()`，每批最多 100 个属性；复制集合只含 execution/claim 前缀，排除 purge 状态项。批数据与 cursor/manifest 一起提交；全量 manifest 变化、原 key / 时间 / hash 不符则阻止继续。claim 的旧 success=true 表示领取，导入为 UNKNOWN，不能变成功。Sheet 已确认结果优先，重跑不回退状态。非法来源使迁移停止，先查证修复，不能直接删除腾空间。
+4. 运行 `maintenanceExecutionStoreStatus()` 查各状态数量、控制信息与 `legacyUnknownMessageIds`。Messages 已 pending 而无 mark 的遗留分裂仍会被禁止自动领取；按 ID 对账，不自动恢复。
+5. 零未处理冲突、来源逐项校验、旧写入者全部停用且隔离验收通过后，在编辑器调用 `maintenanceActivateExecutionStore({oldWritersRetired:true, isolatedValidationPassed:true})`。参数是操作员核查的声明，代码无法撤销不执行新协议的旧部署。切换到 sheet_primary 并增加 epoch；先少量合成任务观察再放量。
+6. 故障回滚先运行 `maintenancePauseExecutionClaims()`，保留确认，再回退至仍支持同一 schema v1 的兼容构建。新生成记录继续留在 Sheet；不得回退到 Properties-only。Sheet 故障时停止领取，不能拿旧属性或缓存代替真相。
+7. 终态最少保留最近变化后 48h，每 6h 检查、每批最多删除 100 行，锁内倒序删除；不允许 `maxAgeMs` 缩短窗口，未决永不按 TTL 删除。带 legacySources 的行在旧属性清理结束前不自动删除，以保留校验证据。
+8. 旧属性默认保留只读。切换观察至少 48h、在途完成对账、同权限快照和回滚演练都确认后，可选调用 `maintenanceDeleteMigratedExecutionProperties({snapshotVerified:true, rollbackVerified:true, oldWritersRetired:true, inflightReconciled:true})`，每次最多 100 条、逐项 hash 校验、可中断续跑；不碰 Timeline、Config、密钥或 purge 旧状态项。更长回调约定须延长记录与观察窗口，不能直接沿用 48h。
+
+#### 验证、容量与上线门槛
+
+`npm run verify:execution-mark-store` 使用原子批次模拟器做权限拒绝、超时后落盘/未落盘、满 Properties、零缓存、重复领取、迟到/冲突确认、迁移中断、清理和回滚故障注入；现有 `timelineSyncRule.test.ts` 使用同一模拟器保留 Jira payload、行移动、Logs 元数据与调度计数回归。这是确定性协议测试，不需要 LLM 体验 eval。
+
+通过日志 `execution_commit` 查看 kind / durationMs / records；维护状态返回状态分布、超时 CLAIMED 数与最老 UNKNOWN 年龄。上线监控还应从执行日志聚合 storage HTTP 错误、锁超时、unknown_commit、冲突和 late_unknown，并与下游回执核对重复/漏执行。孤立 claim、重复记账、覆盖新一轮展示任一出现即暂停领取。UNKNOWN 超过 2h 告警，不能用自动删除压低积压。
+
+以每日 D 个 key、未决 U 条估计主表约 `2.25D+U` 行（含 6h 清理余量），长期 legacy/UNKNOWN 额外累计。每次读全账本，容量增加会增加读写时间；正式放量前需真实 Google 环境 1k/10k 行与 2 倍峰值压测，验证 API 配额、p95<2s/p99<5s 的存储预算以及 Jira 实际超时裕量。首版保守冻结未知提交会降低可用性，不能以本地模拟耗时冒充 Google SLA。没有真实环境并发、授权、性能和至少 48h 观察证据，不视为上线验收通过。
+
+Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate)、[ScriptApp OAuth token](https://developers.google.com/apps-script/reference/script/script-app#getOAuthToken())（Google；本次访问 2026-10-23）。
+
 ### 11. App Script 自动更新
 
 - App Script 自动更新使用 Google Apps Script API 的 `deployments.update` 更新现有 Web App deployment，保持 Web App URL 不变，避免用户重新配置 Jira Automation
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '2.13.3';
-  var APP_SCRIPT_LAST_UPDATED = '2026-10-21';
+  var APP_SCRIPT_VERSION = '3.0.0';
+  var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -585,7 +632,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。状态面板可直接运行 Apps Script dry-run 测试，也保留复制 curl 的手工排障路径。
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
 - 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` / `confirmBotMessageTriggered` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
-- Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。AgentTask 未确认可按 at-least-once 重领（memory-service 幂等吸收）；自定义 API 默认 at-most-once，claimed TTL（2h）后标 `trigger_delivery_failed`。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
+- Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。3.0.0 起所有通道未确认均不自动重领；claimed TTL（2h）后仅转 UNKNOWN、不记失败，保留迟到确认与人工对账。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
 - Apps Script ≥ 2.13.3 不再根据 Config 中的 Executor 版本把 API 领取直接标成成功：Config 可能仍是旧版本，即使实际 Jira Rule 已升级。旧 Executor 也需要升级到支持 confirm 的版本；领取本身不是交付证据。
 - Executor Rule ≥ 1.7.4 在 `executed=true` 判断前记录拉取响应的 HTTP status、executed、message 和 error（不记录完整响应或凭据）。Audit 的 `SUCCESS / Successfully published webhook` 只证明请求动作完成；没有 `Claimed scheduled message` 时，应先看拉取结果，不能推断下游已调用。Messages 读取全表显示值，不受隐藏行或 Sheet 视图筛选影响；状态、推送方式、执行日期、当天成功/失败/待确认状态和时间窗口决定是否返回，`Next_Exec` 不是领取筛选输入。
 - Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.7.1 进一步区分 Dify workflow 成功与下游业务接受：只有 `data.outputs.accepted=true` 才确认成功，`accepted=false` 或缺失时把 `error/statusCode/queueStatus` 作为 `trigger_delivery_failed` 回写 Sheet。≥ 1.7.3 的 Bot 私发把 `inputs.email` 设为 Apps Script 返回的 `botmanEmail`，并兼容旧 Apps Script 的 `userName`，不再使用 `initiator.emailAddress`。≥ 1.6.1 的领取 audit Log 仍保留。

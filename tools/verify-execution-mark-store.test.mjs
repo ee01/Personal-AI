@@ -1,0 +1,163 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { executionHarness } from './helpers/appscript-execution-harness.mjs';
+const hour = 3600000;
+function ready(options) { const h = executionHarness(options); h.initialize(); h.activate(); return h; }
+function legacy(key, success = true, markedAt = '2026-10-23T08:00:00Z') { key = key.startsWith('ek_') ? key : 'ek_' + key; return JSON.stringify({ executionKey: key, messageId: 'M1', rowIndex: 2, success, markedAt }); }
+
+test('uninitialized claims fail closed, full Properties never need a write, no cache dependency', () => {
+  const h = executionHarness(); assert.match(h.claim().error, /not_initialized/);
+  h.initialize(); assert.match(h.claim().error, /paused/); h.activate();
+  assert.equal(h.claim().success, true); assert.equal(h.confirm().success, true);
+  assert.equal(h.cell('Exec_Count'), '1'); assert.equal(h.properties.size, 0);
+});
+test('ten serialized contenders and cross-minute/row movement get only one permission', () => {
+  const h = ready(); let permissions = 0;
+  for (let i = 0; i < 10; i++) { const result = h.claim('k' + i); if (result.success && !result.duplicate) permissions++; }
+  assert.equal(permissions, 1); h.advance(60000);
+  h.table('Messages').rows.splice(1, 0, ['OTHER', 'Active']);
+  assert.equal(h.claim('new-minute', 'M1', 2).executionKey, h.context.normalizeExecutionKey('k0'));
+  assert.equal(h.confirm('k0', true, 'M1', 2).rowIndex, 3);
+  assert.equal(h.records().length, 1);
+});
+test('locked invocation does not bypass ownership', () => {
+  const h = ready(); h.lock(true); assert.match(h.claim().error, /lock_timeout/);
+  assert.match(h.claim().error, /lock_timeout/); h.lock(false); assert.equal(h.claim().success, true);
+});
+test('claim batch rejection leaves Messages untouched and durable prepared record blocks retries', () => {
+  const h = ready(); h.fail({ phase: 'commit', code: 403 });
+  assert.equal(h.claim().success, false); assert.equal(h.cell('Last_Exec'), '');
+  assert.equal(h.table('_ExecutionMarks').rows.length, 1);
+  assert.match(h.claim().error, /unknown_commit/);
+  const control = JSON.parse(h.table('_ExecutionMarkControl').rows[1][0]);
+  assert.throws(() => h.context.maintenanceResolveExecutionCommit({ operationId: control.pending.operationId }), /evidence_required/);
+  h.context.maintenanceResolveExecutionCommit({ operationId: control.pending.operationId, originalExecutionStopped: true, remoteRequestSettled: true });
+  assert.equal(h.context.readExecutionStore().control.mode, 'paused');
+});
+test('lost response after applied claim never redelivers, lost confirm never double counts', () => {
+  const h = ready(); h.fail({ phase: 'commit', apply: true, throw: true });
+  assert.equal(h.claim().success, false); assert.equal(h.claim('other').duplicate, true);
+  h.fail({ phase: 'commit', apply: true, throw: true }); assert.equal(h.confirm().success, false);
+  assert.equal(h.confirm().duplicate, true); assert.equal(h.cell('Exec_Count'), '1');
+  assert.equal(h.table('Logs').rows.length, 2);
+});
+test('preparation failure cannot authorize a send or advance the migration cursor', () => {
+  const h = executionHarness({ properties: { BOT_CLAIM_MARK_ek_k1: legacy('k1') } }); h.initialize();
+  h.fail({ phase: 'commit', code: 403 }); assert.throws(() => h.context.maintenanceMigrateExecutionMarks(), /403/);
+  const c = JSON.parse(h.table('_ExecutionMarkControl').rows[1][0]); assert.equal(c.cursor, 0); assert.equal(c.migrated, false);
+  const h2 = ready(); h2.fail({ phase: 'prepare', apply: true, throw: true });
+  assert.equal(h2.claim().success, false); assert.equal(h2.cell('Last_Exec'), ''); assert.match(h2.claim().error, /unknown_commit/);
+});
+test('unknown keys/no-key/wrong IDs are rejected, repeated and conflicting confirmations are explicit', () => {
+  const h = ready(); assert.match(h.confirm().error, /late_unknown/); assert.match(h.confirm('').error, /key_required/);
+  h.claim(); assert.match(h.confirm('k1', true, 'OTHER').error, /mismatch/);
+  assert.equal(h.confirm('k1', false).success, true); assert.equal(h.confirm('k1', false).duplicate, true);
+  assert.match(h.confirm('k1', true).error, /outcome_conflict/); assert.equal(h.cell('Exec_Count'), '1');
+});
+test('accounting and Logs failure is atomic, not swallowed', () => {
+  const h = ready(); h.claim(); h.table('Logs').rows[0] = ['bad'];
+  assert.match(h.confirm().error, /logs_schema/); assert.equal(h.cell('Exec_Count'), '0'); assert.equal(h.records()[0].state, 'CLAIMED');
+  const j = ready(); j.claim(); j.fail({ phase: 'commit', code: 403 }); assert.equal(j.confirm().success, false);
+  assert.equal(j.cell('Exec_Count'), '0'); assert.equal(j.table('Logs').rows.length, 1);
+});
+test('2h expiry is UNKNOWN without count; late confirm within 48h works; beyond window refuses', () => {
+  const h = ready(); h.claim(); h.advance(3 * hour);
+  h.context.expireStaleClaimAsDeliveryFailed({ ID: 'M1' }, 2);
+  assert.equal(h.records()[0].state, 'UNKNOWN'); assert.equal(h.cell('Exec_Count'), '0'); assert.equal(h.confirm().success, true);
+  const j = ready(); j.claim(); j.advance(49 * hour); assert.match(j.confirm().error, /late_unknown/);
+  j.context.purgeExpiredExecutionMarks({ maxAgeMs: hour }); assert.equal(j.records().length, 1);
+});
+test('purge never shortens 48h, preserves unresolved and serializes with confirm', () => {
+  const h = ready(); h.claim(); h.confirm(); h.advance(13 * hour);
+  assert.equal(h.context.purgeExpiredExecutionMarks({ maxAgeMs: hour }).deleted, 0);
+  assert.equal(h.confirm().duplicate, true); h.advance(36 * hour);
+  assert.equal(h.context.purgeExpiredExecutionMarks().deleted, 1); assert.match(h.confirm().error, /late_unknown/);
+});
+test('migration merges claim/terminal records, checkpoints and preserves newer Sheet confirmation', () => {
+  const h = executionHarness({ properties: { BOT_CLAIM_MARK_ek_k1: legacy('k1'), BOT_EXECUTION_MARK_ek_k1: legacy('k1', false), BOT_EXECUTION_MARK_PURGE_LAST_RUN: 'nonnumeric', TIMELINE_CACHE_x: 'keep' } });
+  h.initialize(); assert.equal(h.context.maintenanceMigrateExecutionMarks().complete, true);
+  assert.equal(h.records().length, 1); assert.equal(h.records()[0].state, 'FAILED');
+  assert.equal(Object.keys(h.records()[0].legacySources).length, 2);
+  h.activate(); assert.equal(h.properties.get('TIMELINE_CACHE_x'), 'keep'); assert.equal(h.confirm('ek_k1', false).duplicate, true);
+  assert.equal(h.cell('Exec_Count'), '0');
+  const j = executionHarness({ properties: { BOT_CLAIM_MARK_ek_k1: legacy('k1') } }); j.initialize();
+  assert.equal(j.confirm('ek_k1').success, true); j.context.maintenanceMigrateExecutionMarks(); assert.equal(j.records()[0].state, 'CONFIRMED');
+});
+test('more than 100 sources restart at batch boundary and source changes prevent cutover', () => {
+  const properties = Object.fromEntries(Array.from({ length: 105 }, (_, i) => ['BOT_CLAIM_MARK_ek_k' + i, legacy('k' + i)]));
+  const h = executionHarness({ properties }); h.initialize();
+  assert.equal(h.context.maintenanceMigrateExecutionMarks().copied, 100);
+  assert.equal(h.context.maintenanceMigrateExecutionMarks().complete, true); assert.equal(h.records().length, 105);
+  h.properties.set('BOT_CLAIM_MARK_ek_k1', legacy('k1', false));
+  assert.throws(() => h.context.maintenanceActivateExecutionStore({ oldWritersRetired: true, isolatedValidationPassed: true }), /migration_not_verified/);
+});
+test('duplicate IDs/ledger rows, corrupt metadata and orphan pending are blocked', () => {
+  const h = ready(); h.table('Messages').rows.push([...h.table('Messages').rows[1]]); assert.match(h.claim().error, /duplicate_message_id/);
+  const j = ready(); j.claim(); j.table('_ExecutionMarks').rows.push([...j.table('_ExecutionMarks').rows[1]]); assert.match(j.confirm().error, /duplicate_execution_record/);
+  const k = ready(); k.setCell('Exec_Log', '⏳ API 已领取待确认'); assert.match(k.claim().error, /legacy_unknown/);
+  assert.deepEqual([...k.context.maintenanceExecutionStoreStatus().legacyUnknownMessageIds], ['M1']);
+});
+test('rollback pauses new claims but keeps Sheet confirmations and post-cutover records', () => {
+  const h = ready(); h.claim(); h.context.maintenancePauseExecutionClaims();
+  assert.match(h.claim('k2').error, /paused/); assert.equal(h.confirm().success, true); assert.equal(h.records()[0].state, 'CONFIRMED');
+  assert.throws(() => h.context.maintenanceActivateExecutionStore({}), /attestations/);
+});
+test('legacy cleanup requires observation, verified copies and keeps unrelated properties', () => {
+  const h = ready({ properties: { BOT_EXECUTION_MARK_ek_old: legacy('old'), TIMELINE_CACHE_x: 'keep' } });
+  const options = { snapshotVerified: true, rollbackVerified: true, oldWritersRetired: true, inflightReconciled: true };
+  assert.throws(() => h.context.maintenanceDeleteMigratedExecutionProperties(options), /observation_window/);
+  h.advance(49 * hour); assert.equal(h.context.maintenanceDeleteMigratedExecutionProperties(options).complete, true);
+  assert.equal(h.properties.get('TIMELINE_CACHE_x'), 'keep'); assert.equal(h.properties.has('BOT_EXECUTION_MARK_ek_old'), false);
+});
+
+test('historical confirmation does not overwrite a newer occurrence display', () => {
+  const h = ready(); h.claim();
+  // A later instance can come from a previously deployed compatible writer.
+  const ledger = h.table('_ExecutionMarks');
+  const newer = { ...h.records()[0], executionKey: 'ek_newer', claimAt: '2026-10-23T10:00:00Z', updatedAt: '2026-10-23T10:00:00Z', state: 'CONFIRMED' };
+  ledger.rows.push([newer.executionKey, JSON.stringify(newer)]);
+  h.setCell('Last_Exec', '2026-10-23 10:00'); h.setCell('Exec_Log', 'newer result');
+  assert.equal(h.confirm().success, true); assert.equal(h.cell('Last_Exec'), '2026-10-23 10:00');
+  assert.equal(h.cell('Exec_Log'), 'newer result'); assert.equal(h.cell('Exec_Count'), '1');
+});
+test('candidate snapshot changed after selection cannot authorize delivery', () => {
+  const h = ready();
+  const message = h.context.parseRow(h.table('Messages').rows[1], h.table('Messages').rows[0]);
+  const candidate = { ...message, _executionSnapshot: h.context.executionMessageFingerprint(message) };
+  h.setCell('Content', 'edited since selection');
+  const r = h.context.claimMessagePending('M1', 2, candidate, 'key');
+  assert.equal(r.success, false); assert.match(r.error, /stale_message/); assert.equal(h.cell('Last_Exec'), '');
+});
+test('1k and 10k record local model exercises full lookup and atomic grid expansion', () => {
+  for (const size of [1000, 10000]) {
+    const h = ready(); const ledger = h.table('_ExecutionMarks');
+    const record = { schemaVersion: 1, messageId: 'historical', state: 'CONFIRMED', updatedAt: '2026-10-23T08:00:00Z', retainUntil: '2026-10-25T08:00:00Z' };
+    ledger.rows.push(...Array.from({ length: size }, (_, i) => {
+      const r = { ...record, executionKey: 'ek_historical_' + i }; return [r.executionKey, JSON.stringify(r)];
+    }));
+    ledger.maxRows = size + 1;
+    assert.equal(h.claim().success, true); assert.equal(h.records().length, size + 1);
+    assert.equal(h.table('_ExecutionMarks').maxRows, size + 2);
+    assert.equal(h.confirm().success, true);
+  }
+});
+test('100 rounds of duplicate callback contention retain a single accounting effect', () => {
+  for (let round = 0; round < 100; round++) {
+    const h = ready(); h.claim();
+    for (let retry = 0; retry < 10; retry++) assert.equal(h.confirm().success, true);
+    assert.equal(h.cell('Exec_Count'), '1'); assert.equal(h.table('Logs').rows.length, 2);
+  }
+});
+
+test('REST read failures do not mutate Messages, unavailable snapshot cannot authorize claim', () => {
+  const h = ready(); h.fail({ phase: 'read', code: 429 });
+  assert.match(h.claim().error, /http_429/); assert.equal(h.cell('Last_Exec'), '');
+  assert.equal(h.claim().success, true);
+});
+test('trailing empty cells from REST compare equal to the selected SpreadsheetApp snapshot', () => {
+  const h = ready();
+  const message = h.context.parseRow(h.table('Messages').rows[1], h.table('Messages').rows[0]);
+  const candidate = { _executionSnapshot: h.context.executionMessageFingerprint(message) };
+  h.table('Messages').rows[1] = h.table('Messages').rows[1].slice(0, 11);
+  assert.equal(h.context.claimMessagePending('M1', 2, candidate, 'empty-tail').success, true);
+});

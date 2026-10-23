@@ -26,8 +26,8 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '2.13.3';
-var APP_SCRIPT_LAST_UPDATED = '2026-10-21';
+var APP_SCRIPT_VERSION = '3.0.0';
+var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -35,6 +35,8 @@ var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
 var TIMELINE_CACHE_MAX_AGE_MS = 36 * 60 * 60 * 1000;
 var EXECUTION_MARK_KEY_PREFIX = 'BOT_EXECUTION_MARK_';
 var EXECUTION_MARK_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+var EXECUTION_MARK_PURGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+var EXECUTION_MARK_PURGE_STATE_KEY = 'BOT_EXECUTION_MARK_PURGE_LAST_RUN';
 // Claim/confirm 拆分：领取只写 claimed，确认成功后才写最终 ✅，避免 302/超时假成功锁死当天。
 var CLAIM_MARK_KEY_PREFIX = 'BOT_CLAIM_MARK_';
 var CLAIM_PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000;
@@ -125,6 +127,8 @@ function determineMessageType(rowData) {
  * - OneTime: 一次性消息
  */
 function executeScheduledMessages() {
+  maybePurgeExpiredExecutionMarks(new Date());
+
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
   if (!sheet) {
     Logger.log('错误：未找到 Messages 工作表');
@@ -812,10 +816,11 @@ function normalizeBotmanRecipientToken(token) {
  * @param {string} executionKey - 单次执行幂等键（可选）
  * @param {object} sendResultMeta - 实际发送结果元数据（可选）
  */
-function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount, executionKey, sendResultMeta) {
+function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount, executionKey, sendResultMeta, requests, logHeaders) {
   try {
     const logsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Logs');
     if (!logsSheet) {
+      if (requests) throw new Error('Logs sheet not found');
       Logger.log('警告：未找到 Logs 工作表，跳过记录推送日志');
       return;
     }
@@ -829,7 +834,10 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
     const sentAt = sendResultMeta && getRequestParameterValue(sendResultMeta.sentAt)
       ? getRequestParameterValue(sendResultMeta.sentAt)
       : (success && (sentChatId || sentPostId) ? now.toISOString() : '');
-    const headers = ensurePushLogHeaders(logsSheet);
+    const headers = requests ? logHeaders : ensurePushLogHeaders(logsSheet);
+    if (requests && PUSH_LOG_SCHEMA_COLUMNS.some(function(c) { return headers.indexOf(c) < 0; })) {
+      throw new Error('invalid_logs_schema');
+    }
     const entry = {
       Timestamp: timestamp,
       Message_ID: messageId,
@@ -850,6 +858,11 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
     });
     
     // 在第2行插入新行（表头是第1行）
+    if (requests) {
+      requests.push({ insertDimension: { range: { sheetId: logsSheet.getSheetId(), dimension: 'ROWS', startIndex: 1, endIndex: 2 }, inheritFromBefore: false } });
+      requests.push(executionCells(logsSheet.getSheetId(), 2, 1, [logRow]));
+      return;
+    }
     logsSheet.insertRowAfter(1);
     
     // 写入数据到新插入的第2行
@@ -858,6 +871,7 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
     Logger.log(`推送记录已插入: ${messageId} - ${status}`);
     
   } catch (error) {
+    if (requests) throw error;
     Logger.log(`插入推送记录失败: ${error}`);
     // 不抛出错误，避免影响主流程
   }
@@ -906,7 +920,8 @@ function ensurePushLogHeaders(logsSheet) {
  * 
  * @param {object} replacedContent - 可选，替换变量后的内容 { topic, content }
  */
-function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg, replacedContent, executionKey) {
+function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg, replacedContent, executionKey, requests, historical, logHeaders) {
+  if (requests) sheet = executionBatchSheet(sheet, requests, historical ? ['Exec_Count'] : null, headers);
   const now = new Date();
   const execCount = (parseInt(rowData.Exec_Count) || 0) + 1;
   const willMarkAsDone = success && shouldMarkAsDone(rowData, now);
@@ -1007,7 +1022,9 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     errorMsg || '',
     execCount,
     executionKey || '',
-    replacedContent || null
+    replacedContent || null,
+    requests,
+    logHeaders
   );
 }
 
@@ -1244,108 +1261,16 @@ function buildClaimMarkPropertyKey(executionKey) {
 
 /**
  * 领取阶段：只写 claimed / pending，不写最终 ✅，不增加 Exec_Count，不 Done。
- * AgentTask 允许未确认后按 at-least-once 重领；自定义 API 默认 at-most-once。
+ * 所有领取统一 no_auto_retry；未确认只对账，不自动重领。
  */
 function claimMessagePending(messageId, rowIndex, message, executionKey) {
-  const applyClaim = function() {
-    const now = new Date();
-    const normalizedExecutionKey = normalizeExecutionKey(executionKey);
-    const props = PropertiesService.getScriptProperties();
-    const claimPropertyKey = normalizedExecutionKey
-      ? buildClaimMarkPropertyKey(normalizedExecutionKey)
-      : '';
-
-    if (claimPropertyKey) {
-      const existingClaim = getRecordedExecutionMark(props, claimPropertyKey, now);
-      if (existingClaim) {
-        return {
-          success: true,
-          claimed: true,
-          duplicate: true,
-          stage: 'claimed',
-          messageId: getRequestParameterValue(messageId) || getRequestParameterValue(existingClaim.messageId),
-          rowIndex: parseInt(existingClaim.rowIndex, 10) || parseInt(rowIndex, 10) || 0,
-          executionKey: normalizedExecutionKey,
-          logMessage: buildClaimLogMessage(message)
-        };
-      }
-    }
-
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
-    if (!sheet) {
-      return { success: false, error: 'Messages sheet not found', stage: 'claimed' };
-    }
-
-    const data = sheet.getDataRange().getDisplayValues();
-    const headers = data[0];
-    const resolvedRow = resolveExecutionMarkRow(data, headers, rowIndex, messageId);
-    if (!resolvedRow.success) {
-      return {
-        success: false,
-        error: resolvedRow.error,
-        messageId: messageId,
-        rowIndex: rowIndex,
-        stage: 'claimed'
-      };
-    }
-
-    const actualRowIndex = resolvedRow.rowIndex;
-    const rowData = resolvedRow.rowData || message || {};
-    const claimLog = buildClaimLogMessage(rowData);
-    const lastExecCol = getColumnIndex(headers, 'Last_Exec');
-    const execLogCol = getColumnIndex(headers, 'Exec_Log');
-    const agentLastRunAtCol = getColumnIndex(headers, 'Agent_Last_Run_At');
-    const agentLastStatusCol = getColumnIndex(headers, 'Agent_Last_Status');
-    const agentLastErrorCol = getColumnIndex(headers, 'Agent_Last_Error');
-    const runAtText = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
-
-    if (lastExecCol > 0) {
-      sheet.getRange(actualRowIndex, lastExecCol).setValue(runAtText);
-    }
-    if (execLogCol > 0) {
-      sheet.getRange(actualRowIndex, execLogCol).setValue(claimLog);
-    }
-    if (isAgentTaskMessage(rowData)) {
-      if (agentLastRunAtCol > 0) {
-        sheet.getRange(actualRowIndex, agentLastRunAtCol).setValue(runAtText);
-      }
-      if (agentLastStatusCol > 0) {
-        sheet.getRange(actualRowIndex, agentLastStatusCol).setValue('claimed');
-      }
-      if (agentLastErrorCol > 0) {
-        sheet.getRange(actualRowIndex, agentLastErrorCol).setValue('');
-      }
-    }
-
-    if (claimPropertyKey) {
-      recordExecutionMark(
-        props,
-        claimPropertyKey,
-        normalizedExecutionKey,
-        messageId,
-        actualRowIndex,
-        true,
-        now
-      );
-    }
-
-    Logger.log(`标记消息领取待确认: ${messageId}, executionKey=${normalizedExecutionKey}`);
-    return {
-      success: true,
-      claimed: true,
-      duplicate: false,
-      stage: 'claimed',
-      messageId: messageId,
-      rowIndex: actualRowIndex,
-      executionKey: normalizedExecutionKey,
-      logMessage: claimLog
-    };
-  };
-
-  if (normalizeExecutionKey(executionKey)) {
-    return withExecutionMarkLock(applyClaim);
+  try {
+    return withExecutionMarkLock(function() {
+      return claimSheetExecution(messageId, rowIndex, message, executionKey);
+    });
+  } catch (error) {
+    return { success: false, claimed: false, error: String(error), code: 'storage_unavailable' };
   }
-  return applyClaim();
 }
 
 function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
@@ -1355,43 +1280,6 @@ function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
       requested: normalizedMode,
       marked: false,
       claimed: false
-    };
-  }
-
-  // 兼容档：mode=all 仍走旧的最终成功标记；api 模式改为 claim-only。
-  if (normalizedMode === 'all' && !isClaimConfirmMessage(message)) {
-    const markResult = markBotMessageExecuted(
-      messageId,
-      message.rowIndex,
-      true,
-      '',
-      message.Topic || '',
-      message.Content || '',
-      executionKey || ''
-    );
-
-    if (!markResult || markResult.success !== true) {
-      return {
-        requested: normalizedMode,
-        marked: false,
-        claimed: false,
-        success: false,
-        error: markResult && markResult.error ? markResult.error : 'auto mark on fetch failed',
-        messageId: messageId,
-        rowIndex: message.rowIndex,
-        executionKey: executionKey || ''
-      };
-    }
-
-    return {
-      requested: normalizedMode,
-      marked: true,
-      claimed: false,
-      success: true,
-      duplicate: markResult.duplicate === true,
-      messageId: markResult.messageId || messageId,
-      rowIndex: markResult.rowIndex || message.rowIndex,
-      executionKey: markResult.executionKey || executionKey || ''
     };
   }
 
@@ -1775,43 +1663,34 @@ function parseExecutionMarkRecord(rawValue) {
   }
 }
 
-function getRecordedExecutionMark(props, propertyKey, now) {
-  if (!propertyKey) {
-    return null;
-  }
-
-  const existing = parseExecutionMarkRecord(props.getProperty(propertyKey));
-  if (!existing) {
-    return null;
-  }
-
-  const markedAt = existing.markedAt ? new Date(existing.markedAt).getTime() : 0;
-  if (markedAt && now.getTime() - markedAt > EXECUTION_MARK_MAX_AGE_MS) {
-    props.deleteProperty(propertyKey);
-    return null;
-  }
-
-  return existing;
+function isExecutionOrClaimMarkPropertyKey(propertyKey) {
+  const key = String(propertyKey || '');
+  return key.indexOf(EXECUTION_MARK_KEY_PREFIX) === 0 || key.indexOf(CLAIM_MARK_KEY_PREFIX) === 0;
 }
 
-function recordExecutionMark(props, propertyKey, executionKey, messageId, rowIndex, success, now) {
-  if (!propertyKey) {
-    return;
-  }
+/** Clean only settled Sheet records under the same lock as claims/confirms. */
+function purgeExpiredExecutionMarks(options) {
+  return withExecutionMarkLock(function() { return purgeSheetExecutionMarks(options || {}); });
+}
 
-  props.setProperty(propertyKey, JSON.stringify({
-    executionKey: normalizeExecutionKey(executionKey),
-    messageId,
-    rowIndex,
-    success,
-    markedAt: now.toISOString()
-  }));
+function maybePurgeExpiredExecutionMarks(now) {
+  // Maintenance cannot turn an empty queue into a Properties quota exception.
+  // Uninitialized/paused stores are maintained explicitly by the operator.
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  if (!book.getSheetByName('_ExecutionMarkControl')) return { skipped: true, reason: 'not_initialized' };
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    if (store.control.mode !== 'sheet_primary') return { skipped: true, reason: store.control.mode };
+    const date = now || new Date();
+    if (date.getTime() - (store.control.lastPurgeAt || 0) < EXECUTION_MARK_PURGE_INTERVAL_MS) {
+      return { skipped: true, reason: 'throttled' };
+    }
+    return purgeSheetExecutionMarks({ now: date }, store);
+  });
 }
 
 function withExecutionMarkLock(callback) {
-  if (typeof LockService === 'undefined') {
-    return callback();
-  }
+  if (typeof LockService === 'undefined') throw new Error('execution_lock_unavailable');
 
   const lock = LockService.getScriptLock();
   try {
@@ -2290,6 +2169,20 @@ function doGet(e) {
       }))
     ).setMimeType(ContentService.MimeType.JSON);
   }
+
+  if (action === 'purgeExpiredExecutionMarks') {
+    const force = isTruthyRequestValue(e.parameter.force);
+    const maxAgeMs = parseInt(e.parameter.maxAgeMs, 10);
+    const payload = force
+      ? purgeExpiredExecutionMarks({
+        now: new Date(),
+        maxAgeMs: maxAgeMs > 0 ? maxAgeMs : EXECUTION_MARK_MAX_AGE_MS
+      })
+      : maybePurgeExpiredExecutionMarks(new Date());
+    return ContentService.createTextOutput(
+      JSON.stringify(payload)
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
   
   if (action === 'setupTriggers') {
     // 通过 Web App 创建触发器
@@ -2379,6 +2272,21 @@ function doPost(e) {
         JSON.stringify(scanUnconfirmedClaims({
           maxAgeMs: parseInt(getRequestParameterValue(parameters.maxAgeMs), 10) || CLAIM_PENDING_MAX_AGE_MS
         }))
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (action === 'purgeExpiredExecutionMarks') {
+      const parameters = mergeRequestParameters(queryParameters, postData);
+      const force = isTruthyRequestValue(parameters.force);
+      const maxAgeMs = parseInt(getRequestParameterValue(parameters.maxAgeMs), 10);
+      const payload = force
+        ? purgeExpiredExecutionMarks({
+          now: new Date(),
+          maxAgeMs: maxAgeMs > 0 ? maxAgeMs : EXECUTION_MARK_MAX_AGE_MS
+        })
+        : maybePurgeExpiredExecutionMarks(new Date());
+      return ContentService.createTextOutput(
+        JSON.stringify(payload)
       ).setMimeType(ContentService.MimeType.JSON);
     }
     
@@ -2485,73 +2393,9 @@ function markBotMessageExecuted(messageId, rowIndex, success, errorMsg, replaced
       sentAt: sendResultMeta.sentAt || ''
     } : null;
 
-    const normalizedExecutionKey = normalizeExecutionKey(executionKey);
-    const applyExecutionMark = function() {
-      const now = new Date();
-      const props = normalizedExecutionKey ? PropertiesService.getScriptProperties() : null;
-      const propertyKey = normalizedExecutionKey ? buildExecutionMarkPropertyKey(normalizedExecutionKey) : '';
-      const existingMark = props ? getRecordedExecutionMark(props, propertyKey, now) : null;
-
-      if (existingMark) {
-        Logger.log(`跳过重复执行标记: ${messageId}, executionKey=${normalizedExecutionKey}`);
-        return {
-          success: true,
-          messageId: getRequestParameterValue(messageId) || getRequestParameterValue(existingMark.messageId),
-          marked: true,
-          duplicate: true,
-          rowIndex: parseInt(existingMark.rowIndex, 10) || parseInt(rowIndex, 10) || 0,
-          executionKey: normalizedExecutionKey
-        };
-      }
-
-      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
-      if (!sheet) {
-        return { success: false, error: 'Messages sheet not found' };
-      }
-
-      const data = sheet.getDataRange().getDisplayValues();
-      const headers = data[0];
-
-      const resolvedRow = resolveExecutionMarkRow(data, headers, rowIndex, messageId);
-      if (!resolvedRow.success) {
-        return {
-          success: false,
-          error: resolvedRow.error,
-          messageId: messageId,
-          rowIndex: rowIndex
-        };
-      }
-
-      const actualRowIndex = resolvedRow.rowIndex;
-      const rowData = resolvedRow.rowData;
-
-      // 更新执行日志（已包含 shouldMarkAsDone 判断和 insertPushLog 调用）
-      updateExecutionLog(sheet, actualRowIndex, rowData, success, headers, errorMsg, replacedContentObj, normalizedExecutionKey);
-      if (props) {
-        recordExecutionMark(props, propertyKey, normalizedExecutionKey, messageId, actualRowIndex, success, now);
-      }
-
-      Logger.log(`标记消息执行完成: ${messageId}, 成功: ${success}`);
-
-      const response = {
-        success: true,
-        messageId: messageId,
-        marked: true,
-        duplicate: false,
-        rowIndex: actualRowIndex
-      };
-      if (normalizedExecutionKey) {
-        response.executionKey = normalizedExecutionKey;
-      }
-      return response;
-    };
-
-    if (normalizedExecutionKey) {
-      return withExecutionMarkLock(applyExecutionMark);
-    }
-
-    // 兼容旧 Jira Rule：没有 executionKey 时保持原行为。
-    return applyExecutionMark();
+    return withExecutionMarkLock(function() {
+      return confirmSheetExecution(messageId, rowIndex, success, errorMsg, replacedContentObj, executionKey);
+    });
     
   } catch (error) {
     Logger.log(`markBotMessageExecuted 执行失败: ${error}`);
@@ -2741,8 +2585,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       continue;
     }
 
-    // 自定义 API / AI：claimed 未确认时 at-most-once，避免第三方被重复调用。
-    // AgentTask：未确认可重领（at-least-once），重复由 memory-service 幂等吸收。
+    // 所有执行器未确认领取均阻止自动重领，避免外部效果重复。
     if (isClaimPendingBlockingReclaim(rowData, matchDate, now, i + 1)) {
       continue;
     }
@@ -2873,6 +2716,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         targetType: targetType,
         chatId: chatId,
         rowIndex: i + 1,
+        _executionSnapshot: executionMessageFingerprint(rowData),
         Schedule_Date: rowData.Schedule_Date,
         Schedule_Time: rowData.Schedule_Time,
         Created_At: rowData.Created_At || '',
@@ -2974,8 +2818,7 @@ function isPushedSuccessfullyToday(rowData, currentDate) {
 
 /**
  * claimed 是否应阻止自动重领。
- * - AgentTask：不阻止（at-least-once）
- * - 自定义 API/AI：TTL 内阻止；超时后标 trigger_delivery_failed 并继续阻止自动重领
+ * - 所有执行器：未决领取跨日期阻止重领；2h 后记 UNKNOWN，不当真实失败。
  */
 function isClaimPendingBlockingReclaim(rowData, currentDate, now, rowIndex) {
   const lastExec = rowData.Last_Exec;
@@ -2984,14 +2827,7 @@ function isClaimPendingBlockingReclaim(rowData, currentDate, now, rowIndex) {
     return false;
   }
 
-  const lastExecDate = lastExec.toString().substring(0, 10);
-  if (lastExecDate !== currentDate) {
-    return false;
-  }
-
-  if (isAgentTaskMessage(rowData)) {
-    return false;
-  }
+  // Unresolved delivery blocks automatic re-claim across dates and executors.
 
   const lastExecTime = parseSheetDateTime(lastExec);
   if (lastExecTime && (now.getTime() - lastExecTime.getTime()) > CLAIM_PENDING_MAX_AGE_MS) {
@@ -3020,24 +2856,21 @@ function parseSheetDateTime(value) {
 }
 
 function expireStaleClaimAsDeliveryFailed(rowData, rowIndex) {
-  try {
-    const resolvedRowIndex = parseInt(rowIndex, 10) || 0;
-    if (!rowData || !resolvedRowIndex) {
-      return;
-    }
-    markBotMessageExecuted(
-      rowData.ID || '',
-      resolvedRowIndex,
-      false,
-      'trigger_delivery_failed: claim TTL expired without confirm',
-      rowData.Topic || '',
-      rowData.Content || '',
-      ''
-    );
-    Logger.log(`claimed TTL 过期，标记 trigger_delivery_failed: ${rowData.ID}`);
-  } catch (error) {
-    Logger.log(`expireStaleClaimAsDeliveryFailed 失败: ${error}`);
-  }
+  // A deadline is not evidence of failed delivery. Keep the key for late confirm.
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    const entries = store.entries.filter(function(e) { return e.record.messageId === String(rowData.ID) && e.record.state === 'CLAIMED'; });
+    const requests = [];
+    entries.forEach(function(e) {
+      if (Date.now() > Date.parse(e.record.deadlineAt)) {
+        e.record.state = 'UNKNOWN';
+        e.record.updatedAt = new Date().toISOString();
+        requests.push(executionRecordRequest(store, e.row, e.record));
+      }
+    });
+    if (requests.length) commitExecutionBatch(store, requests, 'expire');
+    return { success: true, unknown: requests.length };
+  });
 }
 
 /**
@@ -3484,6 +3317,8 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
  */
 function getMessageCurrentTimeWithReleaseInfo(postData) {
   try {
+    maybePurgeExpiredExecutionMarks(new Date());
+
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
     if (!sheet) {
       Logger.log('错误：未找到 Messages 工作表');
@@ -3589,7 +3424,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     }
     
     Logger.log(`返回待发送消息数据: ${messageId} - ${message.Topic}`);
-    const executionKey = buildMessageExecutionKey(message, messageId, now);
+    let executionKey = buildMessageExecutionKey(message, messageId, now);
     let agentTaskApiPayload = null;
     if (message.Push_Method === 'AgentTask') {
       agentTaskApiPayload = buildAgentTaskApiPayload(message, messageId, executionKey);
@@ -3611,9 +3446,17 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       message,
       messageId,
       executionKey,
-      autoMarkOnFetchMode
+      autoMarkOnFetchMode === 'none' ? 'api' : autoMarkOnFetchMode
     );
 
+    if (autoMarkOnFetchResult.success !== false && !autoMarkOnFetchResult.marked && !autoMarkOnFetchResult.claimed) {
+      const dispatch = claimMessagePending(messageId, message.rowIndex, message, executionKey);
+      Object.assign(autoMarkOnFetchResult, dispatch);
+    }
+    if (autoMarkOnFetchResult.duplicate) {
+      return { executed: false, duplicate: true, code: 'already_claimed', executionKey: autoMarkOnFetchResult.executionKey, messageId: messageId };
+    }
+    if (autoMarkOnFetchResult.executionKey) executionKey = autoMarkOnFetchResult.executionKey;
     if (autoMarkOnFetchResult.success === false) {
       Logger.log(`领取后自动标记失败，停止返回待发送消息: ${messageId} - ${autoMarkOnFetchResult.error}`);
       return {
@@ -4718,4 +4561,447 @@ function splitGroovyMapPairs(content, depth) {
   }
   
   return pairs;
+}
+
+/** Apps Script 编辑器里可手动运行一次，立即清理过期 execution/claim 标记。 */
+function maintenancePurgeExpiredExecutionMarks() {
+  const result = purgeExpiredExecutionMarks({ now: new Date() });
+  Logger.log(JSON.stringify(result));
+  return result;
+}
+
+// Durable execution protocol v1. All entry points below run under ScriptLock.
+// Hidden sheets contain metadata only; sharing the workbook grants access to them.
+var EXECUTION_LEDGER_SHEET = '_ExecutionMarks';
+var EXECUTION_CONTROL_SHEET = '_ExecutionMarkControl';
+var EXECUTION_LEDGER_HEADERS = ['Execution_Key', 'Record_JSON'];
+
+function executionCells(sheetId, row, column, values) {
+  return { updateCells: {
+    start: { sheetId: sheetId, rowIndex: row - 1, columnIndex: column - 1 },
+    rows: values.map(function(items) { return { values: items.map(function(value) {
+      return { userEnteredValue: typeof value === 'number' ? { numberValue: value } : { stringValue: String(value == null ? '' : value) } };
+    }) }; }), fields: 'userEnteredValue'
+  } };
+}
+
+function executionApiBatch(requests) {
+  const response = UrlFetchApp.fetch('https://sheets.googleapis.com/v4/spreadsheets/' +
+    SpreadsheetApp.getActiveSpreadsheet().getId() + ':batchUpdate', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: JSON.stringify({ requests: requests }), muteHttpExceptions: true
+  });
+  const code = response.getResponseCode();
+  // Never log response bodies: a Google error can contain request data.
+  if (code < 200 || code >= 300) throw new Error('execution_storage_http_' + code);
+}
+
+function executionReadSnapshot() {
+  // Use REST for a fresh snapshot inside the lock. SpreadsheetApp can cache reads
+  // made earlier during candidate selection, before another execution committed.
+  const ranges = ["'" + EXECUTION_CONTROL_SHEET + "'", "'" + EXECUTION_LEDGER_SHEET + "'", "'Messages'", "'Logs'!1:1"];
+  const response = UrlFetchApp.fetch('https://sheets.googleapis.com/v4/spreadsheets/' +
+    SpreadsheetApp.getActiveSpreadsheet().getId() + '/values:batchGet?valueRenderOption=FORMATTED_VALUE&' +
+    ranges.map(function(range) { return 'ranges=' + encodeURIComponent(range); }).join('&'), {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true
+  });
+  if (response.getResponseCode() !== 200) throw new Error('execution_storage_http_' + response.getResponseCode());
+  const results = JSON.parse(response.getContentText()).valueRanges;
+  if (!results || results.length !== ranges.length) throw new Error('invalid_execution_snapshot');
+  return results.map(function(range) { return range.values || []; });
+}
+
+function readExecutionStore() {
+  const book = SpreadsheetApp.getActiveSpreadsheet();
+  const ledger = book.getSheetByName(EXECUTION_LEDGER_SHEET);
+  const controlSheet = book.getSheetByName(EXECUTION_CONTROL_SHEET);
+  if (!ledger || !controlSheet) throw new Error('execution_store_not_initialized');
+  const snapshots = executionReadSnapshot();
+  const controlRows = snapshots[0];
+  if (controlRows[0][0] !== 'Control_JSON') throw new Error('invalid_execution_control_schema');
+  const control = JSON.parse(controlRows[1] && controlRows[1][0] || 'null');
+  if (!control || control.schemaVersion !== 1 || ['paused', 'legacy_drain', 'sheet_primary'].indexOf(control.mode) < 0) {
+    throw new Error('invalid_execution_control');
+  }
+  if (control.pending) throw new Error('unknown_commit:' + control.pending.operationId);
+  const rows = snapshots[1];
+  if (JSON.stringify(rows[0]) !== JSON.stringify(EXECUTION_LEDGER_HEADERS)) throw new Error('invalid_execution_ledger_schema');
+  const seen = {};
+  const entries = [];
+  for (let i = 1; i < rows.length; i++) {
+    if (!rows[i][0] && !rows[i][1]) continue;
+    const record = JSON.parse(rows[i][1]);
+    if (!record || record.schemaVersion !== 1 || !record.executionKey || rows[i][0] !== record.executionKey ||
+        !record.messageId || ['CLAIMED', 'UNKNOWN', 'CONFIRMED', 'FAILED'].indexOf(record.state) < 0 ||
+        !isFinite(Date.parse(record.updatedAt)) || !isFinite(Date.parse(record.retainUntil)) || seen[record.executionKey]) {
+      throw new Error('invalid_or_duplicate_execution_record');
+    }
+    seen[record.executionKey] = true;
+    entries.push({ row: i + 1, record: record });
+  }
+  return { ledger: ledger, controlSheet: controlSheet, control: control, entries: entries, nextRow: rows.length + 1, messageRows: snapshots[2], logRows: snapshots[3], baseControl: JSON.parse(JSON.stringify(control)) };
+}
+
+function executionControlRequest(store) {
+  return executionCells(store.controlSheet.getSheetId(), 2, 1, [[JSON.stringify(store.control)]]);
+}
+
+function executionRecordRequest(store, row, record) {
+  return executionCells(store.ledger.getSheetId(), row, 1, [[record.executionKey, JSON.stringify(record)]]);
+}
+
+function commitExecutionBatch(store, requests, kind) {
+  const start = Date.now();
+  const operationId = Utilities.getUuid();
+  const preparedControl = store.baseControl;
+  if (preparedControl.pending) throw new Error('unknown_commit:' + preparedControl.pending.operationId);
+  preparedControl.pending = { operationId: operationId, kind: kind, preparedAt: new Date().toISOString() };
+  // Preparation preserves the previous cursor/mode. Only final commit advances it.
+  executionApiBatch([executionCells(store.controlSheet.getSheetId(), 2, 1, [[JSON.stringify(preparedControl)]])]);
+  store.control.pending = null;
+  store.control.lastOperation = operationId;
+  store.control.lastOperationKind = kind;
+  const flattened = [].concat.apply([], requests);
+  const neededRow = flattened.reduce(function(max, request) {
+    const update = request.updateCells;
+    return update && update.start.sheetId === store.ledger.getSheetId() ? Math.max(max, update.start.rowIndex + update.rows.length) : max;
+  }, 0);
+  if (neededRow > store.ledger.getMaxRows()) flattened.unshift({ appendDimension: {
+    sheetId: store.ledger.getSheetId(), dimension: 'ROWS', length: neededRow - store.ledger.getMaxRows()
+  } });
+  flattened.push(executionControlRequest(store));
+  executionApiBatch(flattened);
+  Logger.log(JSON.stringify({ event: 'execution_commit', kind: kind, durationMs: Date.now() - start, records: store.entries.length }));
+}
+
+function executionBatchSheet(sheet, requests, allowedColumns, headers) {
+  return { getRange: function(row, column) { return { setValue: function(value) {
+    if (!allowedColumns || allowedColumns.indexOf(headers[column - 1]) >= 0) {
+      requests.push(executionCells(sheet.getSheetId(), row, column, [[value]]));
+    }
+  } }; } };
+}
+
+function executionMessage(store, messageId, rowIndex) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+  if (!sheet || !String(messageId || '').trim()) throw new Error('message_id_required');
+  const data = store.messageRows;
+  const headers = data[0];
+  const idIndex = headers.indexOf('ID');
+  if (idIndex < 0 || data.slice(1).filter(function(r) { return String(r[idIndex]) === String(messageId); }).length !== 1) {
+    throw new Error('missing_or_duplicate_message_id');
+  }
+  const resolved = resolveExecutionMarkRow(data, headers, rowIndex, messageId);
+  if (!resolved.success) throw new Error(resolved.error);
+  return { sheet: sheet, headers: headers, row: resolved.rowIndex, message: resolved.rowData };
+}
+
+function executionMessageFingerprint(message) {
+  // values.batchGet omits trailing empty cells; SpreadsheetApp returns empty strings.
+  return JSON.stringify(Object.keys(message).sort().map(function(column) {
+    return [column, String(message[column] == null ? '' : message[column])];
+  }));
+}
+
+function executionOccurrence(message, now) {
+  // Current scheduler permits one execution per local day. Revision includes schedule
+  // inputs; unresolved earlier revisions are separately blocked at claim time.
+  const columns = ['Schedule_Date', 'Schedule_Time', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Days',
+    'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset', 'Push_Method'];
+  return JSON.stringify([String(message.ID), Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
+    columns.map(function(c) { return String(message[c] || ''); })]);
+}
+
+function claimSheetExecution(messageId, rowIndex, candidate, executionKey) {
+  const key = normalizeExecutionKey(executionKey);
+  if (!key) throw new Error('execution_key_required');
+  const store = readExecutionStore();
+  if (store.control.mode !== 'sheet_primary') throw new Error('execution_claims_paused');
+  const resolved = executionMessage(store, messageId, rowIndex);
+  const message = resolved.message;
+  if (message.Status !== 'Active') throw new Error('message_not_enabled');
+  // Reject a stale candidate when another editor changed scheduling or payload.
+  if (candidate && candidate._executionSnapshot && candidate._executionSnapshot !== executionMessageFingerprint(message)) {
+    throw new Error('stale_message_candidate');
+  }
+  const now = new Date();
+  const occurrence = executionOccurrence(message, now);
+  const existing = store.entries.filter(function(e) {
+    return e.record.executionKey === key || (e.record.messageId === String(messageId) &&
+      (e.record.occurrenceId === occurrence || e.record.state === 'CLAIMED' || e.record.state === 'UNKNOWN'));
+  })[0];
+  if (existing) {
+    if (existing.record.messageId !== String(messageId)) throw new Error('execution_message_mismatch');
+    return { success: true, claimed: true, duplicate: true, stage: 'claimed', executionKey: existing.record.executionKey, rowIndex: resolved.row, messageId: messageId };
+  }
+  // Includes historical split writes with no surviving mark. Never replay implicitly.
+  if (isClaimPendingLog(message.Exec_Log || '')) throw new Error('legacy_unknown_claim');
+  if (isPushedSuccessfullyToday(message, Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd'))) throw new Error('message_already_executed');
+  const record = {
+    schemaVersion: 1, writerEpoch: store.control.epoch, executionKey: key, messageId: String(messageId), rowHint: resolved.row,
+    occurrenceId: occurrence, state: 'CLAIMED', deliveryPolicy: 'no_auto_retry',
+    claimAt: now.toISOString(), deadlineAt: new Date(now.getTime() + CLAIM_PENDING_MAX_AGE_MS).toISOString(),
+    completedAt: '', updatedAt: now.toISOString(), retainUntil: new Date(now.getTime() + EXECUTION_MARK_MAX_AGE_MS).toISOString(),
+    accountingVersion: 0
+  };
+  const requests = [executionRecordRequest(store, store.nextRow, record)];
+  const proxy = executionBatchSheet(resolved.sheet, requests, null, resolved.headers);
+  const updates = { Last_Exec: Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'), Exec_Log: buildClaimLogMessage(message) };
+  if (isAgentTaskMessage(message)) {
+    updates.Agent_Last_Run_At = updates.Last_Exec; updates.Agent_Last_Status = 'claimed'; updates.Agent_Last_Error = '';
+  }
+  Object.keys(updates).forEach(function(c) {
+    const column = getColumnIndex(resolved.headers, c);
+    if (column > 0) proxy.getRange(resolved.row, column).setValue(updates[c]);
+  });
+  commitExecutionBatch(store, requests, 'claim');
+  return { success: true, claimed: true, duplicate: false, stage: 'claimed', messageId: messageId, rowIndex: resolved.row, executionKey: key, logMessage: updates.Exec_Log };
+}
+
+function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced, executionKey) {
+  const key = normalizeExecutionKey(executionKey);
+  if (!key) throw new Error('execution_key_required');
+  const store = readExecutionStore();
+  let entry = store.entries.filter(function(e) { return e.record.executionKey === key; })[0];
+  if (!entry && store.control.mode === 'legacy_drain') {
+    const keys = [buildClaimMarkPropertyKey(key), buildExecutionMarkPropertyKey(key)].filter(function(k) {
+      return PropertiesService.getScriptProperties().getProperty(k) != null;
+    });
+    if (!keys.length) throw new Error('late_unknown');
+    importLegacyExecutionBatch(store, keys);
+    return confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced, executionKey);
+  }
+  if (!entry) throw new Error('late_unknown');
+  const record = entry.record;
+  if (record.messageId !== String(messageId)) throw new Error('execution_message_mismatch');
+  const state = success ? 'CONFIRMED' : 'FAILED';
+  if (record.state === 'CONFIRMED' || record.state === 'FAILED') {
+    if (record.state !== state) throw new Error('execution_outcome_conflict');
+    return { success: true, marked: true, duplicate: true, executionKey: key, messageId: messageId, rowIndex: record.rowHint };
+  }
+  const now = new Date();
+  if (now.getTime() > Date.parse(record.retainUntil)) throw new Error('late_unknown');
+  const resolved = executionMessage(store, messageId, rowIndex);
+  const newerDisplay = parseSheetDateTime(resolved.message.Last_Exec);
+  const newer = (newerDisplay && newerDisplay.getTime() > Date.parse(record.claimAt || record.updatedAt)) || store.entries.some(function(e) { return e.record.messageId === String(messageId) && e.record.executionKey !== key &&
+    Date.parse(e.record.claimAt || e.record.updatedAt) > Date.parse(record.claimAt || record.updatedAt); });
+  const requests = [];
+  updateExecutionLog(resolved.sheet, resolved.row, resolved.message, success, resolved.headers, errorMsg, replaced, key, requests, newer, store.logRows[0]);
+  record.state = state; record.completedAt = now.toISOString(); record.updatedAt = now.toISOString();
+  record.retainUntil = new Date(now.getTime() + EXECUTION_MARK_MAX_AGE_MS).toISOString();
+  record.accountingVersion = 1; record.rowHint = resolved.row;
+  requests.push(executionRecordRequest(store, entry.row, record));
+  commitExecutionBatch(store, requests, 'confirm');
+  return { success: true, marked: true, duplicate: false, executionKey: key, messageId: messageId, rowIndex: resolved.row };
+}
+
+function purgeSheetExecutionMarks(options, existingStore) {
+  const store = existingStore || readExecutionStore();
+  const now = options.now || new Date();
+  // No caller may shorten the 48h window; unresolved records never expire here.
+  const rows = store.entries.filter(function(e) {
+    return (!e.record.legacySources || store.control.legacyDeletedAt) && (e.record.state === 'CONFIRMED' || e.record.state === 'FAILED') &&
+      now.getTime() > Date.parse(e.record.retainUntil) &&
+      now.getTime() - Date.parse(e.record.updatedAt) > EXECUTION_MARK_MAX_AGE_MS;
+  }).slice(-100).map(function(e) { return e.row; }).sort(function(a, b) { return b - a; });
+  const requests = rows.map(function(row) { return { deleteDimension: { range: {
+    sheetId: store.ledger.getSheetId(), dimension: 'ROWS', startIndex: row - 1, endIndex: row
+  } } }; });
+  store.control.lastPurgeAt = now.getTime();
+  commitExecutionBatch(store, requests, 'purge');
+  return { success: true, scanned: store.entries.length, deleted: rows.length, maxAgeMs: EXECUTION_MARK_MAX_AGE_MS };
+}
+
+/** Editor-only: run after retiring old writers. Safe with a completely full Properties store. */
+function maintenanceInitializeExecutionStore() {
+  return withExecutionMarkLock(function() {
+    const book = SpreadsheetApp.getActiveSpreadsheet();
+    const requests = [];
+    const ids = book.getSheets().map(function(s) { return s.getSheetId(); });
+    let nextId = Math.max.apply(null, ids) + 1;
+    [EXECUTION_LEDGER_SHEET, EXECUTION_CONTROL_SHEET].forEach(function(name) {
+      const sheet = book.getSheetByName(name);
+      if (sheet) return;
+      const id = nextId++;
+      requests.push({ addSheet: { properties: { sheetId: id, title: name, hidden: true, gridProperties: { rowCount: 1000, columnCount: 2 } } } });
+      requests.push(executionCells(id, 1, 1, [name === EXECUTION_LEDGER_SHEET ? EXECUTION_LEDGER_HEADERS : ['Control_JSON']]));
+      requests.push({ addProtectedRange: { protectedRange: { range: { sheetId: id }, description: 'Execution protocol metadata; do not edit', warningOnly: true } } });
+      if (name === EXECUTION_CONTROL_SHEET) requests.push(executionCells(id, 2, 1, [[JSON.stringify({
+        schemaVersion: 1, mode: 'legacy_drain', epoch: 1, pending: null, cursor: 0, manifest: '', migrated: false, lastPurgeAt: 0
+      })]]));
+    });
+    if (requests.length) executionApiBatch(requests);
+    const logs = book.getSheetByName('Logs');
+    if (!logs) throw new Error('Logs sheet required');
+    ensurePushLogHeaders(logs);
+    return { success: true, mode: readExecutionStore().control.mode };
+  });
+}
+
+function legacyExecutionSources() {
+  const props = PropertiesService.getScriptProperties();
+  return props.getKeys().filter(function(key) {
+    return isExecutionOrClaimMarkPropertyKey(key) && key !== EXECUTION_MARK_PURGE_STATE_KEY;
+  }).sort().map(function(key) { return { key: key, raw: props.getProperty(key) }; });
+}
+
+function executionDigest(value) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8)
+    .map(function(b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
+}
+
+function importLegacyExecutionBatch(store, keys) {
+  const props = PropertiesService.getScriptProperties();
+  const requests = [];
+  const byKey = {};
+  store.entries.forEach(function(e) { byKey[e.record.executionKey] = e; });
+  keys.forEach(function(propertyKey) {
+    const raw = props.getProperty(propertyKey);
+    if (raw == null) return;
+    const old = parseExecutionMarkRecord(raw);
+    if (!old || !old.executionKey || !old.messageId || typeof old.success !== 'boolean' || !isFinite(Date.parse(old.markedAt))) throw new Error('invalid_legacy_mark');
+    const key = normalizeExecutionKey(old.executionKey);
+    const isClaim = propertyKey.indexOf(CLAIM_MARK_KEY_PREFIX) === 0;
+    if (propertyKey !== (isClaim ? buildClaimMarkPropertyKey(key) : buildExecutionMarkPropertyKey(key))) throw new Error('legacy_key_mismatch');
+    let entry = byKey[key];
+    if (entry && entry.record.messageId !== String(old.messageId)) throw new Error('legacy_message_conflict');
+    if (!entry) {
+      entry = { row: store.nextRow++, record: {
+        schemaVersion: 1, writerEpoch: store.control.epoch, executionKey: key, messageId: String(old.messageId), rowHint: old.rowIndex,
+        occurrenceId: 'legacy', state: isClaim ? 'UNKNOWN' : (old.success ? 'CONFIRMED' : 'FAILED'),
+        deliveryPolicy: 'no_auto_retry', claimAt: old.markedAt,
+        deadlineAt: new Date(Date.parse(old.markedAt) + CLAIM_PENDING_MAX_AGE_MS).toISOString(), completedAt: isClaim ? '' : old.markedAt,
+        updatedAt: old.markedAt, retainUntil: new Date(Date.parse(old.markedAt) + EXECUTION_MARK_MAX_AGE_MS).toISOString(),
+        accountingVersion: isClaim ? 0 : 1, legacySources: {}
+      } };
+      byKey[key] = entry;
+    }
+    const record = entry.record;
+    record.legacySources = record.legacySources || {};
+    const digest = executionDigest(raw);
+    if (record.legacySources[propertyKey] && record.legacySources[propertyKey] !== digest) throw new Error('legacy_source_changed');
+    // An authoritative Sheet confirmation always wins over the frozen snapshot.
+    if (!isClaim && record.accountingVersion === 0) {
+      record.state = old.success ? 'CONFIRMED' : 'FAILED'; record.completedAt = old.markedAt;
+      record.updatedAt = old.markedAt; record.retainUntil = new Date(Date.parse(old.markedAt) + EXECUTION_MARK_MAX_AGE_MS).toISOString();
+      record.accountingVersion = 1;
+    }
+    record.legacySources[propertyKey] = digest;
+  });
+  Object.keys(byKey).forEach(function(key) {
+    if (keys.some(function(k) { return k === buildClaimMarkPropertyKey(key) || k === buildExecutionMarkPropertyKey(key); })) {
+      requests.push(executionRecordRequest(store, byKey[key].row, byKey[key].record));
+    }
+  });
+  commitExecutionBatch(store, requests, 'import');
+}
+
+/** Editor-only, repeat until complete; cursor and imported rows share one commit. */
+function maintenanceMigrateExecutionMarks() {
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    if (store.control.mode === 'sheet_primary') throw new Error('pause_claims_before_migration');
+    const sources = legacyExecutionSources();
+    const manifest = executionDigest(JSON.stringify(sources));
+    if (store.control.manifest && store.control.manifest !== manifest) throw new Error('legacy_manifest_changed');
+    store.control.manifest = manifest;
+    const start = store.control.cursor || 0;
+    const batch = sources.slice(start, start + 100);
+    store.control.cursor = start + batch.length;
+    store.control.migrated = store.control.cursor === sources.length;
+    importLegacyExecutionBatch(store, batch.map(function(s) { return s.key; }));
+    return { success: true, copied: store.control.cursor, total: sources.length, complete: store.control.migrated };
+  });
+}
+
+function maintenanceExecutionStoreStatus() {
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    const states = {};
+    store.entries.forEach(function(e) { states[e.record.state] = (states[e.record.state] || 0) + 1; });
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+    const rows = store.messageRows;
+    const unresolvedMessages = rows.slice(1).map(function(r) { return parseRow(r, rows[0]); }).filter(function(m) {
+      return isClaimPendingLog(m.Exec_Log || '') && !store.entries.some(function(e) { return e.record.messageId === String(m.ID); });
+    }).map(function(m) { return String(m.ID); });
+    const unknownTimes = store.entries.filter(function(e) { return e.record.state === 'UNKNOWN'; }).map(function(e) { return Date.parse(e.record.claimAt || e.record.updatedAt); });
+    const overdue = store.entries.filter(function(e) { return e.record.state === 'CLAIMED' && Date.now() > Date.parse(e.record.deadlineAt); }).length;
+    return { success: true, control: store.control, states: states, records: store.entries.length,
+      overdueClaims: overdue, oldestUnknownAgeMs: unknownTimes.length ? Date.now() - Math.min.apply(null, unknownTimes) : 0,
+      legacyUnknownMessageIds: unresolvedMessages };
+  });
+}
+
+/** Explicit operator attestations; these cannot retire an old deployment themselves. */
+function maintenanceActivateExecutionStore(options) {
+  if (!options || options.oldWritersRetired !== true || options.isolatedValidationPassed !== true) throw new Error('cutover_attestations_required');
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    if (!store.control.migrated || executionDigest(JSON.stringify(legacyExecutionSources())) !== store.control.manifest) throw new Error('migration_not_verified');
+    const sources = legacyExecutionSources();
+    sources.forEach(function(s) {
+      const record = store.entries.filter(function(e) { return e.record.legacySources && e.record.legacySources[s.key] === executionDigest(s.raw); })[0];
+      if (!record) throw new Error('migration_verification_failed');
+    });
+    store.control.mode = 'sheet_primary'; store.control.epoch++;
+    store.control.activatedAt = new Date().toISOString();
+    commitExecutionBatch(store, [], 'activate');
+    return { success: true, mode: store.control.mode };
+  });
+}
+
+/** Rollback target must retain schema v1 support; never switch back to Properties. */
+function maintenancePauseExecutionClaims() {
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore(); store.control.mode = 'paused';
+    commitExecutionBatch(store, [], 'pause'); return { success: true, mode: 'paused' };
+  });
+}
+
+/** No automatic retry after ambiguous writes, including the PREPARED write itself.
+ * Inspect Google execution logs and Sheet state first. Settled means the remote
+ * request can no longer arrive late, not merely that a lookup returned no row.
+ */
+function maintenanceResolveExecutionCommit(options) {
+  if (!options || !options.originalExecutionStopped || !options.remoteRequestSettled || !options.operationId) throw new Error('recovery_evidence_required');
+  return withExecutionMarkLock(function() {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(EXECUTION_CONTROL_SHEET);
+    const control = JSON.parse(sheet.getDataRange().getDisplayValues()[1][0]);
+    if (!control.pending || control.pending.operationId !== options.operationId) throw new Error('pending_operation_mismatch');
+    control.pending = null; control.mode = 'paused';
+    executionApiBatch([executionCells(sheet.getSheetId(), 2, 1, [[JSON.stringify(control)]])]);
+    return { success: true, mode: 'paused', requiresReconciliation: true };
+  });
+}
+
+/** Optional, never called by migration or cutover. Keep the frozen source until
+ * the observation window, snapshot and rollback exercise are explicitly verified.
+ * A partial deletion is restartable using each record's source digest.
+ */
+function maintenanceDeleteMigratedExecutionProperties(options) {
+  if (!options || !options.snapshotVerified || !options.rollbackVerified || !options.oldWritersRetired || !options.inflightReconciled) {
+    throw new Error('legacy_deletion_evidence_required');
+  }
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    if (store.control.mode !== 'sheet_primary' || !store.control.activatedAt ||
+        Date.now() - Date.parse(store.control.activatedAt) < EXECUTION_MARK_MAX_AGE_MS) throw new Error('observation_window_incomplete');
+    const sources = legacyExecutionSources();
+    sources.forEach(function(s) {
+      if (!store.entries.some(function(e) { return e.record.legacySources && e.record.legacySources[s.key] === executionDigest(s.raw); })) {
+        throw new Error('legacy_source_not_verified');
+      }
+    });
+    const props = PropertiesService.getScriptProperties();
+    sources.slice(0, 100).forEach(function(s) {
+      if (props.getProperty(s.key) !== s.raw) throw new Error('legacy_source_changed');
+      props.deleteProperty(s.key);
+    });
+    if (sources.length <= 100) {
+      store.control.legacyDeletedAt = new Date().toISOString();
+      commitExecutionBatch(store, [], 'legacy_cleanup');
+    }
+    return { success: true, deleted: Math.min(sources.length, 100), complete: sources.length <= 100 };
+  });
 }

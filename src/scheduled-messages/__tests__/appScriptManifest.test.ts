@@ -66,6 +66,7 @@ test('keeps manifest keys the rewrite used to silently drop', () => {
 
   assert.deepEqual(manifest.oauthScopes, [
     'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/script.external_request',
   ]);
   assert.deepEqual(manifest.dependencies, { enabledAdvancedServices: [] });
 });

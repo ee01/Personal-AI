@@ -243,7 +243,7 @@ async function installRoutes(page) {
             name: 'Code',
             type: 'SERVER_JS',
             source: appScriptTemplate,
-          }],
+          }, { name: 'appsscript', type: 'JSON', source: JSON.stringify({ oauthScopes: ['https://www.googleapis.com/auth/spreadsheets'] }) }],
         }),
       });
       return;
@@ -253,6 +253,11 @@ async function installRoutes(page) {
       url === 'https://script.googleapis.com/v1/projects/script-123/content' &&
       request.method() === 'PUT'
     ) {
+      const files = request.postDataJSON().files;
+      assert.ok(files.find(f => f.type === 'SERVER_JS').source.includes(`APP_SCRIPT_VERSION = '${templateVersion}'`));
+      const manifest = JSON.parse(files.find(f => f.name === 'appsscript').source);
+      assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/spreadsheets'));
+      assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.external_request'));
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({}),
@@ -344,89 +349,19 @@ try {
   await page.locator('text=App Script 可升级，但版本历史已满').waitFor({
     timeout: 15000,
   });
-  await page.locator('text=Project History 200/200').waitFor({
-    timeout: 15000,
-  });
-  const proofReceipt = page.locator('[aria-label="App Script 升级证明回执"]');
-  await proofReceipt.waitFor({
-    timeout: 15000,
-  });
-  await page.locator('text=升级证明回执: 版本历史已满，本次主操作只打开 Project History').waitFor({
-    timeout: 15000,
-  });
-  assert.match(
-    await proofReceipt.getAttribute('title') || '',
-    /仍未写 Sheet\/Script\/Jira Rule/,
-  );
-  const limitProjectHistoryButton = page.locator('button', { hasText: '打开 Project History' }).first();
-  await limitProjectHistoryButton.waitFor({
-    timeout: 15000,
-  });
-  assert.match(
-    await limitProjectHistoryButton.getAttribute('title') || '',
-    /打开 App Script Project History/,
-  );
-  assert.match(
-    await limitProjectHistoryButton.getAttribute('aria-label') || '',
-    /不升级 deployment、不写 Sheet、不改 Jira Rule/,
-  );
+  const limitButton = page.locator('button', { hasText: /^清理版本$/ });
+  await limitButton.waitFor({ timeout: 15000 });
+  assert.match(await limitButton.getAttribute('title') || '', /Project History 已用 200\/200/);
+  assert.match(await limitButton.getAttribute('aria-label') || '', /不升级 deployment、不写 Sheet、不改 Jira Rule/);
 
-  const recheckButton = page.locator('button', { hasText: '重新检查' });
-  await recheckButton.waitFor({
-    timeout: 15000,
-  });
-  assert.match(
-    await recheckButton.getAttribute('title') || '',
-    /重新读取 App Script 版本和 Project History 额度/,
-  );
-  assert.match(
-    await recheckButton.getAttribute('aria-label') || '',
-    /只读取版本端点、deployment 和 Project History，不写 Sheet、Script 或 Jira Rule/,
-  );
-
-  const dialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
-  await recheckButton.click();
-  const dialog = await dialogPromise;
-  assert.match(
-    dialog.message(),
-    new RegExp(`发现 App Script 新版本: 1\\.0\\.0 → ${templateVersion.replace(/\./g, '\\.')}`),
-  );
-  await dialog.accept();
-
-  await page.locator('text=App Script 可升级，版本历史接近上限').waitFor({
-    timeout: 15000,
-  });
-  await page.locator('text=Project History 198/200').waitFor({
-    timeout: 15000,
-  });
-  await page.locator('text=只有 getVersion 返回目标版本才把 Sheet/Storage 标记最新').waitFor({
-    timeout: 15000,
-  });
-  assert.match(
-    await proofReceipt.getAttribute('title') || '',
-    /未确认时保留旧配置并走回退\/检查页面/,
-  );
-  const cleanupButton = page.locator('button', { hasText: '打开 Project History' }).first();
-  await cleanupButton.waitFor({
-    timeout: 15000,
-  });
-  assert.match(
-    await cleanupButton.getAttribute('aria-label') || '',
-    /点击只打开检查页面，不升级 deployment、不写 Sheet、不改 Jira Rule/,
-  );
-
-  const upgradeButton = page.locator('button', { hasText: '升级调度系统' }).last();
-  await upgradeButton.waitFor({
-    timeout: 15000,
-  });
-  assert.match(
-    await upgradeButton.getAttribute('title') || '',
-    /只有 Web App 版本端点确认目标版本后才标记 Sheet\/Storage 为最新/,
-  );
-  assert.match(
-    await upgradeButton.getAttribute('aria-label') || '',
-    /失败项保留现有版本/,
-  );
+  // The compact toast now places re-check in page initialization/maintenance.
+  // Reload runs the same silent check after the simulated history cleanup.
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('text=Project History 仅剩 2 个版本').waitFor({ timeout: 15000 });
+  const upgradeButton = page.locator('button', { hasText: /^升级$/ });
+  await upgradeButton.waitFor({ timeout: 15000 });
+  assert.match(await upgradeButton.getAttribute('title') || '', /只有 Web App 版本端点确认目标版本后才标记 Sheet\/Storage 为最新/);
+  assert.match(await upgradeButton.getAttribute('aria-label') || '', /Project History 已用 198\/200/);
 
   const confirmPromise = page.waitForEvent('dialog', { timeout: 15000 }).then(async (confirmDialog) => {
     assert.match(confirmDialog.message(), /确定要升级调度系统吗/);
