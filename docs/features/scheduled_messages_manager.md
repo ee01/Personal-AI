@@ -240,9 +240,11 @@ Sheet 不可写、表头损坏、重复 key / 消息 ID、坏记录和锁超时�
 7. 终态最少保留最近变化后 48h，每 6h 检查、每批最多删除 100 行，锁内倒序删除；不允许 `maxAgeMs` 缩短窗口，未决永不按 TTL 删除。带 legacySources 的行在旧属性清理结束前不自动删除，以保留校验证据。
 8. 旧属性默认保留只读。切换观察至少 48h、在途完成对账、同权限快照和回滚演练都确认后，可选调用 `maintenanceDeleteMigratedExecutionProperties({snapshotVerified:true, rollbackVerified:true, oldWritersRetired:true, inflightReconciled:true})`，每次最多 100 条、逐项 hash 校验、可中断续跑；不碰 Timeline、Config、密钥或 purge 旧状态项。更长回调约定须延长记录与观察窗口，不能直接沿用 48h。
 
+3.0.1 修复初始化期间混用 Sheets REST 与 SpreadsheetApp 元数据的问题：API 刚建好的隐藏页，SpreadsheetApp 在同次执行中可能仍返回旧页列表，导致 `02B_INITIALIZE` 末尾误报 `execution_store_not_initialized`。初始化与账本操作现在统一用 REST 元数据确定页 ID/行数，REST 快照前 flush 当前脚本待提交的表写入；重试复用已存在的表，不重建或重置 mode、epoch、cursor、pending 和账本记录。修复保留 schema v1，不需要重新迁移已提交的数据。旧助手若只接受精确版本3.0.0，需更新其版本检查以接受3.0.x补丁版本；原表ID和人工核查配置保持原值。
+
 #### 旧表编辑器迁移助手
 
-`tools/scheduled-messages-old-sheet-migration.gs` 是供编辑器手动运行的独立辅助文件，和完整 3.0.0 模板放在同一个绑定项目中；不需要替换或删除 Code.gs。先把配置 `spreadsheetId` 填为要迁移的旧表 ID，备份/停写/验证声明默认均为 false，不能以排错为由跳过真实核查。
+`tools/scheduled-messages-old-sheet-migration.gs` 是供编辑器手动运行的独立辅助文件，和完整 3.0.x 模板放在同一个绑定项目中（初始化修复版为 3.0.1）；不需要替换或删除 Code.gs。先把配置 `spreadsheetId` 填为要迁移的旧表 ID，备份/停写/验证声明默认均为 false，不能以排错为由跳过真实核查。
 
 | 编辑器入口 | 行为与下一步 |
 |---|---|
@@ -272,7 +274,7 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.0.0';
+  var APP_SCRIPT_VERSION = '3.0.1';
   var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
   ```
 

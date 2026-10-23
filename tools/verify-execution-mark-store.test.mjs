@@ -161,3 +161,37 @@ test('trailing empty cells from REST compare equal to the selected SpreadsheetAp
   h.table('Messages').rows[1] = h.table('Messages').rows[1].slice(0, 11);
   assert.equal(h.context.claimMessagePending('M1', 2, candidate, 'empty-tail').success, true);
 });
+
+
+test('initialize and copy do not depend on SpreadsheetApp seeing REST-created hidden tabs', () => {
+  const h = executionHarness({ staleSheetMetadata: true });
+  const book = h.context.SpreadsheetApp.getActiveSpreadsheet();
+  h.initialize();
+  assert.equal(book.getSheetByName('_ExecutionMarks'), null, 'the service metadata deliberately remains stale');
+  assert.equal(h.context.maintenanceMigrateExecutionMarks().complete, true);
+  h.context.maintenanceActivateExecutionStore({ oldWritersRetired: true, isolatedValidationPassed: true });
+  assert.equal(h.claim().success, true); assert.equal(h.confirm().success, true);
+  const before = JSON.stringify(h.table('_ExecutionMarkControl').rows);
+  h.initialize();
+  assert.equal(JSON.stringify(h.table('_ExecutionMarkControl').rows), before, 'reinitialization must not reset mode, epoch or cursor');
+});
+test('retry initialization after lost REST create response reuses existing ledger without resetting data', () => {
+  const h = executionHarness({ staleSheetMetadata: true });
+  h.fail({ phase: 'commit', apply: true, throw: true });
+  assert.throws(() => h.initialize(), /network_timeout/);
+  h.initialize(); h.activate(); h.claim();
+  const before = JSON.stringify(h.table('_ExecutionMarks').rows);
+  h.initialize();
+  assert.equal(JSON.stringify(h.table('_ExecutionMarks').rows), before);
+  assert.equal(h.records().length, 1);
+});
+
+
+test('explicit prepared-operation recovery uses REST even while SpreadsheetApp metadata remains stale', () => {
+  const h = executionHarness({ staleSheetMetadata: true }); h.initialize(); h.activate();
+  h.fail({ phase: 'commit', code: 403 }); assert.equal(h.claim().success, false);
+  const control = JSON.parse(h.table('_ExecutionMarkControl').rows[1][0]);
+  const result = h.context.maintenanceResolveExecutionCommit({ operationId: control.pending.operationId, originalExecutionStopped: true, remoteRequestSettled: true });
+  assert.equal(result.mode, 'paused'); assert.equal(h.context.readExecutionStore().control.pending, null);
+  assert.equal(h.records().length, 0);
+});

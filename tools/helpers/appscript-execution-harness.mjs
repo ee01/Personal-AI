@@ -36,8 +36,8 @@ export function executionHarness(options = {}) {
   });
   const book = {
     getId: () => 'test-book',
-    getSheets: () => tables.map(t => sheet(t.id)),
-    getSheetByName: name => { const t = tables.find(t => t.name === name); return t ? sheet(t.id) : null; },
+    getSheets: () => tables.filter(t => !options.staleSheetMetadata || !t.name.startsWith('_Execution')).map(t => sheet(t.id)),
+    getSheetByName: name => { if (options.staleSheetMetadata && name.startsWith('_Execution')) return null; const t = tables.find(t => t.name === name); return t ? sheet(t.id) : null; },
   };
   function apply(requests) {
     const copy = structuredClone(tables);
@@ -77,7 +77,7 @@ export function executionHarness(options = {}) {
       let owns = false;
       return { waitLock: () => { if (lockHeld) throw Error('lock_timeout'); lockHeld = true; owns = true; }, releaseLock: () => { if (owns) lockHeld = false; } };
     } },
-    SpreadsheetApp: { getActiveSpreadsheet: () => book },
+    SpreadsheetApp: { getActiveSpreadsheet: () => book, flush: () => {} },
     ScriptApp: { getOAuthToken: () => 'test-token' },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: key => properties.get(key) ?? null, getKeys: () => [...properties.keys()],
@@ -87,6 +87,12 @@ export function executionHarness(options = {}) {
     UrlFetchApp: { fetch: (url, opts) => {
       if (!opts.payload) {
         if (failure?.phase === 'read') { const f = failure; failure = null; return { getResponseCode: () => f.code || 403 }; }
+        if (new URL(url).searchParams.has('fields')) return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({ sheets: tables.map(t => ({ properties: {
+            sheetId: t.id, title: t.name, hidden: t.name.startsWith('_Execution'), gridProperties: { rowCount: t.maxRows, columnCount: 100 }
+          } })) })
+        };
         const ranges = [...new URL(url).searchParams.getAll('ranges')];
         return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ valueRanges: ranges.map(range => {
           const name = range.match(/^'([^']+)'/)[1];
@@ -96,7 +102,7 @@ export function executionHarness(options = {}) {
         }) }) };
       }
       const requests = JSON.parse(opts.payload).requests;
-      const isPrepare = requests.length === 1 && requests[0].updateCells?.start.sheetId === book.getSheetByName('_ExecutionMarkControl')?.getSheetId() && JSON.parse(requests[0].updateCells.rows[0].values[0].userEnteredValue.stringValue).pending;
+      const isPrepare = requests.length === 1 && requests[0].updateCells?.start.sheetId === tables.find(t => t.name === '_ExecutionMarkControl')?.id && JSON.parse(requests[0].updateCells.rows[0].values[0].userEnteredValue.stringValue).pending;
       const phase = isPrepare ? 'prepare' : 'commit';
       events.push({ phase, requests: structuredClone(requests) });
       if (failure?.phase === phase) {

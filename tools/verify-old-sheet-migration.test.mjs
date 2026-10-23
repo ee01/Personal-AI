@@ -4,14 +4,13 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { executionHarness } from './helpers/appscript-execution-harness.mjs';
 
-function fixture(properties = {}) {
-  const h = executionHarness({ properties });
+function fixture(properties = {}, options = {}) {
+  const h = executionHarness({ properties, ...options });
   const c = h.context;
   const originalFetch = c.UrlFetchApp.fetch;
   c.UrlFetchApp.fetch = (url, options) => {
     assert.ok(url.startsWith('https://sheets.googleapis.com/'), 'helper must never call a delivery endpoint');
-    if (!url.includes('?fields=sheets.properties')) return originalFetch(url, options);
-    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ sheets: ['Messages', 'Logs', '_ExecutionMarks', '_ExecutionMarkControl'].filter(n => h.table(n)).map(n => ({ properties: { title: n, hidden: n.startsWith('_') } })) }) };
+    return originalFetch(url, options);
   };
   c.ScriptApp.getScriptId = () => 'test-script';
   c.ScriptApp.getProjectTriggers = () => [];
@@ -87,4 +86,17 @@ test('mark backup is explicit, excludes config, and never emits formula-bearing 
   assert.equal(Buffer.from(written[1][1], 'base64').toString(), source(1));
   assert.equal(h.properties.get('SECRET'), 'do not copy');
   assert.equal(h.properties.size, 3);
+});
+
+
+test('old-sheet Copy initializes and imports 32 properties despite stale SpreadsheetApp metadata', () => {
+  const properties = Object.fromEntries(Array.from({ length: 32 }, (_, i) => ['BOT_CLAIM_MARK_ek_old_' + i, source(i)]));
+  const h = fixture(properties, { staleSheetMetadata: true }); review(h);
+  const result = h.context.oldSheetMigration02Copy();
+  assert.equal(result.complete, true); assert.equal(result.progress.copied, 32); assert.equal(result.progress.total, 32);
+  assert.equal(result.status.control.mode, 'legacy_drain'); assert.equal(h.properties.size, 32);
+  const before = JSON.stringify(h.table('_ExecutionMarks').rows);
+  h.context.oldSheetMigration02Copy();
+  assert.equal(JSON.stringify(h.table('_ExecutionMarks').rows), before);
+  assert.equal(h.context.readExecutionStore().control.cursor, 32);
 });

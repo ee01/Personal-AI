@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.0.0';
+var APP_SCRIPT_VERSION = '3.0.1';
 var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
@@ -4597,7 +4597,36 @@ function executionApiBatch(requests) {
   if (code < 200 || code >= 300) throw new Error('execution_storage_http_' + code);
 }
 
+function executionReadSheetMetadata() {
+  SpreadsheetApp.flush();
+  const response = UrlFetchApp.fetch('https://sheets.googleapis.com/v4/spreadsheets/' +
+    SpreadsheetApp.getActiveSpreadsheet().getId() + '?fields=sheets.properties(sheetId,title,gridProperties)', {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true
+  });
+  if (response.getResponseCode() !== 200) throw new Error('execution_storage_http_' + response.getResponseCode());
+  const sheets = JSON.parse(response.getContentText()).sheets;
+  if (!Array.isArray(sheets)) throw new Error('invalid_execution_sheet_metadata');
+  return sheets.map(function(sheet) { return sheet.properties; });
+}
+
+function executionMetadataSheet(metadata, title) {
+  const matches = metadata.filter(function(properties) { return properties.title === title; });
+  if (!matches.length) return null;
+  const properties = matches[0];
+  if (matches.length !== 1 || !Number.isInteger(properties.sheetId) || properties.sheetId < 0 ||
+      !properties.gridProperties || !Number.isInteger(properties.gridProperties.rowCount) || properties.gridProperties.rowCount < 1) {
+    throw new Error('invalid_execution_sheet_metadata');
+  }
+  // Ledger requests only need ID and grid size. Use REST metadata handles instead
+  // of SpreadsheetApp objects, whose sheet list can be stale after REST addSheet.
+  return {
+    getSheetId: function() { return properties.sheetId; },
+    getMaxRows: function() { return properties.gridProperties.rowCount; }
+  };
+}
+
 function executionReadSnapshot() {
+  SpreadsheetApp.flush();
   // Use REST for a fresh snapshot inside the lock. SpreadsheetApp can cache reads
   // made earlier during candidate selection, before another execution committed.
   const ranges = ["'" + EXECUTION_CONTROL_SHEET + "'", "'" + EXECUTION_LEDGER_SHEET + "'", "'Messages'", "'Logs'!1:1"];
@@ -4613,9 +4642,9 @@ function executionReadSnapshot() {
 }
 
 function readExecutionStore() {
-  const book = SpreadsheetApp.getActiveSpreadsheet();
-  const ledger = book.getSheetByName(EXECUTION_LEDGER_SHEET);
-  const controlSheet = book.getSheetByName(EXECUTION_CONTROL_SHEET);
+  const metadata = executionReadSheetMetadata();
+  const ledger = executionMetadataSheet(metadata, EXECUTION_LEDGER_SHEET);
+  const controlSheet = executionMetadataSheet(metadata, EXECUTION_CONTROL_SHEET);
   if (!ledger || !controlSheet) throw new Error('execution_store_not_initialized');
   const snapshots = executionReadSnapshot();
   const controlRows = snapshots[0];
@@ -4818,11 +4847,11 @@ function maintenanceInitializeExecutionStore() {
   return withExecutionMarkLock(function() {
     const book = SpreadsheetApp.getActiveSpreadsheet();
     const requests = [];
-    const ids = book.getSheets().map(function(s) { return s.getSheetId(); });
+    const metadata = executionReadSheetMetadata();
+    const ids = metadata.map(function(properties) { return properties.sheetId; });
     let nextId = Math.max.apply(null, ids) + 1;
     [EXECUTION_LEDGER_SHEET, EXECUTION_CONTROL_SHEET].forEach(function(name) {
-      const sheet = book.getSheetByName(name);
-      if (sheet) return;
+      if (executionMetadataSheet(metadata, name)) return;
       const id = nextId++;
       requests.push({ addSheet: { properties: { sheetId: id, title: name, hidden: true, gridProperties: { rowCount: 1000, columnCount: 2 } } } });
       requests.push(executionCells(id, 1, 1, [name === EXECUTION_LEDGER_SHEET ? EXECUTION_LEDGER_HEADERS : ['Control_JSON']]));
@@ -4835,6 +4864,7 @@ function maintenanceInitializeExecutionStore() {
     const logs = book.getSheetByName('Logs');
     if (!logs) throw new Error('Logs sheet required');
     ensurePushLogHeaders(logs);
+    SpreadsheetApp.flush();
     return { success: true, mode: readExecutionStore().control.mode };
   });
 }
@@ -4966,8 +4996,9 @@ function maintenancePauseExecutionClaims() {
 function maintenanceResolveExecutionCommit(options) {
   if (!options || !options.originalExecutionStopped || !options.remoteRequestSettled || !options.operationId) throw new Error('recovery_evidence_required');
   return withExecutionMarkLock(function() {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(EXECUTION_CONTROL_SHEET);
-    const control = JSON.parse(sheet.getDataRange().getDisplayValues()[1][0]);
+    const sheet = executionMetadataSheet(executionReadSheetMetadata(), EXECUTION_CONTROL_SHEET);
+    if (!sheet) throw new Error('execution_store_not_initialized');
+    const control = JSON.parse(executionReadSnapshot()[0][1][0]);
     if (!control.pending || control.pending.operationId !== options.operationId) throw new Error('pending_operation_mismatch');
     control.pending = null; control.mode = 'paused';
     executionApiBatch([executionCells(sheet.getSheetId(), 2, 1, [[JSON.stringify(control)]])]);

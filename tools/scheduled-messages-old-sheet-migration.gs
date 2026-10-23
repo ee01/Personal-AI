@@ -1,4 +1,4 @@
-/** Editor-only old-sheet migration assistant. Paste ALONGSIDE template 3.0.0.
+/** Editor-only old-sheet migration assistant. Paste ALONGSIDE template 3.0.x.
  * Select only oldSheetMigration01Diagnose / 02Copy / 03Activate / 04Status.
  * It never sends messages, deletes source properties, resets pending operations,
  * clears Messages/Logs, deploys code, or automatically resumes Jira/triggers.
@@ -18,9 +18,9 @@ function oldSheetMigrationGuard() {
   if (book.getId() !== OLD_SHEET_MIGRATION.spreadsheetId) {
     throw new Error('WRONG_SPREADSHEET: expected=' + OLD_SHEET_MIGRATION.spreadsheetId + ', actual=' + book.getId());
   }
-  if (typeof APP_SCRIPT_VERSION === 'undefined' || APP_SCRIPT_VERSION !== '3.0.0' ||
+  if (typeof APP_SCRIPT_VERSION === 'undefined' || !/^3[.]0[.][0-9]+$/.test(APP_SCRIPT_VERSION) ||
       typeof maintenanceInitializeExecutionStore !== 'function') {
-    throw new Error('TEMPLATE_REQUIRED: paste the complete 3.0.0 template in the same project');
+    throw new Error('TEMPLATE_REQUIRED: paste the complete 3.0.x template in the same project');
   }
   return book;
 }
