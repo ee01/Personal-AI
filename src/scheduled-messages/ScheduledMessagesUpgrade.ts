@@ -5,7 +5,7 @@ import { JiraAutomationService, JiraRule } from './JiraAutomationService';
 import { normalizeSheetConfig } from './botAutomationConfig';
 import { SheetConfig, InitializationResult, BotAutomationRule } from './types';
 import { formatLocalScheduleDate, formatLocalScheduleTime } from './scheduleDateTime';
-import { RuntimeHealth, compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl } from './upgradeContracts';
+import { RuntimeHealth, compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl, jiraRuleContentMatches } from './upgradeContracts';
 
 export const UPGRADE_DRAFT_KEY = 'scheduledMessagesUpgradeDraft';
 export interface UpgradeDraft {
@@ -277,9 +277,10 @@ export class ScheduledMessagesUpgrade {
     });
     const verifyRule = async (config: BotAutomationRule, expected: JiraRule) => {
       const read = await jira.getRuleById(config, config.ruleId);
-      if (!read || read.state !== expected.state ||
-          JSON.stringify(read.trigger) !== JSON.stringify(expected.trigger) ||
-          JSON.stringify(read.components) !== JSON.stringify(expected.components)) throw new Error('Jira 规则回读不一致，保持暂停并重试切换');
+      const mismatch = !read ? '规则不存在' : read.state !== expected.state ? '启停状态' :
+        !jiraRuleContentMatches(expected.trigger, read.trigger) ? '触发条件' :
+        !jiraRuleContentMatches(expected.components, read.components) ? '动作内容或顺序' : '';
+      if (mismatch) throw new Error(`Jira 规则 ${config.ruleId} 回读不一致（${mismatch}），保持暂停并重试切换`);
     };
     // First pause every rule; never leave a new URL enabled during partial cutover.
     for (const { config } of this.draft.rules!) {

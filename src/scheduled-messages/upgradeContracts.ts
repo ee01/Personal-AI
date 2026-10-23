@@ -36,6 +36,18 @@ export function ruleContainsUrl(value: unknown, url: string): boolean {
   return serialized.includes(url) || serialized.includes(encodeURIComponent(url));
 }
 
+/** Jira regenerates structural node IDs on PUT. Keep business IDs inside value intact. */
+export function jiraRuleContentMatches(expected: unknown, actual: unknown): boolean {
+  const canonical = (value: any, node = false): any => {
+    if (Array.isArray(value)) return value.map(item => canonical(item, node));
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort()
+      .filter(key => !node || !['id', 'parentId', 'conditionParentId'].includes(key))
+      .map(key => [key, canonical(value[key], node && ['children', 'conditions'].includes(key))]));
+  };
+  return JSON.stringify(canonical(expected, true)) === JSON.stringify(canonical(actual, true));
+}
+
 export interface ImportPreview {
   rows: string[][];
   pending: string[];

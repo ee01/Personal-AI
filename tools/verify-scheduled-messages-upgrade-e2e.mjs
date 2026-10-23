@@ -16,9 +16,18 @@ const sourceRows = [headers,
  ['pending2','Second unknown','body','2026-10-23','10:00','Bot','Active','2026-10-23 10:00','','0','⏳ API 已领取待确认']];
 let targetRows = [headers], configRows = [['Key','Value']], targetMode = 'paused';
 let replayResponseLost = false;
+let corruptReadback = false;
 let sheetCreates = 0, scriptCreates = 0, failDeployment = true, failJira = false, jiraFailed = false, retirementCode;
-const rule = id => ({ id, name: `Custom ${id}`, state: 'ENABLED', trigger: { type: 'scheduled', value: { cron: '* * * * *' } },
-  components: [{ type: 'web', url: sourceUrl+'?action=getBotMessageCurrentTime' }, { type: 'web', url: sourceUrl+'?action=confirmBotMessageTriggered' }, { type: 'custom', url: sourceUrl+'?action=cacheReleaseInfo', customExpression: 'keep-me' }], projects: [], tags: [], labels: [] });
+const rule = id => ({ id, name: `Custom ${id}`, state: 'ENABLED', trigger: { id: 'old-trigger', type: 'scheduled', value: { cron: '* * * * *' } },
+  components: [{ id: 'old-poll', type: 'web', url: sourceUrl+'?action=getBotMessageCurrentTime' }, { type: 'web', url: sourceUrl+'?action=confirmBotMessageTriggered' }, { type: 'custom', url: sourceUrl+'?action=cacheReleaseInfo', customExpression: 'keep-me', children: [{ id: 'old-child', parentId: 'old-parent', type: 'web', value: { id: 'business-id', url: sourceUrl+'?action=confirm' } }], conditions: [{ id: 'old-condition', conditionParentId: 'old-parent', value: { jql: 'status = Open' } }] }], projects: [], tags: [], labels: [] });
+let nodeSequence = 0;
+// Jira persists new structural node IDs and may return object keys in another order.
+const jiraRoundtrip = (value, node = false) => {
+  if (Array.isArray(value)) return value.map(item => jiraRoundtrip(item, node));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key,
+    node && ['id', 'parentId', 'conditionParentId'].includes(key) ? `server-${++nodeSequence}` : jiraRoundtrip(item, node && ['children', 'conditions'].includes(key))]));
+};
 const rules = [rule(1),rule(2)];
 const calls = [];
 const props = ['Messages','Config','Logs'].map((title,i)=>({ properties:{ title, sheetId:i+11,index:i } }));
@@ -96,7 +105,12 @@ try {
       if(method==='PUT') {
         const body=req.postDataJSON();
         if(failJira && !jiraFailed && body.id === 2 && JSON.stringify(body).includes(targetUrl)) {jiraFailed=true;return respond({error:'fixture permission denied'},403);}
-        const index=rules.findIndex(r=>r.id===body.id);rules[index]=body;return respond(body);
+        const index=rules.findIndex(r=>r.id===body.id);
+        rules[index]={...body,trigger:jiraRoundtrip(body.trigger,true),components:jiraRoundtrip(body.components,true)};
+        if(corruptReadback && body.id===2 && body.state==='DISABLED' && JSON.stringify(body).includes(targetUrl)) {
+          corruptReadback=false;rules[index].components[0].url=sourceUrl+'?action=getBotMessageCurrentTime';
+        }
+        return respond(rules[index]);
       }
       return respond({});
     }
@@ -135,11 +149,21 @@ try {
   await wizard.getByRole('alert').waitFor();
   assert.equal(jiraFailed,true);assert.equal(targetMode,'paused');assert.ok(rules.every(r=>r.state==='DISABLED'));
   assert.equal((await worker.evaluate(()=>chrome.storage.local.get('scheduledMessagesConfig'))).scheduledMessagesConfig.sheetId,'old-book');
+  corruptReadback=true;
+  await wizard.getByRole('button',{name:'切换到新表',exact:true}).click();
+  await wizard.getByRole('alert').filter({hasText:'动作内容或顺序'}).waitFor();
+  assert.equal(corruptReadback,false);
+  assert.equal(targetMode,'paused');assert.ok(rules.every(r=>r.state==='DISABLED'));
+  assert.equal((await worker.evaluate(()=>chrome.storage.local.get('scheduledMessagesConfig'))).scheduledMessagesConfig.sheetId,'old-book');
   await wizard.getByRole('button',{name:'切换到新表',exact:true}).click();
   await wizard.getByRole('heading',{name:'4. 新表已接管',exact:true}).waitFor();
+  await page.waitForFunction(()=>document.querySelector('fieldset')?.disabled===false);
+  assert.equal(await page.getByRole('button',{name:'➕ 新增',exact:true}).isEnabled(),true,'successful cutover reloads the manager and unlocks the candidate without another click');
   const saved=(await worker.evaluate(()=>chrome.storage.local.get('scheduledMessagesConfig'))).scheduledMessagesConfig;
   assert.equal(saved.sheetId,'new-book');assert.equal(targetMode,'sheet_primary');
   for(const r of rules){assert.equal(r.state,'ENABLED');assert.equal(JSON.stringify(r).includes(sourceUrl),false);assert.equal(r.components[2].customExpression,'keep-me');}
+  assert.equal(rules[0].components[2].children[0].value.id,'business-id');
+  assert.notEqual(rules[0].trigger.id,'old-trigger');
   assert.ok(configRows.some(r=>r[0]==='web_app_url'&&r[1]===targetUrl));
   await wizard.getByRole('button',{name:'检查真实领取回执',exact:true}).click();
   await wizard.getByText(/尚无真实领取；可能暂无到期任务/).waitFor();

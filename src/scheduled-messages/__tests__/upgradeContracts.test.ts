@@ -1,8 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl } from '../upgradeContracts';
+import { compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl, jiraRuleContentMatches } from '../upgradeContracts';
 const headers = ['ID', 'Topic', 'Content', 'Status', 'Last_Exec', 'Exec_Count', 'Exec_Log', 'Push_Method', 'Schedule_Date', 'Schedule_Time'];
 const row = ['A', 'Test', '=not-a-formula()', 'Active', '2026-10-23 09:00', '3', '✅ 推送成功', 'Bot', '2026-10-23', '09:00'];
+test('Jira readback accepts regenerated structural IDs and object key order', () => {
+  const expected = [{ id: 'old', type: 'branch', children: [{ id: 'child', parentId: 'old', type: 'web', value: { url: 'new', id: 'business' } }], conditions: [{ id: 'condition', conditionParentId: 'old', value: { jql: 'status = Open' } }] }];
+  const actual = [{ conditions: [{ value: { jql: 'status = Open' }, conditionParentId: 'new-id', id: 'new-condition' }], children: [{ value: { id: 'business', url: 'new' }, type: 'web', parentId: 'new-id', id: 'new-child' }], type: 'branch', id: 'new-id' }];
+  assert.equal(jiraRuleContentMatches(expected, actual), true);
+  assert.equal(jiraRuleContentMatches({ id: 'old', type: 'scheduled', value: { cron: '* * * * *' } }, { value: { cron: '* * * * *' }, type: 'scheduled', id: 'new' }), true);
+});
+test('Jira readback rejects URL, business ID, condition, custom field, type and action-order changes', () => {
+  const expected = [{ id: 'old', type: 'web', value: { url: 'new', id: 'business', parentId: 'business-parent', conditionParentId: 'business-condition' }, conditions: [{ id: 1, value: { jql: 'status = Open' } }], custom: { id: 'keep' } }, { type: 'log', value: 'end' }];
+  const changed = (mutate: (copy: any) => void) => { const copy = JSON.parse(JSON.stringify(expected)); mutate(copy); assert.equal(jiraRuleContentMatches(expected, copy), false); };
+  changed(copy => { copy[0].value.url = 'old'; });
+  for (const key of ['id', 'parentId', 'conditionParentId']) changed(copy => { copy[0].value[key] = 'changed'; });
+  changed(copy => { copy[0].conditions[0].value.jql = 'status = Closed'; });
+  changed(copy => { copy[0].custom.id = 'changed'; });
+  changed(copy => { copy[0].type = 'log'; });
+  changed(copy => { copy.reverse(); });
+  changed(copy => { copy[0].children = []; });
+});
 test('compatibility requires correct book, protocol and active ledger, not just a version', () => {
   assert.equal(compatibleRuntime({ success: true, scriptVersion: '3.1.0' }, 'A'), false);
   const health = { success: true, spreadsheetId: 'A', ready: true, mode: 'sheet_primary', executionStoreSchemaVersion: 1 };

@@ -159,7 +159,13 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
           <button disabled={busy || !manual} style={button} onClick={() => run(async service => { await service.save({ manualRetired: true, retired: true }); })}>记录人工核验</button>
         </details>
         <label style={{ display: 'block' }}><input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)} />我已核对导入、所有账号旧触发器及在途发送状态，接受切换期间短暂延迟、漏发/重复风险，并授权更新原 Jira 规则及启用新表</label>
-        <button disabled={busy || !draft.retired || !acknowledged} style={button} onClick={() => run(async service => { await service.cutover(); })}>切换到新表</button>
+        <button disabled={busy || !draft.retired || !acknowledged} style={button} onClick={async () => {
+          let completed = false;
+          await run(async service => { await service.cutover(); completed = true; });
+          // The manager and its service still point at the source until reloaded.
+          // Reload only after the complete draft and active config are persisted.
+          if (completed) window.location.reload();
+        }}>切换到新表</button>
         <button disabled={busy || !!draft.cutoverAt} style={button} onClick={() => run(async service => { await service.save({ stage: 'import' }); })}>返回检查消息</button>
       </>}
       {draft?.stage === 'complete' && <>
