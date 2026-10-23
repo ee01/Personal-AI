@@ -191,6 +191,7 @@ test('cutover repairs a HEAD deployment URL before any Jira mutation and rewrite
       }
     } }),
     './ConfigSyncService': () => ({ ConfigSyncService: class {
+      async readConfigFromSheet() { return { last_sync_time: '2026-10-23T14:00:00Z' }; }
       async saveConfigToSheet(config) { configWrites.push(config); }
       async saveConfigToStorage() {}
     } }),
@@ -222,6 +223,11 @@ test('cutover repairs a HEAD deployment URL before any Jira mutation and rewrite
   assert.equal(configWrites.length, 1);
   assert.equal(configWrites[0].webAppUrl, NEW_URL);
   assert.equal(configWrites[0].deploymentId, 'dep9');
+  // A retry can already hold the repaired URL while Config still has stale data.
+  // Reconcile Config again even though neither URL nor cutoverAt changes now.
+  await service.cutover();
+  assert.equal(configWrites.length, 2);
+  assert.equal(configWrites[1].webAppUrl, NEW_URL);
   // Activation went to the repaired URL; the HEAD URL was never contacted.
   assert.ok(fetchCalls.includes(NEW_URL));
   assert.ok(!fetchCalls.includes(HEAD_URL));

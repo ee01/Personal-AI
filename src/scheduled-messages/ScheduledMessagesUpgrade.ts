@@ -259,17 +259,19 @@ export class ScheduledMessagesUpgrade {
     // Older clients saved the automatic HEAD test deployment as the candidate
     // Web App URL. Adopt (or publish) a real versioned release before any Jira
     // mutation so rules, Sheet Config and activation reference the same URL.
-    let webAppUrlChanged = false;
     if (this.draft.candidate.scriptId && this.draft.candidate.webAppUrl) {
       const deployed = await new SheetInitializer(this.token)
         .ensureVersionedWebAppDeployment(this.draft.candidate.scriptId, this.draft.candidate.webAppUrl);
       if (deployed.webAppUrl !== this.draft.candidate.webAppUrl) {
-        webAppUrlChanged = true;
         await this.save({ candidate: { ...this.draft.candidate, webAppUrl: deployed.webAppUrl, deploymentId: deployed.deploymentId } });
       }
     }
     const candidate = this.draft.candidate;
     if (!candidate.sheetId || !candidate.webAppUrl || !source.webAppUrl) throw new Error('缺少部署配置');
+    const sync = new ConfigSyncService(this.token);
+    // Keep current target settings and a freshness baseline before changing Jira.
+    // Another device changing Config during repair must still stop this write.
+    const targetConfig = await sync.readConfigFromSheet(candidate.sheetId);
     const jira = new JiraAutomationService();
     if (!this.draft.rules) {
       const configs = [source.botAutomation?.executorRule, source.botAutomation?.timelineSyncRule].filter(Boolean) as BotAutomationRule[];
@@ -303,27 +305,36 @@ export class ScheduledMessagesUpgrade {
     // Refresh source after stopping new polling. Pending copied rows remain quarantined.
     // Automatic imports are refreshed; manual edits must be rechecked by the user.
     if (this.draft.autoImported && !this.draft.cutoverAt) await this.importFromSource();
-    await this.inspect();
+    if (this.draft.stage === 'complete') {
+      // A completed live system can have legitimate in-flight claims. Its ledger
+      // remains authoritative; do not reapply the import-only quarantine gate.
+      const preview = inspectUpgradeRows(await this.readRows(candidate.sheetId));
+      if (preview.errors.length) throw new Error(preview.errors.join('；'));
+    } else {
+      await this.inspect();
+    }
     for (const { config, original } of this.draft.rules!) {
       const expected = expectedRule(original, 'DISABLED');
       await jira.updateRule(config, config.ruleId, expected);
       await verifyRule(config, expected);
     }
     const version = await AppScriptUpdater.getLatestVersionInfo();
-    const next: SheetConfig = { ...source, sheetId: candidate.sheetId,
+    const next: SheetConfig = { ...source, ...targetConfig, sheetId: candidate.sheetId,
       messagesSheetId: candidate.messagesSheetId, logsSheetId: candidate.logsSheetId, deploymentId: candidate.deploymentId,
       sheetUrl: candidate.sheetUrl!, scriptId: candidate.scriptId, webAppUrl: candidate.webAppUrl,
       appScriptVersion: version.version, appScriptLastUpdated: version.lastUpdated,
       minute_trigger_id: undefined, daily_trigger_id: undefined,
-      last_sync_time: undefined, created_at: new Date().toISOString() };
+      last_sync_time: targetConfig.last_sync_time, created_at: targetConfig.created_at || new Date().toISOString() };
     // Persist target Config before activation, but keep the local active config untouched.
-    // A repaired deployment URL forces a rewrite even when an earlier failed
-    // attempt already stamped cutoverAt with the stale address.
-    const sync = new ConfigSyncService(this.token);
-    if (!this.draft.cutoverAt || webAppUrlChanged) {
-      await sync.saveConfigToSheet(next, new Date().toISOString(), { syncAction: 'new_sheet_upgrade' });
-      await this.save({ cutoverAt: new Date().toISOString() });
-    }
+    // Always reconcile Config: a prior retry may have persisted the new candidate
+    // URL before failing to write Config. cutoverAt cannot prove its URL matches.
+    const syncedAt = new Date().toISOString();
+    await sync.saveConfigToSheet(next, syncedAt, {
+      syncAction: 'new_sheet_upgrade', expectedLastSyncTime: targetConfig.last_sync_time,
+    });
+    next.last_sync_time = syncedAt;
+    next.last_sync_action = 'new_sheet_upgrade';
+    await this.save({ cutoverAt: this.draft.cutoverAt || new Date().toISOString() });
     const health = await this.fresh('activate');
     if (!compatibleRuntime(health, candidate.sheetId)) throw new Error('新表未就绪，Jira 保持暂停');
     for (const { config, original } of this.draft.rules!) {

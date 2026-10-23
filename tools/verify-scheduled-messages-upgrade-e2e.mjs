@@ -199,6 +199,29 @@ try {
   await page.getByRole('button',{name:'➕ 新增',exact:true}).waitFor();
   await page.waitForFunction(()=>!Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='➕ 新增')?.disabled);
   assert.equal(await page.getByRole('button',{name:'➕ 新增',exact:true}).isEnabled(),true);
+  // A live new-system claim is not an orphan imported from the source sheet.
+  targetRows.push(['live-claim','Current claim','body','2026-10-23','10:00','Bot','Active','2026-10-23 10:00','','0','⏳ API 已领取待确认']);
+  const beforeRepair=JSON.stringify(targetRows);
+  await Promise.all([
+    page.waitForEvent('load'),
+    wizard.getByRole('button',{name:'修复部署和引用（保留新表数据）',exact:true}).click(),
+  ]);
+  await page.waitForFunction(()=>document.querySelector('fieldset')?.disabled===false);
+  assert.equal(JSON.stringify(targetRows),beforeRepair,'repair of a completed upgrade must not reimport or reset messages');
+  assert.equal(deploymentCreates,2,'repair reuses the published deployment');
+  await wizard.getByRole('button',{name:'收起向导（保留进度）',exact:true}).click();
+  await wizard.waitFor({state:'hidden'});
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('fieldset')?.disabled===false);
+  assert.equal(await wizard.count(),0,'completed receipt stays collapsed after reload');
+  assert.equal((await worker.evaluate(()=>chrome.storage.local.get('scheduledMessagesUpgradeDraft'))).scheduledMessagesUpgradeDraft.stage,'complete','collapsing keeps upgrade history');
+  targetMode='paused';
+  await page.reload();
+  await wizard.getByRole('status').filter({hasText:'paused'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'➕ 新增',exact:true}).isEnabled(),false,'dismissal must not bypass an unhealthy runtime');
+  targetMode='sheet_primary';
+  await wizard.getByRole('button',{name:'重新检查连接',exact:true}).click();
+  await wizard.waitFor({state:'hidden'});
   await fs.mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/scheduled-messages-upgrade.png',fullPage:true});
   assert.deepEqual(errors,[]);

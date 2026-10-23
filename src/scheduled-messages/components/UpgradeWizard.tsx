@@ -11,6 +11,7 @@ import { ImportPreview, compatibleRuntime, inspectUpgradeRows } from '../upgrade
 interface Props { config: SheetConfig; onCompatibility: (ready: boolean) => void; }
 const panel: React.CSSProperties = { margin: '16px 0', padding: 20, background: '#fff8eb', border: '1px solid #c8a65d', borderRadius: 10, color: '#302b24', fontSize: 14, lineHeight: 1.65 };
 const button: React.CSSProperties = { margin: '8px 12px 8px 0', padding: '8px 14px', cursor: 'pointer' };
+const DISMISSED_RECEIPT_KEY = 'scheduledMessagesUpgradeDismissedReceipt';
 
 function nextPlan(preview: ImportPreview): string {
   const now = new Date();
@@ -60,10 +61,10 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
   };
   useEffect(() => {
     void check();
-    void chrome.storage.local.get(UPGRADE_DRAFT_KEY).then(result => {
+    void chrome.storage.local.get([UPGRADE_DRAFT_KEY, DISMISSED_RECEIPT_KEY]).then(result => {
       const saved = result[UPGRADE_DRAFT_KEY] as UpgradeDraft | undefined;
       if (saved && (saved.source.sheetId === config.sheetId || saved.candidate.sheetId === config.sheetId)) {
-        setDraft(saved); setOpen(true);
+        setDraft(saved); setOpen(saved.stage !== 'complete' || result[DISMISSED_RECEIPT_KEY] !== saved.id);
       }
     });
   }, [config.sheetId]);
@@ -96,9 +97,9 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
   if (ready && !open) return null;
   return <section aria-label="新表升级向导" style={panel}>
     <strong>{ready || draft?.stage === 'complete' ? '新表升级收据' : '当前表只读 · 升级到兼容新表'}</strong>
-    <p role="status">{draft?.stage === 'complete' ? '切换已完成，进入新表管理后刷新当前列表。' : health}</p>
+    <p role="status">{draft?.stage === 'complete' ? `已有切换记录。${health}` : health}</p>
     {!open && <>
-      <button style={button} onClick={() => setOpen(true)}>开始新表升级</button>
+      <button style={button} onClick={() => setOpen(true)}>{draft?.stage === 'complete' ? '查看升级收据与修复' : '开始新表升级'}</button>
       <button style={button} onClick={check}>重新检查连接</button>
       <p>旧表与旧 Jira 不会因打开此页而停用。可以继续查看和导出原表。</p>
       <a href={config.sheetUrl} target="_blank" rel="noreferrer">查看旧 Google Sheet</a>
@@ -170,6 +171,14 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
       </>}
       {draft?.stage === 'complete' && <>
         <h3>4. 新表已接管</h3>
+        <p>若完成记录仍引用 HEAD 测试部署，可在原新表上修复。会核验正式部署并同步 Config、扩展和 Jira，短暂停止后恢复原规则；不会重新导入消息或清空执行账本。</p>
+        <button disabled={busy} style={button} onClick={async () => {
+          onCompatibility(false); setReady(false); setHealth('正在修复部署和引用，管理暂时只读…');
+          let completed = false;
+          await run(async service => { await service.cutover(); completed = true; });
+          if (completed) window.location.reload();
+          else setHealth('修复未完成，请处理下方错误后继续；管理保持只读。');
+        }}>修复部署和引用（保留新表数据）</button>
         <p>切换时间：{draft.cutoverAt}。Jira 地址已回读验证；真实下游送达仍以消息确认和 Logs 为准。</p>
         <p>{receipt}</p>
         {draft.source.botAutomation?.timelineSyncRule && <div>
@@ -211,7 +220,10 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
       </>}
       {busy && <p role="status">正在执行，请勿重复操作…</p>}
       {error && <p role="alert">{error}{draft?.retirementWritten || draft?.cutoverAt ? ' 旧触发器可能已停用或 Jira 已部分切换，请从当前步骤继续，不要直接恢复旧发送。' : ' 当前扩展配置尚未切换。'}</p>}
-      <button disabled={busy} style={button} onClick={() => setOpen(false)}>收起向导（保留进度）</button>
+      <button disabled={busy} style={button} onClick={async () => {
+        if (draft?.stage === 'complete') await chrome.storage.local.set({ [DISMISSED_RECEIPT_KEY]: draft.id });
+        setOpen(false);
+      }}>收起向导（保留进度）</button>
     </>}
   </section>;
 };
