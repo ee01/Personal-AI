@@ -5,6 +5,7 @@
 
 import { InitializationResult, SheetConfig } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
+import { findVersionedWebAppDeployment } from './upgradeContracts';
 import {
   formatLocalScheduleDate,
   formatLocalScheduleTime,
@@ -204,13 +205,24 @@ export class SheetInitializer {
       // A previous upload may have failed after project creation. Reuse the project.
       await this.uploadUpgradeCode(state.scriptId, setupToken);
     }
-    if (!state.webAppUrl) {
+    {
       // Recover an applied deployment whose response was lost instead of deploying twice.
-      const response = await fetch(`https://script.googleapis.com/v1/projects/${state.scriptId}/deployments`, {
-        headers: { Authorization: `Bearer ${this.token}` },
-      });
-      if (!response.ok) throw new Error('无法检查候选部署，请重试');
-      const existing = (await response.json()).deployments?.find((d: any) => d.entryPoints?.some((e: any) => e.webApp?.url));
+      // Google also lists an automatic HEAD entry without versionNumber. It is
+      // not a published release, even if it has a Web App URL and anonymous config.
+      // Revalidate saved checkpoints too: older clients may have saved that HEAD URL.
+      const deployments: any[] = [];
+      let pageToken: string | undefined;
+      do {
+        const suffix = pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : '';
+        const response = await fetch(`https://script.googleapis.com/v1/projects/${state.scriptId}/deployments${suffix}`, {
+          headers: { Authorization: `Bearer ${this.token}` }, signal: AbortSignal.timeout(20000),
+        });
+        if (!response.ok) throw new Error('无法检查候选部署，请重试');
+        const page = await response.json();
+        deployments.push(...(page.deployments || []));
+        pageToken = page.nextPageToken;
+      } while (pageToken);
+      const existing = findVersionedWebAppDeployment(deployments, state.webAppUrl);
       const webAppUrl = existing?.entryPoints?.find((e: any) => e.webApp?.url)?.webApp.url || await this.deployWebApp(state.scriptId!);
       await persist({ webAppUrl, deploymentId: existing?.deploymentId || this.deploymentId });
     }

@@ -1,8 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl, jiraRuleContentMatches } from '../upgradeContracts';
+import { compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl, jiraRuleContentMatches, findVersionedWebAppDeployment } from '../upgradeContracts';
 const headers = ['ID', 'Topic', 'Content', 'Status', 'Last_Exec', 'Exec_Count', 'Exec_Log', 'Push_Method', 'Schedule_Date', 'Schedule_Time'];
 const row = ['A', 'Test', '=not-a-formula()', 'Active', '2026-10-23 09:00', '3', '✅ 推送成功', 'Bot', '2026-10-23', '09:00'];
+test('deployment recovery rejects HEAD even with an anonymous Web App URL', () => {
+  const head = { deploymentId: 'head', deploymentConfig: { scriptId: 'script' }, entryPoints: [{ webApp: { url: 'head/exec', entryPointConfig: { access: 'ANYONE_ANONYMOUS' } } }] };
+  assert.equal(findVersionedWebAppDeployment([head]), undefined);
+  for (const versionNumber of [0, -1, 1.5, '1']) assert.equal(findVersionedWebAppDeployment([{ ...head, deploymentConfig: { versionNumber } }]), undefined);
+  const release = { ...head, deploymentId: 'release', deploymentConfig: { versionNumber: 1 }, entryPoints: [{ webApp: { url: 'release/exec' } }] };
+  const other = { ...release, deploymentId: 'other', entryPoints: [{ webApp: { url: 'other/exec' } }] };
+  assert.equal(findVersionedWebAppDeployment([head, release]), release);
+  assert.equal(findVersionedWebAppDeployment([head, release, other], 'other/exec'), other);
+  assert.equal(findVersionedWebAppDeployment([{ ...release, entryPoints: [] }]), undefined);
+});
 test('Jira readback accepts regenerated structural IDs and object key order', () => {
   const expected = [{ id: 'old', type: 'branch', children: [{ id: 'child', parentId: 'old', type: 'web', value: { url: 'new', id: 'business' } }], conditions: [{ id: 'condition', conditionParentId: 'old', value: { jql: 'status = Open' } }] }];
   const actual = [{ conditions: [{ value: { jql: 'status = Open' }, conditionParentId: 'new-id', id: 'new-condition' }], children: [{ value: { id: 'business', url: 'new' }, type: 'web', parentId: 'new-id', id: 'new-child' }], type: 'branch', id: 'new-id' }];

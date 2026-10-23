@@ -18,6 +18,9 @@ let targetRows = [headers], configRows = [['Key','Value']], targetMode = 'paused
 let replayResponseLost = false;
 let corruptReadback = false;
 let sheetCreates = 0, scriptCreates = 0, failDeployment = true, failJira = false, jiraFailed = false, retirementCode;
+let deploymentCreates = 0, deploymentExists = false;
+const headDeployment = {deploymentId:'head',deploymentConfig:{scriptId:'new-script'},entryPoints:[{webApp:{url:'https://script.google.com/macros/s/head/exec',entryPointConfig:{access:'ANYONE_ANONYMOUS'}}}]};
+const publishedDeployment = {deploymentId:'new',deploymentConfig:{versionNumber:1,scriptId:'new-script'},entryPoints:[{webApp:{url:targetUrl}}]};
 const rule = id => ({ id, name: `Custom ${id}`, state: 'ENABLED', trigger: { id: 'old-trigger', type: 'scheduled', value: { cron: '* * * * *' } },
   components: [{ id: 'old-poll', type: 'web', url: sourceUrl+'?action=getBotMessageCurrentTime' }, { type: 'web', url: sourceUrl+'?action=confirmBotMessageTriggered' }, { type: 'custom', url: sourceUrl+'?action=cacheReleaseInfo', customExpression: 'keep-me', children: [{ id: 'old-child', parentId: 'old-parent', type: 'web', value: { id: 'business-id', url: sourceUrl+'?action=confirm' } }], conditions: [{ id: 'old-condition', conditionParentId: 'old-parent', value: { jql: 'status = Open' } }] }], projects: [], tags: [], labels: [] });
 let nodeSequence = 0;
@@ -87,10 +90,13 @@ try {
       }
       if(url.pathname.endsWith('/content')) return respond({});
       if(url.pathname.endsWith('/versions')) return respond({versionNumber:1});
-      if(url.pathname.endsWith('/deployments')&&method==='GET') return respond({deployments:[]});
+      if(url.pathname.endsWith('/deployments')&&method==='GET') return url.searchParams.has('pageToken')
+        ? respond({deployments:deploymentExists?[publishedDeployment]:[]})
+        : respond({deployments:[headDeployment],nextPageToken:'published-page'});
       if(url.pathname.endsWith('/deployments')) {
+        deploymentCreates++;
         if(failDeployment) {failDeployment=false;return respond({error:'fixture failure'},403);}
-        return respond({deploymentId:'new',entryPoints:[{webApp:{url:targetUrl}}]});
+        deploymentExists=true;return respond(publishedDeployment);
       }
     }
     if(url.hostname==='script.google.com') {
@@ -126,9 +132,16 @@ try {
   await wizard.getByRole('button',{name:'创建新表',exact:true}).click();
   await wizard.getByRole('alert').waitFor();
   assert.equal(sheetCreates,1);assert.equal(scriptCreates,1);
+  await worker.evaluate(async head=>{const result=await chrome.storage.local.get('scheduledMessagesUpgradeDraft');const d=result.scheduledMessagesUpgradeDraft;d.candidate.webAppUrl=head.entryPoints[0].webApp.url;d.candidate.deploymentId=head.deploymentId;await chrome.storage.local.set({scheduledMessagesUpgradeDraft:d});},headDeployment);
   await wizard.getByRole('button',{name:'继续准备同一张新表',exact:true}).click();
   await wizard.getByRole('button',{name:'已授权，检查新表',exact:true}).waitFor();
   assert.equal(sheetCreates,1);assert.equal(scriptCreates,1);
+  assert.equal(deploymentCreates,2,'HEAD-only projects must create a versioned deployment');
+  await wizard.getByRole('button',{name:'继续准备同一张新表',exact:true}).click();
+  await wizard.getByRole('button',{name:'已授权，检查新表',exact:true}).waitFor();
+  assert.equal(deploymentCreates,2,'retries recover the published deployment on a later page');
+  const recovered=(await worker.evaluate(()=>chrome.storage.local.get('scheduledMessagesUpgradeDraft'))).scheduledMessagesUpgradeDraft.candidate;
+  assert.equal(recovered.webAppUrl,targetUrl);assert.equal(recovered.deploymentId,'new');
   assert.equal((await worker.evaluate(()=>chrome.storage.local.get('scheduledMessagesConfig'))).scheduledMessagesConfig.sheetId,'old-book');
   assert.equal(calls.some(c=>c.url.includes('/permissions')),false,'candidate remains owner-only');
   await wizard.getByRole('button',{name:'已授权，检查新表',exact:true}).click();

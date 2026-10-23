@@ -36,6 +36,14 @@ export function ruleContainsUrl(value: unknown, url: string): boolean {
   return serialized.includes(url) || serialized.includes(encodeURIComponent(url));
 }
 
+/** HEAD deployments exist automatically, but cannot serve as public versioned releases. */
+export function findVersionedWebAppDeployment(deployments: any[], preferredUrl?: string): any | undefined {
+  const versioned = deployments.filter(deployment =>
+    Number.isInteger(deployment.deploymentConfig?.versionNumber) && deployment.deploymentConfig.versionNumber > 0 &&
+    deployment.deploymentId && deployment.entryPoints?.some((entry: any) => entry.webApp?.url));
+  return versioned.find(deployment => deployment.entryPoints.some((entry: any) => entry.webApp?.url === preferredUrl)) || versioned[0];
+}
+
 /** Jira regenerates structural node IDs on PUT. Keep business IDs inside value intact. */
 export function jiraRuleContentMatches(expected: unknown, actual: unknown): boolean {
   const canonical = (value: any, node = false): any => {
