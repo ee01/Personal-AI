@@ -134,6 +134,13 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
     });
   }
 
+  if (url === 'https://script.google.com/macros/s/deployment-123/exec' && method === 'POST') {
+    const data = JSON.parse(String(init?.body || '{}'));
+    assert.equal(data.action, 'freshSetup');
+    assert.ok(data.token);
+    return jsonResponse({ success: true, spreadsheetId: 'sheet-123', mode: data.operation === 'prepare' ? 'paused' : 'sheet_primary' });
+  }
+
   if (
     url === 'https://script.google.com/macros/s/deployment-123/exec?action=setupTriggers' &&
     method === 'GET'
@@ -233,6 +240,7 @@ try {
     result.scriptId,
     result.webAppUrl,
     {
+      freshSetupToken: result.freshSetupToken,
       deploymentId: result.deploymentId,
       messagesSheetId: result.messagesSheetId,
       logsSheetId: result.logsSheetId,
@@ -307,7 +315,7 @@ try {
     'Receipt should expose the Web App deployment ID',
   );
   assert.ok(
-    receiptNotice.details.some((detail) => detail.includes('分钟 / 每日触发器已写入 Config')),
+    receiptNotice.details.some((detail) => detail.includes('分钟触发器已写入 Config')),
     'Receipt should confirm trigger metadata from Config',
   );
   assert.ok(

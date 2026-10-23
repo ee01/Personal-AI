@@ -1,3 +1,4 @@
+import { UpgradeWizard } from './components/UpgradeWizard';
 /**
  * 定时消息管理主页面
  */
@@ -1489,6 +1490,7 @@ function buildBotConfigWarningState(
 const ScheduledMessagesManager: React.FC = () => {
   const initialQueryFilters = parseScheduledMessagesQueryFilters(window.location.search);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [runtimeReady, setRuntimeReady] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);  // 🔧 新增：是否需要重新授权
@@ -1654,7 +1656,7 @@ const ScheduledMessagesManager: React.FC = () => {
         if (token) {
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
-          const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
+          const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true, readOnly: true });
           const didConsumeSetupReceipt = await consumePendingSetupReceipt(savedConfig);
           if (!didConsumeSetupReceipt) {
             maybeShowAgentTaskWebhookReadinessNotice(savedConfig, initialMessages);
@@ -1813,15 +1815,16 @@ const ScheduledMessagesManager: React.FC = () => {
   const loadMessages = async (
     messageService: ScheduledMessageService,
     skipJiraSync = false,
-    options: { deferEnrichment?: boolean } = {},
+    options: { deferEnrichment?: boolean; readOnly?: boolean } = {},
   ): Promise<ScheduledMessage[]> => {
     lastLoadMessagesErrorRef.current = null;
     try {
       const { deferEnrichment = false } = options;
-      const baseMessages = await messageService.getAllMessages();
+      const baseMessages = await messageService.getAllMessages({ readOnly: options.readOnly });
 
       setMessages(baseMessages);
       setStatistics(buildStatistics(baseMessages));
+      if (options.readOnly) return baseMessages;
 
       const applyOutreachOverlay = async (
         seedMessages: ScheduledMessage[],
@@ -2320,6 +2323,7 @@ const ScheduledMessagesManager: React.FC = () => {
     options: { interactive?: boolean; showCurrentAlert?: boolean } = {},
   ) => {
     const { interactive = false, showCurrentAlert = false } = options;
+    if (!runtimeReady) return;
 
     try {
       if (!config || !config.webAppUrl) {
@@ -2679,12 +2683,16 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
   
+  useEffect(() => {
+    if (runtimeReady && service) void loadMessages(service, false, { deferEnrichment: true });
+  }, [runtimeReady, service]);
+
   // 组件加载时检查更新
   useEffect(() => {
     if (isInitialized && config) {
       checkForUpdates({ interactive: false });
     }
-  }, [isInitialized, config]);
+  }, [isInitialized, config, runtimeReady]);
   
   const handleOpenScheduledSheetTab = async (
     tab: ScheduledMessagesSheetTab,
@@ -4518,7 +4526,7 @@ const ScheduledMessagesManager: React.FC = () => {
           setNeedsReauth(false);
           const messageService = new ScheduledMessageService(token);
           setService(messageService);
-          const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true });
+          const initialMessages = await loadMessages(messageService, false, { deferEnrichment: true, readOnly: true });
           if (config) {
             const didConsumeSetupReceipt = await consumePendingSetupReceipt(config);
             if (!didConsumeSetupReceipt) {
@@ -4566,6 +4574,11 @@ const ScheduledMessagesManager: React.FC = () => {
   
   return (
     <div style={styles.container}>
+      {config && <UpgradeWizard config={config} onCompatibility={setRuntimeReady} />}
+      <fieldset disabled={!runtimeReady} onClickCapture={event => {
+        const anchor = (event.target as HTMLElement).closest('a');
+        if (!runtimeReady && anchor && (!anchor.href || anchor.getAttribute('href') === '#')) { event.preventDefault(); event.stopPropagation(); }
+      }} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <header style={styles.header}>
         <h1 style={styles.title}>⏰ 定时消息管理</h1>
         <div style={styles.headerActions}>
@@ -5827,6 +5840,7 @@ const ScheduledMessagesManager: React.FC = () => {
            <div style={styles.tooltipContent}>{getScheduledMessageTooltipContent(hoveredMessage)}</div>
          </div>
        )}
+      </fieldset>
     </div>
   );
 };

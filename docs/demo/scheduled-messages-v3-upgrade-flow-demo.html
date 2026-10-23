@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>定时消息 3.0 · 新表升级交互流程</title>
+<style>
+  /* ---------- Design tokens ---------- */
+  :root{
+    --bg:#0b0d10; --bg-1:#111419; --bg-2:#171b21; --line:#232932; --line-2:#2e3540;
+    --fg:#e8ecf1; --fg-2:#a6afbb; --fg-3:#6f7987;
+    --accent:#4fd1a5; --accent-dim:rgba(79,209,165,.12);
+    --warn:#f2b84b; --warn-dim:rgba(242,184,75,.12);
+    --err:#f0716b; --err-dim:rgba(240,113,107,.12);
+    --info:#7aa7ff;
+    --r:8px; --r-sm:6px;
+    --ease:cubic-bezier(.2,.8,.2,1);
+    --t1:120ms; --t2:240ms; --t3:400ms;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Inter","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+  body{background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.035) 1px,transparent 0);background-size:24px 24px}
+  button{font:inherit;color:inherit;cursor:pointer}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .muted{color:var(--fg-2)} .dim{color:var(--fg-3)}
+
+  /* ---------- Shell ---------- */
+  .app{max-width:1120px;margin:0 auto;padding:32px 24px 64px}
+  .crumb{display:flex;gap:8px;align-items:center;color:var(--fg-3);font-size:12px;letter-spacing:.02em}
+  .crumb b{color:var(--fg-2);font-weight:500}
+  .clock{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+  .grid{display:grid;grid-template-columns:240px 1fr;gap:32px;margin-top:24px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr;gap:16px}}
+
+  /* ---------- Stepper rail ---------- */
+  .rail{position:sticky;top:24px;align-self:start}
+  .rail ol{list-style:none;margin:0;padding:0;position:relative}
+  .rail ol::before{content:"";position:absolute;left:11px;top:16px;bottom:16px;width:1px;background:var(--line-2)}
+  .rail li{position:relative}
+  .rail button{display:flex;gap:16px;align-items:flex-start;width:100%;background:none;border:0;padding:8px 0;text-align:left;border-radius:var(--r-sm)}
+  .rail button:disabled{cursor:default}
+  .node{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--bg);border:1px solid var(--line-2);font:11px var(--mono);color:var(--fg-3);transition:all var(--t2) var(--ease);position:relative;z-index:1}
+  .rail .lbl{font-weight:500;color:var(--fg-3);transition:color var(--t2)}
+  .rail .sub{display:block;font-size:12px;color:var(--fg-3);font-weight:400}
+  .rail li.on .node{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px var(--accent-dim)}
+  .rail li.on .lbl{color:var(--fg)}
+  .rail li.done .node{background:var(--accent);border-color:var(--accent);color:#06281c}
+  .rail li.done .lbl{color:var(--fg-2)}
+  .rail .eta{margin-top:24px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--fg-3)}
+  .bar{height:2px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent);width:0;transition:width var(--t3) var(--ease)}
+  @media(max-width:860px){
+    .rail{position:static}.rail ol{display:flex;gap:8px}.rail ol::before{display:none}
+    .rail .lbl .sub,.rail .eta{display:none}.rail .lbl{font-size:12px}
+    .rail button{flex-direction:column;gap:4px;align-items:center;text-align:center}
+  }
+
+  /* ---------- Panels ---------- */
+  .stage{min-height:560px;position:relative}
+  .view{display:none;animation:in var(--t3) var(--ease)}
+  .view.on{display:block}
+  @keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  h1{font-size:24px;line-height:32px;font-weight:600;margin:0 0 8px;letter-spacing:-.01em}
+  h2{font-size:16px;font-weight:600;margin:0 0 8px}
+  h3{font-size:12px;font-weight:500;margin:0 0 8px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.08em}
+  p{margin:0 0 16px}
+  .lead{color:var(--fg-2);max-width:620px;margin-bottom:24px}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r);padding:24px}
+  .card+.card{margin-top:16px}
+  .row{display:flex;gap:16px;align-items:center}
+  .stack>*+*{margin-top:16px}
+  .actions{display:flex;gap:8px;align-items:center;margin-top:32px}
+  .actions .hint{margin-left:auto;font-size:12px;color:var(--fg-3)}
+  kbd{font:11px var(--mono);border:1px solid var(--line-2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--fg-2)}
+
+  .btn{height:40px;padding:0 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--bg-2);font-weight:500;transition:all var(--t1) var(--ease);display:inline-flex;align-items:center;gap:8px}
+  .btn:hover{border-color:var(--fg-3)}
+  .btn:active{transform:scale(.98)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#06281c}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.ghost{background:none;border-color:transparent;color:var(--fg-2)}
+  .btn.ghost:hover{color:var(--fg)}
+  .btn[disabled]{opacity:.4;pointer-events:none}
+  .btn.lg{height:48px;padding:0 24px;font-size:15px}
+
+  .pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:11px;font-size:12px;font-weight:500;background:var(--bg-2);color:var(--fg-2);border:1px solid var(--line)}
+  .pill.ok{color:var(--accent);background:var(--accent-dim);border-color:transparent}
+  .pill.warn{color:var(--warn);background:var(--warn-dim);border-color:transparent}
+  .pill.err{color:var(--err);background:var(--err-dim);border-color:transparent}
+
+  .callout{display:flex;gap:16px;padding:16px;border-radius:var(--r);background:var(--warn-dim);border:1px solid rgba(242,184,75,.25)}
+  .callout.ok{background:var(--accent-dim);border-color:rgba(79,209,165,.25)}
+  .callout.err{background:var(--err-dim);border-color:rgba(240,113,107,.25)}
+  .callout svg{flex:none;margin-top:2px}
+  .callout p{margin:0}
+
+  /* ---------- Step 0 : detection banner ---------- */
+  .legacy{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
+  @media(max-width:640px){.legacy{grid-template-columns:1fr}}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;font-size:13px}
+  .kv dt{color:var(--fg-3)} .kv dd{margin:0}
+  .ro-table{width:100%;border-collapse:collapse;font-size:13px;opacity:.6}
+  .ro-table td{padding:8px 0;border-top:1px solid var(--line)}
+  .ro-table td:last-child{text-align:right}
+
+  /* ---------- Checklist w/ live progress ---------- */
+  .checklist{list-style:none;margin:0;padding:0}
+  .checklist li{display:flex;gap:16px;align-items:center;padding:12px 0;border-top:1px solid var(--line);color:var(--fg-3);transition:color var(--t2)}
+  .checklist li:first-child{border-top:0}
+  .checklist li .ic{flex:none;width:20px;height:20px;display:grid;place-items:center}
+  .checklist li .meta{margin-left:auto;font-size:12px}
+  .checklist li.run{color:var(--fg)}
+  .checklist li.ok{color:var(--fg-2)}
+  .checklist li.fail{color:var(--err)}
+  .spin{width:14px;height:14px;border:2px solid var(--line-2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .tick{color:var(--accent)}
+  .pend{width:6px;height:6px;border-radius:50%;background:var(--line-2)}
+
+  /* ---------- Step 2 : copy ---------- */
+  .seg{display:inline-flex;padding:4px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r-sm);gap:4px}
+  .seg button{height:32px;padding:0 12px;border:0;border-radius:4px;background:none;color:var(--fg-2);font-size:13px}
+  .seg button[aria-pressed="true"]{background:var(--bg);color:var(--fg);box-shadow:0 0 0 1px var(--line-2)}
+  table.msgs{width:100%;border-collapse:collapse;font-size:13px}
+  table.msgs th{font-weight:500;color:var(--fg-3);text-align:left;font-size:12px;padding:0 8px 8px;border-bottom:1px solid var(--line)}
+  table.msgs td{padding:12px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.msgs tr:last-child td{border-bottom:0}
+  table.msgs .t{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .col-hl{background:var(--accent-dim)}
+  .col-hl.bad{background:var(--err-dim)}
+  .tablewrap{overflow-x:auto;margin:0 -8px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:16px}
+  .stats div{background:var(--bg-1);padding:16px}
+  .stats b{display:block;font:600 24px/32px var(--mono)}
+  .stats span{font-size:12px;color:var(--fg-3)}
+  @media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .paste{border:1px dashed var(--line-2);border-radius:var(--r);padding:24px;text-align:center;transition:all var(--t2) var(--ease)}
+  .paste.filled{border-style:solid;border-color:var(--accent);background:var(--accent-dim);text-align:left}
+  .steps-mini{counter-reset:s;list-style:none;padding:0;margin:0 0 16px;text-align:left}
+  .steps-mini li{counter-increment:s;padding-left:32px;position:relative;margin:8px 0;color:var(--fg-2)}
+  .steps-mini li::before{content:counter(s);position:absolute;left:0;top:1px;width:20px;height:20px;border-radius:50%;border:1px solid var(--line-2);font:11px/18px var(--mono);text-align:center;color:var(--fg-3)}
+
+  /* ---------- Step 3 : switch ---------- */
+  .diff{font:12px/1.8 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 16px;overflow-x:auto;white-space:nowrap}
+  .diff .m{color:var(--err)} .diff .p{color:var(--accent)}
+  .window{position:relative;height:72px;margin:24px 0 8px}
+  .window .axis{position:absolute;left:0;right:0;top:40px;height:1px;background:var(--line-2)}
+  .window .zone{position:absolute;top:28px;height:24px;background:var(--warn-dim);border-left:1px solid var(--warn);border-right:1px solid var(--warn)}
+  .window .now{position:absolute;top:16px;bottom:8px;width:1px;background:var(--accent)}
+  .window .now::after{content:"切换 T";position:absolute;top:-16px;left:-18px;font:11px var(--mono);color:var(--accent)}
+  .window .ev{position:absolute;top:34px;width:12px;height:12px;margin-left:-6px;border-radius:50%;border:2px solid var(--bg)}
+  .window .tick-l{position:absolute;top:56px;font:11px var(--mono);color:var(--fg-3);transform:translateX(-50%)}
+  .risk-list{list-style:none;padding:0;margin:0}
+  .risk-list li{display:flex;gap:16px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:13px}
+  .risk-list li:first-child{border-top:0}
+  .risk-list .mono{width:48px;color:var(--fg-2)}
+
+  /* ---------- Step 4 : receipt ---------- */
+  .hero{display:flex;gap:24px;align-items:center;margin-bottom:24px}
+  .seal{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;background:var(--accent-dim);color:var(--accent);box-shadow:0 0 0 1px rgba(79,209,165,.3),0 0 32px rgba(79,209,165,.15);animation:pop var(--t3) cubic-bezier(.34,1.56,.64,1)}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:none;opacity:1}}
+  .receipt{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:640px){.receipt{grid-template-columns:1fr}}
+  .receipt .card{padding:16px}
+  .receipt b{display:block;font:600 20px/28px var(--mono)}
+
+  /* ---------- Annotation drawer ---------- */
+  .why{margin-top:32px;border-top:1px solid var(--line);padding-top:16px}
+  .why summary{cursor:pointer;color:var(--fg-3);font-size:12px;list-style:none;display:flex;gap:8px;align-items:center}
+  .why summary::-webkit-details-marker{display:none}
+  .why summary::before{content:"";width:6px;height:6px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(-45deg);transition:transform var(--t1)}
+  .why[open] summary::before{transform:rotate(45deg)}
+  .why ul{margin:12px 0 0;padding-left:16px;color:var(--fg-2);font-size:13px}
+  .why li{margin:4px 0}
+  .why b{color:var(--fg);font-weight:500}
+
+  .scenario{position:fixed;right:16px;bottom:16px;display:flex;gap:8px;align-items:center;background:var(--bg-1);border:1px solid var(--line);border-radius:var(--r);padding:8px 12px;font-size:12px;color:var(--fg-3);z-index:5}
+  .scenario label{display:flex;gap:6px;align-items:center;cursor:pointer}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,16px);opacity:0;background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r);padding:12px 16px;font-size:13px;transition:all var(--t2) var(--ease);pointer-events:none;z-index:6}
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:1ms!important;transition-duration:1ms!important}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2l6.5 11.5h-13z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.5v3M8 11.5v.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sheet" viewBox="0 0 16 16"><rect x="2.5" y="2" width="11" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 6h11M2.5 10h11M7 6v8" stroke="currentColor" stroke-width="1.3"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 16 16"><path d="M9 3h4v4M13 3L7 9M11 9.5V13H3V5h3.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="app">
+  <div class="crumb">
+    <span>Personal AI</span><span>/</span><span>定时消息</span><span>/</span><b>升级到 3.0</b>
+    <span class="clock mono"><span class="dot"></span>2026-10-23 周五 <span id="clk">10:12</span></span>
+  </div>
+
+  <div class="grid">
+    <!-- ===== Stepper ===== -->
+    <nav class="rail" aria-label="升级步骤">
+      <ol id="rail">
+        <li data-i="0"><button><span class="node">0</span><span class="lbl">发现旧表<span class="sub">2.x 只读</span></span></button></li>
+        <li data-i="1"><button><span class="node">1</span><span class="lbl">创建新表<span class="sub">约 40 秒，自动</span></span></button></li>
+        <li data-i="2"><button><span class="node">2</span><span class="lbl">带入消息<span class="sub">整行复制</span></span></button></li>
+        <li data-i="3"><button><span class="node">3</span><span class="lbl">一键切换<span class="sub">Jira 换址即交接</span></span></button></li>
+        <li data-i="4"><button><span class="node">4</span><span class="lbl">完成<span class="sub">收据 + 首轮确认</span></span></button></li>
+      </ol>
+      <div class="eta">
+        <div class="row" style="justify-content:space-between"><span>全程预计</span><span class="mono" id="eta">≈ 4 分钟</span></div>
+        <div class="bar"><i id="prog"></i></div>
+        <p style="margin-top:16px">切换前任何一步都可以关掉页面，旧表照常发送。</p>
+      </div>
+    </nav>
+
+    <main class="stage">
+      <!-- ===== 0. Detection ===== -->
+      <section class="view" data-v="0" aria-labelledby="h0">
+        <span class="pill warn"><svg width="12" height="12"><use href="#i-warn"/></svg>此表需要升级</span>
+        <h1 id="h0" style="margin-top:16px">你的消息表还是 2.x 结构，3.0 需要一张新表</h1>
+        <p class="lead">新版把发送记录从 Script Properties 挪进了表格本身，旧表无法原地转换。我们会帮你建一张新表、把消息搬过去、再把 Jira 指过去。<b style="color:var(--fg)">在你点「切换」之前，旧表一直照常发送。</b></p>
+
+        <div class="legacy">
+          <div class="card">
+            <h3>当前连接</h3>
+            <dl class="kv">
+              <dt>表格</dt><dd>Scheduled Messages · Esone</dd>
+              <dt>脚本版本</dt><dd class="mono">2.4.1</dd>
+              <dt>Jira 执行规则</dt><dd>运行中 · 每分钟</dd>
+              <dt>今日已发送</dt><dd class="mono">6 条</dd>
+            </dl>
+          </div>
+          <div class="card" aria-label="旧表消息（只读）">
+            <div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">消息 · 只读</h3><svg width="14" height="14" class="dim"><use href="#i-lock"/></svg></div>
+            <table class="ro-table">
+              <tr><td>每日站会提醒</td><td class="mono">09:30</td></tr>
+              <tr><td>午餐订餐（AsMe）</td><td class="mono">11:20</td></tr>
+              <tr><td>周报草稿生成</td><td class="mono">周五 17:00</td></tr>
+            </table>
+            <p class="dim" style="font-size:12px;margin:8px 0 0">升级完成前不能在这里编辑，避免两边内容不一致。</p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary lg" data-go="1">开始升级 <svg width="16" height="16"><use href="#i-arrow"/></svg></button>
+          <button class="btn ghost" id="later">稍后再说</button>
+          <span class="hint"><kbd>→</kbd> 下一步</span>
+        </div>
+        <details class="why"><summary>设计依据</summary><ul>
+          <li><b>预期管理</b>：首屏就说清「为什么要新表」「旧表会不会停」，消除升级焦虑——用户最怕的是点了按钮消息就断。</li>
+          <li><b>默认值效应</b>：唯一主按钮；「稍后再说」不惩罚，旧表继续工作。</li>
+          <li>只读而不是隐藏旧消息：保留掌控感，同时防止升级期间两边内容分叉。</li>
+        </ul></details>
+      </section>
+
+      <!-- ===== 1. Create ===== -->
+      <section class="view" data-v="1" aria-labelledby="h1">
+        <h1 id="h1">创建新表</h1>
+        <p class="lead">用你的 Google 账号建一张全新的 3.0 表。新表建好后处于<b style="color:var(--fg)">待接管</b>状态：不会发送任何消息，Jira 也还没指向它。</p>
+        <div class="card">
+          <div class="row" style="margin-bottom:16px">
+            <svg width="20" height="20" class="muted"><use href="#i-sheet"/></svg>
+            <div><div>Scheduled Messages 3.0 · Esone</div><div class="dim" style="font-size:12px">esone.demo@example.com · 仅你可见</div></div>
+            <span class="pill" id="newState" style="margin-left:auto">未创建</span>
+          </div>
+          <ul class="checklist" id="createList">
+            <li data-k="auth"><span class="ic"><span class="pend"></span></span>Google 授权<span class="meta mono dim"></span></li>
+            <li data-k="sheet"><span class="ic"><span class="pend"></span></span>创建表格与 Messages / Logs 表头<span class="meta mono dim"></span></li>
+            <li data-k="script"><span class="ic"><span class="pend"></span></span>绑定 3.0 脚本并部署 Web App<span class="meta mono dim"></span></li>
+            <li data-k="ledger"><span class="ic"><span class="pend"></span></span>初始化发送账本（全新表，无需迁移）<span class="meta mono dim"></span></li>
+            <li data-k="probe"><span class="ic"><span class="pend"></span></span>健康检查：账本就绪 · 无触发器 · 未接 Jira<span class="meta mono dim"></span></li>
+          </ul>
+        </div>
+        <div id="createErr" class="callout err" style="display:none;margin-top:16px">
+          <svg width="16" height="16" style="color:var(--err)"><use href="#i-x"/></svg>
+          <div><p><b>部署 Web App 失败</b>：Google 返回「需要再次授权」。已建好的表会保留，重试只会补完剩下的步骤，不会再建一张。</p>
+          <button class="btn" style="margin-top:12px" id="retry">重新授权并继续</button></div>
+        </div>
+        <div class="actions">
+          <button class="btn primary lg" id="createBtn">创建新表</button>
+          <button class="btn ghost" data-go="0">返回</button>
+          <span class="hint">旧表在此期间继续发送</span>
+        </div>
+        <details class="why"><summary>设计依据</summary><ul>
+          <li><b>目标梯度效应</b>：拆成 5 个可见子步，每完成一步打勾，越接近终点用户越愿意等。</li>
+          <li><b>即时反馈 + 可恢复</b>：失败只在失败那一行变红，重试不重复建表（右下角可切换到失败场景看效果）。</li>
+          <li>「待接管」是一个明确的中间态：用户能看到新表已存在、但还不会动——这是后面敢点「切换」的心理基础。</li>
+        </ul></details>
+      </section>
+
+      <!-- ===== 2. Copy ===== -->
+      <section class="view" data-v="2" aria-labelledby="h2">
+        <h1 id="h2">把消息带过来</h1>
+        <p class="lead">按整行复制，<b style="color:var(--fg)">连同 Last_Exec / Exec_Log 两列</b>一起带过来——新表靠这两列认出「今天已经发过」，就不会重发。</p>
+
+        <div class="row" style="margin-bottom:16px">
+          <div class="seg" role="group" aria-label="复制方式">
+            <button aria-pressed="true" data-mode="manual">我自己复制粘贴</button>
+            <button aria-pressed="false" data-mode="auto">自动导入 <span class="dim">· 二期</span></button>
+          </div>
+        </div>
+
+        <div class="paste" id="paste">
+          <ol class="steps-mini">
+            <li>打开 <a href="#" class="muted" onclick="return false">旧表 Messages <svg width="12" height="12"><use href="#i-ext"/></svg></a>，点左上角全选，<kbd>⌘</kbd> <kbd>C</kbd></li>
+            <li>打开 <a href="#" class="muted" onclick="return false">新表 Messages <svg width="12" height="12"><use href="#i-ext"/></svg></a>，选中 A1，<kbd>⌘</kbd> <kbd>V</kbd></li>
+            <li>回到这里点「检查」</li>
+          </ol>
+          <button class="btn" id="checkBtn">我粘贴好了，检查一下</button>
+        </div>
+
+        <div id="preview" style="display:none" class="stack">
+          <div class="stats">
+            <div><b class="mono">27</b><span>条消息带入</span></div>
+            <div><b class="mono" style="color:var(--accent)">6</b><span>今日已发 · 保留去重</span></div>
+            <div><b class="mono">4</b><span>已完成 · 不会再发</span></div>
+            <div><b class="mono" style="color:var(--warn)">1</b><span>发送结果未知</span></div>
+          </div>
+          <div class="card" style="padding:16px 24px">
+            <div class="tablewrap"><table class="msgs">
+              <thead><tr><th>消息</th><th>时间</th><th>方式</th><th class="col-hl">Last_Exec</th><th class="col-hl">Exec_Log</th><th>新表中</th></tr></thead>
+              <tbody>
+                <tr><td class="t">每日站会提醒 · #mobile-core</td><td class="mono">09:30</td><td>Bot</td><td class="mono col-hl">10-23 09:30</td><td class="col-hl">✓ 成功</td><td><span class="pill ok">今日跳过</span></td></tr>
+                <tr><td class="t">Jira 未关闭 P1 汇总</td><td class="dim">不指定</td><td>AI</td><td class="mono col-hl">10-23 08:01</td><td class="col-hl">✓ 成功</td><td><span class="pill ok">今日跳过</span></td></tr>
+                <tr><td class="t">Code review 催办 · 张伟</td><td class="mono">09:50</td><td>Bot</td><td class="mono col-hl">10-23 09:50</td><td class="col-hl">✓ 成功</td><td><span class="pill ok">今日跳过</span></td></tr>
+                <tr><td class="t">午餐订餐</td><td class="mono">11:20</td><td>AsMe</td><td class="mono col-hl">10-22 11:20</td><td class="col-hl">✓ 成功</td><td><span class="pill">今天 11:20 发</span></td></tr>
+                <tr><td class="t">Release 2026.11 冻结倒计时</td><td class="mono">10:00</td><td>AgentTask</td><td class="mono col-hl">10-23 10:00</td><td class="col-hl">⏳ 已领取待确认</td><td><span class="pill warn">暂停，待你确认</span></td></tr>
+                <tr><td class="t">周报草稿生成</td><td class="mono">17:00</td><td>AgentTask</td><td class="mono col-hl">10-16 17:00</td><td class="col-hl">✓ 成功</td><td><span class="pill">今天 17:00 发</span></td></tr>
+              </tbody>
+            </table></div>
+            <p class="dim" style="font-size:12px;margin:8px 0 0">显示 6 / 27 条 · 高亮两列决定「今天还发不发」</p>
+          </div>
+          <div class="callout">
+            <svg width="16" height="16" style="color:var(--warn)"><use href="#i-warn"/></svg>
+            <p>「Release 冻结倒计时」在旧表里还没收到执行结果。新表会让它<b>保持暂停</b>，切换后你看一眼 RingCentral 群里有没有发出，再决定是否手动启用。</p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary lg" data-go="3" id="toSwitch" disabled>下一步：切换</button>
+          <button class="btn ghost" data-go="1">返回</button>
+        </div>
+        <details class="why"><summary>设计依据</summary><ul>
+          <li><b>重新定义</b>：原方案「只复制内容列 + 新表重算边界」→ 新方式「整行原样复制」。去重状态本来就存在 Messages 行里（<span class="mono">Last_Exec / Exec_Log</span>），带过来就等于带走了「今天发过没」，无需迁账本、无需新代码。</li>
+          <li><b>预期管理</b>：预览直接告诉用户每条消息到新表后「今天会怎样」，而不是抽象的校验通过。</li>
+          <li>异常只露出 1 条（⏳），其余默认安全——<b>希克定律</b>，不让用户逐条审核 27 条。</li>
+        </ul></details>
+      </section>
+
+      <!-- ===== 3. Switch ===== -->
+      <section class="view" data-v="3" aria-labelledby="h3">
+        <h1 id="h3">一键切换</h1>
+        <p class="lead">Jira 只有一条执行规则。把它的地址从旧表换成新表，这一刻起旧表自然不再被拉取——<b style="color:var(--fg)">不需要停领、排空，也不会两边同时发。</b></p>
+
+        <div class="card">
+          <h3>将要发生的 4 处变化</h3>
+          <ul class="checklist" id="switchList">
+            <li data-k="trig"><span class="ic"><span class="pend"></span></span><div>旧表：自动停用分钟触发器<div class="dim" style="font-size:12px">写入退役脚本 → 下一分钟触发器自删并在旧表留回执 · Web App 不受影响，在途确认照常</div></div><span class="meta mono dim"></span></li>
+            <li data-k="jira"><span class="ic"><span class="pend"></span></span><div>Jira 执行规则：领取 + 6 个确认分支换成新地址<div class="diff" style="margin-top:8px"><div class="m">- …/macros/s/AKfycbx_<span class="dim">old</span>…/exec</div><div class="p">+ …/macros/s/AKfycbz_<span class="dim">new</span>…/exec</div></div></div><span class="meta mono dim"></span></li>
+            <li data-k="tl"><span class="ic"><span class="pend"></span></span>Timeline 同步规则：写入新表缓存<span class="meta mono dim"></span></li>
+            <li data-k="cfg"><span class="ic"><span class="pend"></span></span>扩展：当前连接指向新表<span class="meta mono dim"></span></li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between"><h3 style="margin:0">重复发送风险 · 过去 30 分钟</h3><span class="pill ok" id="riskPill">0 条</span></div>
+          <div class="window" aria-hidden="true">
+            <div class="axis"></div>
+            <div class="zone" style="left:30%;width:62%"></div>
+            <div class="now" style="left:92%"></div>
+            <span class="ev" style="left:46%;background:var(--accent)" title="09:50"></span>
+            <span class="ev" style="left:76%;background:var(--warn)" title="10:00"></span>
+            <span class="ev" style="left:100%;background:var(--fg-3)" title="11:20"></span>
+            <span class="tick-l" style="left:30%">09:42</span><span class="tick-l" style="left:46%">09:50</span><span class="tick-l" style="left:76%">10:00</span><span class="tick-l" style="left:92%">10:12</span>
+          </div>
+          <ul class="risk-list">
+            <li><span class="mono">09:50</span>Code review 催办<span class="pill ok" style="margin-left:auto">Exec_Log 已带入 · 不会重发</span></li>
+            <li><span class="mono">10:00</span>Release 冻结倒计时<span class="pill warn" style="margin-left:auto">⏳ 已暂停 · 不会重发</span></li>
+          </ul>
+          <p class="dim" style="font-size:12px;margin:12px 0 0">只有在补偿窗口内、且没有带入 Exec_Log 的消息才可能重发一次；未指定时间的消息窗口是 08:00 之后全天。</p>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary lg" id="switchBtn">切换到新表</button>
+          <button class="btn ghost" data-go="2">返回</button>
+          <span class="hint">约 1 分钟 · 先停旧触发器再换址，期间错过的轮询由 30 分钟补偿补上</span>
+        </div>
+        <div id="switchErr" class="callout err" style="display:none;margin-top:16px">
+          <svg width="16" height="16" style="color:var(--err)"><use href="#i-x"/></svg>
+          <div><p><b>Jira 规则更新失败</b>（403：你不是规则 owner）。什么都没改：Jira 仍指向旧表，旧表继续发送。</p>
+          <div class="row" style="margin-top:12px"><button class="btn" id="copyUrl">复制新地址，我手动去 Jira 改</button><button class="btn ghost" id="retrySw">重试</button></div></div>
+        </div>
+        <details class="why"><summary>设计依据</summary><ul>
+          <li><b>重新定义</b>：原方案「冻结 → 排空 → 最终快照 → 换址 → 激活」5 段 → 新方式「换址即交接」1 步。因为执行权只由一条 Jira 规则持有，改地址本身就是原子的执行权转移，排空交给已有的 ⏳ 暂停与 30 分钟补偿。</li>
+          <li><b>可视化风险</b>：把「会不会重复」从口头承诺变成一条时间轴，用户自己能看到窗口里有哪几条、为什么安全。</li>
+          <li><b>可撤销降低焦虑</b>：失败时明确「什么都没改」，并给人工兜底路径。</li>
+        </ul></details>
+      </section>
+
+      <!-- ===== 4. Done ===== -->
+      <section class="view" data-v="4" aria-labelledby="h4">
+        <div class="hero">
+          <div class="seal"><svg width="28" height="28"><use href="#i-check"/></svg></div>
+          <div><h1 id="h4" style="margin:0">已切换到 3.0</h1><p class="muted" style="margin:0">切换时间 <span class="mono">2026-10-23 10:12:38</span> · 旧表已归档为只读</p></div>
+        </div>
+        <div class="receipt">
+          <div class="card"><span class="dim">下一条发送</span><b>11:20</b><span class="muted">午餐订餐 · AsMe</span></div>
+          <div class="card"><span class="dim">Jira 首轮拉取</span><b id="firstPoll" style="color:var(--fg-3)">等待中…</b><span class="muted" id="firstPollSub">每分钟一次</span></div>
+          <div class="card"><span class="dim">需要你看一眼</span><b style="color:var(--warn)">1</b><span class="muted">Release 冻结倒计时</span></div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="row">
+            <svg width="16" height="16" style="color:var(--warn);flex:none"><use href="#i-warn"/></svg>
+            <div style="flex:1"><div>Release 2026.11 冻结倒计时 · 10:00</div><div class="dim" style="font-size:12px">旧表领取后没收到结果。请到 #release-2026-11 确认是否已发出。</div></div>
+            <button class="btn" id="sentYes">已发出</button>
+            <button class="btn" id="sentNo">没发，现在补发</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="openMgr">打开消息管理</button>
+          <button class="btn ghost" data-go="0" id="restart">从头再看一遍</button>
+        </div>
+        <details class="why"><summary>设计依据</summary><ul>
+          <li><b>峰终定律</b>：结尾给一个确定的「已切换」印章 + 首轮拉取的真实回执，而不是一句「应该好了」。</li>
+          <li><b>蔡格尼克效应</b>：唯一的未完成事项（⏳ 那条）放在收据里、带两个直接动作，用户不会忘，也不用去翻表。</li>
+          <li>「下一条发送 11:20」把抽象的成功变成可期待的具体时刻。</li>
+        </ul></details>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div class="scenario">
+  <span>演示场景</span>
+  <label><input type="checkbox" id="failCreate"> 创建失败</label>
+  <label><input type="checkbox" id="failSwitch"> Jira 无权限</label>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const wait = ms => new Promise(r => setTimeout(r, reduce ? 0 : ms));
+  const state = { step: 0, maxStep: 0, created: false, copied: false, switched: false };
+
+  function go(i) {
+    if (i > state.maxStep) return;
+    state.step = i;
+    $$('.view').forEach(v => v.classList.toggle('on', +v.dataset.v === i));
+    $$('#rail li').forEach(li => {
+      const n = +li.dataset.i;
+      li.classList.toggle('on', n === i);
+      li.classList.toggle('done', n < state.maxStep && n !== i || (n === 4 && state.switched));
+      li.querySelector('button').disabled = n > state.maxStep;
+      li.querySelector('.node').innerHTML = (li.classList.contains('done') && n !== i) ? '<svg width="12" height="12"><use href="#i-check"/></svg>' : n;
+    });
+    $('#prog').style.width = (state.maxStep / 4 * 100) + '%';
+    $('#eta').textContent = ['≈ 4 分钟', '≈ 4 分钟', '≈ 3 分钟', '≈ 1 分钟', '完成'][state.maxStep];
+    window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+  }
+  function unlock(i) { state.maxStep = Math.max(state.maxStep, i); }
+  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 2400); }
+
+  function setItem(list, k, st, meta = '') {
+    const li = $(`[data-k="${k}"]`, list);
+    li.className = st;
+    li.querySelector('.ic').innerHTML = st === 'run' ? '<span class="spin"></span>'
+      : st === 'ok' ? '<svg width="16" height="16" class="tick"><use href="#i-check"/></svg>'
+      : st === 'fail' ? '<svg width="16" height="16"><use href="#i-x"/></svg>' : '<span class="pend"></span>';
+    li.querySelector('.meta').textContent = meta;
+  }
+
+  async function runSteps(list, steps, failAt) {
+    for (const [k, ms, meta] of steps) {
+      if (list.querySelector(`[data-k="${k}"]`).classList.contains('ok')) continue;
+      setItem(list, k, 'run');
+      await wait(ms);
+      if (k === failAt) { setItem(list, k, 'fail', '失败'); return false; }
+      setItem(list, k, 'ok', meta);
+    }
+    return true;
+  }
+
+  // Step 0
+  $('#later').onclick = () => toast('好的，旧表继续发送。下次打开管理页仍会提示。');
+
+  // Step 1
+  const createSteps = [['auth', 700, '已授权'], ['sheet', 900, '1.2s'], ['script', 1300, '2.8s'], ['ledger', 800, 'sheet_primary'], ['probe', 700, '3/3 通过']];
+  async function doCreate() {
+    $('#createBtn').disabled = true; $('#createErr').style.display = 'none';
+    $('#newState').textContent = '创建中'; $('#newState').className = 'pill';
+    const ok = await runSteps($('#createList'), createSteps, $('#failCreate').checked && !state._retried ? 'script' : null);
+    if (!ok) { $('#createErr').style.display = 'flex'; $('#newState').textContent = '部分完成'; $('#newState').className = 'pill err'; return; }
+    state.created = true; $('#newState').textContent = '待接管'; $('#newState').className = 'pill ok';
+    $('#createBtn').textContent = '下一步：带入消息'; $('#createBtn').disabled = false;
+    $('#createBtn').onclick = () => go(2);
+    unlock(2); go(1);
+  }
+  $('#createBtn').onclick = () => { unlock(1); doCreate(); };
+  $('#retry').onclick = () => { state._retried = true; doCreate(); };
+
+  // Step 2
+  $$('.seg button').forEach(b => b.onclick = () => {
+    if (b.dataset.mode === 'auto') { toast('自动导入在二期提供，首版请手动整行粘贴。'); return; }
+  });
+  $('#checkBtn').onclick = async () => {
+    const b = $('#checkBtn'); b.disabled = true; b.innerHTML = '<span class="spin"></span> 正在读取新表…';
+    await wait(900);
+    $('#paste').classList.add('filled');
+    $('#paste').innerHTML = '<div class="row"><svg width="16" height="16" class="tick"><use href="#i-check"/></svg><span>已识别 27 行，表头与 3.0 一致，含 Last_Exec / Exec_Log</span><button class="btn ghost" style="margin-left:auto" id="recheck">重新检查</button></div>';
+    $('#recheck').onclick = () => toast('已重新读取，内容无变化。');
+    $('#preview').style.display = 'block';
+    $('#toSwitch').disabled = false; state.copied = true; unlock(3); go(2);
+  };
+
+  // Step 3
+  const swSteps = [['trig', 1600, '回执 10:13 · 0 个触发器'], ['jira', 1200, '已回读'], ['tl', 600, '已回读'], ['cfg', 400, '已保存']];
+  async function doSwitch() {
+    $('#switchBtn').disabled = true; $('#switchErr').style.display = 'none';
+    const ok = await runSteps($('#switchList'), swSteps, $('#failSwitch').checked && !state._swRetried ? 'jira' : null);
+    if (!ok) { $('#switchErr').style.display = 'flex'; $('#switchBtn').disabled = false; setItem($('#switchList'), 'jira', '', ''); return; }
+    state.switched = true; unlock(4); go(4);
+    await wait(2200);
+    $('#firstPoll').textContent = '✓ 10:13'; $('#firstPoll').style.color = 'var(--accent)';
+    $('#firstPollSub').textContent = '新表响应正常 · 当前无到点消息';
+  }
+  $('#switchBtn').onclick = doSwitch;
+  $('#retrySw').onclick = () => { state._swRetried = true; doSwitch(); };
+  $('#copyUrl').onclick = () => toast('新 Web App 地址已复制。改完回到这里，我们会回读确认。');
+
+  // Step 4
+  $('#sentYes').onclick = e => { e.target.closest('.card').innerHTML = '<div class="row"><svg width="16" height="16" class="tick"><use href="#i-check"/></svg>已标记为已发送，今天不会再发。</div>'; toast('已记录'); };
+  $('#sentNo').onclick = e => { e.target.closest('.card').innerHTML = '<div class="row"><svg width="16" height="16" class="tick"><use href="#i-check"/></svg>已加入补发：下一分钟由新表发出。</div>'; toast('已安排补发'); };
+  $('#openMgr').onclick = () => toast('演示结束：这里会进入正常的消息管理页。');
+
+  // Rail + generic nav
+  $$('#rail button').forEach(b => b.onclick = () => go(+b.closest('li').dataset.i));
+  $$('[data-go]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.go; if (i === 1) unlock(1); go(i); }));
+  addEventListener('keydown', e => {
+    if (e.target.matches('input,textarea')) return;
+    if (e.key === 'ArrowRight' && state.step < state.maxStep) go(state.step + 1);
+    if (e.key === 'ArrowRight' && state.step === 0 && state.maxStep === 0) { unlock(1); go(1); }
+    if (e.key === 'ArrowLeft' && state.step > 0) go(state.step - 1);
+  });
+
+  go(0);
+})();
+</script>
+</body>
+</html>

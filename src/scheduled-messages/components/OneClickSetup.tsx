@@ -150,6 +150,7 @@ export const OneClickSetup: React.FC<OneClickSetupProps> = ({ onComplete }) => {
         tempResult.scriptId,
         tempResult.webAppUrl,
         {
+          freshSetupToken: tempResult.freshSetupToken,
           deploymentId: tempResult.deploymentId,
           messagesSheetId: tempResult.messagesSheetId,
           logsSheetId: tempResult.logsSheetId,

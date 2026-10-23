@@ -1985,7 +1985,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.0\.1';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.1\.0';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);

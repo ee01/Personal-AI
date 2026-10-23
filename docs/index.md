@@ -130,6 +130,7 @@
 | 🏠 lane 执行后投递 | Task Center | [task_center.md](./features/task_center.md) | `ActionExecutor` 终态复用 `planAgentTaskNotifications`；`bot` / `asme` / `plugin`；失败写 `notifyDeliveryError` 不改 run 状态 |
 | L1 Bot / AsMe 分层 | Task Center | [task_center.md](./features/task_center.md) | 能力条认 Bot 或 AsMe；未配置通道置灰并链到定时消息页 / Options 追问凭据 |
 | 提醒我 | Task Center | [task_center.md](./features/task_center.md) | 快捷时间（1 小时后 / 今晚 / 明早 / 下周一）；到点走 `notify_user`，过点时间顺延到下一档 |
+| 定时消息新表升级 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 旧版只读门禁、可恢复候选表、整行复制与未决隔离、旧触发器退役回执、Jira 全地址换址回读及人工补发；Apps Script 3.1.0 |
 | 定时消息一键初始化 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet、Apps Script、触发器；创建 / 授权 / 恢复按钮 hover 与读屏标明阶段边界 |
 | 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称；Done 单次改成仍有下次执行的循环会自动恢复 Active |
 | Glip 快速定时与未来消息 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 输入框闹钟创建 `ComposeScheduled` AsMe；列表底部虚线未来消息是本地 pending 快照，不是已发送消息 |

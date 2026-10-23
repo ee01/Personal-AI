@@ -26,7 +26,9 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.0.1';
+var APP_SCRIPT_VERSION = '3.1.0';
+// Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
+var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
@@ -127,6 +129,14 @@ function determineMessageType(rowData) {
  * - OneTime: 一次性消息
  */
 function executeScheduledMessages() {
+  // A candidate must also fence the email fallback, which does not claim the ledger.
+  try {
+    if (readExecutionStore().control.mode !== 'sheet_primary') return;
+  } catch (error) {
+    // Preserve the historical email fallback only for an entirely uninitialized legacy project.
+    if (FRESH_SETUP_TOKEN || String(error.message || error) !== 'execution_store_not_initialized') throw error;
+  }
+
   maybePurgeExpiredExecutionMarks(new Date());
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
@@ -2200,6 +2210,10 @@ function doGet(e) {
   }
   
   // 获取 App Script 版本信息
+  if (action === 'getRuntimeHealth') {
+    return ContentService.createTextOutput(JSON.stringify(getRuntimeHealth())).setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action === 'getVersion') {
     return ContentService.createTextOutput(
       JSON.stringify({ 
@@ -2229,6 +2243,10 @@ function doPost(e) {
     action = action || getRequestParameterValue(postData.action);
     Logger.log(`POST action: ${action}`);
     Logger.log(`POST 请求来源: ${JSON.stringify(queryParameters)}`);
+
+    if (action === 'freshSetup') {
+      return ContentService.createTextOutput(JSON.stringify(handleFreshSetup(postData))).setMimeType(ContentService.MimeType.JSON);
+    }
 
     if (action === 'cacheReleaseInfo') {
       return handleCacheReleaseInfoRequest(mergeRequestParameters(queryParameters, postData));
@@ -4746,6 +4764,7 @@ function claimSheetExecution(messageId, rowIndex, candidate, executionKey) {
   const key = normalizeExecutionKey(executionKey);
   if (!key) throw new Error('execution_key_required');
   const store = readExecutionStore();
+  if (store.control.freshSetup && !store.control.firstPollAt) store.control.firstPollAt = new Date().toISOString();
   if (store.control.mode !== 'sheet_primary') throw new Error('execution_claims_paused');
   const resolved = executionMessage(store, messageId, rowIndex);
   const message = resolved.message;
@@ -5034,5 +5053,57 @@ function maintenanceDeleteMigratedExecutionProperties(options) {
       commitExecutionBatch(store, [], 'legacy_cleanup');
     }
     return { success: true, deleted: Math.min(sources.length, 100), complete: sources.length <= 100 };
+  });
+}
+
+/** Read-only compatibility probe. An absent ledger is never a healthy v3 deployment. */
+function getRuntimeHealth() {
+  try {
+    const store = readExecutionStore();
+    return { success: true, spreadsheetId: SpreadsheetApp.getActiveSpreadsheet().getId(),
+      scriptVersion: APP_SCRIPT_VERSION, executionStoreSchemaVersion: store.control.schemaVersion,
+      mode: store.control.mode, freshCandidate: !!store.control.freshSetup,
+      ready: store.control.mode === 'sheet_primary',
+      firstPollAt: store.control.firstPollAt || '',
+      activatedAt: store.control.activatedAt || '' };
+  } catch (error) {
+    return { success: false, scriptVersion: APP_SCRIPT_VERSION, error: String(error.message || error) };
+  }
+}
+
+/** A capability secret is installed in source by the owner via Apps Script API.
+ * This endpoint cannot initialize existing projects or bypass legacy migration.
+ */
+function handleFreshSetup(options) {
+  if (!FRESH_SETUP_TOKEN || !options || options.token !== FRESH_SETUP_TOKEN) throw new Error('fresh_setup_unauthorized');
+  if (options.operation !== 'prepare' && options.operation !== 'activate' && options.operation !== 'pause') throw new Error('invalid_setup_operation');
+  if (legacyExecutionSources().length) throw new Error('fresh_project_has_legacy_marks');
+  if (options.operation === 'prepare') maintenanceInitializeExecutionStore();
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    if (!store.control.freshSetup) {
+      if (store.entries.length || store.control.mode !== 'legacy_drain' || store.control.manifest) throw new Error('not_a_fresh_project');
+      store.control.freshSetup = true;
+      store.control.mode = 'paused';
+      commitExecutionBatch(store, [], 'fresh_prepare');
+    }
+    if (options.operation === 'pause') {
+      store.control.mode = 'paused';
+      commitExecutionBatch(store, [], 'fresh_pause');
+    }
+    if (options.operation === 'activate') {
+      if (store.control.mode !== 'sheet_primary') {
+        if (store.control.mode !== 'paused' || (store.entries.length && !store.control.activatedAt)) throw new Error('candidate_not_prepared');
+        store.control.mode = 'sheet_primary';
+        store.control.activatedAt = new Date().toISOString();
+        store.control.epoch++;
+        commitExecutionBatch(store, [], 'fresh_activate');
+      }
+      // Idempotent after a lost response; never clear marks or imported Messages.
+      if (!ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'minuteTrigger'; })) {
+        ScriptApp.newTrigger('minuteTrigger').timeBased().everyMinutes(1).create();
+      }
+    }
+    return getRuntimeHealth();
   });
 }

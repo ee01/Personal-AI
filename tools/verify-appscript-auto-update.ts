@@ -640,7 +640,7 @@ async function verifyReadOnlyUpdateCheckSkipsConfigMetadataSync(): Promise<void>
       sheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-123/edit',
       scriptId: 'script-123',
       webAppUrl: 'https://example.com/exec',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -688,7 +688,7 @@ async function verifyMissingScriptIdBlocksUpgradeState(): Promise<void> {
 
       if (url === 'https://example.com/exec?action=getVersion') {
         return new Response(JSON.stringify({
-          version: '1.0.0',
+          version: '3.0.0',
           lastUpdated: '2025-01-01',
         }), {
           status: 200,
@@ -710,14 +710,14 @@ async function verifyMissingScriptIdBlocksUpgradeState(): Promise<void> {
       sheet_version: '2.7',
       created_by: 'Personal AI Extension',
       created_at: '2026-04-30 12:00:00',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
     const result = await updater.checkForUpdates();
 
     assert.equal(result.needsUpdate, false);
-    assert.equal(result.currentVersion, '1.0.0');
+    assert.equal(result.currentVersion, '3.0.0');
     assert.equal(result.latestVersion, templateVersion);
     assert.match(result.error || '', /Script ID/);
     assert.equal(scriptApiCalls, 0);
@@ -852,7 +852,7 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 
       if (url === 'https://script.google.com/macros/s/match/exec?debug=1&action=getVersion') {
         return new Response(JSON.stringify({
-          version: deploymentUpdated ? templateVersion : '1.0.0',
+          version: deploymentUpdated ? templateVersion : '3.0.0',
           lastUpdated: deploymentUpdated ? templateLastUpdated : '2025-01-01',
         }), {
           status: 200,
@@ -949,7 +949,7 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
       sheet_version: '2.7',
       created_by: 'Personal AI Extension',
       created_at: '2026-04-30 12:00:00',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1001,7 +1001,7 @@ async function verifyProjectContentMismatchStopsScriptMutations(): Promise<void>
 
       if (url === 'https://example.com/exec?action=getVersion') {
         return new Response(JSON.stringify({
-          version: '1.0.0',
+          version: '3.0.0',
           lastUpdated: '2025-01-01',
         }), {
           status: 200,
@@ -1057,7 +1057,7 @@ async function verifyProjectContentMismatchStopsScriptMutations(): Promise<void>
       sheet_version: '2.7',
       created_by: 'Personal AI Extension',
       created_at: '2026-04-30 12:00:00',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1117,7 +1117,7 @@ async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<v
 
       if (url === 'https://example.com/exec?action=getVersion') {
         return new Response(JSON.stringify({
-          version: '1.0.0',
+          version: '3.0.0',
           lastUpdated: '2025-01-01',
         }), {
           status: 200,
@@ -1199,7 +1199,7 @@ async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<v
       sheet_version: '2.7',
       created_by: 'Personal AI Extension',
       created_at: '2026-04-30 12:00:00',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1207,7 +1207,7 @@ async function verifyPostDeploymentVersionMismatchDoesNotSyncConfig(): Promise<v
 
     assert.equal(result.success, false);
     assert.equal(result.errorCode, APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR);
-    assert.equal(result.currentVersion, '1.0.0');
+    assert.equal(result.currentVersion, '3.0.0');
     assert.equal(result.latestVersion, templateVersion);
     assert.match(result.error || '', /配置不会被标记为最新/);
     assert.match(result.error || '', /回退到升级前版本 7/);
@@ -1257,7 +1257,7 @@ async function verifyDeploymentUrlMismatchStopsScriptMutations(): Promise<void> 
 
       if (url === 'https://script.google.com/macros/s/current/exec?action=getVersion') {
         return new Response(JSON.stringify({
-          version: '1.0.0',
+          version: '3.0.0',
           lastUpdated: '2025-01-01',
         }), {
           status: 200,
@@ -1296,7 +1296,7 @@ async function verifyDeploymentUrlMismatchStopsScriptMutations(): Promise<void> 
     const updater = new AppScriptUpdater('test-token', {
       scriptId: 'script-123',
       webAppUrl: 'https://script.google.com/macros/s/current/exec',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1365,7 +1365,7 @@ async function verifyTransientVersionProbeStopsScriptMutations(): Promise<void> 
       scriptId: 'script-123',
       webAppUrl: 'https://example.com/exec',
       deploymentId: 'deployment-123',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1433,7 +1433,7 @@ async function verifyNonJsonVersionProbeStopsScriptMutations(): Promise<void> {
       scriptId: 'script-123',
       webAppUrl: 'https://example.com/exec',
       deploymentId: 'deployment-123',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1495,7 +1495,7 @@ async function verifyInvalidTemplateSemverStopsScriptMutations(): Promise<void> 
       scriptId: 'script-123',
       webAppUrl: 'https://example.com/exec',
       deploymentId: 'deployment-123',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1562,7 +1562,7 @@ async function verifyTemplateVersionLoadFailureStopsScriptMutations(): Promise<v
       scriptId: 'script-123',
       webAppUrl: 'https://example.com/exec',
       deploymentId: 'deployment-123',
-      appScriptVersion: '1.0.0',
+      appScriptVersion: '3.0.0',
       appScriptLastUpdated: '2025-01-01',
     } as any);
 
@@ -1588,3 +1588,33 @@ async function verifyTemplateVersionLoadFailureStopsScriptMutations(): Promise<v
 await verifyTemplateVersionLoadFailureStopsScriptMutations();
 
 console.log('App Script auto-update verification passed');
+
+// A 2.x deployment must enter the new-sheet wizard; no HEAD, deployment or Config writes.
+{
+  const originalFetch = globalThis.fetch;
+  const originalChrome = (globalThis as any).chrome;
+  let mutations = 0;
+  (AppScriptUpdater as any).cachedVersionInfo = null;
+  (globalThis as any).chrome = {
+    runtime: { getURL: (name: string) => `chrome-extension://test/${name}` },
+    storage: { local: { get: async () => ({}), set: async () => { mutations++; } } },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method && init.method !== 'GET') mutations++;
+    return new Response(String(input).includes('app-script-template.gs') ? appScriptTemplate : JSON.stringify({ version: '2.9.0' }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const updater = new AppScriptUpdater('test-token', { scriptId: 'old-script', webAppUrl: 'https://example.com/exec' } as any);
+    const check = await updater.checkForUpdates();
+    assert.equal(check.needsUpdate, false);
+    assert.match(check.error || '', /NEW_SHEET_UPGRADE_REQUIRED/);
+    const result = await updater.updateAppScript();
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /NEW_SHEET_UPGRADE_REQUIRED/);
+    assert.equal(mutations, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).chrome = originalChrome;
+    (AppScriptUpdater as any).cachedVersionInfo = null;
+  }
+}

@@ -269,6 +269,11 @@ export class JiraRuleUpdater {
    * 使用 PUT API 更新现有规则，保持 Rule ID 不变
    */
   async updateJiraRule(options: JiraRuleUpdateOptions = {}): Promise<JiraRuleUpdateResult> {
+    const upgrade = (await chrome.storage.local.get('scheduledMessagesUpgradeDraft')).scheduledMessagesUpgradeDraft;
+    if (upgrade?.source?.sheetId === this.config?.sheetId && (upgrade.retirementWritten || upgrade.retired)) {
+      return { success: false, message: '旧表已进入退役流程，请继续新表升级向导', error: 'UPGRADE_IN_PROGRESS' };
+    }
+
     try {
       const executorRule = getExecutorRule(this.config);
       const timelineSyncRule = getTimelineSyncRule(this.config);

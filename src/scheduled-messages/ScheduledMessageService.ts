@@ -178,7 +178,7 @@ export class ScheduledMessageService {
   /**
    * 获取所有消息
    */
-  async getAllMessages(): Promise<ScheduledMessage[]> {
+  async getAllMessages(options: { readOnly?: boolean } = {}): Promise<ScheduledMessage[]> {
     if (!this.config) {
       await this.loadConfig();
     }
@@ -231,7 +231,7 @@ export class ScheduledMessageService {
             }
             
             // 如果有更新，写回 Sheet
-            if (rowNeedsUpdate) {
+            if (rowNeedsUpdate && !options.readOnly) {
               const row = await this.messageToRow(message, headers);
               await this.updateRow(i + 1, row, headers);
             }

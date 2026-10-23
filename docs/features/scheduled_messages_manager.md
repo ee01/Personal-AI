@@ -1,10 +1,10 @@
 # 定时消息统一管理功能（任务中心 ☁️ jira_sheet lane）
 
-*最后更新: 2026-09-18*
+*最后更新: 2026-10-23*
 
 > **定位**：本文是[任务中心](task_center.md)的 **Level 2 / ☁️ `jira_sheet` lane** 子文档，覆盖 Google Sheet + App Script + Jira Automation 这条云端 24/7 调度链路的全部实现细节（数据模型、执行匹配与幂等、Config 同步、Timeline 缓存、App Script 自动更新）。
 >
-> 任务中心的总体设计——两条 lane 如何共存、任务类型与编辑器、分层激活、人工节点、反思候选——见 [`task_center.md`](task_center.md)。本文描述的能力对存量用户**照常运行、无需迁移**。
+> 任务中心的总体设计——两条 lane 如何共存、任务类型与编辑器、分层激活、人工节点、反思候选——见 [`task_center.md`](task_center.md)。2.x 存量部署不会被自动覆盖；新版管理页要求运行账本兼容，可通过新表升级向导接管，或由维护人员完成原表迁移。
 
 ## 功能概述
 
@@ -204,6 +204,29 @@
 - 如果看到 `INVALID_POST_JSON`，通常说明手工规则仍在用 POST 或 body 不是合法 JSON；当前修复方向是把 Apps Script 写缓存请求改回生成规则的 GET URL
 
 
+### 新表升级向导（Apps Script 3.1.0）
+
+普通用户从定时消息管理页完成「创建并授权 → 带入消息 → 切换 → 完成」，无需在编辑器运行账本迁移函数。扩展版本为 12.1.0。这个流程不转换旧 Properties 执行凭据，也不承诺零停机或零重复；专业维护人员仍可使用下方原表迁移入口。
+
+**大白话运行逻辑**：先新建一套只有自己可访问、暂时不能发送的系统，旧系统继续按自身健康状态工作；把 Messages 整行带过去，保留执行次数和当天成功记录。旧发送触发器停用并核对后，短暂停止原 Jira Rule，替换所有取消息/确认/Timeline 缓存地址，检查远端确实写入，最后让新表接管。旧表和固定 Web App 不删除，在途确认仍回原部署。
+
+1. **兼容门禁**：管理页通过只读 `getRuntimeHealth` 核对目标 spreadsheetId、账本 schema v1、`sheet_primary` 与 ready。仅有版本号或隐藏 tab 不算就绪。旧版不支持探针、不完整初始化和网络/授权异常保持只读，网络异常明确提示重试，不自动新建；查看列表不会自动修正旧表 ID/Push_Method。页面不主动停旧 Jira。2.x → 3.x 的后台及手动自动覆盖入口也被拦截，提示使用向导。
+2. **候选创建**：独立 `scheduledMessagesUpgradeDraft` 保存候选 sheet/script/deployment 与阶段，不覆盖当前 Config，不复制共享权限，不写欢迎发送行。候选脚本获得一个随机管理能力密钥，仅存在新项目源码和本浏览器草稿中，不写 URL、旧项目、退役回执、消息 ID 或报告。授权后受密钥保护的 `freshSetup` 创建空账本，保持 paused，且不创建触发器。普通首次一键初始化也使用 fresh prepare/activate，避免创建 3.x 项目后没有运行账本。
+3. **恢复**：每获得一个资源 ID 就保存检查点。部署失败重试复用原 sheet/script，并先查询是否已有已提交部署。创建表/项目的响应若丢失，不能盲目重发 POST：向导让用户核实 Google 中 `[Upgrade <公开交接ID>]` 资源并恢复 ID；恢复检查资源名称，脚本还检查 parentId。确实未创建时可明确选择重试。浏览器刷新可续作；跨设备/不同 Chrome 配置不自动接续该草稿。
+4. **导入检查**：支持整行手动按值粘贴，或自动按值复制 Messages 全行（包括自定义列）；自动复制用一次 Sheets batch 原子覆盖候选 Messages，字符串永远作为字面值，不执行公式。校验必要表头、ID 唯一、执行次数、状态和推送方式。保留 ID、Schedule、Last_Exec、Exec_Log、Exec_Count；不复制 Config、Logs、旧账本或旧 key。⏳/UNKNOWN/待确认/旧 trigger_delivery_failed 行自动设 Paused；手动复制的这些行必须先暂停才允许继续。无时间任务和 Timeline 任务给出对应警示。预览展示每行原记录、计划时间及新表处理方式。
+5. **退役旧触发器**：通过已授权的 Apps Script API 备份旧项目文件，修改 HEAD 将 `minuteTrigger` / `executeScheduledMessages` / `dailyTrigger` / `dailyCleanup` 改成退役包装器；保留原 manifest，不创建版本、不更新旧部署。下一次受管触发器运行时只删除当前执行账号拥有的这些发送触发器，并在旧表 `_UpgradeRetirement` 写公开交接 ID 与时间。向导读取匹配回执后才继续，不能以“Logs 一分钟没变化”证明已停用。无 scriptId、权限不足、没有运行中的触发器时提供触发器页面和明确人工核验入口。其他账号、其他独立规则及已经启动的旧执行仍需用户核实；3.1 的邮件 fallback 也遵守 paused/legacy_drain 门禁；系统没有全账号触发器清单，也没有撤回在途发送的能力。
+6. **切换原规则**：先保存 Executor / Timeline 规则完整备份，再逐条停用并回读；自动导入在这之后重新读取源表，手动路径要求用户核对最后变化。递归替换原规则内旧 Web App URL（包含 URL 编码形式），保留自定义分支，不套模板覆盖规则。领取、所有确认分支和 Timeline 缓存写入一起换址，再回读 trigger/components/state。候选 Config 先写成功，随后激活新表并建立唯一分钟触发器、恢复原规则启用状态，最后发布扩展当前配置。两个窗口通过浏览器 Web Locks 防止重复操作。
+7. **失败处理**：在切换阶段出错时，尝试暂停新表领取/邮件 fallback 和所有相关 Jira Rule，逐项报告未能确认暂停的远端状态；当前步骤保留备份与阶段，可继续重试。新表已激活过则不重新导入、不清空已有账本。不自动恢复旧发送；远端暂停不明时必须核对真实状态，不能声称旧表还在正常发。
+8. **收据与未决任务**：完成页展示切换时间、规则回读结果；点击读取实际行可查看下一次计划及隔离任务。首次领取时间只来自真正成功的领取提交，未发生领取明确显示等待，不模拟探测发送，也不把 Jira 拉取/下游 HTTP 成功当作收件人送达。未决行可在确认弹窗后选择“已发出”（写人工成功、对照源表计数，恢复未来周期/单次 Done）或“现在补发”（建立带公开交接 ID 的一次性立即到期副本，原行仍暂停）；重复点击使用相同补发 ID，不自动重复建任务。
+
+**时间和风险边界**：整行复制保留当日成功去重，但源表在复制后可能又发送/确认，跨服务切换不是事务。指定时间任务仍服从原引擎当前分钟和过去约 30 分钟补偿；无时间 Bot/AI/AgentTask 可能在 8:00 后全天兜底，不能把重复风险统一说成 ±30 分钟。跨午夜、长于补偿窗口、旧在途执行与手动漏复制字段仍可能漏发或重复，用户在最终切换处明确确认这些风险。Timeline 不搬旧缓存，需等待原 Sync Rule 新一轮刷新或在 Jira 手动运行；缓存未就绪时按现有门禁不匹配，完成页不伪造 Timeline 就绪。
+
+**权限和数据边界**：新 Sheet 默认 owner-only；后续分享由用户自行决定。旧文件和规则备份可能包含正文及凭据，只保存在本浏览器扩展存储，不上传报告、不自动删除。管理密钥与公开交接 ID 相互独立。fresh 入口拒绝旧 Properties marks 和非全新账本；只读探针不能重置、迁移或激活账本。旧表原地维护声明不会被向导伪造。
+
+实现来源：`ScheduledMessagesUpgrade.ts`、`components/UpgradeWizard.tsx`、`upgradeContracts.ts`、`SheetInitializer.ts`、`AppScriptUpdater.ts`、`app-script-template.gs`。交互参考归档：`docs/demo/scheduled-messages-v3-upgrade-flow-demo.html`；参考稿中的“约三分钟”“零重复”等示例文案不构成运行保证，以上实际门禁与回执为准。
+
+验证：`npm run verify:scheduled-messages-upgrade`（导入/URL 契约、fresh 状态机、故障模型），`npm run verify:scheduled-messages-upgrade:e2e`（全新 dist 扩展，模拟 Google/Jira，覆盖断点恢复、权限失败和重新切换），并跑定时消息回归、一键初始化与自动更新校验。确定性协调流程不依赖 LLM 判断，不另设经验 eval。真实 Google 授权/定时触发器与真实 Jira 换址仍需隔离账号/测试规则验收，本地 API 模型和 Chromium E2E不能替代线上结果。
+
 ### execution / claim 持久账本（Apps Script 3.0.0）
 
 **大白话运行逻辑：** Jira 先挑选到期消息，再在同一脚本锁里复查消息和账本。只有“领取记录和 Messages 待确认状态一起保存成功”才返回可发送任务；收到已知 key 的确认后，把结果、次数和 Logs 一起保存。重复领取不给第二次发送许可，重复确认不再加次数。存储报错或结果不明时停止写入，留下可对账记录。
@@ -270,11 +293,13 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 
 ### 11. App Script 自动更新
 
+- 2.x → 3.x 走上方新表升级向导，自动更新检查与写入均拒绝跨此协议边界；同属 3.x 的兼容更新继续使用下列原 deployment 更新流程。退役流程中的旧项目/规则禁止后台自动覆盖。
+
 - App Script 自动更新使用 Google Apps Script API 的 `deployments.update` 更新现有 Web App deployment，保持 Web App URL 不变，避免用户重新配置 Jira Automation
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.0.1';
+  var APP_SCRIPT_VERSION = '3.1.0';
   var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
   ```
 

@@ -72,6 +72,8 @@
     "verify:i18n": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-i18n.ts",
     "verify:decision-center:e2e": "node tools/verify-decision-center-e2e.mjs",
     "verify:action-queue:e2e": "node tools/verify-action-queue-e2e.mjs",
+    "verify:scheduled-messages-upgrade": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node --test src/scheduled-messages/__tests__/upgradeContracts.test.ts && node --test tools/verify-scheduled-messages-upgrade.test.mjs",
+    "verify:scheduled-messages-upgrade:e2e": "node tools/verify-scheduled-messages-upgrade-e2e.mjs",
     "verify:execution-mark-store": "node --test tools/verify-execution-mark-store.test.mjs",
     "verify:appscript-auto-update": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-appscript-auto-update.ts",
     "verify:appscript-auto-update:e2e": "node tools/verify-appscript-auto-update-e2e.mjs",

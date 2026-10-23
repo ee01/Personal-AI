@@ -19,7 +19,7 @@ interface SharingPermissionResult {
 
 type InitializationSetupMetadata = Pick<
   InitializationResult,
-  'deploymentId' | 'messagesSheetId' | 'logsSheetId'
+  'deploymentId' | 'messagesSheetId' | 'logsSheetId' | 'freshSetupToken'
 >;
 
 /**
@@ -165,6 +165,64 @@ export class SheetInitializer {
     this.token = token;
   }
 
+  /** Candidate creation never writes the current config or creates send triggers. */
+  async prepareUpgradeCandidate(
+    checkpoint: Partial<InitializationResult>,
+    setupToken: string,
+    save: (result: Partial<InitializationResult>) => Promise<void>,
+    setupId: string,
+  ): Promise<InitializationResult> {
+    let state = { ...checkpoint };
+    const persist = async (patch: Partial<InitializationResult>) => {
+      state = { ...state, ...patch };
+      await save(state);
+    };
+    if (state.pendingCreation) throw new Error('上次创建响应未确认，请先在 Google 中核对资源，再恢复 ID；系统不会自动重复创建');
+    if (!state.sheetId) {
+      await persist({ pendingCreation: 'spreadsheet' });
+      const sheet = await this.createSpreadsheet(setupId);
+      await persist({ sheetId: sheet.spreadsheetId, sheetUrl: sheet.spreadsheetUrl,
+        messagesSheetId: this.messagesSheetId, logsSheetId: this.logsSheetId, pendingCreation: undefined });
+    }
+    const metadataResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}?fields=sheets.properties`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+    });
+    if (!metadataResponse.ok) throw new Error('无法恢复候选工作表，请重试');
+    const metadata = await metadataResponse.json();
+    const findId = (title: string) => metadata.sheets.find((s: { properties: { title: string; sheetId: number } }) => s.properties.title === title)?.properties.sheetId;
+    this.messagesSheetId = findId('Messages'); this.configSheetId = findId('Config'); this.logsSheetId = findId('Logs');
+    if ([this.messagesSheetId, this.configSheetId, this.logsSheetId].some(id => id == null)) throw new Error('候选表结构不完整');
+    await persist({ messagesSheetId: this.messagesSheetId, logsSheetId: this.logsSheetId });
+    // Headers are only prepared before import; never clear imported rows on a retry.
+    await this.setupWorksheets(state.sheetId!);
+    if (!state.scriptId) {
+      await persist({ pendingCreation: 'script' });
+      await this.createAppScriptProject(state.sheetId!, setupToken, async scriptId => {
+        await persist({ scriptId, pendingCreation: undefined });
+      }, setupId);
+    } else if (!state.webAppUrl) {
+      // A previous upload may have failed after project creation. Reuse the project.
+      await this.uploadUpgradeCode(state.scriptId, setupToken);
+    }
+    if (!state.webAppUrl) {
+      // Recover an applied deployment whose response was lost instead of deploying twice.
+      const response = await fetch(`https://script.googleapis.com/v1/projects/${state.scriptId}/deployments`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      if (!response.ok) throw new Error('无法检查候选部署，请重试');
+      const existing = (await response.json()).deployments?.find((d: any) => d.entryPoints?.some((e: any) => e.webApp?.url));
+      const webAppUrl = existing?.entryPoints?.find((e: any) => e.webApp?.url)?.webApp.url || await this.deployWebApp(state.scriptId!);
+      await persist({ webAppUrl, deploymentId: existing?.deploymentId || this.deploymentId });
+    }
+    return { ...state, success: true, needsAuthorization: true,
+      authUrl: `${state.webAppUrl}?action=authSuccess` } as InitializationResult;
+  }
+
+  private async uploadUpgradeCode(scriptId: string, setupToken: string): Promise<void> {
+    const updater = new AppScriptUpdater(this.token);
+    await updater.writeFreshCandidateCode(scriptId, setupToken);
+  }
+
   /**
    * 一键创建定时消息系统
    */
@@ -191,7 +249,8 @@ export class SheetInitializer {
 
       // 4. 创建 AppScript 项目
       console.log('步骤 4/8: 创建 AppScript 项目...');
-      const scriptId = await this.createAppScriptProject(sheet.spreadsheetId);
+      const freshSetupToken = crypto.randomUUID();
+      const scriptId = await this.createAppScriptProject(sheet.spreadsheetId, freshSetupToken);
 
       // 5. 部署为 Web App（必须先部署才能调用 Web App）
       console.log('步骤 5/8: 部署 Web App...');
@@ -213,6 +272,7 @@ export class SheetInitializer {
         logsSheetId: this.logsSheetId,
         setupWarnings,
         needsAuthorization: true,
+        freshSetupToken,
         authUrl: `${webAppUrl}?action=authSuccess`, // 用户需要访问这个 URL 来授权
       };
     } catch (error) {
@@ -248,7 +308,7 @@ export class SheetInitializer {
   /**
    * 创建 Spreadsheet
    */
-  private async createSpreadsheet(): Promise<{
+  private async createSpreadsheet(setupId?: string): Promise<{
     spreadsheetId: string;
     spreadsheetUrl: string;
   }> {
@@ -264,7 +324,7 @@ export class SheetInitializer {
         },
         body: JSON.stringify({
           properties: {
-            title: `${userInfo.given_name} 的定时消息管理 - Personal AI`,
+            title: `${userInfo.given_name} 的定时消息管理 - Personal AI${setupId ? ` [Upgrade ${setupId}]` : ''}`,
             timeZone,
           },
           sheets: [
@@ -580,7 +640,7 @@ export class SheetInitializer {
   /**
    * 创建 AppScript 项目
    */
-  private async createAppScriptProject(spreadsheetId: string): Promise<string> {
+  private async createAppScriptProject(spreadsheetId: string, setupToken?: string, onCreated?: (id: string) => Promise<void>, setupId?: string): Promise<string> {
     const userInfo = await this.getUserInfo();
     // 读取 AppScript 模板代码
     const scriptCode = await this.loadAppScriptTemplate();
@@ -596,7 +656,7 @@ export class SheetInitializer {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          title: `${userInfo.given_name} - Scheduled Messages`,
+          title: `${userInfo.given_name} - Scheduled Messages${setupId ? ` [Upgrade ${setupId}]` : ''}`,
           parentId: spreadsheetId,
         }),
       },
@@ -618,6 +678,11 @@ export class SheetInitializer {
 
     const project = await createResponse.json();
     const scriptId = project.scriptId;
+    if (onCreated) await onCreated(scriptId);
+    if (setupToken) {
+      await this.uploadUpgradeCode(scriptId, setupToken);
+      return scriptId;
+    }
 
     // 上传代码
     const updateResponse = await fetch(
@@ -728,7 +793,18 @@ function minuteTrigger() {
 
       // 6. 创建触发器（通过 Web App 调用）
       console.log('步骤 6/8: 创建触发器...');
-      const triggers = await this.createTriggers(webAppUrl);
+      if (setupMetadata.freshSetupToken) {
+        for (const operation of ['prepare', 'activate']) {
+          const response = await fetch(webAppUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'freshSetup', token: setupMetadata.freshSetupToken, operation }) });
+          if (!response.ok) throw new Error('新表初始化失败，请完成授权后重试');
+          const health = await response.json();
+          if (!health.success || health.spreadsheetId !== sheetId) throw new Error(health.error || '新表身份检查失败');
+        }
+      }
+      const triggers = setupMetadata.freshSetupToken
+        ? { minuteTriggerId: 'created-via-webapp', dailyTriggerId: '' }
+        : await this.createTriggers(webAppUrl);
 
       // 7. 添加示例数据（触发器创建后才能推送）
       console.log('步骤 7/8: 添加示例数据...');

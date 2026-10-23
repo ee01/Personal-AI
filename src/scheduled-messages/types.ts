@@ -230,6 +230,10 @@ export interface SheetConfig {
 
 // 初始化结果
 export interface InitializationResult {
+  /** Fresh-project setup capability, never persisted in the active Config. */
+  freshSetupToken?: string;
+  /** An unresolved create response must be reconciled before retrying. */
+  pendingCreation?: 'spreadsheet' | 'script';
   success: boolean;
   sheetId: string;
   sheetUrl: string;

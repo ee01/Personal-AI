@@ -530,6 +530,10 @@ export class AppScriptUpdater {
       // 从 Web App 获取当前部署的版本
       const deployedVersionInfo = await this.getDeployedVersionInfo();
       const currentVersion = deployedVersionInfo.version;
+      if (Number(currentVersion.split('.')[0]) < 3 && Number(latestVersion.split('.')[0]) >= 3 && this.config.scriptId) {
+        return { needsUpdate: false, currentVersion, latestVersion,
+          error: 'NEW_SHEET_UPGRADE_REQUIRED: 请使用定时消息管理页的新表升级向导' };
+      }
       
       // 比较版本
       const needsUpdate = isAppScriptVersionOlder(currentVersion, latestVersion);
@@ -690,6 +694,13 @@ export class AppScriptUpdater {
         }
 
         const deployedVersion = deployedVersionInfo.version;
+        if (Number(deployedVersion.split('.')[0]) < 3 && Number(latestVersion.split('.')[0]) >= 3) {
+          throw new Error('NEW_SHEET_UPGRADE_REQUIRED: 请在定时消息管理页使用新表升级向导，旧部署不会自动跨版本覆盖');
+        }
+        const draft = (await chrome.storage.local.get?.('scheduledMessagesUpgradeDraft'))?.scheduledMessagesUpgradeDraft;
+        if (draft?.source?.scriptId === this.config.scriptId && (draft.retirementWritten || draft.retired)) {
+          throw new Error('旧项目已进入退役流程，请继续新表升级，不可覆盖退役代码');
+        }
         const deployedComparison = compareAppScriptVersions(deployedVersion, latestVersion);
 
         if (deployedComparison >= 0) {
@@ -862,6 +873,15 @@ export class AppScriptUpdater {
   /**
    * 更新 App Script 项目内容
    */
+  /** Only used with the newly created, independently checkpointed candidate project. */
+  async writeFreshCandidateCode(scriptId: string, setupToken: string): Promise<void> {
+    if (!/^[a-f0-9-]{36}$/.test(setupToken)) throw new Error('invalid_setup_token');
+    const code = (await this.loadAppScriptTemplate()).replace(
+      "var FRESH_SETUP_TOKEN = '';", `var FRESH_SETUP_TOKEN = '${setupToken}';`,
+    );
+    await this.updateProjectContent(scriptId, code);
+  }
+
   private async updateProjectContent(
     scriptId: string,
     scriptCode: string,
