@@ -68,7 +68,62 @@ test('keeps manifest keys the rewrite used to silently drop', () => {
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/script.external_request',
   ]);
-  assert.deepEqual(manifest.dependencies, { enabledAdvancedServices: [] });
+  assert.ok(
+    Array.isArray(manifest.dependencies.enabledAdvancedServices) &&
+      manifest.dependencies.enabledAdvancedServices.some(service => service.serviceId === 'sheets'),
+    'the ledger needs the Sheets API enabled on the Cloud project',
+  );
+});
+
+test('declares the Sheets advanced service for API-created projects', () => {
+  const manifest = JSON.parse(
+    buildAppScriptManifestSource({ timeZone: 'Asia/Shanghai' }),
+  );
+
+  assert.deepEqual(manifest.dependencies.enabledAdvancedServices, [
+    { userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4' },
+  ]);
+});
+
+test('keeps user-added advanced services and never duplicates the Sheets entry', () => {
+  const manifest = JSON.parse(
+    buildAppScriptManifestSource({
+      timeZone: 'Asia/Shanghai',
+      existingManifestSource: JSON.stringify({
+        dependencies: {
+          enabledAdvancedServices: [
+            { userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4' },
+            { userSymbol: 'Calendar', serviceId: 'calendar', version: 'v3' },
+          ],
+        },
+      }),
+    }),
+  );
+
+  assert.deepEqual(manifest.dependencies.enabledAdvancedServices, [
+    { userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4' },
+    { userSymbol: 'Calendar', serviceId: 'calendar', version: 'v3' },
+  ]);
+});
+
+test('avoids a userSymbol collision with an unrelated Sheets symbol', () => {
+  const manifest = JSON.parse(
+    buildAppScriptManifestSource({
+      timeZone: 'Asia/Shanghai',
+      existingManifestSource: JSON.stringify({
+        dependencies: {
+          enabledAdvancedServices: [
+            { userSymbol: 'Sheets', serviceId: 'drive', version: 'v3' },
+          ],
+        },
+      }),
+    }),
+  );
+
+  assert.deepEqual(manifest.dependencies.enabledAdvancedServices, [
+    { userSymbol: 'Sheets', serviceId: 'drive', version: 'v3' },
+    { userSymbol: 'SheetsApi', serviceId: 'sheets', version: 'v4' },
+  ]);
 });
 
 test('defaults to anonymous Web App access when no manifest exists', () => {

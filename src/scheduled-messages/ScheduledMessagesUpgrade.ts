@@ -113,7 +113,11 @@ export class ScheduledMessagesUpgrade {
       body: JSON.stringify({ action: 'freshSetup', operation, token: this.draft.token }),
       signal: AbortSignal.timeout(45000),
     }));
-    if (!result.success) throw new Error(result.error || '新表准备失败');
+    if (!result.success) {
+      // Apps Script's doPost catch-all returns {status:'ERROR', message}; read
+      // it so the operator sees the server-side reason instead of a fallback.
+      throw new Error(result.error || result.message || '新表准备失败');
+    }
     return result;
   }
 

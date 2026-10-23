@@ -715,6 +715,14 @@ export class SheetInitializer {
                   access: 'ANYONE_ANONYMOUS',
                   executeAs: 'USER_DEPLOYING',
                 },
+                // The 3.x execution ledger calls sheets.googleapis.com REST
+                // with the script token; the Sheets API must be enabled on the
+                // project's Cloud project, which this declaration provisions.
+                dependencies: {
+                  enabledAdvancedServices: [
+                    { userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4' },
+                  ],
+                },
               }),
             },
           ],

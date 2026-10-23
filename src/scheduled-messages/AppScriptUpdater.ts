@@ -222,6 +222,33 @@ export function buildAppScriptManifestSource(input: {
   }
   delete manifest.executionApi;
 
+  // The durable execution protocol calls sheets.googleapis.com directly with the
+  // script's OAuth token, so the Sheets API must be enabled on the project's
+  // Cloud project. A project created or rewritten through the Apps Script API
+  // never enables it on its own; declaring the advanced service provisions it.
+  // Existing services (user-added or a previous version's) are preserved.
+  const existingDependencies =
+    existing.dependencies && typeof existing.dependencies === 'object' && !Array.isArray(existing.dependencies)
+      ? (existing.dependencies as Record<string, unknown>)
+      : {};
+  const existingServices = Array.isArray(existingDependencies.enabledAdvancedServices)
+    ? (existingDependencies.enabledAdvancedServices as Array<Record<string, unknown>>)
+    : [];
+  const hasSheetsService = existingServices.some(service => service && service.serviceId === 'sheets');
+  manifest.dependencies = {
+    ...existingDependencies,
+    enabledAdvancedServices: hasSheetsService
+      ? existingServices
+      : [
+          ...existingServices,
+          {
+            userSymbol: existingServices.some(service => service && service.userSymbol === 'Sheets') ? 'SheetsApi' : 'Sheets',
+            serviceId: 'sheets',
+            version: 'v4',
+          },
+        ],
+  };
+
   return JSON.stringify(manifest, null, 2);
 }
 
