@@ -240,6 +240,22 @@ Sheet 不可写、表头损坏、重复 key / 消息 ID、坏记录和锁超时�
 7. 终态最少保留最近变化后 48h，每 6h 检查、每批最多删除 100 行，锁内倒序删除；不允许 `maxAgeMs` 缩短窗口，未决永不按 TTL 删除。带 legacySources 的行在旧属性清理结束前不自动删除，以保留校验证据。
 8. 旧属性默认保留只读。切换观察至少 48h、在途完成对账、同权限快照和回滚演练都确认后，可选调用 `maintenanceDeleteMigratedExecutionProperties({snapshotVerified:true, rollbackVerified:true, oldWritersRetired:true, inflightReconciled:true})`，每次最多 100 条、逐项 hash 校验、可中断续跑；不碰 Timeline、Config、密钥或 purge 旧状态项。更长回调约定须延长记录与观察窗口，不能直接沿用 48h。
 
+#### 旧表编辑器迁移助手
+
+`tools/scheduled-messages-old-sheet-migration.gs` 是供编辑器手动运行的独立辅助文件，和完整 3.0.0 模板放在同一个绑定项目中；不需要替换或删除 Code.gs。先把配置 `spreadsheetId` 填为要迁移的旧表 ID，备份/停写/验证声明默认均为 false，不能以排错为由跳过真实核查。
+
+| 编辑器入口 | 行为与下一步 |
+|---|---|
+| `oldSheetMigration00BackupMarks` | 旧写入者停用后，可创建独立 mark 备份文件；只复制两个 mark 前缀，原值以 Base64 保存，附 SHA-256；不复制 Config/密钥，不删除源属性，备份 URL 仅在执行日志显示 |
+| `oldSheetMigration01Diagnose` | 只读核对绑定表 ID、项目 ID、实际 Google 执行账号（若可见）、Sheets API 元数据、安装触发器、旧 mark 数和缺少的隐藏表；即使尚未初始化也能诊断 |
+| `oldSheetMigration02Copy` | 备份及旧写入者停用已核查后，设置 backupsVerified / oldWritersRetired 为 true；先检查 API 和 Messages/Logs，再初始化账本，每次至多迁移 5 批；未 complete 时重复运行同一入口续跑，不自动激活 |
+| `oldSheetMigration03Activate` | 核查复制结果、遗留 pending 和实际隔离验证后才设置 isolatedValidationPassed=true；显式传入激活参数，已经激活时只返回已有状态；不恢复 Jira/trigger，不发送测试消息 |
+| `oldSheetMigration04Status` | 只读显示迁移状态、模式、各状态计数和遗留待确认 ID |
+
+日志以 stage 标记 API_PREFLIGHT、INITIALIZE、COPY_BATCH、VERIFY_STATUS、ACTIVATE 阶段（以实际输出的 `02A_API_PREFLIGHT` 等完整名称为准）；任一失败停止，不继续下一阶段。权限/API 未启用先修配置，unknown_commit 保持冻结，来源变动/冲突先对账，不能重置控制表或删除旧属性。初始化后仍找不到隐藏表时须核对同一绑定项目并检查初始化阶段错误，不能只手工创建同名空表。
+
+完整操作顺序仍包括助手以外的人工步骤：备份 Sheet/脚本版本/旧 mark（复制 Sheet 不等于备份 Properties）；暂停新领取并排空旧执行，停用所有旧写入者；将**原 deployment 更新至 3.0.0 并保留 URL**，由兼容代码接收已知旧确认，此时不开放新领取；运行助手完成复制/验证/激活，再核对 getVersion，最后只放行一条授权测试任务，确认结果后逐步恢复调度。编辑器保存代码不会自动更新已发布的版本化 Web App；只改 Code.gs 而不更新原 deployment，旧 URL 仍可能运行旧代码。
+
 #### 验证、容量与上线门槛
 
 `npm run verify:execution-mark-store` 使用原子批次模拟器做权限拒绝、超时后落盘/未落盘、满 Properties、零缓存、重复领取、迟到/冲突确认、迁移中断、清理和回滚故障注入；现有 `timelineSyncRule.test.ts` 使用同一模拟器保留 Jira payload、行移动、Logs 元数据与调度计数回归。这是确定性协议测试，不需要 LLM 体验 eval。
