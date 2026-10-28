@@ -39,9 +39,47 @@ test('fresh endpoint rejects legacy projects and does not reset an existing migr
 test('an imported orphan pending row remains blocked after 2h without poisoning other messages', () => {
   const h = candidate(); h.setup('prepare'); h.setup('activate');
   h.setCell('Exec_Log', '⏳ API 已领取待确认'); h.setCell('Last_Exec', '2026-10-23 06:00');
-  assert.equal(h.context.isClaimPendingBlockingReclaim(h.context.parseRow(h.table('Messages').rows[1], h.headers), '2026-10-23', new h.context.Date(), 2), true);
+  const row = () => h.context.parseRow(h.table('Messages').rows[1], h.headers);
+  assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), true);
   assert.equal(h.records().length, 0); assert.equal(h.cell('Exec_Count'), '0');
+  assert.match(h.cell('Exec_Log'), /trigger_delivery_failed/);
+  // The quarantine marker clears the pending condition: later scans must not
+  // re-enter the lock or pay another UrlFetch snapshot for this row.
+  const reads = h.apiReads();
+  assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), false);
+  assert.equal(h.apiReads(), reads, 'a quarantined orphan row costs no further REST reads');
+  assert.equal(h.context.isPushedFailedToday(row(), '2026-10-23'), true, 'the row stays excluded from same-day reclaim');
   assert.equal(h.context.getRuntimeHealth().ready, true);
+});
+
+test('expiring a real stale claim rewrites the sheet marker in the same commit', () => {
+  const h = candidate(); h.setup('prepare'); h.setup('activate');
+  h.claim('k1');
+  h.setCell('Last_Exec', '2026-10-23 06:00');
+  h.advance(3 * 60 * 60 * 1000);
+  const row = () => h.context.parseRow(h.table('Messages').rows[1], h.headers);
+  assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), true);
+  assert.equal(h.records()[0].state, 'UNKNOWN');
+  assert.match(h.cell('Exec_Log'), /trigger_delivery_failed/);
+  assert.equal(h.context.isClaimPendingLog(h.cell('Exec_Log')), false);
+  const reads = h.apiReads();
+  assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), false);
+  assert.equal(h.apiReads(), reads, 'after expiry the row no longer triggers per-poll REST reads');
+});
+
+test('the purge throttle reads one control cell and skips the REST snapshot', () => {
+  const h = candidate(); h.setup('prepare'); h.setup('activate');
+  assert.equal(h.context.maybePurgeExpiredExecutionMarks(new h.context.Date()).success, true);
+  let reads = h.apiReads();
+  // Throttled (last purge just ran) stores answer without any REST read.
+  const throttled = h.context.maybePurgeExpiredExecutionMarks(new h.context.Date());
+  assert.equal(throttled.skipped, true); assert.equal(throttled.reason, 'throttled');
+  assert.equal(h.apiReads(), reads, 'throttle check uses the built-in control cell, not UrlFetch');
+  h.setup('pause');
+  reads = h.apiReads();
+  const paused = h.context.maybePurgeExpiredExecutionMarks(new h.context.Date());
+  assert.equal(paused.skipped, true); assert.equal(paused.reason, 'paused');
+  assert.equal(h.apiReads(), reads, 'mode check uses the built-in control cell, not UrlFetch');
 });
 test('health is read-only and does not manufacture a first-poll or delivery receipt', () => {
   const h = candidate(); assert.equal(h.context.getRuntimeHealth().success, false);

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 // It deliberately has no Properties writes or CacheService implementation.
 export function executionHarness(options = {}) {
   let clock = Date.parse(options.now || '2026-10-23T09:00:00Z');
+  let apiReads = 0;
   function Clock(...args) { return new Date(...(args.length ? args : [clock])); }
   Clock.now = () => clock;
   Clock.parse = Date.parse;
@@ -28,6 +29,7 @@ export function executionHarness(options = {}) {
     getDataRange: () => ({ getDisplayValues: () => structuredClone(tables.find(t => t.id === id).rows) }),
     getRange: (row, col) => ({
       setValue(value) { this.setValues([[value]]); },
+      getDisplayValue() { const t = tables.find(t => t.id === id); return String((t.rows[row - 1] || [])[col - 1] ?? ''); },
       setValues(values) {
         const t = tables.find(t => t.id === id);
         values.forEach((r, i) => r.forEach((v, j) => { t.rows[row - 1 + i] ||= []; t.rows[row - 1 + i][col - 1 + j] = String(v); if (options.onDirectWrite) options.onDirectWrite(id, row + i, col + j, v); }));
@@ -86,6 +88,7 @@ export function executionHarness(options = {}) {
     }) },
     UrlFetchApp: { fetch: (url, opts) => {
       if (!opts.payload) {
+        apiReads++;
         if (failure?.phase === 'read') { const f = failure; failure = null; return { getResponseCode: () => f.code || 403 }; }
         if (new URL(url).searchParams.has('fields')) return {
           getResponseCode: () => 200,
@@ -118,6 +121,7 @@ export function executionHarness(options = {}) {
   vm.runInContext(readFileSync('src/scheduled-messages/app-script-template.gs', 'utf8'), context);
   return {
     context, properties, events, headers,
+    apiReads: () => apiReads,
     table: name => tables.find(t => t.name === name),
     cell: name => tables.find(t => t.name === 'Messages').rows[1][headers.indexOf(name)],
     setCell: (name, value) => { tables.find(t => t.name === 'Messages').rows[1][headers.indexOf(name)] = String(value); },

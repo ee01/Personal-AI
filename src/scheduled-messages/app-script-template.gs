@@ -26,10 +26,10 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.1.0';
+var APP_SCRIPT_VERSION = '3.1.1';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
-var APP_SCRIPT_LAST_UPDATED = '2026-10-23';
+var APP_SCRIPT_LAST_UPDATED = '2026-10-28';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -1687,11 +1687,24 @@ function maybePurgeExpiredExecutionMarks(now) {
   // Maintenance cannot turn an empty queue into a Properties quota exception.
   // Uninitialized/paused stores are maintained explicitly by the operator.
   const book = SpreadsheetApp.getActiveSpreadsheet();
-  if (!book.getSheetByName('_ExecutionMarkControl')) return { skipped: true, reason: 'not_initialized' };
+  const controlSheet = book.getSheetByName('_ExecutionMarkControl');
+  if (!controlSheet) return { skipped: true, reason: 'not_initialized' };
+  const date = now || new Date();
+  // Cheap throttle check through the built-in service: the REST snapshot costs a
+  // UrlFetch call on every poll and every trigger minute, so an idle system
+  // would burn thousands of daily quota calls before this gate existed.
+  try {
+    const control = JSON.parse(controlSheet.getRange(2, 1).getDisplayValue() || 'null');
+    if (control && control.schemaVersion === 1 && !control.pending) {
+      if (control.mode !== 'sheet_primary') return { skipped: true, reason: control.mode };
+      if (date.getTime() - (control.lastPurgeAt || 0) < EXECUTION_MARK_PURGE_INTERVAL_MS) return { skipped: true, reason: 'throttled' };
+    }
+  } catch (error) {
+    // An unreadable control cell defers to the locked snapshot for the real error.
+  }
   return withExecutionMarkLock(function() {
     const store = readExecutionStore();
     if (store.control.mode !== 'sheet_primary') return { skipped: true, reason: store.control.mode };
-    const date = now || new Date();
     if (date.getTime() - (store.control.lastPurgeAt || 0) < EXECUTION_MARK_PURGE_INTERVAL_MS) {
       return { skipped: true, reason: 'throttled' };
     }
@@ -2886,8 +2899,24 @@ function expireStaleClaimAsDeliveryFailed(rowData, rowIndex) {
         requests.push(executionRecordRequest(store, e.row, e.record));
       }
     });
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+    const logColumn = getColumnIndex(store.messageRows[0], 'Exec_Log');
+    if (sheet && logColumn > 0 && rowIndex) {
+      if (requests.length) {
+        // Rewrite the sheet-side ⏳ marker in the same atomic commit: otherwise
+        // the stale text re-enters this lock on every scan and burns a UrlFetch
+        // snapshot per row per minute without ever clearing the condition.
+        executionBatchSheet(sheet, requests, null, store.messageRows[0]).getRange(rowIndex, logColumn)
+          .setValue(TRIGGER_DELIVERY_FAILED_LOG + '：领取超时未确认，已隔离待人工核对');
+      } else if (!entries.length) {
+        // Orphan claim text with no CLAIMED ledger record (e.g. imported from a
+        // 2.x sheet, or already expired to UNKNOWN): quarantine the text so
+        // scans stop paying one REST snapshot for this row on every poll.
+        sheet.getRange(rowIndex, logColumn).setValue(TRIGGER_DELIVERY_FAILED_LOG + '：旧系统领取记录，已隔离待人工核对');
+      }
+    }
     if (requests.length) commitExecutionBatch(store, requests, 'expire');
-    return { success: true, unknown: requests.length };
+    return { success: true, unknown: requests.length, quarantined: !entries.length };
   });
 }
 
