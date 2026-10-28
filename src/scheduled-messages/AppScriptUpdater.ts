@@ -44,6 +44,16 @@ export interface AppScriptVersionInfo {
   lastUpdated: string;
 }
 
+/** Keep the project's private setup capability when replacing its managed code. */
+export function preserveAppScriptSetupCapability(templateSource: string, currentSource: string): string {
+  const declaration = /^\s*var\s+FRESH_SETUP_TOKEN\s*=\s*(['"])([^'"\r\n]*)\1\s*;/m;
+  const existing = currentSource.match(declaration)?.[2];
+  if (!existing) return templateSource;
+  if (!/^[a-f0-9-]{36}$/.test(existing)) throw new Error('invalid_existing_setup_configuration');
+  if (!declaration.test(templateSource)) throw new Error('setup_capability_declaration_missing');
+  return templateSource.replace(declaration, `var FRESH_SETUP_TOKEN = ${JSON.stringify(existing)};`);
+}
+
 /**
  * Outcome of an auto-update pass. Returned rather than swallowed so callers stop
  * reporting "更新成功" for a run that skipped or failed.
@@ -757,14 +767,14 @@ export class AppScriptUpdater {
       );
 
       // 3. 确认 Script ID 指向 Personal AI 管理的调度脚本，避免覆盖错误项目或用户自定义脚本
-      const { manifestSource: existingManifestSource } =
+      const { manifestSource: existingManifestSource, managedSource } =
         await this.assertCurrentProjectLooksManagedByPersonalAi(this.config.scriptId);
 
       // 4. 预检 Project History 版本额度，避免达到 200 上限时仍先覆盖 HEAD 代码
       await this.assertProjectVersionCapacity(this.config.scriptId);
 
       // 5. 加载最新的 App Script 模板代码
-      const scriptCode = await this.loadAppScriptTemplate();
+      const scriptCode = preserveAppScriptSetupCapability(await this.loadAppScriptTemplate(), managedSource);
 
       // 6. 更新 App Script 项目代码（保留线上 manifest 的 Web App access 等域策略相关设置）
       await this.updateProjectContent(
@@ -960,7 +970,7 @@ export class AppScriptUpdater {
    */
   private async assertCurrentProjectLooksManagedByPersonalAi(
     scriptId: string,
-  ): Promise<{ manifestSource?: string }> {
+  ): Promise<{ manifestSource?: string; managedSource: string }> {
     let response: Response;
     try {
       response = await fetch(
@@ -1019,7 +1029,7 @@ export class AppScriptUpdater {
 
     console.log(`✅ App Script 项目代码归属已确认: ${matchedFile.name || 'SERVER_JS'}`);
 
-    return { manifestSource: extractManifestSource(files) };
+    return { manifestSource: extractManifestSource(files), managedSource: matchedFile.source };
   }
   
   /**

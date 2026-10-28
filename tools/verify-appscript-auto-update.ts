@@ -7,6 +7,7 @@ import {
 } from '../src/scheduled-messages/appScriptVersioning';
 import {
   AppScriptUpdater,
+  preserveAppScriptSetupCapability,
   APP_SCRIPT_DEPLOYMENT_MISMATCH_ERROR,
   APP_SCRIPT_DEPLOYMENT_VERIFY_FAILED_ERROR,
   APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR,
@@ -20,6 +21,15 @@ const managerSource = readFileSync(
   'src/scheduled-messages/ScheduledMessagesManager.tsx',
   'utf8',
 );
+const setupFixture = '12345678-1234-1234-1234-123456789abc';
+const blankSetup = "var FRESH_SETUP_TOKEN = '';\nvar APP_SCRIPT_VERSION = '3.1.1';";
+const preservedSetup = preserveAppScriptSetupCapability(blankSetup, `var FRESH_SETUP_TOKEN = '${setupFixture}';`);
+assert.ok(preservedSetup.includes(JSON.stringify(setupFixture)), 'normal updates must preserve the project setup capability');
+assert.ok(preservedSetup.includes("APP_SCRIPT_VERSION = '3.1.1'"), 'new template code must still be used');
+assert.equal(preserveAppScriptSetupCapability(blankSetup, blankSetup), blankSetup, 'standard projects keep setup disabled');
+assert.equal(preserveAppScriptSetupCapability(blankSetup, 'legacy code'), blankSetup);
+assert.throws(() => preserveAppScriptSetupCapability('var other = 1;', `var FRESH_SETUP_TOKEN = '${setupFixture}';`), /declaration_missing/);
+assert.throws(() => preserveAppScriptSetupCapability(blankSetup, "var FRESH_SETUP_TOKEN = 'unexpected-private-value';"), /invalid_existing_setup_configuration/);
 const updaterSource = readFileSync(
   'src/scheduled-messages/AppScriptUpdater.ts',
   'utf8',
@@ -890,6 +900,8 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
 
       if (url === 'https://script.googleapis.com/v1/projects/script-123/content' && init?.method === 'PUT') {
         contentUpdated = true;
+        const upload = JSON.parse(String(init.body));
+        assert.ok(upload.files.find((file: any) => file.name === 'Code').source.includes(JSON.stringify(setupFixture)), 'updateAppScript must carry the existing capability into the uploaded release');
         return new Response('{}', { status: 200 });
       }
 
@@ -898,7 +910,7 @@ async function verifyDeploymentSelectionMatchesConfiguredWebAppUrl(): Promise<vo
           files: [{
             name: 'Code',
             type: 'SERVER_JS',
-            source: appScriptTemplate,
+            source: appScriptTemplate.replace("var FRESH_SETUP_TOKEN = '';", `var FRESH_SETUP_TOKEN = '${setupFixture}';`),
           }],
         }), {
           status: 200,

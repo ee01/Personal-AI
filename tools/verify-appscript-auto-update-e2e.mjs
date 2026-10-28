@@ -17,6 +17,8 @@ const appScriptTemplate = await fs.readFile(
 );
 const templateVersion = appScriptTemplate.match(/var APP_SCRIPT_VERSION = '([^']+)';/)?.[1];
 const templateLastUpdated = appScriptTemplate.match(/var APP_SCRIPT_LAST_UPDATED = '([^']+)';/)?.[1];
+const existingVersion = '3.0.0';
+const setupFixture = '12345678-1234-1234-1234-123456789abc';
 
 assert.ok(templateVersion, 'App Script template version should be readable');
 assert.ok(templateLastUpdated, 'App Script template last-updated date should be readable');
@@ -188,11 +190,14 @@ async function installRoutes(page) {
     });
   });
 
+  await page.route('https://script.google.com/macros/s/test/exec?action=getRuntimeHealth', async route => {
+    await route.fulfill({contentType:'application/json',body:JSON.stringify({success:true,spreadsheetId:sheetId,executionStoreSchemaVersion:1,mode:'sheet_primary',ready:true})});
+  });
   await page.route('https://script.google.com/macros/s/test/exec?action=getVersion', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        version: deploymentUpdated ? templateVersion : '1.0.0',
+        version: deploymentUpdated ? templateVersion : existingVersion,
         lastUpdated: deploymentUpdated ? templateLastUpdated : '2025-01-01',
       }),
     });
@@ -242,7 +247,7 @@ async function installRoutes(page) {
           files: [{
             name: 'Code',
             type: 'SERVER_JS',
-            source: appScriptTemplate,
+            source: appScriptTemplate.replace("var FRESH_SETUP_TOKEN = '';", `var FRESH_SETUP_TOKEN = '${setupFixture}';`),
           }, { name: 'appsscript', type: 'JSON', source: JSON.stringify({ oauthScopes: ['https://www.googleapis.com/auth/spreadsheets'] }) }],
         }),
       });
@@ -255,6 +260,7 @@ async function installRoutes(page) {
     ) {
       const files = request.postDataJSON().files;
       assert.ok(files.find(f => f.type === 'SERVER_JS').source.includes(`APP_SCRIPT_VERSION = '${templateVersion}'`));
+      assert.ok(files.find(f => f.type === 'SERVER_JS').source.includes(JSON.stringify(setupFixture)), 'browser upgrade preserves the setup capability');
       const manifest = JSON.parse(files.find(f => f.name === 'appsscript').source);
       assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/spreadsheets'));
       assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.external_request'));
@@ -303,7 +309,7 @@ try {
   const { context, extensionId, serviceWorker } = launched;
 
   await serviceWorker.evaluate(
-    async ({ targetSheetId }) => {
+    async ({ targetSheetId, existingVersion }) => {
       await chrome.storage.local.clear();
       await chrome.storage.local.set({
         scheduledMessagesConfig: {
@@ -317,12 +323,12 @@ try {
           sheet_version: '2.8',
           created_by: 'Personal AI Extension',
           created_at: '2026-05-30T02:30:00.000Z',
-          appScriptVersion: '1.0.0',
+          appScriptVersion: existingVersion,
           appScriptLastUpdated: '2025-01-01',
         },
       });
     },
-    { targetSheetId: sheetId },
+    { targetSheetId: sheetId, existingVersion },
   );
 
   const page = await context.newPage();

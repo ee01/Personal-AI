@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-10-23*
+*最后更新: 2026-10-28*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -143,7 +143,7 @@
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
 | 定时消息领取与交付诊断 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | API 领取仅写待确认，不依赖可能过期的 Config 版本；Executor 在执行条件前记录拉取结果，区分请求成功与下游交付 |
 | 定时消息持久幂等账本 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet 原子领取/确认、满属性迁移、旧表四步诊断助手、初始化元数据缓存修复（3.0.1）、未知提交冻结、48h 去重与兼容回滚；3.0.0 需维护窗口切换 |
-| App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
+| App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检、保留项目私有管理校验值；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
 | 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Sheet 保存任务计划；Jira Rule 触发 memory-service 入队 `delegate_agent`；执行器由 Options registry 选择（OpenClaw / ACP local 或 remote Worker）；成功通知分执行/整理/投递三段，结果群消息按模板直发、不加 `任务完成` 前缀；模板骨架（标题行/分隔线/结尾 cc 行）由模板锚定、模型写出自己的标题时以模型标题为准（模板标题里的示例数字不得当成本次结果），命中 0 条时不调 LLM、只把列表位置换成一行说明；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |
 | 执行器连通性测试 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options「测试 / 深度测试」；`POST /agent-executors/:id/probe`；stage=dns/connect/auth/ready；缓存 5 分钟；不跑 LLM |
 | Agent Worker 远程执行 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | ACP `runtime=remote` 入队 `awaiting_claim`；pair/heartbeat/claim/report + lease fencing；Desktop 内嵌或 headless `install.sh` |
