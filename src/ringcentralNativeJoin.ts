@@ -14,8 +14,6 @@ const RINGCENTRAL_VIDEO_NATIVE_SCHEME = 'rcvdt';
 const RINGCENTRAL_VIDEO_BROWSER_PROTOCOLS = new Set(['https:', 'http:']);
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID =
   'pai-ringcentral-native-join-fallback';
-const RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID =
-  'pai-ringcentral-native-join-dismissed-recovery';
 const RINGCENTRAL_NATIVE_JOIN_BROWSER_REQUESTED_ID =
   'pai-ringcentral-native-join-browser-requested';
 const RINGCENTRAL_NATIVE_JOIN_FALLBACK_LINK_ATTR =
@@ -92,7 +90,6 @@ export interface RingCentralNativeJoinSetEnabledResponseMessage {
 }
 
 interface RingCentralNativeJoinFallbackOptions {
-  restoredAfterDismiss?: boolean;
   restoredAfterBrowserRequest?: boolean;
 }
 
@@ -445,9 +442,6 @@ function showRingCentralNativeJoinFallback(
   previousFallbackCleanup?.();
   document.getElementById(RINGCENTRAL_NATIVE_JOIN_FALLBACK_ID)?.remove();
   document
-    .getElementById(RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID)
-    ?.remove();
-  document
     .getElementById(RINGCENTRAL_NATIVE_JOIN_BROWSER_REQUESTED_ID)
     ?.remove();
 
@@ -475,7 +469,7 @@ function showRingCentralNativeJoinFallback(
     ? 'Copy the full RingCentral browser meeting link, including hidden passcode/details. This does not join the meeting, retry the app, or change the default join path.'
     : 'Copy the RingCentral browser meeting link. This does not join the meeting, retry the app, or change the default join path.';
   const closeActionBoundary =
-    'Hide this RingCentral recovery panel and leave a compact Restore recovery strip. This does not confirm joining, retry the app, open the browser fallback, copy meeting material, or change the default join path.';
+    'Hide this RingCentral recovery panel. This does not confirm joining, retry the app, open the browser fallback, copy meeting material, or change the default join path.';
   const retryAppActionBoundary =
     'Try opening this validated RingCentral app link again. This does not open the browser fallback, copy meeting material, or change the default join path; Personal AI still cannot confirm whether you joined.';
 
@@ -609,7 +603,6 @@ function showRingCentralNativeJoinFallback(
     event.stopPropagation();
     event.stopImmediatePropagation();
     removeHost();
-    showRingCentralNativeJoinDismissedRecovery(target);
   });
 
   const scheduleHandoffConcern = (): void => {
@@ -691,11 +684,8 @@ function showRingCentralNativeJoinFallback(
     actions.appendChild(retryAppButton);
   };
 
-  const setRestoredRecoveryState = (
-    source: 'hidden' | 'browser-request',
-  ): void => {
+  const setRestoredRecoveryState = (): void => {
     title.textContent = 'RingCentral recovery restored';
-    void source;
     setFallbackStatus('', 'manual');
     ensureRetryAppButton();
   };
@@ -876,30 +866,11 @@ function showRingCentralNativeJoinFallback(
 
   document.body?.appendChild(host);
   if (options.restoredAfterBrowserRequest) {
-    setRestoredRecoveryState('browser-request');
-  } else if (options.restoredAfterDismiss) {
-    setRestoredRecoveryState('hidden');
+    setRestoredRecoveryState();
   } else {
     scheduleAutoDismiss();
     scheduleHandoffConcern();
   }
-}
-
-function showRingCentralNativeJoinDismissedRecovery(
-  target: RingCentralVideoJoinTarget,
-): void {
-  showRingCentralNativeJoinCompactReceipt(target, {
-    id: RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID,
-    label: 'RingCentral app handoff hidden recovery',
-    title: 'RingCentral handoff hidden',
-    body:
-      'No join was confirmed and the default path is unchanged. Restore recovery if the app prompt was cancelled.',
-    closeBoundary:
-      'Close this compact RingCentral hidden-handoff strip. This does not confirm joining, restore the recovery panel, retry the app, open the browser fallback, copy meeting material, or change the default join path.',
-    restoreBoundary:
-      'Restore browser recovery controls for this RingCentral handoff. This does not retry the app, open the browser fallback, copy meeting material, change the default join path, or confirm that you joined.',
-    restoreMode: 'hidden',
-  });
 }
 
 function showRingCentralNativeJoinBrowserRequestedReceipt(
@@ -915,7 +886,6 @@ function showRingCentralNativeJoinBrowserRequestedReceipt(
       'Close this compact RingCentral browser-request receipt. This does not confirm joining, restore the recovery panel, retry the app, open another browser window, copy meeting material, or change the default join path.',
     restoreBoundary:
       'Restore RingCentral recovery after the browser join request. This does not open another browser window, retry the app, copy meeting material, change the default join path, or confirm the previous browser join.',
-    restoreMode: 'browser-request',
   });
 }
 
@@ -928,16 +898,12 @@ function showRingCentralNativeJoinCompactReceipt(
     body: string;
     closeBoundary: string;
     restoreBoundary: string;
-    restoreMode: 'hidden' | 'browser-request';
   },
 ): void {
   if (typeof document === 'undefined' || !document.body) {
     return;
   }
 
-  document
-    .getElementById(RINGCENTRAL_NATIVE_JOIN_DISMISSED_RECOVERY_ID)
-    ?.remove();
   document
     .getElementById(RINGCENTRAL_NATIVE_JOIN_BROWSER_REQUESTED_ID)
     ?.remove();
@@ -1045,8 +1011,7 @@ function showRingCentralNativeJoinCompactReceipt(
     event.stopImmediatePropagation();
     removeStrip();
     showRingCentralNativeJoinFallback(target, {
-      restoredAfterBrowserRequest: options.restoreMode === 'browser-request',
-      restoredAfterDismiss: options.restoreMode === 'hidden',
+      restoredAfterBrowserRequest: true,
     });
   });
 

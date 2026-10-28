@@ -570,13 +570,6 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
     return null;
   }
 
-  function collectElementText(root: FakeElement | null | undefined): string {
-    if (!root) return '';
-    return [root.textContent, ...root.children.map(collectElementText)]
-      .filter(Boolean)
-      .join(' ');
-  }
-
   const body = new FakeElement('body');
   const documentElement = new FakeElement('html');
   let pageVisibilityState: 'visible' | 'hidden' = 'visible';
@@ -840,64 +833,20 @@ test('openRingCentralVideoNativeJoin keeps browser recovery when app handoff lea
       undefined,
       'top-right close control should remove the native handoff panel',
     );
-    const dismissedRecovery = elementsById.get(
-      'pai-ringcentral-native-join-dismissed-recovery',
-    );
-    assert.ok(
-      dismissedRecovery,
-      'closing the handoff panel should leave a compact recovery affordance',
-    );
-    assert.ok(
-      collectElementText(dismissedRecovery).includes(
-        'RingCentral handoff hidden',
-      ) &&
-        collectElementText(dismissedRecovery).includes('No join was confirmed') &&
-        collectElementText(dismissedRecovery).includes(
-          'default path is unchanged',
-        ) &&
-        collectElementText(dismissedRecovery).includes('Restore recovery'),
-      'dismissed recovery strip should preserve the unconfirmed handoff boundary',
-    );
-    assert.deepEqual(
-      scheduledTimeouts.map((item) => item.delay),
-      [
-        5000, 6000, 10000, 5000, 6000, 10000, 5000, 6000, 10000, 12000,
-      ],
-      'dismissed recovery strip should use a short bounded lifetime',
-    );
-    const restoreRecoveryButton = findElementByAttribute(
-      dismissedRecovery!,
-      'data-pai-ringcentral-native-join-restore-recovery',
-    );
-    await restoreRecoveryButton?.dispatchTestEvent('click');
-    const restoredFallback = elementsById.get(
-      'pai-ringcentral-native-join-fallback',
-    );
-    assert.ok(
-      restoredFallback,
-      'Restore recovery should rebuild the full browser recovery panel',
-    );
     assert.equal(
       elementsById.get('pai-ringcentral-native-join-dismissed-recovery'),
       undefined,
-      'restoring the full panel should clear the compact recovery strip',
+      'closing the handoff panel should not leave a recovery strip',
+    );
+    assert.deepEqual(
+      scheduledTimeouts.map((item) => item.delay),
+      [5000, 6000, 10000, 5000, 6000, 10000, 5000, 6000, 10000],
+      'closing the handoff panel should not schedule any extra timers',
     );
     assert.equal(
       elementsById.get('pai-ringcentral-native-join-launch-link'),
       undefined,
-      'restoring recovery controls should not relaunch the native app',
-    );
-    assert.equal(
-      findElementByAttribute(
-        restoredFallback,
-        'data-pai-ringcentral-native-join-title',
-      )?.textContent,
-      'RingCentral recovery restored',
-      'restored recovery should retain only its title and controls',
-    );
-    assert.ok(
-      findElementByText(restoredFallback, 'Try app again'),
-      'restored recovery should retain the app retry control',
+      'closing the handoff panel should remove the temporary native launch link',
     );
 
     pageVisibilityState = 'hidden';

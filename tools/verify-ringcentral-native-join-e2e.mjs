@@ -580,7 +580,6 @@ async function main() {
     assert(
       result.closeTag === 'BUTTON' &&
         result.closeLabel.includes('Hide this RingCentral recovery panel') &&
-        result.closeLabel.includes('compact Restore recovery strip') &&
         result.closeLabel.includes('does not confirm joining') &&
         result.closeLabel.includes('retry the app') &&
         result.closeLabel.includes('open the browser fallback') &&
@@ -1443,136 +1442,27 @@ async function main() {
         }),
       );
     });
-    await page.waitForSelector('#pai-ringcentral-native-join-dismissed-recovery');
-    const dismissedRecoveryState = await page.evaluate(() => ({
+    const closedPanelState = await page.evaluate(() => ({
       fallbackVisible: Boolean(
         document.querySelector('#pai-ringcentral-native-join-fallback'),
       ),
-      stripText:
-        document.querySelector('#pai-ringcentral-native-join-dismissed-recovery')
-          ?.textContent || '',
-      restoreButtonText:
-        document.querySelector(
-          '[data-pai-ringcentral-native-join-restore-recovery]',
-        )?.textContent || '',
-      restoreButtonLabel:
-        document
-          .querySelector('[data-pai-ringcentral-native-join-restore-recovery]')
-          ?.getAttribute('aria-label') || '',
-      restoreButtonTitle:
-        document
-          .querySelector('[data-pai-ringcentral-native-join-restore-recovery]')
-          ?.getAttribute('title') || '',
-      closeButtonLabel:
-        document
-          .querySelector(
-            '#pai-ringcentral-native-join-dismissed-recovery [data-pai-ringcentral-native-join-close]',
-          )
-          ?.getAttribute('aria-label') || '',
-      closeButtonTitle:
-        document
-          .querySelector(
-            '#pai-ringcentral-native-join-dismissed-recovery [data-pai-ringcentral-native-join-close]',
-          )
-          ?.getAttribute('title') || '',
-      nativeLaunchCount: (window.__paiNativeLaunches || []).length,
-    }));
-    assert(
-      !dismissedRecoveryState.fallbackVisible &&
-        dismissedRecoveryState.stripText.includes(
-          'RingCentral handoff hidden',
-        ) &&
-        dismissedRecoveryState.stripText.includes('No join was confirmed') &&
-        dismissedRecoveryState.stripText.includes(
-          'default path is unchanged',
-        ) &&
-        dismissedRecoveryState.restoreButtonText.includes('Restore recovery') &&
-        dismissedRecoveryState.restoreButtonLabel.includes(
-          'Restore browser recovery controls',
-        ) &&
-        dismissedRecoveryState.restoreButtonLabel.includes(
-          'does not retry the app',
-        ) &&
-        dismissedRecoveryState.restoreButtonLabel.includes(
-          'open the browser fallback',
-        ) &&
-        dismissedRecoveryState.restoreButtonLabel.includes(
-          'copy meeting material',
-        ) &&
-        dismissedRecoveryState.restoreButtonLabel.includes(
-          'default join path',
-        ) &&
-        dismissedRecoveryState.restoreButtonLabel.includes(
-          'confirm that you joined',
-        ) &&
-        dismissedRecoveryState.restoreButtonTitle ===
-          dismissedRecoveryState.restoreButtonLabel &&
-        dismissedRecoveryState.closeButtonLabel.includes(
-          'Close this compact RingCentral hidden-handoff strip',
-        ) &&
-        dismissedRecoveryState.closeButtonLabel.includes(
-          'does not confirm joining',
-        ) &&
-        dismissedRecoveryState.closeButtonLabel.includes(
-          'restore the recovery panel',
-        ) &&
-        dismissedRecoveryState.closeButtonLabel.includes('retry the app') &&
-        dismissedRecoveryState.closeButtonLabel.includes(
-          'open the browser fallback',
-        ) &&
-        dismissedRecoveryState.closeButtonTitle ===
-          dismissedRecoveryState.closeButtonLabel &&
-        dismissedRecoveryState.nativeLaunchCount === nativeLaunchCountBeforeClose,
-      `Closing the handoff panel should leave a compact restore path without launching again: ${JSON.stringify(
-        dismissedRecoveryState,
-      )}`,
-    );
-    await page.click('[data-pai-ringcentral-native-join-restore-recovery]');
-    await page.waitForSelector('#pai-ringcentral-native-join-fallback');
-    const restoredRecoveryState = await page.evaluate(() => ({
       dismissedRecoveryVisible: Boolean(
-        document.querySelector('#pai-ringcentral-native-join-dismissed-recovery'),
-      ),
-      fallbackText:
-        document.querySelector('#pai-ringcentral-native-join-fallback')
-          ?.textContent || '',
-      title:
-        document.querySelector('[data-pai-ringcentral-native-join-title]')
-          ?.textContent || '',
-      status:
-        document.querySelector('[data-pai-ringcentral-native-join-status]')
-          ?.textContent || '',
-      handoffReceiptText:
         document.querySelector(
-          '[data-pai-ringcentral-native-join-handoff-receipt]',
-        )?.textContent || '',
+          '#pai-ringcentral-native-join-dismissed-recovery',
+        ),
+      ),
       nativeLaunchCount: (window.__paiNativeLaunches || []).length,
     }));
     assert(
-      !restoredRecoveryState.dismissedRecoveryVisible &&
-        restoredRecoveryState.title.includes('RingCentral recovery restored') &&
-        restoredRecoveryState.fallbackText.includes('Join in browser') &&
-        restoredRecoveryState.fallbackText.includes('Copy link') &&
-        restoredRecoveryState.fallbackText.includes('Try app again') &&
-        restoredRecoveryState.status.includes('Recovery restored') &&
-        restoredRecoveryState.status.includes('No join was confirmed') &&
-        restoredRecoveryState.handoffReceiptText.includes(
-          'Recovery panel restored after being hidden',
-        ) &&
-        restoredRecoveryState.handoffReceiptText.includes(
-          'did not retry the app',
-        ) &&
-        restoredRecoveryState.handoffReceiptText.includes(
-          'join in browser',
-        ) &&
-        restoredRecoveryState.handoffReceiptText.includes(
-          'change the default join path',
-        ) &&
-        restoredRecoveryState.nativeLaunchCount === nativeLaunchCountBeforeClose,
-      `Restoring recovery should not relaunch the app or imply a join happened: ${JSON.stringify(
-        restoredRecoveryState,
+      !closedPanelState.fallbackVisible &&
+        !closedPanelState.dismissedRecoveryVisible &&
+        closedPanelState.nativeLaunchCount === nativeLaunchCountBeforeClose,
+      `Closing the handoff panel should remove it without a recovery strip or another app launch: ${JSON.stringify(
+        closedPanelState,
       )}`,
     );
+    await page.click('[data-test-automation-id="calendar-event-item-join-button"]');
+    await page.waitForSelector('#pai-ringcentral-native-join-fallback');
 
     await page.evaluate(() => {
       window.__paiFallbackClickSeen = 0;
