@@ -1490,7 +1490,7 @@ function buildBotConfigWarningState(
 const ScheduledMessagesManager: React.FC = () => {
   const initialQueryFilters = parseScheduledMessagesQueryFilters(window.location.search);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [runtimeReady, setRuntimeReady] = useState(false);
+  const [runtimeReady, setRuntimeReady] = useState<boolean | null>(null); // null = 后台兼容检查进行中，不阻断使用
   const [isLoading, setIsLoading] = useState(true);
   const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);  // 🔧 新增：是否需要重新授权
@@ -4575,9 +4575,9 @@ const ScheduledMessagesManager: React.FC = () => {
   return (
     <div style={styles.container}>
       {config && <UpgradeWizard config={config} onCompatibility={setRuntimeReady} />}
-      <fieldset disabled={!runtimeReady} onClickCapture={event => {
+      <fieldset disabled={runtimeReady === false} onClickCapture={event => {
         const anchor = (event.target as HTMLElement).closest('a');
-        if (!runtimeReady && anchor && (!anchor.href || anchor.getAttribute('href') === '#')) { event.preventDefault(); event.stopPropagation(); }
+        if (runtimeReady === false && anchor && (!anchor.href || anchor.getAttribute('href') === '#')) { event.preventDefault(); event.stopPropagation(); }
       }} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <header style={styles.header}>
         <h1 style={styles.title}>⏰ 定时消息管理</h1>

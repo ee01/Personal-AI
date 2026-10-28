@@ -37,7 +37,7 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<UpgradeDraft | null>(null);
   const [health, setHealth] = useState('正在检查表与运行账本…');
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -48,7 +48,9 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
   const [timelineReceipt, setTimelineReceipt] = useState('新表 Timeline 缓存尚未核验；请手动运行同步规则后检查，期间里程碑任务可能延迟或错过。');
 
   const check = async () => {
-    onCompatibility(false);
+    // The probe runs in the background: never block the manager while it is
+    // pending, and only surface the panel (and read-only mode) once the check
+    // concludes that this table is not compatible.
     try {
       const result = await probeRuntime(config);
       const compatible = compatibleRuntime(result, config.sheetId);
@@ -94,9 +96,9 @@ export const UpgradeWizard: React.FC<Props> = ({ config, onCompatibility }) => {
     }
   };
 
-  if (ready && !open) return null;
+  if (ready !== false && !open) return null;
   return <section aria-label="新表升级向导" style={panel}>
-    <strong>{ready || draft?.stage === 'complete' ? '新表升级收据' : '当前表只读 · 升级到兼容新表'}</strong>
+    <strong>{ready === true || draft?.stage === 'complete' ? '新表升级收据' : '当前表只读 · 升级到兼容新表'}</strong>
     <p role="status">{draft?.stage === 'complete' ? `已有切换记录。${health}` : health}</p>
     {!open && <>
       <button style={button} onClick={() => setOpen(true)}>{draft?.stage === 'complete' ? '查看升级收据与修复' : '开始新表升级'}</button>

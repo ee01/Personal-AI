@@ -14,7 +14,7 @@ const sourceRows = [headers,
  ['sent','Sent today','=literal()','2026-10-23','09:00','Bot','Active','2026-10-23 09:00','','2','✅ 推送成功'],
  ['pending','Unknown delivery','body','2026-10-23','10:00','Bot','Active','2026-10-23 10:00','','0','⏳ API 已领取待确认'],
  ['pending2','Second unknown','body','2026-10-23','10:00','Bot','Active','2026-10-23 10:00','','0','⏳ API 已领取待确认']];
-let targetRows = [headers], configRows = [['Key','Value']], targetMode = 'paused';
+let targetRows = [headers], configRows = [['Key','Value']], targetMode = 'paused', slowHealth = false;
 let replayResponseLost = false;
 let corruptReadback = false;
 let sheetCreates = 0, scriptCreates = 0, failDeployment = true, failJira = false, jiraFailed = false, retirementCode;
@@ -100,6 +100,7 @@ try {
       }
     }
     if(url.hostname==='script.google.com') {
+      if(url.searchParams.get('action')==='getRuntimeHealth'&&slowHealth) await new Promise(resolve=>setTimeout(resolve,1500));
       if(url.href.startsWith(sourceUrl)) return respond({status:'OK',version:'2.9.0'});
       if(url.searchParams.get('action')==='getVersion')return respond({version:'3.1.0',lastUpdated:'2026-10-23'});
       if(method==='POST') {const data=JSON.parse(req.postData());if(data.operation==='activate')targetMode='sheet_primary';if(data.operation==='pause')targetMode='paused';}
@@ -222,8 +223,17 @@ try {
   targetMode='sheet_primary';
   await wizard.getByRole('button',{name:'重新检查连接',exact:true}).click();
   await wizard.waitFor({state:'hidden'});
+  // A compatible table must stay usable while the runtime check is still pending.
+  slowHealth=true;
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('fieldset')!==null);
+  assert.equal(await page.evaluate(()=>document.querySelector('fieldset')?.disabled),false,'a pending runtime check must not lock the manager');
+  assert.equal(await page.getByRole('button',{name:'➕ 新增',exact:true}).isEnabled(),true,'healthy tables are usable immediately');
+  await page.waitForFunction(()=>document.querySelector('fieldset')?.disabled===false);
+  assert.equal(await wizard.count(),0,'a healthy table shows no upgrade panel after the check concludes');
+  slowHealth=false;
   await fs.mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/scheduled-messages-upgrade.png',fullPage:true});
   assert.deepEqual(errors,[]);
   console.log('Upgrade extension E2E passed: read-only, resumable create, import, retirement, partial Jira failure, retry and honest receipt');
-} catch(error) { console.error(await context.pages().at(-1)?.getByRole('region',{name:'新表升级向导'}).innerText()); throw error; } finally {await context.close();await fs.rm(profile,{recursive:true,force:true});}
+} catch(error) { console.error('E2E FAILURE:', String(error?.message || error)); try { console.error(await context.pages().at(-1)?.getByRole('region',{name:'新表升级向导'}).innerText()); } catch {} throw error; } finally {await context.close();await fs.rm(profile,{recursive:true,force:true});}
