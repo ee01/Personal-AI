@@ -14,6 +14,7 @@ import {
   sheetMessageIdFromMirror,
   sheetMessageToLedgerBody,
   sheetStatusToQueueStatus,
+  shouldRegisterSheetMessageInLedger,
 } from '../scheduled-messages/taskCenterSheetMirror';
 import {
   mergeAsmePayloadIntoSheetConfig,
@@ -95,6 +96,7 @@ export async function applyTaskCenterSheetMirrorControl(
 export async function registerSheetMessageInLedger(
   message: ScheduledMessage,
 ): Promise<TaskCenterTask | null> {
+  if (!shouldRegisterSheetMessageInLedger(message)) return null;
   const body = sheetMessageToLedgerBody(message);
   const client = getMemoryServiceClient();
   const existing = await client

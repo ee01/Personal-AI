@@ -18,7 +18,7 @@
 
 1. 表格行是否有效：状态、日期、时间、重复规则、推送方式和内容是调度的根。
 2. 本地时区解释：日期/时间按本机本地时间保存和预览，避免 UTC 转换造成跨天误发。
-3. 执行引擎选择：AsMe 走 App Script，Bot/AI 走 Jira Automation，Outreach 走 memory-service runtime，AgentTask 由 Jira Automation 到期触发 memory-service，再由 OpenClaw 执行；浏览器只做备用。
+3. 执行引擎选择：AsMe 走 App Script，Bot/AI 走 Jira Automation，Outreach 走 memory-service runtime。新建「帮我做」默认走 Multica：Jira 仍是唯一时间源，到期把任务送到该用户自己的 Autopilot Webhook；已有空 `Agent_Provider` 的任务继续走 memory-service / OpenClaw。浏览器只做备用。
 4. 幂等和补偿：`Next_Exec`、Logs、occurrence/session 共同决定是否已执行、是否要补偿、是否应避免重复。
 5. 队列健康：pending/running/succeeded/failed/recovered 等状态会影响管理页提示，不应把历史成功误当当前阻塞。
 6. Glip 输入框里的虚线未来消息只是本地待发送快照；它以同一 `Message_ID` 的成功 Logs 为完成信号，不以计划时间到点或页面出现同文消息为准。
@@ -305,8 +305,8 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.1.1';
-  var APP_SCRIPT_LAST_UPDATED = '2026-10-28';
+  var APP_SCRIPT_VERSION = '3.2.0';
+  var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -757,6 +757,16 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 整理层**不**检索记忆、**不**委派 OpenClaw；LLM 失败时回落本地按模板填空（只铺列表，不臆造 URL）。
 - 发到结果目标的 Glip 消息**不加** `任务完成: <Topic>` 前缀，正文即模板内容；`帮我做完成` / `帮我做失败` 私密回执仍保留标题前缀。
 - `notifyTemplate` 在 `/agent-tasks/execute` 会回落读 `agent_task_notify_configs`（body 显式值优先），并写入 action metadata 供执行器证据提示使用。
+
+##### Multica 路径（新任务）
+
+- 新建「帮我做」默认 `Agent_Provider=multica`。旧行保持 `legacy_memory` 或空值，仍走上面的 memory-service / Dify 路径，不会自动迁移。
+- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。PAT 只留在扩展 session；勾选「记住这台设备」才进本机 local storage。PAT、webhook URL 不进 Messages、不进日志、不进页面可复制内容。
+- Jira Executor Rule ≥ 1.8.0 在 `agentProvider=multica` 时直接 POST `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。
+- 保存不会立即执行。Jira 规则还没写上调度校验值时，行保持暂停，回执是「Multica 已创建，计划尚未启用」。成功回执是「已安排，时间由 Jira 触发；执行与结果在 Multica」。
+- 断开连接只删除本机 PAT，不停止已经接好的 Webhook 和周期任务。复制表格时 Multica 行会被暂停，绑定表不跟着复制；spreadsheet id 对不上时脚本清掉 webhook。
+- Messages 2.14 只增加公开列：`Agent_Provider`、`Agent_Binding_ID`、`Agent_Multica_Workspace_ID`、`Agent_Multica_Workspace_Slug`、`Agent_Multica_Agent_ID`、`Agent_Multica_Project_ID`、`Agent_Multica_Autopilot_ID`、`Agent_Multica_Trigger_ID`、`Agent_Multica_Web_Origin`、`Agent_Multica_Api_Origin`、`Agent_Multica_User_ID`、`Agent_Provision_State`、`Agent_Content_Revision`。Webhook URL 在隐藏表 `_AgentBindings`。
+- 真实 Jira 出站、用户 PAT 和 Apps Script 部署不在这次代码落地里验证。线上要手动升级脚本和 Executor Rule 后才会生效。
 
 #### 7. AR 绑定来源
 

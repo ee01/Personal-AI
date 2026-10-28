@@ -375,7 +375,11 @@ export class JiraRuleUpdater {
   ): Promise<any> {
     // 获取环境配置
     const envConfig = await getEnvConfig();
-    const { userinfo } = await chrome.storage.local.get('userinfo');
+    const { userinfo, multicaSchedulerCapability } = await chrome.storage.local.get([
+      'userinfo',
+      'multicaSchedulerCapability',
+    ]);
+    const multicaCapability = typeof multicaSchedulerCapability === 'string' ? multicaSchedulerCapability : '';
     
     // 保持原有的规则名称前缀（用户名部分）
     const nameMatch = existingRule.name.match(/^\[([^\]]+)\]/);
@@ -404,7 +408,8 @@ export class JiraRuleUpdater {
       .replace(/{{USER_EMAIL}}/g, userinfo?.userEmail || '')
       .replace(/{{PROJECT_KEY}}/g, ruleConfig.projectKey || '')
       .replace(/{{PROJECT_ID}}/g, String(existingRule.projects?.[0]?.projectId || ''))
-      .replace(/{{USER_KEY}}/g, existingRule.authorAccountId || '');
+      .replace(/{{USER_KEY}}/g, existingRule.authorAccountId || '')
+      .replace(/{{MULTICA_SCHEDULER_CAPABILITY}}/g, encodeURIComponent(multicaCapability));
 
     const rulePayload = JSON.parse(
       replaceScheduledMessagesDifyJumpboardPlaceholders(

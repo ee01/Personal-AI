@@ -1592,7 +1592,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.7.4');
+  assert.equal(template._metadata.version, '1.8.0');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1610,6 +1610,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     String(claimLog?.value || ''),
     /Claimed scheduled message: messageId=\{\{messageId\}\}, topic=\{\{replacedTopic\}\}, pushMethod=\{\{webhookResponse\.body\.pushMethod\}\}, targetType=\{\{webhookResponse\.body\.targetType\}\}, executionKey=\{\{executionKey\}\}, rowIndex=\{\{rowIndex\}\}/,
   );
+  assert.doesNotMatch(String(claimLog?.value || ''), /multicaWebhookHost|capability=/);
 
   const branchContainer = components[executedGateIndex + 2];
   assert.equal(branchContainer?.type, 'jira.condition.container.block');
@@ -1729,19 +1730,23 @@ test('Executor rule confirms AgentTask/API after downstream call instead of fetc
   assert.equal(getMessageWebhooks.length, 1);
   assert.equal(
     getMessageWebhooks[0].value.url,
-    '{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api',
+    '{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api&capability={{MULTICA_SCHEDULER_CAPABILITY}}',
   );
   assert.equal(apiWebhooks.length, 4);
-  // 4 API branches + AgentTask accepted/rejected branches
-  assert.equal(confirmWebhooks.length, 6);
+  // 4 API branches + legacy AgentTask accepted/rejected + Multica accepted/duplicate/rejected
+  assert.equal(confirmWebhooks.length, 9);
   const confirmedWebhooks = confirmWebhooks.filter(({ url }) =>
     url.includes('success=true') && url.includes('stage=confirmed')
+  );
+  const deliveredWebhooks = confirmWebhooks.filter(({ url }) =>
+    url.includes('success=true') && url.includes('stage=delivered')
   );
   const failedWebhooks = confirmWebhooks.filter(({ url }) =>
     url.includes('success=false') && url.includes('stage=trigger_delivery_failed')
   );
   assert.equal(confirmedWebhooks.length, 5);
-  assert.equal(failedWebhooks.length, 1);
+  assert.equal(deliveredWebhooks.length, 2);
+  assert.equal(failedWebhooks.length, 2);
   assert.equal(
     confirmWebhooks.every(({ node }) =>
       node.value.method === 'GET'
@@ -1757,18 +1762,18 @@ test('Executor rule confirms AgentTask/API after downstream call instead of fetc
     )
   );
   assert.ok(agentTaskAccepted, 'AgentTask success callback must require Dify accepted=true');
-  assert.equal(
-    failedWebhooks[0].conditions.some((condition: any) =>
+  const difyFailed = failedWebhooks.find(({ conditions }) =>
+    conditions.some((condition: any) =>
       condition.value?.first === '{{webhookResponse.body.data.outputs.accepted}}'
       && condition.value?.second === 'true'
       && condition.value?.operator === 'NOT_EQUALS'
-    ),
-    true,
-    'AgentTask failure callback must handle missing/false Dify acceptance',
+    )
   );
-  assert.match(failedWebhooks[0].url, /webhookResponse\.body\.data\.outputs\.error\.urlEncode/);
-  assert.match(failedWebhooks[0].url, /webhookResponse\.body\.data\.outputs\.statusCode\.urlEncode/);
-  assert.match(failedWebhooks[0].url, /webhookResponse\.body\.data\.outputs\.queueStatus\.urlEncode/);
+  assert.ok(difyFailed, 'AgentTask failure callback must handle missing/false Dify acceptance');
+  assert.match(difyFailed.url, /webhookResponse\.body\.data\.outputs\.error\.urlEncode/);
+  assert.match(difyFailed.url, /webhookResponse\.body\.data\.outputs\.statusCode\.urlEncode/);
+  assert.match(difyFailed.url, /webhookResponse\.body\.data\.outputs\.queueStatus\.urlEncode/);
+  assert.match(JSON.stringify(template), /https:\/\/\{\{multicaWebhookHost\}\}\/\{\{multicaWebhookPath\}\}/);
   assert.deepEqual(
     apiWebhooks.map(item => item.url).sort(),
     [
@@ -1985,7 +1990,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.1\.1';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.2\.0';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);

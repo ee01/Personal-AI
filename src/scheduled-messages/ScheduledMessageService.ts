@@ -65,6 +65,8 @@ import {
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
 import { mergeScheduledMessageUpdate } from './jiraAutomationLink';
 import { isGoogleSheetsInvalidCredentialError } from './googleSheetsAuthErrors.js';
+import { upsertMulticaBinding, upsertSpreadsheetConfigKey } from './multica/multicaBindingSheet.js';
+import type { MulticaBindingRecord } from './multica/multicaContract.js';
 
 const NON_PERSISTED_OUTREACH_FIELDS = new Set([
   'Outreach_Target_Type',
@@ -305,7 +307,10 @@ export class ScheduledMessageService {
   /**
    * 创建新消息
    */
-  async createMessage(formData: CreateMessageFormData): Promise<ScheduledMessage> {
+  async createMessage(
+    formData: CreateMessageFormData,
+    options?: { status?: ScheduledMessage['Status']; execLog?: string },
+  ): Promise<ScheduledMessage> {
     if (!this.config) {
       await this.loadConfig();
     }
@@ -318,9 +323,9 @@ export class ScheduledMessageService {
       ID: `msg_${Date.now()}`,
       ...formData,
       Schedule_Time: formData.Schedule_Time || '',  // 留空表示每日9点
-      Status: 'Active',
+      Status: options?.status || 'Active',
       Exec_Count: 0,
-      Exec_Log: '待执行'
+      Exec_Log: options?.execLog || '待执行'
     };
     message.Push_Method = normalizePushMethodAlias(message.Push_Method) as ScheduledMessage['Push_Method'];
     normalizeExecutorTargetType(message);
@@ -815,6 +820,27 @@ export class ScheduledMessageService {
     }
   }
   
+  async upsertConfigValue(key: string, value: string): Promise<void> {
+    if (!this.config) await this.loadConfig();
+    if (!this.config?.sheetId) throw new Error('未找到配置');
+    await this.withTokenRetry(() => upsertSpreadsheetConfigKey({
+      token: this.token,
+      spreadsheetId: this.config!.sheetId,
+      key,
+      value,
+    }));
+  }
+
+  async upsertMulticaBinding(record: MulticaBindingRecord): Promise<void> {
+    if (!this.config) await this.loadConfig();
+    if (!this.config?.sheetId) throw new Error('未找到配置');
+    await this.withTokenRetry(() => upsertMulticaBinding({
+      token: this.token,
+      spreadsheetId: this.config!.sheetId,
+      record,
+    }));
+  }
+
   /**
    * 计算下次执行时间
    */

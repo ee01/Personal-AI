@@ -211,6 +211,7 @@ curl -sS 'http://memory.xmnup.com/api/v1/context-pack?scope=identity_preferences
 ## Sheet 触发（Block 0）
 
 - Apps Script **claim ≠ confirm**；AgentTask at-least-once；自定义 API at-most-once + TTL
+- 新建 Scheduled Messages「帮我做」可以选 Multica。这类任务不进 memory-service 执行器注册表，也不进任务中心账本；到期由 Jira 把任务送到用户自己的 Autopilot Webhook。已有空 `Agent_Provider` 的任务仍走这里的执行器。
 - 线上模板需在定时消息管理页**手动升级** Apps Script / Jira Rule 后才对真实 Sheet 生效
 
 ## 明确不做

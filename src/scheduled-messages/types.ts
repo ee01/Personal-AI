@@ -101,6 +101,20 @@ export interface ScheduledMessage {
   Agent_Last_Error?: string;
   /** Runtime-only overlay from memory-service artifact evidence; not a Sheet column. */
   Agent_Last_Evidence?: string;
+  /** multica = 新任务走 Multica Autopilot；空值或 legacy_memory 保持原 memory-service 路径。 */
+  Agent_Provider?: 'multica' | 'legacy_memory' | string;
+  Agent_Binding_ID?: string;
+  Agent_Multica_Workspace_ID?: string;
+  Agent_Multica_Workspace_Slug?: string;
+  Agent_Multica_Agent_ID?: string;
+  Agent_Multica_Project_ID?: string;
+  Agent_Multica_Autopilot_ID?: string;
+  Agent_Multica_Trigger_ID?: string;
+  Agent_Multica_Web_Origin?: string;
+  Agent_Multica_Api_Origin?: string;
+  Agent_Multica_User_ID?: string;
+  Agent_Provision_State?: string;
+  Agent_Content_Revision?: string;
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -160,6 +174,23 @@ export interface CreateMessageFormData {
   Agent_Last_Error?: string;
   /** Runtime-only overlay from memory-service artifact evidence; not a Sheet column. */
   Agent_Last_Evidence?: string;
+  Agent_Provider?: 'multica' | 'legacy_memory' | string;
+  Agent_Binding_ID?: string;
+  Agent_Multica_Workspace_ID?: string;
+  Agent_Multica_Workspace_Slug?: string;
+  Agent_Multica_Agent_ID?: string;
+  Agent_Multica_Project_ID?: string;
+  Agent_Multica_Autopilot_ID?: string;
+  Agent_Multica_Trigger_ID?: string;
+  Agent_Multica_Web_Origin?: string;
+  Agent_Multica_Api_Origin?: string;
+  Agent_Multica_User_ID?: string;
+  Agent_Provision_State?: string;
+  Agent_Content_Revision?: string;
+  /** 仅提交时使用，不写入 Sheet。 */
+  Multica_Connection_Ready?: boolean;
+  /** 仅提交时使用，不写入 Sheet。 */
+  Multica_Block_Reason?: string;
   // 分类标签
   Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
   // Jira Automation 链接

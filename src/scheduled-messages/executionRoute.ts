@@ -1,5 +1,6 @@
 import type { PushMethod } from './types';
 import { hasLocalScheduleTime } from './scheduleDateTime.js';
+import { isMulticaAgentProvider } from './multica/multicaContract.js';
 
 export type ExecutionRouteState = 'ready' | 'needs_setup' | 'external';
 export type ExecutionLaneTone = 'info' | 'warning';
@@ -9,6 +10,7 @@ export interface ExecutionRouteInput {
   AI_Endpoint?: string;
   Automation_Link?: string;
   Schedule_Date?: string;
+  Agent_Provider?: string;
 }
 
 export interface ExecutionRouteContext {
@@ -43,6 +45,10 @@ function isManagedExecutorRoute(message: ExecutionRouteInput): boolean {
 }
 
 function getExecutorWritebackBoundary(message: ExecutionRouteInput): string {
+  if (message.Push_Method === 'AgentTask' && isMulticaAgentProvider(message.Agent_Provider)) {
+    return '领取后由 Jira 把任务送到 Multica。HTTP 送达只表示已入队，不表示 Agent 已做完。暂停不会停止已经开始的那一次，需要到 Multica 里停。';
+  }
+
   if (message.Push_Method === 'AgentTask') {
     return '领取后由 Jira Rule 调 memory-service 发起 Agent run；Sheet 只记录计划/领取，执行账本、结果和通知以 memory-service 为准。';
   }
@@ -99,6 +105,15 @@ export function getScheduledMessageExecutionRoute(
       };
 
     case 'AgentTask':
+      if (isMulticaAgentProvider(message.Agent_Provider)) {
+        return {
+          engine: 'Jira Automation · Multica Autopilot',
+          detail: context.botConfigured
+            ? '到期由 Jira 把任务送到 Multica Webhook。送达不等于任务已经做完；结果在 Multica。暂停不会停掉已经开始的那一次。'
+            : '帮我做依赖 Bot executor rule 作为 Jira 侧入口，需先配置 Bot 推送后才能执行。',
+          state: context.botConfigured ? 'ready' : 'needs_setup',
+        };
+      }
       return {
         engine: 'Jira Automation · memory-service AgentTask',
         detail: context.botConfigured

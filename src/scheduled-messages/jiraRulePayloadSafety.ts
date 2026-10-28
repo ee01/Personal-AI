@@ -25,7 +25,9 @@ function shouldRedactProperty(key: string, value: unknown, sensitiveContext: boo
 export function redactJiraRuleTextForLog(value: string): string {
   return value
     .replace(/("(?:clientSecret|jwt|password|token|api[_-]?key|secret)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")/gi, '$1[REDACTED]$3')
-    .replace(/(Bearer\s+)([^"\\\s]+)/gi, '$1[REDACTED]');
+    .replace(/(Bearer\s+)([^"\\\s]+)/gi, '$1[REDACTED]')
+    .replace(/(\/api\/webhooks\/autopilots\/)[A-Za-z0-9_-]+/g, '$1[REDACTED]')
+    .replace(/(capability=)[^&\s"']+/gi, '$1[REDACTED]');
 }
 
 function redactValue(value: unknown, sensitiveContext = false): unknown {

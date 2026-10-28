@@ -144,6 +144,7 @@
 
 - **Jira / roadmap-service 仍是团队事实源**。账本只管个人执行层，用 `externalRef` 指向 `(teamId, itemKey)`，完成走既有 resolve intent 回写，不复制任何排期字段。
 - **不做**：通用 workflow DSL / BPMN 引擎、PPT/文档渲染管线、多人协作编辑 UI、在 `ScheduledMessagesManager` 里新增 UI（它已 12,874 行，账本 UI 在 memory-exploring 独立生长）。
+- `Agent_Provider=multica` 的定时「帮我做」不注册进这本账本。它的执行和结果在 Multica；账本继续服务 memory-service / 🏠 lane。
 
 ## 入口
 

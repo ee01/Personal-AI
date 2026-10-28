@@ -89,6 +89,7 @@ import { ConfigSyncService } from './scheduled-messages/ConfigSyncService';
 import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
 import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
 import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
+import { handleMulticaExtensionMessage } from './scheduled-messages/multica/multicaConnection.js';
 import {
   applyTaskCenterSheetMirrorControl,
   registerSheetMessageInLedgerSafe,
@@ -1837,6 +1838,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   //   '来自:',
   //   sender.tab?.url || sender.url || 'unknown',
   // );
+
+  if (typeof request?.type === 'string' && request.type.startsWith('MULTICA_')) {
+    const storage = chrome.storage as typeof chrome.storage & { session: chrome.storage.StorageArea };
+    const area = (target: chrome.storage.StorageArea) => ({
+      get: (keys: string[]) => target.get(keys),
+      set: (items: Record<string, unknown>) => target.set(items),
+      remove: (keys: string[]) => target.remove(keys),
+    });
+    handleMulticaExtensionMessage(request, sender, {
+      extensionId: chrome.runtime.id,
+      session: area(storage.session),
+      local: area(chrome.storage.local),
+    }).then(sendResponse);
+    return true;
+  }
 
   if (request.type === 'FLUSH_USAGE_TELEMETRY') {
     (async () => {

@@ -6,6 +6,7 @@ import { normalizeSheetConfig } from './botAutomationConfig';
 import { SheetConfig, InitializationResult, BotAutomationRule } from './types';
 import { formatLocalScheduleDate, formatLocalScheduleTime } from './scheduleDateTime';
 import { RuntimeHealth, compatibleRuntime, inspectUpgradeRows, quarantineImportedRows, replaceRuleUrl, ruleContainsUrl, jiraRuleContentMatches } from './upgradeContracts';
+import { pauseCopiedMulticaMessageRows } from './multica/multicaContract.js';
 
 export const UPGRADE_DRAFT_KEY = 'scheduledMessagesUpgradeDraft';
 export interface UpgradeDraft {
@@ -122,7 +123,7 @@ export class ScheduledMessagesUpgrade {
   }
 
   async importFromSource(): Promise<void> {
-    const rows = quarantineImportedRows(await this.readRows(this.draft.source.sheetId));
+    const rows = pauseCopiedMulticaMessageRows(quarantineImportedRows(await this.readRows(this.draft.source.sheetId)));
     const health = await probeRuntime(this.draft.candidate as SheetConfig);
     if (health.mode !== 'paused' || health.spreadsheetId !== this.draft.candidate.sheetId) throw new Error('只能导入待接管的新表');
     const metadata = await this.api(`https://sheets.googleapis.com/v4/spreadsheets/${this.draft.candidate.sheetId}?fields=sheets.properties`);

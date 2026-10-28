@@ -9,6 +9,14 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { OneClickSetup } from './components/OneClickSetup';
 import { ScheduledMessageService } from './ScheduledMessageService';
 import { ScheduledMessage, SheetConfig, InitializationResult, Statistics, CreateMessageFormData, BotAutomationConfig, TargetType } from './types';
+import { MulticaAgentTaskPanel, type MulticaDraft } from './multica/MulticaAgentTaskPanel';
+import { buildAutopilotViewUrl, isMulticaAgentProvider } from './multica/multicaContract.js';
+import {
+  archiveMulticaAutopilot,
+  multicaScheduleOnlyEdit,
+  saveMulticaScheduledAgentTask,
+  setMulticaTriggerEnabled,
+} from './multica/multicaSave.js';
 import {
   AppScriptUpdater,
   APP_SCRIPT_PROJECT_HISTORY_LIMIT_ERROR,
@@ -3314,6 +3322,15 @@ const ScheduledMessagesManager: React.FC = () => {
       
       setIsLoading(true);
       try {
+        if (isMulticaAgentProvider(message.Agent_Provider) && message.Agent_Multica_Autopilot_ID) {
+          try {
+            await archiveMulticaAutopilot(message.Agent_Multica_Autopilot_ID);
+          } catch (archiveError) {
+            const archiveMessage = archiveError instanceof Error ? archiveError.message : String(archiveError);
+            alert(`还不能删除：Multica Autopilot 没有归档（${archiveMessage}）。请稍后重试。已接好的入口仍然存在。`);
+            return;
+          }
+        }
         await service.deleteMessage(id);
         void unregisterSheetMessageFromLedgerSafe(id);
         let cancelledOutreachTemplate = false;
@@ -3358,6 +3375,20 @@ const ScheduledMessagesManager: React.FC = () => {
     }
   };
 
+  const buildMulticaAutopilotViewUrl = (message: ScheduledMessage): string => {
+    try {
+      if (!isMulticaAgentProvider(message.Agent_Provider)) return '';
+      if (!message.Agent_Multica_Autopilot_ID || !message.Agent_Multica_Workspace_Slug) return '';
+      return buildAutopilotViewUrl(
+        message.Agent_Multica_Web_Origin || 'https://multica.ai',
+        message.Agent_Multica_Workspace_Slug,
+        message.Agent_Multica_Autopilot_ID,
+      );
+    } catch {
+      return '';
+    }
+  };
+
   const buildAgentTaskLedgerUrl = (message: ScheduledMessage): string => {
     const params = new URLSearchParams({
       sourceKind: 'agent_task',
@@ -3394,8 +3425,15 @@ const ScheduledMessagesManager: React.FC = () => {
     try {
       let jiraRuleSyncDetail = '';
       let jiraRuleSyncWarning = false;
-      // 如果有 Automation_Link，同时更新 Jira Rule 状态
-      if (message.Automation_Link) {
+      const multicaAutopilotId = message.Agent_Multica_Autopilot_ID || '';
+      const multicaTriggerId = message.Agent_Multica_Trigger_ID || '';
+      const multicaManaged = isMulticaAgentProvider(message.Agent_Provider) && Boolean(multicaAutopilotId && multicaTriggerId);
+      const enabling = message.Status !== 'Active';
+      if (multicaManaged && enabling) {
+        await setMulticaTriggerEnabled(multicaAutopilotId, multicaTriggerId, true);
+      }
+      // 如果有 Automation_Link，同时更新 Jira Rule 状态。Multica 行不改共享 executor rule。
+      if (message.Automation_Link && !isMulticaAgentProvider(message.Agent_Provider)) {
         const linkInfo = parseAutomationLink(message.Automation_Link);
         if (linkInfo) {
           const { jiraUrl, projectKey, ruleId } = linkInfo;
@@ -3446,6 +3484,15 @@ const ScheduledMessagesManager: React.FC = () => {
       }
       
       const updatedMessage = await service.toggleMessageStatus(message.ID);
+      if (multicaManaged && !enabling) {
+        try {
+          await setMulticaTriggerEnabled(multicaAutopilotId, multicaTriggerId, false);
+        } catch (triggerError) {
+          jiraRuleSyncWarning = true;
+          const triggerMessage = triggerError instanceof Error ? triggerError.message : String(triggerError);
+          jiraRuleSyncDetail = `Multica: 表格已暂停，但 Webhook 停用未确认（${triggerMessage}）。到期领取会因状态不是 Active 而跳过。`;
+        }
+      }
       void registerSheetMessageInLedgerSafe(updatedMessage);
       let outreachMirrorDetail = '';
       let outreachMirrorWarning = false;
@@ -3486,6 +3533,26 @@ const ScheduledMessagesManager: React.FC = () => {
     submitMessageInFlightRef.current = true;
     setIsSubmitting(true);
     try {
+      if (formData.Push_Method === 'AgentTask' && isMulticaAgentProvider(formData.Agent_Provider)) {
+        if (!config?.sheetId) throw new Error('未找到表格配置');
+        const saved = await saveMulticaScheduledAgentTask({
+          service,
+          editing: editingMessage,
+          form: formData,
+          spreadsheetId: config.sheetId,
+          updateJiraRule: async () => {
+            const updater = new JiraRuleUpdater(config);
+            const result = await updater.updateJiraRule({ syncConfigToSheet: false });
+            return result.success === true;
+          },
+        });
+        await loadMessages(service, true);
+        setShowAddDialog(false);
+        setEditingMessage(null);
+        focusMessageById(saved.message.ID);
+        setConfigSyncNotice(saved.receipt);
+        return;
+      }
       const agentTaskWebhookDetail = formData.Push_Method === 'AgentTask'
         ? (await ensureAgentTaskWebhookConfigForSave()).detail
         : '';
@@ -5376,9 +5443,10 @@ const ScheduledMessagesManager: React.FC = () => {
                     const editActionBoundary = buildMessageEditActionBoundary(message, displayTitle);
                     const deleteActionBoundary = buildMessageDeleteActionBoundary(message, displayTitle);
                     const autoReplyReviewReceipt = buildAutoReplyReviewReceipt(message);
-                    const agentTaskLedgerUrl = isAgentTaskMessage(message)
+                    const agentTaskLedgerUrl = isAgentTaskMessage(message) && !isMulticaAgentProvider(message.Agent_Provider)
                       ? buildAgentTaskLedgerUrl(message)
                       : '';
+                    const multicaViewUrl = buildMulticaAutopilotViewUrl(message);
                     const outreachSessionsUrl = message.Push_Method === 'Outreach'
                       ? buildOutreachSessionsUrl(message.ID, message.Outreach_Last_Session_ID)
                       : '';
@@ -5434,6 +5502,17 @@ const ScheduledMessagesManager: React.FC = () => {
                                   onClick={(event) => openTopicLink(event, agentTaskLedgerUrl)}
                                   aria-label={`查看帮我做执行账本: ${displayTitle}`}
                                   title="查看帮我做执行账本"
+                                >
+                                  🔗
+                                </button>
+                              )}
+                              {multicaViewUrl && (
+                                <button
+                                  type="button"
+                                  style={styles.topicInlineLinkButton}
+                                  onClick={(event) => openTopicLink(event, multicaViewUrl)}
+                                  aria-label={`查看执行: ${displayTitle}`}
+                                  title="查看执行"
                                 >
                                   🔗
                                 </button>
@@ -6654,6 +6733,21 @@ const AddMessageDialog: React.FC<{
         Agent_Last_Status: editingMessage.Agent_Last_Status,
         Agent_Last_Result: editingMessage.Agent_Last_Result,
         Agent_Last_Error: editingMessage.Agent_Last_Error,
+        Agent_Provider: editingMessage.Agent_Provider === 'multica'
+          ? 'multica'
+          : (editingMessage.Push_Method === 'AgentTask' ? 'legacy_memory' : ''),
+        Agent_Binding_ID: editingMessage.Agent_Binding_ID,
+        Agent_Multica_Workspace_ID: editingMessage.Agent_Multica_Workspace_ID,
+        Agent_Multica_Workspace_Slug: editingMessage.Agent_Multica_Workspace_Slug,
+        Agent_Multica_Agent_ID: editingMessage.Agent_Multica_Agent_ID,
+        Agent_Multica_Project_ID: editingMessage.Agent_Multica_Project_ID,
+        Agent_Multica_Autopilot_ID: editingMessage.Agent_Multica_Autopilot_ID,
+        Agent_Multica_Trigger_ID: editingMessage.Agent_Multica_Trigger_ID,
+        Agent_Multica_Web_Origin: editingMessage.Agent_Multica_Web_Origin,
+        Agent_Multica_Api_Origin: editingMessage.Agent_Multica_Api_Origin,
+        Agent_Multica_User_ID: editingMessage.Agent_Multica_User_ID,
+        Agent_Provision_State: editingMessage.Agent_Provision_State,
+        Agent_Content_Revision: editingMessage.Agent_Content_Revision,
         Category: editingMessage.Category,
         Automation_Link: editingMessage.Automation_Link,
         Last_Exec: editingMessage.Last_Exec,
@@ -6710,6 +6804,8 @@ const AddMessageDialog: React.FC<{
   const [formData, setFormData] = useState<CreateMessageFormData>(getInitialFormData);
   const isOutreachMode = formData.Push_Method === 'Outreach';
   const isAgentTaskMode = isAgentTaskPushMethod(formData.Push_Method);
+  const usesMulticaAgent = isAgentTaskMode && formData.Agent_Provider === 'multica';
+  const [multicaDraft, setMulticaDraft] = useState<MulticaDraft | null>(null);
   const agentTaskLikelyWrites = /(?:\b(?:create|update|edit|delete|set|sync|assign|move|close|reopen|send|post|publish|merge|deploy)\b|创建|修改|更新|删除|设置|同步|写入|指派|移动|关闭|重开|发送|发布|合并|部署)/i.test(formData.Content || '');
   const resolvedAgentExecutorId = resolveAgentTaskExecutorSelection({
     savedId: formData.Agent_Executor,
@@ -7498,7 +7594,7 @@ ${content}
       alert(`${agentTaskOpenClawBlockReason}\n\n请先完成 Agent 执行器配置后再保存。`);
       return;
     }
-    if (isAgentTaskMode && !resolvedAgentExecutorId) {
+    if (isAgentTaskMode && !usesMulticaAgent && !resolvedAgentExecutorId) {
       alert('请选择 Agent 执行器后再保存。');
       return;
     }
@@ -7584,7 +7680,19 @@ ${content}
         return;
       }
 
-      if (agentResultNotifyEnabled) {
+      if (usesMulticaAgent) {
+        const scheduleOnly = multicaScheduleOnlyEdit(editingMessage, {
+          Content: formData.Content,
+          Agent_Multica_Agent_ID: multicaDraft?.agentId || editingMessage?.Agent_Multica_Agent_ID,
+          Agent_Multica_Workspace_ID: multicaDraft?.workspaceId || editingMessage?.Agent_Multica_Workspace_ID,
+        });
+        if (!scheduleOnly && !multicaDraft?.ready) {
+          alert(multicaDraft?.blockReason || '请先验证 Multica 连接并选择 Agent');
+          return;
+        }
+      }
+
+      if (!usesMulticaAgent && agentResultNotifyEnabled) {
         if (formData.Target_Type === 'private' && userTags.length === 0) {
           alert('请填写结果通知接收人');
           return;
@@ -7855,7 +7963,28 @@ ${content}
       Agent_AR_Binding_ID: formData.Push_Method === 'AgentTask'
         ? formData.Agent_AR_Binding_ID
         : undefined,
+      Agent_Provider: formData.Push_Method === 'AgentTask'
+        ? (formData.Agent_Provider === 'multica' ? 'multica' : 'legacy_memory')
+        : undefined,
     };
+
+    if (finalFormData.Agent_Provider === 'multica') {
+      finalFormData.Glip_User_Name = undefined;
+      finalFormData.Glip_Team_ID = undefined;
+      finalFormData.Agent_Executor = '';
+      finalFormData.Agent_Notify_Template = '';
+      finalFormData.Agent_Notify_Success_Receipt = 'N';
+      finalFormData.Agent_Multica_Api_Origin = multicaDraft?.apiOrigin || editingMessage?.Agent_Multica_Api_Origin || '';
+      finalFormData.Agent_Multica_Web_Origin = multicaDraft?.webOrigin || editingMessage?.Agent_Multica_Web_Origin || '';
+      finalFormData.Agent_Multica_User_ID = multicaDraft?.userId || editingMessage?.Agent_Multica_User_ID || '';
+      finalFormData.Agent_Multica_Workspace_ID = multicaDraft?.workspaceId || editingMessage?.Agent_Multica_Workspace_ID || '';
+      finalFormData.Agent_Multica_Workspace_Slug = multicaDraft?.workspaceSlug || editingMessage?.Agent_Multica_Workspace_Slug || '';
+      finalFormData.Agent_Multica_Agent_ID = multicaDraft?.agentId || editingMessage?.Agent_Multica_Agent_ID || '';
+      finalFormData.Agent_Multica_Project_ID = multicaDraft?.projectId || editingMessage?.Agent_Multica_Project_ID || '';
+      finalFormData.Agent_Binding_ID = editingMessage?.Agent_Binding_ID || finalFormData.Agent_Binding_ID;
+      finalFormData.Multica_Connection_Ready = Boolean(multicaDraft?.ready);
+      finalFormData.Multica_Block_Reason = multicaDraft?.blockReason || '';
+    }
     
     onSubmit(finalFormData);
   };
@@ -7895,6 +8024,7 @@ ${content}
           next.Outreach_Followup_Interval_Hours = 24;
         }
       } else if (method === 'AgentTask') {
+        if (!next.Agent_Provider) next.Agent_Provider = 'multica';
         next.Agent_Executor = resolveAgentTaskExecutorSelection({
           savedId: next.Agent_Executor,
           defaultId: agentTaskDefaultExecutor,
@@ -8218,6 +8348,7 @@ ${content}
     AI_Endpoint: formData.AI_Endpoint,
     Automation_Link: formData.Automation_Link,
     Schedule_Date: formData.Schedule_Date,
+    Agent_Provider: formData.Agent_Provider,
   }, {
     botConfigured,
     ringCentralSenderConfigured,
@@ -8225,6 +8356,7 @@ ${content}
     outreachConfigured,
   }), [
     botConfigured,
+    formData.Agent_Provider,
     formData.AI_Endpoint,
     formData.Automation_Link,
     formData.Push_Method,
@@ -8270,7 +8402,7 @@ ${content}
   const executionRouteBlockReason = executionRoute.state === 'needs_setup'
     ? `发送配置未完成：${executionRoute.detail}`
     : '';
-  const agentTaskOpenClawBlockReason = isAgentTaskMode
+  const agentTaskOpenClawBlockReason = isAgentTaskMode && !usesMulticaAgent
     ? agentTaskOpenClawCheckLoaded
       ? (agentTaskOpenClawConfigured
           ? (resolvedAgentExecutorId ? '' : '请选择 Agent 执行器。')
@@ -8386,7 +8518,7 @@ ${content}
   const dialogTitleHint = isOutreachMode
     ? '由 memory-service 负责追问与结果整理'
     : isAgentTaskMode
-      ? '到期后由 OpenClaw 执行，结果通知单独配置'
+      ? (usesMulticaAgent ? '到期由 Jira 送到 Multica，结果在 Multica' : '到期后由 OpenClaw 执行，结果通知单独配置')
       : '';
   
   return (
@@ -8577,7 +8709,7 @@ ${content}
                 <div style={dialogStyles.methodSetupNotice} role="alert">
                   <p style={dialogStyles.methodSetupText}>
                     ⚠️ <strong>{outreachReadinessUnknown ? '无法验证配置' : '前置配置待完成'}</strong>——当前 tab 可先填写草稿；保存会被阻止，不会写入 Messages、不会创建 Jira Rule 或同步 runtime。
-                    {isAgentTaskMode ? ' 帮我做需要 Bot executor rule + OpenClaw 配置；' : ''}
+                    {isAgentTaskMode ? (usesMulticaAgent ? ' 帮我做（Multica）需要 Bot executor rule，并验证你自己的 Multica 连接；' : ' 帮我做需要 Bot executor rule + OpenClaw 配置；') : ''}
                     {isOutreachMode
                       ? outreachReadinessUnknown
                         ? ` 帮我问暂时无法读取 Memory Service 配置（${outreachConfigLoadError}）；这不代表 RingCentral 未配置。`
@@ -8715,10 +8847,43 @@ ${content}
                   rows={5}
                 />
                 <small style={dialogStyles.hint}>
-                  这段内容会作为 OpenClaw 执行任务本身（存入 Content 列）；不需要再在这里写「通知到某某群」——推送由下方结果通知配置在拿到结果后完成。
+                  {usesMulticaAgent
+                    ? '这段内容会交给 Multica 上的 Agent。保存不会马上执行；到期由 Jira 送到 Multica，结果也在 Multica。'
+                    : '这段内容会作为 OpenClaw 执行任务本身（存入 Content 列）；不需要再在这里写「通知到某某群」——推送由下方结果通知配置在拿到结果后完成。'}
                 </small>
               </div>
 
+              <div style={dialogStyles.formGroup}>
+                <label style={dialogStyles.label}>执行方式</label>
+                <div style={dialogStyles.buttonGroup}>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Agent_Provider === 'multica')}
+                    onClick={() => handleChange('Agent_Provider', 'multica')}
+                    disabled={isSubmitting}
+                  >
+                    Multica
+                  </button>
+                  <button
+                    type="button"
+                    style={getButtonStyle(formData.Agent_Provider !== 'multica')}
+                    onClick={() => handleChange('Agent_Provider', 'legacy_memory')}
+                    disabled={isSubmitting || Boolean(editingMessage && editingMessage.Agent_Provider === 'multica')}
+                  >
+                    现有 Memory 执行器
+                  </button>
+                </div>
+                <small style={dialogStyles.hint}>
+                  {usesMulticaAgent
+                    ? '时间仍由 Jira 触发。断开本机连接不会停止已经接好的周期任务。第一阶段不使用 Bot/AsMe 结果通知。'
+                    : '已有任务继续走 Memory 执行器。改成 Multica 会新建绑定，不会自动搬走旧执行记录。'}
+                </small>
+              </div>
+              {usesMulticaAgent && (
+                <MulticaAgentTaskPanel disabled={isSubmitting} onChange={setMulticaDraft} />
+              )}
+              {!usesMulticaAgent && (
+              <>
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>执行边界</label>
                 <div style={dialogStyles.buttonGroup}>
@@ -9008,6 +9173,8 @@ ${content}
                   <small style={dialogStyles.hint}>架构兼容未来 memory-service cron / heartbeat 直接触发。</small>
                 </div>
               </div>
+              </>
+              )}
             </div>
           )}
 

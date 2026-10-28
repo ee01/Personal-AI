@@ -42,9 +42,10 @@ type InitializationSetupMetadata = Pick<
  * - v2.11: 新增 Agent_Notify_Via（结果通知身份 bot/asme）
  * - v2.12: 新增 Agent_Mode（只读/外部写入边界；旧任务默认 read）
  * - v2.13: 新增 Agent_Notify_When_Empty（0 匹配是否仍推结果通知；空/N=不推）
+ * - v2.14: 新增 Multica 公开列（不含 webhook）。旧行 Agent_Provider 为空，仍走 legacy_memory。
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.13',
+  version: '2.14',
   columns: [
     'ID',
     'Topic',
@@ -81,6 +82,19 @@ export const MESSAGES_SCHEMA = {
     'Agent_Last_Status',
     'Agent_Last_Result',
     'Agent_Last_Error',
+    'Agent_Provider',
+    'Agent_Binding_ID',
+    'Agent_Multica_Workspace_ID',
+    'Agent_Multica_Workspace_Slug',
+    'Agent_Multica_Agent_ID',
+    'Agent_Multica_Project_ID',
+    'Agent_Multica_Autopilot_ID',
+    'Agent_Multica_Trigger_ID',
+    'Agent_Multica_Web_Origin',
+    'Agent_Multica_Api_Origin',
+    'Agent_Multica_User_ID',
+    'Agent_Provision_State',
+    'Agent_Content_Revision',
     'Status',
     'Last_Exec',
     'Next_Exec',

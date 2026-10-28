@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.7.4",
-    "lastUpdated": "2026-10-21",
+    "version": "1.8.0",
+    "lastUpdated": "2026-10-29",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
       "All Google Apps Script {{WEB_APP_URL}} callbacks intentionally use GET. Jira Automation POST requests to Apps Script ContentService can stop on the 302 redirect to script.googleusercontent.com.",
@@ -13,7 +13,8 @@
       "Bot private/group webhooks go through Dify botman jumpboard (BOTMAN_DIFY_*) because Jira cannot reach botman.int.rclabenv.com.",
       "Bot private inputs.email is webhookResponse.body.botmanEmail. Apps Script builds that from Glip_User_Name as userId@ringcentral.com. userName is also passed as personName for compatibility with an older Apps Script response. Do not send initiator.emailAddress or @reply.ringcentral.glip.com as the Botman recipient.",
       "AgentTask execute goes through Dify agent-task jumpboard (AGENT_TASK_DIFY_*) because Jira cannot reach memory-service; Chrome AR still calls memory-service directly.",
-      "AgentTask treats Dify workflow completion and downstream acceptance separately: only data.outputs.accepted=true confirms success; rejected outputs write trigger_delivery_failed plus the Dify error/status back to Sheet."
+      "AgentTask treats Dify workflow completion and downstream acceptance separately: only data.outputs.accepted=true confirms success; rejected outputs write trigger_delivery_failed plus the Dify error/status back to Sheet.",
+      "Multica AgentTask posts directly to the Autopilot webhook. The URL is assembled from host and path smart values and must not be printed in the audit log. Confirm with stage=delivered only when status is accepted or duplicate and run_id is present. skipped or ignored confirms failure. Unknown responses stay claimed."
     ]
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -64,7 +65,7 @@
       "schemaVersion": 2,
       "type": "jira.issue.outgoing.webhook",
       "value": {
-        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api",
+        "url": "{{WEB_APP_URL}}?action=getBotMessageCurrentTime&autoMarkOnFetch=api&capability={{MULTICA_SCHEDULER_CAPABILITY}}",
         "headers": [],
         "sendIssue": false,
         "contentType": "empty",
@@ -190,6 +191,134 @@
           "type": "SMART",
           "value": "{{webhookResponse.body.content}}"
         },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_agentProvider",
+        "name": { "type": "FREE", "value": "agentProvider" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.agentProvider}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaWebhookHost",
+        "name": { "type": "FREE", "value": "multicaWebhookHost" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaWebhookHost}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaWebhookPath",
+        "name": { "type": "FREE", "value": "multicaWebhookPath" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaWebhookPath}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaIdempotencyKey",
+        "name": { "type": "FREE", "value": "multicaIdempotencyKey" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaIdempotencyKey}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaBindingId",
+        "name": { "type": "FREE", "value": "multicaBindingId" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaBindingId}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaScheduledFor",
+        "name": { "type": "FREE", "value": "multicaScheduledFor" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaScheduledFor}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaRevision",
+        "name": { "type": "FREE", "value": "multicaRevision" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaRevision}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaEffectiveTask",
+        "name": { "type": "FREE", "value": "multicaEffectiveTask" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.content}}" },
         "lazy": false
       },
       "children": [],
@@ -632,6 +761,218 @@
           "component": "CONDITION_BLOCK",
           "schemaVersion": 1,
           "type": "jira.condition.if.block",
+          "value": { "conditionMatchType": "ALL" },
+          "children": [
+            {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "https://{{multicaWebhookHost}}/{{multicaWebhookPath}}",
+                "headers": [
+                  {
+                    "id": "_header_multica_idempotency",
+                    "name": "Idempotency-Key",
+                    "value": { "keyOrValue": "{{multicaIdempotencyKey}}", "secret": false }
+                  },
+                  {
+                    "id": "_header_multica_content_type",
+                    "name": "Content-Type",
+                    "value": { "keyOrValue": "application/json", "secret": false }
+                  }
+                ],
+                "sendIssue": false,
+                "contentType": "custom",
+                "customBody": "{\n  \"source\": \"scheduled_messages\",\n  \"provider\": \"multica\",\n  \"messageId\": \"{{messageId}}\",\n  \"bindingId\": \"{{multicaBindingId}}\",\n  \"scheduledFor\": \"{{multicaScheduledFor}}\",\n  \"revision\": \"{{multicaRevision}}\",\n  \"executionKey\": \"{{executionKey}}\",\n  \"effectiveTask\": {{multicaEffectiveTask.asJsonString}}\n}",
+                "method": "POST",
+                "responseEnabled": true,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION_BLOCK",
+              "schemaVersion": 1,
+              "type": "jira.condition.if.block",
+              "value": { "conditionMatchType": "ALL" },
+              "children": [
+                {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=delivered&provider=multica&executionKey={{executionKey.urlEncode}}&dispatchState={{webhookResponse.body.status.urlEncode}}&runId={{webhookResponse.body.run_id.urlEncode}}&issueId={{webhookResponse.body.issue_id.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+              ],
+              "conditions": [
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.status}}", "second": "accepted", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                },
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.run_id}}", "second": "", "operator": "NOT_EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION_BLOCK",
+              "schemaVersion": 1,
+              "type": "jira.condition.if.block",
+              "value": { "conditionMatchType": "ALL" },
+              "children": [
+                {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=true&stage=delivered&provider=multica&executionKey={{executionKey.urlEncode}}&dispatchState={{webhookResponse.body.status.urlEncode}}&runId={{webhookResponse.body.run_id.urlEncode}}&issueId={{webhookResponse.body.issue_id.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+              ],
+              "conditions": [
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.status}}", "second": "duplicate", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                },
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.run_id}}", "second": "", "operator": "NOT_EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION_BLOCK",
+              "schemaVersion": 1,
+              "type": "jira.condition.if.block",
+              "value": { "conditionMatchType": "ANY" },
+              "children": [
+                {
+              "component": "ACTION",
+              "schemaVersion": 2,
+              "type": "jira.issue.outgoing.webhook",
+              "value": {
+                "url": "{{WEB_APP_URL}}?action=confirmBotMessageTriggered&messageId={{messageId.urlEncode}}&rowIndex={{rowIndex}}&success=false&stage=trigger_delivery_failed&provider=multica&executionKey={{executionKey.urlEncode}}&dispatchState={{webhookResponse.body.status.urlEncode}}&error={{webhookResponse.body.status.urlEncode}}",
+                "headers": [],
+                "sendIssue": false,
+                "contentType": "empty",
+                "method": "GET",
+                "responseEnabled": false,
+                "usedSecretsKeys": []
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+              ],
+              "conditions": [
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.status}}", "second": "skipped", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                },
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.status}}", "second": "ignored", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
+              "optimisedIds": [],
+              "newComponent": false
+            }
+          ],
+          "conditions": [
+            {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{webhookResponse.body.pushMethod}}", "second": "AgentTask", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                },
+            {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{agentProvider}}", "second": "multica", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+          ],
+          "optimisedIds": [],
+          "newComponent": false
+        },
+        {
+          "component": "CONDITION_BLOCK",
+          "schemaVersion": 1,
+          "type": "jira.condition.if.block",
           "value": {
             "conditionMatchType": "ALL"
           },
@@ -774,6 +1115,20 @@
                 "first": "{{webhookResponse.body.pushMethod}}",
                 "second": "AgentTask",
                 "operator": "EQUALS"
+              },
+              "children": [],
+              "conditions": [],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION",
+              "schemaVersion": 1,
+              "type": "jira.comparator.condition",
+              "value": {
+                "first": "{{agentProvider}}",
+                "second": "multica",
+                "operator": "NOT_EQUALS"
               },
               "children": [],
               "conditions": [],

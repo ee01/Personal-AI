@@ -26,10 +26,10 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.1.1';
+var APP_SCRIPT_VERSION = '3.2.0';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
-var APP_SCRIPT_LAST_UPDATED = '2026-10-28';
+var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -307,6 +307,187 @@ function getAgentTaskWebhookConfigFromSheet() {
     authToken: (config.agent_task_webhook_token || config.memory_service_agent_task_token || '').toString().trim(),
     userId: (config.agent_task_user_id || config.memory_service_user_id || '').toString().trim()
   };
+}
+
+var MULTICA_CLAIM_CONTEXT = null;
+var MULTICA_DELIVERY_NOTE = null;
+
+function isMulticaAgentTaskRow(rowData) {
+  return Boolean(rowData)
+    && String(rowData.Push_Method || '') === 'AgentTask'
+    && String(rowData.Agent_Provider || '').trim() === 'multica';
+}
+
+function multicaCapabilityMatches(provided, expected) {
+  var left = String(provided || '');
+  var right = String(expected || '');
+  if (left.length < 32 || left.length !== right.length) return false;
+  var diff = 0;
+  for (var i = 0; i < left.length; i++) {
+    diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function getMulticaSchedulerCapabilityFromSheet() {
+  var config = readConfigSheetMap();
+  return String(config.multica_scheduler_capability || '').trim();
+}
+
+function loadMulticaClaimContext(postData) {
+  var provided = '';
+  if (postData) provided = String(postData.schedulerCapability || postData.capability || '').trim();
+  var spreadsheetId = '';
+  try {
+    spreadsheetId = String(SpreadsheetApp.getActiveSpreadsheet().getId() || '');
+  } catch (error) {
+    spreadsheetId = '';
+  }
+  var expected = '';
+  try {
+    expected = getMulticaSchedulerCapabilityFromSheet();
+  } catch (error) {
+    expected = '';
+  }
+  return { capability: provided, expectedCapability: expected, spreadsheetId: spreadsheetId };
+}
+
+function readMulticaBindingById(bindingId) {
+  var wanted = String(bindingId || '').trim();
+  if (!wanted) return null;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('_AgentBindings');
+  if (!sheet) return null;
+  var values = sheet.getDataRange().getDisplayValues();
+  if (!values || values.length < 2) return null;
+  var headers = values[0];
+  var idCol = headers.indexOf('bindingUuid');
+  if (idCol < 0) return null;
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][idCol] || '').trim() !== wanted) continue;
+    var record = { _rowIndex: i + 1 };
+    for (var c = 0; c < headers.length; c++) record[headers[c]] = values[i][c];
+    return record;
+  }
+  return null;
+}
+
+function clearMulticaBindingWebhook(record) {
+  if (!record || !record._rowIndex) return;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('_AgentBindings');
+  if (!sheet) return;
+  var headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getDisplayValues()[0];
+  var webhookCol = headers.indexOf('webhookUrl') + 1;
+  var stateCol = headers.indexOf('provisionState') + 1;
+  if (webhookCol > 0) sheet.getRange(record._rowIndex, webhookCol).setValue('');
+  if (stateCol > 0) sheet.getRange(record._rowIndex, stateCol).setValue('needs_reconnect');
+}
+
+function splitMulticaWebhookUrl(webhookUrl, apiOrigin) {
+  var raw = String(webhookUrl || '').trim();
+  if (raw.indexOf('https://') !== 0) return null;
+  var withoutScheme = raw.substring('https://'.length);
+  var slash = withoutScheme.indexOf('/');
+  if (slash <= 0) return null;
+  var host = withoutScheme.substring(0, slash);
+  var pathAndMore = withoutScheme.substring(slash);
+  if (pathAndMore.indexOf('?') !== -1 || pathAndMore.indexOf('#') !== -1 || pathAndMore.indexOf('@') !== -1) return null;
+  if (pathAndMore.indexOf('/api/webhooks/autopilots/') !== 0) return null;
+  var token = pathAndMore.substring('/api/webhooks/autopilots/'.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(token)) return null;
+  var expectedHost = String(apiOrigin || '').replace(/^https:\/\//, '').replace(/\/+$/, '');
+  if (!expectedHost || host !== expectedHost) return null;
+  return { host: host, path: pathAndMore.replace(/^\//, '') };
+}
+
+function buildMulticaIdempotencyKey(bindingUuid, executionKey) {
+  var key = 'pai:' + String(bindingUuid || '') + ':' + String(executionKey || '');
+  if (key.length <= 128) return key;
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, key, Utilities.Charset.UTF_8);
+  var hex = '';
+  for (var i = 0; i < digest.length; i++) {
+    var byte = digest[i];
+    if (byte < 0) byte += 256;
+    var part = byte.toString(16);
+    hex += part.length === 1 ? '0' + part : part;
+  }
+  return 'pai:' + hex;
+}
+
+function sanitizeMulticaId(value) {
+  return String(value || '').replace(/[^A-Za-z0-9_-]/g, '').substring(0, 80);
+}
+
+function evaluateMulticaClaim(rowData) {
+  var context = MULTICA_CLAIM_CONTEXT || { capability: '', expectedCapability: '', spreadsheetId: '' };
+  if (!multicaCapabilityMatches(context.capability, context.expectedCapability)) {
+    return { deliverable: false, reason: 'capability' };
+  }
+  var bindingId = String(rowData.Agent_Binding_ID || '').trim();
+  var record = readMulticaBindingById(bindingId);
+  if (!record) return { deliverable: false, reason: 'binding' };
+  var spreadsheetId = String(record.spreadsheetId || '').trim();
+  if (!spreadsheetId || spreadsheetId !== String(context.spreadsheetId || '')) {
+    if (record.webhookUrl) clearMulticaBindingWebhook(record);
+    return { deliverable: false, reason: 'spreadsheet' };
+  }
+  if (String(record.provisionState || '') === 'needs_reconnect') {
+    return { deliverable: false, reason: 'reconnect' };
+  }
+  var parts = splitMulticaWebhookUrl(record.webhookUrl, record.apiOrigin || rowData.Agent_Multica_Api_Origin);
+  if (!parts) return { deliverable: false, reason: 'webhook' };
+  return { deliverable: true, binding: record, parts: parts };
+}
+
+function buildMulticaAgentTaskClaim(message, messageId, executionKey, evaluation) {
+  var scheduledFor = [message.Schedule_Date || '', message.Schedule_Time || ''].join(' ').trim();
+  return {
+    success: true,
+    agentProvider: 'multica',
+    multicaWebhookHost: evaluation.parts.host,
+    multicaWebhookPath: evaluation.parts.path,
+    multicaIdempotencyKey: buildMulticaIdempotencyKey(evaluation.binding.bindingUuid || message.Agent_Binding_ID, executionKey),
+    multicaBindingId: evaluation.binding.bindingUuid || message.Agent_Binding_ID,
+    multicaScheduledFor: scheduledFor,
+    multicaRevision: String(message.Agent_Content_Revision || evaluation.binding.contentRevision || ''),
+    multicaEffectiveTask: message.Content || message.Agent_Task_Prompt || ''
+  };
+}
+
+function applyMulticaDeliveryNote(delivery, success) {
+  MULTICA_DELIVERY_NOTE = null;
+  if (!delivery) return;
+  var state = String(delivery.dispatchState || '').trim().toLowerCase();
+  var runId = sanitizeMulticaId(delivery.runId);
+  var issueId = sanitizeMulticaId(delivery.issueId);
+  if (success && (state === 'accepted' || state === 'duplicate') && runId) {
+    MULTICA_DELIVERY_NOTE = {
+      logMessage: '✅ 已送达 Multica run=' + runId + (issueId ? ' issue=' + issueId : ''),
+      agentStatus: 'delivered'
+    };
+    return;
+  }
+  if (state === 'skipped' || state === 'ignored') {
+    MULTICA_DELIVERY_NOTE = {
+      logMessage: '❌ Multica 拒绝触发',
+      agentStatus: 'trigger_delivery_failed'
+    };
+    return;
+  }
+  MULTICA_DELIVERY_NOTE = {
+    logMessage: '❌ Multica 投递未确认',
+    agentStatus: 'trigger_delivery_failed'
+  };
+}
+
+function redactLoggedRequest(value) {
+  try {
+    var copy = JSON.parse(JSON.stringify(value || {}));
+    if (copy.capability) copy.capability = '[redacted]';
+    if (copy.schedulerCapability) copy.schedulerCapability = '[redacted]';
+    return JSON.stringify(copy);
+  } catch (error) {
+    return '[unlogged]';
+  }
 }
 
 function getRingCentralSenderConfigFromSheet() {
@@ -965,7 +1146,9 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   if (execLogCol > 0) {
     let logMessage;
     if (rowData.Push_Method === 'AgentTask') {
-      if (success) {
+      if (MULTICA_DELIVERY_NOTE) {
+        logMessage = MULTICA_DELIVERY_NOTE.logMessage;
+      } else if (success) {
         logMessage = AGENT_TASK_TRIGGERED_LOG;
       } else if (String(errorMsg || '').indexOf('trigger_delivery_failed') !== -1) {
         logMessage = TRIGGER_DELIVERY_FAILED_LOG + (errorMsg && errorMsg !== 'trigger_delivery_failed' ? ': ' + errorMsg : '');
@@ -989,7 +1172,9 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     }
     if (agentLastStatusCol > 0) {
       let agentStatus = 'trigger_failed';
-      if (success) {
+      if (MULTICA_DELIVERY_NOTE) {
+        agentStatus = MULTICA_DELIVERY_NOTE.agentStatus;
+      } else if (success) {
         agentStatus = 'triggered';
       } else if (String(errorMsg || '').indexOf('trigger_delivery_failed') !== -1) {
         agentStatus = 'trigger_delivery_failed';
@@ -1246,6 +1431,7 @@ function isClaimConfirmMessage(message) {
 }
 
 function buildClaimLogMessage(message) {
+  if (isMulticaAgentTaskRow(message)) return '⏳ Multica AgentTask 已领取待确认';
   return isAgentTaskMessage(message) ? AGENT_TASK_CLAIM_LOG : API_CLAIM_LOG;
 }
 
@@ -1333,29 +1519,34 @@ function markMessageOnFetchIfRequested(message, messageId, executionKey, mode) {
  * 确认触发已到达下游（Jira 已成功调用 Dify/第三方 API）。
  * 这才是最终 ✅；与领取 claimed 分离。
  */
-function confirmBotMessageTriggered(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent, executionKey, stage) {
-  const normalizedStage = String(stage || (success ? 'confirmed' : 'trigger_delivery_failed')).trim().toLowerCase();
-  if (normalizedStage === 'trigger_delivery_failed' || success === false) {
+function confirmBotMessageTriggered(messageId, rowIndex, success, errorMsg, replacedTopic, replacedContent, executionKey, stage, multicaDelivery) {
+  applyMulticaDeliveryNote(multicaDelivery, success !== false && String(stage || '') !== 'trigger_delivery_failed');
+  try {
+    const normalizedStage = String(stage || (success ? 'confirmed' : 'trigger_delivery_failed')).trim().toLowerCase();
+    if (normalizedStage === 'trigger_delivery_failed' || success === false) {
+      return markBotMessageExecuted(
+        messageId,
+        rowIndex,
+        false,
+        errorMsg || 'trigger_delivery_failed',
+        replacedTopic || '',
+        replacedContent || '',
+        executionKey || ''
+      );
+    }
+
     return markBotMessageExecuted(
       messageId,
       rowIndex,
-      false,
-      errorMsg || 'trigger_delivery_failed',
+      true,
+      '',
       replacedTopic || '',
       replacedContent || '',
       executionKey || ''
     );
+  } finally {
+    MULTICA_DELIVERY_NOTE = null;
   }
-
-  return markBotMessageExecuted(
-    messageId,
-    rowIndex,
-    true,
-    '',
-    replacedTopic || '',
-    replacedContent || '',
-    executionKey || ''
-  );
 }
 
 function parseJsonStringFragment(fragment) {
@@ -2142,7 +2333,8 @@ function doGet(e) {
     const postData = {
       releaseInfo: releaseInfo || {},
       currentTime: currentTimeStr || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'),
-      autoMarkOnFetch: getAutoMarkOnFetchMode(e.parameter || {})
+      autoMarkOnFetch: getAutoMarkOnFetchMode(e.parameter || {}),
+      schedulerCapability: getRequestParameterValue(e.parameter.capability)
     };
     
     const result = getMessageCurrentTimeWithReleaseInfo(postData);
@@ -2179,9 +2371,14 @@ function doGet(e) {
     const replacedTopic = getRequestParameterValue(e.parameter.topic);
     const replacedContent = getRequestParameterValue(e.parameter.content);
     const stage = getRequestParameterValue(e.parameter.stage) || (success ? 'confirmed' : 'trigger_delivery_failed');
+    const multicaDelivery = getRequestParameterValue(e.parameter.provider) === 'multica' ? {
+      dispatchState: getRequestParameterValue(e.parameter.dispatchState),
+      runId: getRequestParameterValue(e.parameter.runId),
+      issueId: getRequestParameterValue(e.parameter.issueId)
+    } : null;
 
     return ContentService.createTextOutput(
-      JSON.stringify(confirmBotMessageTriggered(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, stage))
+      JSON.stringify(confirmBotMessageTriggered(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, stage, multicaDelivery))
     ).setMimeType(ContentService.MimeType.JSON);
   }
 
@@ -2255,7 +2452,7 @@ function doPost(e) {
     const postData = parseJsonPostBody(e);
     action = action || getRequestParameterValue(postData.action);
     Logger.log(`POST action: ${action}`);
-    Logger.log(`POST 请求来源: ${JSON.stringify(queryParameters)}`);
+    Logger.log(`POST 请求来源: ${redactLoggedRequest(queryParameters)}`);
 
     if (action === 'freshSetup') {
       return ContentService.createTextOutput(JSON.stringify(handleFreshSetup(postData))).setMimeType(ContentService.MimeType.JSON);
@@ -2291,9 +2488,14 @@ function doPost(e) {
       const replacedContent = getRequestParameterValue(parameters.content);
       const executionKey = getRequestParameterValue(parameters.executionKey);
       const stage = getRequestParameterValue(parameters.stage) || (success ? 'confirmed' : 'trigger_delivery_failed');
+      const multicaDelivery = getRequestParameterValue(parameters.provider) === 'multica' ? {
+        dispatchState: getRequestParameterValue(parameters.dispatchState),
+        runId: getRequestParameterValue(parameters.runId),
+        issueId: getRequestParameterValue(parameters.issueId)
+      } : null;
 
       return ContentService.createTextOutput(
-        JSON.stringify(confirmBotMessageTriggered(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, stage))
+        JSON.stringify(confirmBotMessageTriggered(messageId, rowIndex, success, error, replacedTopic, replacedContent, executionKey, stage, multicaDelivery))
       ).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -2324,7 +2526,7 @@ function doPost(e) {
     if (action === 'getBotMessageCurrentTime') {
       // 解析 POST 数据
       let requestData = mergeRequestParameters(queryParameters, postData);
-      Logger.log(`接收到 releaseInfo 数据: ${JSON.stringify(requestData).substring(0, 200)}...`);
+      Logger.log(`接收到 releaseInfo 数据: ${redactLoggedRequest(requestData).substring(0, 200)}...`);
       
       // 支持两种 body 格式：
       // 1. { releaseInfo: {...}, currentTime: "..." } - 标准格式
@@ -2332,7 +2534,13 @@ function doPost(e) {
       if (!requestData.releaseInfo || Object.keys(requestData.releaseInfo).length === 0) {
         const releaseInfo = extractReleaseInfoFromParameters(requestData);
         if (releaseInfo) {
-          requestData = { releaseInfo: releaseInfo, currentTime: requestData.currentTime || '' };
+          requestData = {
+            releaseInfo: releaseInfo,
+            currentTime: requestData.currentTime || '',
+            capability: requestData.capability || requestData.schedulerCapability || '',
+            schedulerCapability: requestData.schedulerCapability || requestData.capability || '',
+            autoMarkOnFetch: requestData.autoMarkOnFetch
+          };
         }
       }
       
@@ -2605,6 +2813,9 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
                               (rowData.Push_Method === 'JiraAutomation' && hasAiEndpoint) ||
                               (ringCentralSenderEnabled === true && rowData.Push_Method === 'AsMe');
     if (rowData.Status !== 'Active' || !isValidPushMethod) {
+      continue;
+    }
+    if (isMulticaAgentTaskRow(rowData) && !evaluateMulticaClaim(rowData).deliverable) {
       continue;
     }
 
@@ -3272,6 +3483,13 @@ function buildAgentTaskNotifyTarget(message) {
 }
 
 function buildAgentTaskApiPayload(message, messageId, executionKey) {
+  if (isMulticaAgentTaskRow(message)) {
+    var evaluation = evaluateMulticaClaim(message);
+    if (!evaluation.deliverable) {
+      return { success: false, error: 'Multica AgentTask is not deliverable' };
+    }
+    return buildMulticaAgentTaskClaim(message, messageId, executionKey, evaluation);
+  }
   const webhookConfig = getAgentTaskWebhookConfigFromSheet();
   const endpointRaw = normalizeAgentTaskEndpointUrl(
     message.AI_Endpoint || (webhookConfig && webhookConfig.webhookUrl)
@@ -3363,6 +3581,7 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
  * @returns {object} 消息数据对象或 null
  */
 function getMessageCurrentTimeWithReleaseInfo(postData) {
+  MULTICA_CLAIM_CONTEXT = loadMulticaClaimContext(postData);
   try {
     maybePurgeExpiredExecutionMarks(new Date());
 
@@ -3518,12 +3737,36 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     }
 
     if (message.Push_Method === 'AgentTask' && agentTaskApiPayload && agentTaskApiPayload.success) {
+      if (agentTaskApiPayload.agentProvider === 'multica') {
+        Logger.log('处理 Multica AgentTask 消息: ' + messageId);
+        return {
+          executed: true,
+          messageId: messageId,
+          topic: message.Topic || '',
+          content: agentTaskApiPayload.multicaEffectiveTask,
+          targetType: 'api',
+          agentProvider: 'multica',
+          multicaWebhookHost: agentTaskApiPayload.multicaWebhookHost,
+          multicaWebhookPath: agentTaskApiPayload.multicaWebhookPath,
+          multicaIdempotencyKey: agentTaskApiPayload.multicaIdempotencyKey,
+          multicaBindingId: agentTaskApiPayload.multicaBindingId,
+          multicaScheduledFor: agentTaskApiPayload.multicaScheduledFor,
+          multicaRevision: agentTaskApiPayload.multicaRevision,
+          rowIndex: message.rowIndex,
+          executionKey: executionKey,
+          pushMethod: 'AgentTask',
+          requiresExecutionCallback: autoMarkOnFetchResult.marked !== true,
+          autoMarkOnFetch: autoMarkOnFetchResult,
+          timestamp: new Date().toISOString()
+        };
+      }
       Logger.log(`处理 AgentTask 消息: ${messageId}`);
       return {
         executed: true,
         messageId: messageId,
         topic: message.Topic || '',
         targetType: 'api',
+        agentProvider: 'legacy_memory',
         aiEndpoint: agentTaskApiPayload.endpointInfo.url,
         aiProtocol: agentTaskApiPayload.endpointInfo.protocol,
         aiHost: agentTaskApiPayload.endpointInfo.host,
@@ -3610,6 +3853,8 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       error: error.toString(),
       timestamp: new Date().toISOString()
     };
+  } finally {
+    MULTICA_CLAIM_CONTEXT = null;
   }
 }
 

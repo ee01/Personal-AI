@@ -17,6 +17,12 @@ import { isTimelineRecurrenceSpec, TIMELINE_TRIGGER } from '../modals/taskCenter
 
 export const JIRA_SHEET_LEDGER_KEY_PREFIX = 'jira_sheet:';
 
+export function shouldRegisterSheetMessageInLedger(
+  message: Pick<ScheduledMessage, 'Push_Method' | 'Agent_Provider'>,
+): boolean {
+  return !(message.Push_Method === 'AgentTask' && message.Agent_Provider === 'multica');
+}
+
 export function jiraSheetLedgerKey(sheetMessageId: string): string {
   return `${JIRA_SHEET_LEDGER_KEY_PREFIX}${sheetMessageId.trim()}`;
 }
