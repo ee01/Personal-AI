@@ -323,7 +323,15 @@ export class ActionExecutor {
     const results: ActionExecutionResult[] = [];
 
     for (const action of dueActions) {
-      results.push(await this.executeAction(action.id));
+      try {
+        results.push(await this.executeAction(action.id));
+      } catch (error) {
+        // Never let one poison item abort the entire user's drain. An exception
+        // before dispatch needs review, not an implicit retry of unknown effects.
+        const reason = error instanceof Error ? error.message : String(error);
+        this.actionRepo.parkQueuedForReview(action.id, reason);
+        console.error(`[ActionExecutor] Drain isolated action ${action.id}: ${reason}`);
+      }
     }
 
     return results;
@@ -513,6 +521,10 @@ export class ActionExecutor {
       options.approve !== true &&
       this.evidenceHasFlaggedMemory(action.evidenceRefs)
     ) {
+      this.actionRepo.parkQueuedForReview(
+        action.id,
+        'Safety review required: evidence references possible-injection memory',
+      );
       throw new Error(
         `Action "${action.id}" references flagged (possible-injection) memory; manual confirmation required`,
       );

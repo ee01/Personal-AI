@@ -798,6 +798,15 @@ export class ActionRepository {
     return this.getById(id);
   }
 
+  /** Preserve an unstarted task for human review, without approving its evidence. */
+  parkQueuedForReview(id: string, reason: string): QueuedActionRecord | null {
+    this.db.prepare(`UPDATE proposed_actions
+      SET queue_status = 'input_required', requires_approval = 1,
+          state = 'pending', last_error = ?
+      WHERE id = ? AND queue_status = 'queued'`).run(reason, id);
+    return this.getById(id);
+  }
+
   markFailed(
     id: string,
     attemptId: string,

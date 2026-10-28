@@ -471,7 +471,28 @@ describe('ActionExecutor', () => {
       'manual confirmation required',
     );
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(actionRepo.getById(action.id)?.queueStatus).toBe('queued');
+    expect(actionRepo.getById(action.id)?.queueStatus).toBe('input_required');
+    expect(actionRepo.getById(action.id)?.requiresApproval).toBe(true);
+    expect(actionRepo.listDueAutoActions(10).map(item => item.id)).not.toContain(action.id);
+  });
+
+  it('continues draining after a poison item and removes unstarted exceptions from future scans', async () => {
+    const poison = actionRepo.create({ actionType: 'notify_user', title: 'poison',
+      executionMode: 'auto', requiresApproval: false, queueStatus: 'queued', priority: 10 });
+    const healthy = actionRepo.create({ actionType: 'notify_user', title: 'scheduled',
+      executionMode: 'auto', requiresApproval: false, queueStatus: 'queued', priority: 7,
+      sourceKind: 'agent_task' });
+    const executor = new ActionExecutor(db, userDataManager, 'test-user');
+    const execute = vi.spyOn(executor, 'executeAction').mockImplementation(async id => {
+      if (id === poison.id) throw new Error('pre-dispatch failure');
+      return { actionId: id, actionType: 'notify_user', queueStatus: 'succeeded' };
+    });
+    const results = await executor.runDueActions(10);
+    expect(execute.mock.calls.map(call => call[0])).toEqual([poison.id, healthy.id]);
+    expect(results.map(result => result.actionId)).toEqual([healthy.id]);
+    expect(actionRepo.getById(poison.id)?.queueStatus).toBe('input_required');
+    expect(actionRepo.getById(poison.id)?.startedAt).toBeUndefined();
+    expect(actionRepo.listDueAutoActions(10).map(item => item.id)).toEqual([healthy.id]);
   });
 
   it('syncs successful delegate_openclaw results back into outreach sessions', async () => {
