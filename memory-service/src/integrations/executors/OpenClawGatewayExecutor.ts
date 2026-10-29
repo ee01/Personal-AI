@@ -351,7 +351,7 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
 
     try {
       await client.connect();
-      const accepted = await client.request<Record<string, unknown>>(
+      const submit = (agentId: string | undefined) => client.request<Record<string, unknown>>(
         'agent',
         {
           message: buildAgentResultUserPrompt(request),
@@ -359,12 +359,29 @@ export class OpenClawGatewayExecutor implements AgentExecutor {
             runtime: 'openclaw',
           }),
           sessionKey,
-          agentId: request.agentId,
+          agentId,
           idempotencyKey,
           timeout: Math.ceil(timeoutMs / 1000),
         },
         30_000,
       );
+      let accepted: Record<string, unknown>;
+      try {
+        accepted = await submit(request.agentId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // This rejection precedes acceptance: resolve the gateway's configured
+        // default, never guess an owner or replay an uncertain network failure.
+        if (request.agentId || sessionKey.startsWith('agent:') ||
+            !message.includes('Multiple agents are configured') ||
+            !message.includes('no explicit owner')) throw error;
+        const listing = await client.request<{ defaultId?: string; agents?: Array<{ id: string }> }>(
+          'agents.list', {}, 15_000,
+        );
+        const defaultId = listing.defaultId?.trim();
+        if (!defaultId || !listing.agents?.some(agent => agent.id === defaultId)) throw error;
+        accepted = await submit(defaultId);
+      }
 
       const remoteRunId = String(
         accepted?.runId || accepted?.id || accepted?.run_id || '',

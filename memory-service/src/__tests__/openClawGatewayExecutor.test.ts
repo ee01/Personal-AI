@@ -15,6 +15,9 @@ import {
 import { OpenClawGatewayExecutor } from '../integrations/executors/OpenClawGatewayExecutor.js';
 
 class FakeSocket implements GatewayWebSocket {
+  requireExplicitOwner = false;
+  agentError: string | undefined;
+  configuredDefault: string | undefined = 'main';
   readyState = 1;
   private listeners = new Map<string, Array<(event: any) => void>>();
   sent: string[] = [];
@@ -42,6 +45,16 @@ class FakeSocket implements GatewayWebSocket {
           payload: { type: 'hello-ok', protocol: 4 },
         }),
       });
+      return;
+    }
+    if (frame.method === 'agents.list') {
+      this.emit('message', { data: JSON.stringify({ type: 'res', id: frame.id, ok: true,
+        payload: { defaultId: this.configuredDefault, agents: [{ id: 'main' }, { id: 'work' }] } }) });
+      return;
+    }
+    if (frame.method === 'agent' && (this.agentError || (this.requireExplicitOwner && !frame.params?.agentId))) {
+      this.emit('message', { data: JSON.stringify({ type: 'res', id: frame.id, ok: false,
+        error: { message: this.agentError || 'Multiple agents are configured, but session key has no explicit owner.' } }) });
       return;
     }
     if (frame.method === 'agent') {
@@ -322,6 +335,63 @@ describe('OpenClawGatewayClient', () => {
 });
 
 describe('OpenClawGatewayExecutor', () => {
+  it.each([
+    { defaultId: 'main', explicit: undefined, session: 'session-1', expected: 'succeeded', sends: 2 },
+    { defaultId: undefined, explicit: undefined, session: 'session-1', expected: 'error', sends: 1 },
+    { defaultId: 'missing-agent', explicit: undefined, session: 'session-1', expected: 'error', sends: 1 },
+    { defaultId: 'main', explicit: 'work', session: 'session-1', expected: 'succeeded', sends: 1 },
+    { defaultId: 'main', explicit: undefined, session: 'agent:work:session-1', expected: 'error', sends: 1 },
+  ])('respects explicit ownership and only falls back to a configured gateway default: $session/$explicit/$defaultId', async ({ defaultId, explicit, session, expected, sends }) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-owner-'));
+    const previous = process.env.DATA_DIR; process.env.DATA_DIR = tempDir;
+    let socket!: FakeSocket;
+    const FakeWS = vi.fn().mockImplementation(() => {
+      socket = new FakeSocket(); socket.requireExplicitOwner = true; socket.configuredDefault = defaultId;
+      queueMicrotask(() => socket.open()); return socket;
+    });
+    try {
+      const executor = new OpenClawGatewayExecutor({ id: 'mac-mini', label: 'Mac mini',
+        type: 'openclaw-gateway', baseUrl: 'http://127.0.0.1:18789', enabled: true },
+        { WebSocketImpl: FakeWS as any });
+      const result = await executor.submit({ task: 'inspect', mode: 'read', threadId: 't1',
+        actionId: 'a1', sessionKey: session, agentId: explicit, idempotencyKey: 'stable-attempt', timeoutMs: 5000 });
+      expect(result.status).toBe(expected);
+      const frames = socket.sent.map(frame => JSON.parse(frame));
+      const submits = frames.filter(frame => frame.method === 'agent');
+      expect(submits).toHaveLength(sends);
+      expect(submits.every(frame => frame.params.idempotencyKey === 'stable-attempt')).toBe(true);
+      if (sends === 2) expect(submits[1].params.agentId).toBe('main');
+      if (explicit || session.startsWith('agent:')) expect(frames.some(frame => frame.method === 'agents.list')).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = previous;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not retry an uncertain submission failure through another owner', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-no-replay-'));
+    const previous = process.env.DATA_DIR; process.env.DATA_DIR = tempDir;
+    let socket!: FakeSocket;
+    const FakeWS = vi.fn().mockImplementation(() => {
+      socket = new FakeSocket(); socket.agentError = 'network timeout: response lost';
+      queueMicrotask(() => socket.open()); return socket;
+    });
+    try {
+      const executor = new OpenClawGatewayExecutor({ id: 'mac-mini', label: 'Mac mini',
+        type: 'openclaw-gateway', baseUrl: 'http://127.0.0.1:18789', enabled: true },
+        { WebSocketImpl: FakeWS as any });
+      const result = await executor.submit({ task: 'inspect', mode: 'read', threadId: 't1',
+        actionId: 'a1', sessionKey: 'session-1', timeoutMs: 5000 });
+      expect(result.status).toBe('error');
+      const frames = socket.sent.map(frame => JSON.parse(frame));
+      expect(frames.filter(frame => frame.method === 'agent')).toHaveLength(1);
+      expect(frames.some(frame => frame.method === 'agents.list')).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = previous;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('submits agent + wait and returns a verifiable success envelope', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-gw-exec-'));
     const previousDataDir = process.env.DATA_DIR;
