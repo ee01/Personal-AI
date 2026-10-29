@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.2.0';
+var APP_SCRIPT_VERSION = '3.2.1';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
@@ -384,8 +384,11 @@ function clearMulticaBindingWebhook(record) {
 
 function splitMulticaWebhookUrl(webhookUrl, apiOrigin) {
   var raw = String(webhookUrl || '').trim();
-  if (raw.indexOf('https://') !== 0) return null;
-  var withoutScheme = raw.substring('https://'.length);
+  var scheme = '';
+  if (raw.indexOf('https://') === 0) scheme = 'https';
+  else if (raw.indexOf('http://') === 0) scheme = 'http';
+  else return null;
+  var withoutScheme = raw.substring(scheme.length + 3);
   var slash = withoutScheme.indexOf('/');
   if (slash <= 0) return null;
   var host = withoutScheme.substring(0, slash);
@@ -394,9 +397,13 @@ function splitMulticaWebhookUrl(webhookUrl, apiOrigin) {
   if (pathAndMore.indexOf('/api/webhooks/autopilots/') !== 0) return null;
   var token = pathAndMore.substring('/api/webhooks/autopilots/'.length);
   if (!/^[A-Za-z0-9_-]+$/.test(token)) return null;
-  var expectedHost = String(apiOrigin || '').replace(/^https:\/\//, '').replace(/\/+$/, '');
-  if (!expectedHost || host !== expectedHost) return null;
-  return { host: host, path: pathAndMore.replace(/^\//, '') };
+  var expectedOrigin = String(apiOrigin || '').trim().replace(/\/+$/, '');
+  var expectedScheme = '';
+  if (expectedOrigin.indexOf('https://') === 0) expectedScheme = 'https';
+  else if (expectedOrigin.indexOf('http://') === 0) expectedScheme = 'http';
+  var expectedHost = expectedOrigin.replace(/^https?:\/\//, '');
+  if (!expectedHost || host !== expectedHost || (expectedScheme && expectedScheme !== scheme)) return null;
+  return { scheme: scheme, host: host, path: pathAndMore.replace(/^\//, '') };
 }
 
 function buildMulticaIdempotencyKey(bindingUuid, executionKey) {
@@ -443,6 +450,7 @@ function buildMulticaAgentTaskClaim(message, messageId, executionKey, evaluation
   return {
     success: true,
     agentProvider: 'multica',
+    multicaWebhookScheme: evaluation.parts.scheme || 'https',
     multicaWebhookHost: evaluation.parts.host,
     multicaWebhookPath: evaluation.parts.path,
     multicaIdempotencyKey: buildMulticaIdempotencyKey(evaluation.binding.bindingUuid || message.Agent_Binding_ID, executionKey),
@@ -3746,6 +3754,7 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
           content: agentTaskApiPayload.multicaEffectiveTask,
           targetType: 'api',
           agentProvider: 'multica',
+          multicaWebhookScheme: agentTaskApiPayload.multicaWebhookScheme || 'https',
           multicaWebhookHost: agentTaskApiPayload.multicaWebhookHost,
           multicaWebhookPath: agentTaskApiPayload.multicaWebhookPath,
           multicaIdempotencyKey: agentTaskApiPayload.multicaIdempotencyKey,

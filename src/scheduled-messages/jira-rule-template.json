@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "version": "1.8.0",
+    "version": "1.8.1",
     "lastUpdated": "2026-10-29",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
@@ -14,7 +14,7 @@
       "Bot private inputs.email is webhookResponse.body.botmanEmail. Apps Script builds that from Glip_User_Name as userId@ringcentral.com. userName is also passed as personName for compatibility with an older Apps Script response. Do not send initiator.emailAddress or @reply.ringcentral.glip.com as the Botman recipient.",
       "AgentTask execute goes through Dify agent-task jumpboard (AGENT_TASK_DIFY_*) because Jira cannot reach memory-service; Chrome AR still calls memory-service directly.",
       "AgentTask treats Dify workflow completion and downstream acceptance separately: only data.outputs.accepted=true confirms success; rejected outputs write trigger_delivery_failed plus the Dify error/status back to Sheet.",
-      "Multica AgentTask posts directly to the Autopilot webhook. The URL is assembled from host and path smart values and must not be printed in the audit log. Confirm with stage=delivered only when status is accepted or duplicate and run_id is present. skipped or ignored confirms failure. Unknown responses stay claimed."
+      "Multica AgentTask posts directly to the Autopilot webhook. The URL keeps a literal http:// or https:// prefix because Jira rejects a URL that is only a smart value. The scheme comes from the claim and must match the API origin. Do not print the URL or capability in the audit log. Confirm with stage=delivered only when status is accepted or duplicate and run_id is present. skipped or ignored confirms failure. Unknown responses stay claimed."
     ]
   },
   "name": "{{RULE_NAME}} v{{RULE_VERSION}}",
@@ -207,6 +207,22 @@
         "name": { "type": "FREE", "value": "agentProvider" },
         "type": "SMART",
         "query": { "type": "SMART", "value": "{{webhookResponse.body.agentProvider}}" },
+        "lazy": false
+      },
+      "children": [],
+      "conditions": [],
+      "optimisedIds": [],
+      "newComponent": false
+    },
+    {
+      "component": "ACTION",
+      "schemaVersion": 1,
+      "type": "jira.create.variable",
+      "value": {
+        "id": "_customsmartvalue_multicaWebhookScheme",
+        "name": { "type": "FREE", "value": "multicaWebhookScheme" },
+        "type": "SMART",
+        "query": { "type": "SMART", "value": "{{webhookResponse.body.multicaWebhookScheme}}" },
         "lazy": false
       },
       "children": [],
@@ -764,32 +780,106 @@
           "value": { "conditionMatchType": "ALL" },
           "children": [
             {
-              "component": "ACTION",
-              "schemaVersion": 2,
-              "type": "jira.issue.outgoing.webhook",
-              "value": {
-                "url": "https://{{multicaWebhookHost}}/{{multicaWebhookPath}}",
-                "headers": [
-                  {
-                    "id": "_header_multica_idempotency",
-                    "name": "Idempotency-Key",
-                    "value": { "keyOrValue": "{{multicaIdempotencyKey}}", "secret": false }
+              "component": "CONDITION_BLOCK",
+              "schemaVersion": 1,
+              "type": "jira.condition.if.block",
+              "value": { "conditionMatchType": "ALL" },
+              "children": [
+                {
+                  "component": "ACTION",
+                  "schemaVersion": 2,
+                  "type": "jira.issue.outgoing.webhook",
+                  "value": {
+                    "url": "http://{{multicaWebhookHost}}/{{multicaWebhookPath}}",
+                    "headers": [
+                      {
+                        "id": "_header_multica_idempotency_http",
+                        "name": "Idempotency-Key",
+                        "value": { "keyOrValue": "{{multicaIdempotencyKey}}", "secret": false }
+                      },
+                      {
+                        "id": "_header_multica_content_type_http",
+                        "name": "Content-Type",
+                        "value": { "keyOrValue": "application/json", "secret": false }
+                      }
+                    ],
+                    "sendIssue": false,
+                    "contentType": "custom",
+                    "customBody": "{\n  \"source\": \"scheduled_messages\",\n  \"provider\": \"multica\",\n  \"messageId\": \"{{messageId}}\",\n  \"bindingId\": \"{{multicaBindingId}}\",\n  \"scheduledFor\": \"{{multicaScheduledFor}}\",\n  \"revision\": \"{{multicaRevision}}\",\n  \"executionKey\": \"{{executionKey}}\",\n  \"effectiveTask\": {{multicaEffectiveTask.asJsonString}}\n}",
+                    "method": "POST",
+                    "responseEnabled": true,
+                    "usedSecretsKeys": []
                   },
-                  {
-                    "id": "_header_multica_content_type",
-                    "name": "Content-Type",
-                    "value": { "keyOrValue": "application/json", "secret": false }
-                  }
-                ],
-                "sendIssue": false,
-                "contentType": "custom",
-                "customBody": "{\n  \"source\": \"scheduled_messages\",\n  \"provider\": \"multica\",\n  \"messageId\": \"{{messageId}}\",\n  \"bindingId\": \"{{multicaBindingId}}\",\n  \"scheduledFor\": \"{{multicaScheduledFor}}\",\n  \"revision\": \"{{multicaRevision}}\",\n  \"executionKey\": \"{{executionKey}}\",\n  \"effectiveTask\": {{multicaEffectiveTask.asJsonString}}\n}",
-                "method": "POST",
-                "responseEnabled": true,
-                "usedSecretsKeys": []
-              },
-              "children": [],
-              "conditions": [],
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
+              "conditions": [
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{multicaWebhookScheme}}", "second": "http", "operator": "EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
+              "optimisedIds": [],
+              "newComponent": false
+            },
+            {
+              "component": "CONDITION_BLOCK",
+              "schemaVersion": 1,
+              "type": "jira.condition.if.block",
+              "value": { "conditionMatchType": "ALL" },
+              "children": [
+                {
+                  "component": "ACTION",
+                  "schemaVersion": 2,
+                  "type": "jira.issue.outgoing.webhook",
+                  "value": {
+                    "url": "https://{{multicaWebhookHost}}/{{multicaWebhookPath}}",
+                    "headers": [
+                      {
+                        "id": "_header_multica_idempotency",
+                        "name": "Idempotency-Key",
+                        "value": { "keyOrValue": "{{multicaIdempotencyKey}}", "secret": false }
+                      },
+                      {
+                        "id": "_header_multica_content_type",
+                        "name": "Content-Type",
+                        "value": { "keyOrValue": "application/json", "secret": false }
+                      }
+                    ],
+                    "sendIssue": false,
+                    "contentType": "custom",
+                    "customBody": "{\n  \"source\": \"scheduled_messages\",\n  \"provider\": \"multica\",\n  \"messageId\": \"{{messageId}}\",\n  \"bindingId\": \"{{multicaBindingId}}\",\n  \"scheduledFor\": \"{{multicaScheduledFor}}\",\n  \"revision\": \"{{multicaRevision}}\",\n  \"executionKey\": \"{{executionKey}}\",\n  \"effectiveTask\": {{multicaEffectiveTask.asJsonString}}\n}",
+                    "method": "POST",
+                    "responseEnabled": true,
+                    "usedSecretsKeys": []
+                  },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
+              "conditions": [
+                {
+                  "component": "CONDITION",
+                  "schemaVersion": 1,
+                  "type": "jira.comparator.condition",
+                  "value": { "first": "{{multicaWebhookScheme}}", "second": "http", "operator": "NOT_EQUALS" },
+                  "children": [],
+                  "conditions": [],
+                  "optimisedIds": [],
+                  "newComponent": false
+                }
+              ],
               "optimisedIds": [],
               "newComponent": false
             },

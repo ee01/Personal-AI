@@ -4,6 +4,7 @@ import {
   OFFICIAL_MULTICA_API_ORIGIN,
   OFFICIAL_MULTICA_WEB_ORIGIN,
 } from './multicaContract.js';
+import { sendMulticaExtensionMessage } from './multicaConnection.js';
 
 export interface MulticaDraft {
   ready: boolean;
@@ -22,10 +23,8 @@ interface WorkspaceChoice { id: string; slug: string; name: string }
 interface AgentChoice { id: string; name: string; runtimeLabel: string }
 interface ProjectChoice { id: string; name: string }
 
-async function sendMultica(type: string, data?: Record<string, unknown>): Promise<any> {
-  const response = await chrome.runtime.sendMessage({ type, data });
-  if (!response?.success) throw new Error(response?.error || 'Multica 请求失败');
-  return response;
+function sendMultica(type: string, data?: Record<string, unknown>): Promise<any> {
+  return sendMulticaExtensionMessage(type, data);
 }
 
 export function MulticaAgentTaskPanel(props: {
@@ -49,6 +48,7 @@ export function MulticaAgentTaskPanel(props: {
   const [status, setStatus] = useState('粘贴你自己的 PAT 后验证连接。扩展不会使用这台电脑上别人的 Multica 登录。');
   const [busy, setBusy] = useState(false);
 
+  const insecure = /^http:\/\//i.test(apiOrigin.trim()) || /^http:\/\//i.test(webOrigin.trim());
   const workspace = workspaces.find((item) => item.id === workspaceId);
   const agent = agents.find((item) => item.id === agentId);
   const ready = connected && Boolean(workspaceId && agentId);
@@ -160,6 +160,11 @@ export function MulticaAgentTaskPanel(props: {
           <label>API 地址<input style={inputStyle} value={apiOrigin} onChange={(event) => setApiOrigin(event.target.value)} /></label>
           <label>网页地址<input style={inputStyle} value={webOrigin} onChange={(event) => setWebOrigin(event.target.value)} /></label>
         </div>
+      )}
+      {insecure && (
+        <p style={hintStyle}>
+          这个地址是 HTTP，PAT 会明文发送。只填写你信任的自托管地址。
+        </p>
       )}
       <label style={{ display: 'block', marginTop: '10px' }}>
         Personal Access Token

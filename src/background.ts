@@ -1850,7 +1850,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       extensionId: chrome.runtime.id,
       session: area(storage.session),
       local: area(chrome.storage.local),
-    }).then(sendResponse);
+    }).then(sendResponse, (error: unknown) => {
+      const message = error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: unknown }).message || '')
+        : '';
+      sendResponse({ success: false, error: message || 'Multica 请求失败', code: 'request_failed' });
+    });
     return true;
   }
 

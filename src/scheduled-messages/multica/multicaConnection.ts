@@ -288,7 +288,47 @@ export async function handleMulticaExtensionMessage(
     }
     return { success: false, error: '不支持的 Multica 操作', code: 'operation_rejected' };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Multica 请求失败';
-    return { success: false, error: message, code: 'request_failed' };
+    return { success: false, error: failureMessage(error), code: 'request_failed' };
   }
+}
+
+function failureMessage(error: unknown): string {
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = String((error as { message?: unknown }).message || '').trim();
+    if (message && message !== '[object Object]') return message;
+  }
+  return 'Multica 请求失败';
+}
+
+export function sendMulticaExtensionMessage(
+  type: string,
+  data?: Record<string, unknown>,
+): Promise<MulticaHandlerResult> {
+  return new Promise((resolve, reject) => {
+    const runtime = (globalThis as { chrome?: { runtime?: {
+      lastError?: { message?: string };
+      sendMessage: (message: unknown, callback: (response: MulticaHandlerResult) => void) => void;
+    } } }).chrome?.runtime;
+    if (!runtime?.sendMessage) {
+      reject(new Error('当前页面不能调用扩展后台'));
+      return;
+    }
+    runtime.sendMessage({ type, data }, (response) => {
+      const runtimeError = runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || '扩展后台没有响应。请在 chrome://extensions 重新加载 Personal AI 后再试。'));
+        return;
+      }
+      if (!response) {
+        reject(new Error('扩展后台没有响应。请在 chrome://extensions 重新加载 Personal AI 后再试。'));
+        return;
+      }
+      if (!response.success) {
+        reject(new Error(response.error || 'Multica 没有返回失败原因'));
+        return;
+      }
+      resolve(response);
+    });
+  });
 }

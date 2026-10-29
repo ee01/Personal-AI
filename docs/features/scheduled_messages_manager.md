@@ -305,7 +305,7 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.2.0';
+  var APP_SCRIPT_VERSION = '3.2.1';
   var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
   ```
 
@@ -762,7 +762,8 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 
 - 新建「帮我做」默认 `Agent_Provider=multica`。旧行保持 `legacy_memory` 或空值，仍走上面的 memory-service / Dify 路径，不会自动迁移。
 - 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。PAT 只留在扩展 session；勾选「记住这台设备」才进本机 local storage。PAT、webhook URL 不进 Messages、不进日志、不进页面可复制内容。
-- Jira Executor Rule ≥ 1.8.0 在 `agentProvider=multica` 时直接 POST `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。
+- 自托管地址可以是用户自己填写的 HTTP 或 HTTPS。默认官方地址仍是 HTTPS。HTTP 会在界面标明 PAT 明文发送。验证请求从扩展后台发出，定时消息页面的 Network 面板看不到它。
+- Jira Executor Rule ≥ 1.8.1 在 `agentProvider=multica` 时按领取结果里的协议 POST `http://{host}/{path}` 或 `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。
 - 保存不会立即执行。Jira 规则还没写上调度校验值时，行保持暂停，回执是「Multica 已创建，计划尚未启用」。成功回执是「已安排，时间由 Jira 触发；执行与结果在 Multica」。
 - 断开连接只删除本机 PAT，不停止已经接好的 Webhook 和周期任务。复制表格时 Multica 行会被暂停，绑定表不跟着复制；spreadsheet id 对不上时脚本清掉 webhook。
 - Messages 2.14 只增加公开列：`Agent_Provider`、`Agent_Binding_ID`、`Agent_Multica_Workspace_ID`、`Agent_Multica_Workspace_Slug`、`Agent_Multica_Agent_ID`、`Agent_Multica_Project_ID`、`Agent_Multica_Autopilot_ID`、`Agent_Multica_Trigger_ID`、`Agent_Multica_Web_Origin`、`Agent_Multica_Api_Origin`、`Agent_Multica_User_ID`、`Agent_Provision_State`、`Agent_Content_Revision`。Webhook URL 在隐藏表 `_AgentBindings`。

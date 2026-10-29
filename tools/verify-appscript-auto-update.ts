@@ -22,10 +22,10 @@ const managerSource = readFileSync(
   'utf8',
 );
 const setupFixture = '12345678-1234-1234-1234-123456789abc';
-const blankSetup = "var FRESH_SETUP_TOKEN = '';\nvar APP_SCRIPT_VERSION = '3.2.0';";
+const blankSetup = "var FRESH_SETUP_TOKEN = '';\nvar APP_SCRIPT_VERSION = '3.2.1';";
 const preservedSetup = preserveAppScriptSetupCapability(blankSetup, `var FRESH_SETUP_TOKEN = '${setupFixture}';`);
 assert.ok(preservedSetup.includes(JSON.stringify(setupFixture)), 'normal updates must preserve the project setup capability');
-assert.ok(preservedSetup.includes("APP_SCRIPT_VERSION = '3.2.0'"), 'new template code must still be used');
+assert.ok(preservedSetup.includes("APP_SCRIPT_VERSION = '3.2.1'"), 'new template code must still be used');
 assert.equal(preserveAppScriptSetupCapability(blankSetup, blankSetup), blankSetup, 'standard projects keep setup disabled');
 assert.equal(preserveAppScriptSetupCapability(blankSetup, 'legacy code'), blankSetup);
 assert.throws(() => preserveAppScriptSetupCapability('var other = 1;', `var FRESH_SETUP_TOKEN = '${setupFixture}';`), /declaration_missing/);

@@ -47,6 +47,10 @@ test('webhook URL must match the selected API origin and stay free of query secr
   const resolved = resolveWebhookUrl({ apiOrigin: API, webhookUrl: WEBHOOK });
   assert.equal(resolved.host, 'api.multica.ai');
   assert.equal(resolved.path, 'api/webhooks/autopilots/goodtoken');
+  assert.equal(resolveWebhookUrl({
+    apiOrigin: 'http://task.xmnup.com',
+    webhookUrl: 'http://task.xmnup.com/api/webhooks/autopilots/goodtoken',
+  }).host, 'task.xmnup.com');
   assert.throws(() => resolveWebhookUrl({ apiOrigin: API, webhookUrl: 'https://evil.example/api/webhooks/autopilots/goodtoken' }), /不一致/);
   assert.throws(() => resolveWebhookUrl({ apiOrigin: API, webhookUrl: `${WEBHOOK}?x=1` }), /查询/);
 });
@@ -156,6 +160,39 @@ test('extension status never returns PAT and rejects untrusted pages or foreign 
     data: { workspaceId: 'ws_other_1' },
   }, sender, { extensionId: 'ext', session, local });
   assert.equal(foreign.code, 'workspace_rejected');
+});
+
+test('self-hosted http verify calls the API instead of failing before the request', async () => {
+  const calls: string[] = [];
+  const session = memoryStore();
+  const local = memoryStore();
+  const result = await handleMulticaExtensionMessage({
+    type: 'MULTICA_VERIFY',
+    data: {
+      apiOrigin: 'http://task.xmnup.com/',
+      webOrigin: 'http://task.xmnup.com/',
+      pat: 'pat_secret_value',
+      remember: false,
+    },
+  }, { id: 'ext', url: 'chrome-extension://ext/scheduled-messages.html' }, {
+    extensionId: 'ext',
+    session,
+    local,
+    clientFactory: () => ({
+      async getMe() {
+        calls.push('me');
+        return { id: 'user_12345678', label: 'E' };
+      },
+      async listWorkspaces() {
+        calls.push('workspaces');
+        return [{ id: 'ws_12345678', slug: 'personal', name: 'Personal' }];
+      },
+    }) as never,
+  });
+  assert.deepEqual(calls, ['me', 'workspaces']);
+  assert.equal(result.success, true);
+  assert.equal(result.connection?.apiOrigin, 'http://task.xmnup.com');
+  assert.equal(JSON.stringify(result).includes('pat_secret_value'), false);
 });
 
 function provisionHarness(options?: { failCreate?: Error; webhookUrl?: string }) {
@@ -340,6 +377,7 @@ test('Apps Script refuses a copied spreadsheet and does not put the full webhook
   `, context);
   const claim = context.result as Record<string, string>;
   assert.equal(claim.agentProvider, 'multica');
+  assert.equal(claim.multicaWebhookScheme, 'https');
   assert.equal(claim.multicaWebhookHost, 'api.multica.ai');
   assert.equal(claim.multicaWebhookPath, 'api/webhooks/autopilots/goodtoken');
   assert.equal(Object.prototype.hasOwnProperty.call(claim, 'webhookUrl'), false);

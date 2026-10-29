@@ -11,6 +11,7 @@ import {
   MULTICA_CAPABILITY_KEY,
   MULTICA_RULE_STAMP_KEY,
   ensureSchedulerCapability,
+  sendMulticaExtensionMessage,
   type KeyValueStorage,
 } from './multicaConnection.js';
 import {
@@ -31,10 +32,8 @@ function browserLocal(): KeyValueStorage {
   };
 }
 
-async function sendMultica(type: string, data?: Record<string, unknown>): Promise<any> {
-  const response = await chrome.runtime.sendMessage({ type, data });
-  if (!response?.success) throw new Error(response?.error || 'Multica 请求失败');
-  return response;
+function sendMultica(type: string, data?: Record<string, unknown>): Promise<any> {
+  return sendMulticaExtensionMessage(type, data);
 }
 
 export function createChromeMulticaRemote(): MulticaProvisionRemote {

@@ -111,8 +111,8 @@ export function assertHttpsOrigin(value: string, label = '地址'): string {
   } catch {
     throw new Error(`${label}不是有效的 URL`);
   }
-  if (url.protocol !== 'https:') {
-    throw new Error(`${label}必须使用 HTTPS`);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(`${label}只能使用 HTTP 或 HTTPS`);
   }
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/') {
     throw new Error(`${label}只能是源站，不能带路径、查询或账号`);
@@ -172,7 +172,7 @@ export function resolveWebhookUrl(input: {
   } catch {
     throw new Error('Webhook URL 无法解析');
   }
-  if (url.protocol !== 'https:') throw new Error('Webhook 必须是 HTTPS');
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Webhook 必须是 HTTP 或 HTTPS');
   if (url.origin !== origin) throw new Error('Webhook host 与已选 API 地址不一致');
   if (!url.pathname.startsWith(MULTICA_WEBHOOK_PATH_PREFIX)) {
     throw new Error('Webhook 路径不在 Autopilot 入口前缀内');
