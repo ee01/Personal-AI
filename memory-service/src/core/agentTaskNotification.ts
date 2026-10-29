@@ -514,7 +514,7 @@ export async function formatSuccessNotificationWithTemplate(input: {
             templateRequestsLinks(template)
               ? [
                   '用户模板要求列表项带可点击链接（markdown `[text](url)`，或模板文字写了要带链接 / link）。',
-                  '模板里的 xxx、Nova-xxx、http://xxx 只是占位示例：请替换成证据里的真实条目，并输出 markdown 链接，不要把标识写成纯文本。',
+                  '模板里的 xxx、{xxx}、Nova-xxx、http://xxx 只是占位示例：请替换成证据里的真实条目，并输出 markdown 链接，不要把标识写成纯文本。',
                   '证据里已有 URL 时必须用证据 URL；证据没有完整 URL 时，按模板给出的链接格式补全可点击地址，不要照抄 xxx 占位符。',
                 ].join('')
               : '',
@@ -911,7 +911,11 @@ function isTemplatePlaceholderLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
   if (trimmed === '*' || trimmed === '* ...' || trimmed === '...') return true;
-  return trimmed.startsWith('*') && (/xxx/i.test(trimmed) || trimmed.includes('...'));
+  // Users naturally reach for bullet markers (- / •) and {variable} braces besides
+  // the * xxx / ... convention; any of those marks a list row to fill, while a
+  // plain prose line stays part of the frame.
+  if (!/^[*\-•]/.test(trimmed)) return false;
+  return /xxx/i.test(trimmed) || trimmed.includes('...') || /\{[^{}\s][^{}]*\}/.test(trimmed);
 }
 
 function looksLikeListContent(content: string): boolean {
