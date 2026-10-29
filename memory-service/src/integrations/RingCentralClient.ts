@@ -330,6 +330,10 @@ export class RingCentralClient {
 
   private getRuntimeConfig() {
     const base = getUserRuntimeConfig(this.userDataManager);
+    // Legacy settings sometimes contain a pasted label / markdown wrapper.
+    // Extract only a single complete JWT; never choose between multiple tokens.
+    const matches = base.ringCentralJwt?.match(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g);
+    if (matches?.length === 1) base.ringCentralJwt = matches[0];
     if (!this.explicitCredentials) return base;
     return {
       ...base,

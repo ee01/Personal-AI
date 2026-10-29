@@ -43,6 +43,20 @@ describe('RingCentralClient', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('accepts one JWT pasted with a label without sending the wrapper as assertion',async()=>{
+    const jwt='eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature';
+    const config=JSON.parse(userDataManager.readFile('config.json')!);
+    userDataManager.writeFile('config.json',JSON.stringify({...config,ringCentralJwt:`JWT: \`${jwt}\``}));
+    fetchMock.mockImplementation(async(input: RequestInfo|URL,init:RequestInit)=>{
+      if(String(input).endsWith('/restapi/oauth/token')){
+        expect(new URLSearchParams(String(init.body)).get('assertion')).toBe(jwt);
+        return{ok:true,status:200,text:async()=>JSON.stringify({access_token:'a',expires_in:3600})};
+      }
+      return{ok:true,status:200,text:async()=>JSON.stringify({records:[]})};
+    });
+    expect(await new RingCentralClient(userDataManager).listPosts('group-1')).toEqual([]);
+  });
+
   it('reuses shared auth token and extension directory cache across instances', async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);

@@ -86,6 +86,48 @@ describe('NotificationCenterService', () => {
     });
   });
 
+  it('persists queue acceptance as pending and never resends an unverified source', async () => {
+    const fetchMock=vi.fn().mockResolvedValue({ok:true,status:201,text:async()=>JSON.stringify({data:{queueId:'q1'},message:'success'})});
+    vi.stubGlobal('fetch',fetchMock);
+    const service=new NotificationCenterService(db,()=>({botApiBaseUrl:'https://bot.example',botToken:'t',botId:'bot',botType:'user',botTeamId:'',botTargetEmail:''}));
+    const input={sourceRef:'queued-result',title:'',body:'notice',targetGroupId:'chat-1'};
+    expect((await service.deliverNoticeToGlip(input)).sent).toBe(false);
+    const row=db.prepare('SELECT status,external_ref,first_delivered_at FROM channel_delivery_records WHERE source_ref=?').get(input.sourceRef) as any;
+    expect(row).toMatchObject({status:'pending',external_ref:null,first_delivered_at:null});
+    const receipt=db.prepare('SELECT target_chat_id,queue_id,post_id,stage,response_json FROM bot_delivery_attempts WHERE source_ref=?').get(input.sourceRef) as any;
+    expect(receipt).toMatchObject({target_chat_id:'chat-1',queue_id:'q1',post_id:null,stage:'pending'});
+    expect(receipt.response_json).not.toContain('botToken');
+    await service.deliverNoticeToGlip(input);expect(fetchMock).toHaveBeenCalledTimes(1);
+    const reconciler=new NotificationCenterService(db,undefined,async()=>({messageId:'late-post',chatId:'chat-1'}));
+    expect(await reconciler.reconcilePendingGlipNotices()).toBe(1);
+    const resolved=db.prepare('SELECT status,external_ref FROM channel_delivery_records WHERE source_ref=?').get(input.sourceRef);
+    expect(resolved).toMatchObject({status:'delivered',external_ref:'late-post'});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rotates past missing pending posts so they cannot starve later readbacks',async()=>{
+    const service=new NotificationCenterService(db,undefined,async input=>input.chatId==='late-chat'?{messageId:'late-proof',chatId:input.chatId}:undefined);
+    for(let i=0;i<6;i++){
+      const source=`rotate-${i}`;
+      service.recordDelivery([{sourceRef:source,channel:'glip',lane:'notice',status:'pending'}]);
+      db.prepare("INSERT INTO bot_delivery_attempts(source_ref,target_chat_id,stage,response_json,created_at) VALUES (?,?,'pending','{}',?)")
+        .run(source,i===5?'late-chat':'missing-chat',Math.floor(Date.now()/1000));
+    }
+    expect(await service.reconcilePendingGlipNotices()).toBe(0);
+    expect(await service.reconcilePendingGlipNotices()).toBe(1);
+  });
+
+  it('marks a group delivered only after readback and saves the real post ID',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,status:201,text:async()=>JSON.stringify({data:{queueId:'q2'}})}));
+    const verify=vi.fn().mockResolvedValue({messageId:'real-post',chatId:'chat-2'});
+    const service=new NotificationCenterService(db,()=>({botApiBaseUrl:'https://bot.example',botToken:'t',botId:'bot',botType:'user',botTeamId:'',botTargetEmail:''}),verify);
+    const result=await service.deliverNoticeToGlip({sourceRef:'verified-result',title:'',body:'notice',targetGroupId:'chat-2'});
+    expect(result).toMatchObject({sent:true,messageId:'real-post',queueId:'q2',chatId:'chat-2'});
+    const row=db.prepare('SELECT status,external_ref FROM channel_delivery_records WHERE source_ref=?').get('verified-result');
+    expect(row).toMatchObject({status:'delivered',external_ref:'real-post'});
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
   it('classifies and filters channel feed by delivery receipts', () => {
     const now = Math.floor(Date.now() / 1000);
 

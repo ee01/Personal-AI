@@ -30,6 +30,10 @@ import { tickAutoBackups, tickMirrors } from './AutoBackupService.js';
 import { sweepExpiredExportJobs } from './ExportJobService.js';
 import { TaskCenterMaintenanceService } from './TaskCenterMaintenanceService.js';
 import { ActionExecutor } from './actions/ActionExecutor.js';
+import { NotificationCenterService } from './NotificationCenterService.js';
+import { RingCentralClient } from '../integrations/RingCentralClient.js';
+import { groupPostVerifier } from '../utils/botDeliveryVerifier.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 
 // Usage-analytics rollup cron schedules (independent of proactive features).
 const USAGE_ROLLUP_HOURLY_CRON = '0 * * * *';
@@ -98,6 +102,7 @@ export class ProactiveScheduler {
     if (process.env.TASK_DRAIN_SCHEDULER_ENABLED !== 'false') {
       this.taskDrainIntervalId = setInterval(() => {
         this.safeRun('taskDrain', () => this.runTaskDrainCycle());
+        this.safeRun('botDeliveryReadback', () => this.runBotDeliveryReadbackCycle());
       }, config.taskDrainIntervalMs);
       startedLoops.push(`taskDrain every ${config.taskDrainIntervalMs}ms`);
     } else {
@@ -297,6 +302,20 @@ export class ProactiveScheduler {
           `[ProactiveScheduler] Task drain error for user ${userId}:`,
           (err as Error).message,
         );
+      }
+    }
+  }
+
+  private async runBotDeliveryReadbackCycle(): Promise<void> {
+    for(const userId of this.ucm.getRegisteredUserIds()) {
+      try {
+        const ctx=this.ucm.getContext(userId);
+        const runtime=getUserRuntimeConfig(ctx.userDataManager);
+        await new NotificationCenterService(ctx.db,()=>runtime,
+          groupPostVerifier(new RingCentralClient(ctx.userDataManager,ctx.db,userId),runtime.botId))
+          .reconcilePendingGlipNotices();
+      } catch(error) {
+        console.error(`[ProactiveScheduler] Bot readback error for ${userId}:`,(error as Error).message);
       }
     }
   }

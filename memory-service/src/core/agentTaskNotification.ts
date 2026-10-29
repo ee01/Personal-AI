@@ -12,6 +12,8 @@ import {
 } from '../integrations/executors/agentResultEnvelope.js';
 import { RingCentralClient } from '../integrations/RingCentralClient.js';
 import { composeNoticeMarkdown } from '../utils/botSender.js';
+import { groupPostVerifier } from '../utils/botDeliveryVerifier.js';
+import { getUserRuntimeConfig } from '../runtimeConfig.js';
 import { getLLMClient, type LLMOptions, type LLMResponse } from '../llm/LLMClient.js';
 import type { QueuedActionRecord } from '../repositories/ActionRepository.js';
 import { ActionRepository } from '../repositories/ActionRepository.js';
@@ -1317,7 +1319,9 @@ export async function deliverAgentTaskRunNotifications(input: {
     });
   }
 
-  const notificationService = new NotificationCenterService(input.db);
+  const runtime = getUserRuntimeConfig(input.userDataManager);
+  const notificationService = new NotificationCenterService(input.db, () => runtime,
+    groupPostVerifier(new RingCentralClient(input.userDataManager, input.db, ownerUserId), runtime.botId));
   const deliveryRepo = new ChannelDeliveryRepository(input.db);
   const errors: string[] = [];
   let delivered = 0;
@@ -1400,6 +1404,10 @@ export async function deliverAgentTaskRunNotifications(input: {
     });
     if (botResult.sent) {
       delivered += 1;
+    } else if (botResult.accepted || botResult.uncertain) {
+      // Queued / readback pending is not a delivery failure. Keep its receipt
+      // and do not issue another message (including an owner escalation).
+      errors.push(botResult.error || 'delivery_pending');
     } else {
       const err = botResult.error || 'Bot notify failed';
       errors.push(err);

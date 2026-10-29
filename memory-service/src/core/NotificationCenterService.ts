@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 
 import {
   ChannelDeliveryRepository,
@@ -10,6 +11,7 @@ import {
 import {
   BotSender,
   getBotSender,
+  composeNoticeMarkdown,
   type BotConfig,
   type BotSendResult,
 } from '../utils/botSender.js';
@@ -65,7 +67,7 @@ export interface NotificationSnoozeReceipt {
 
 export interface NotificationChannelReceipt {
   channel: DeliveryChannel;
-  state: 'not_attempted' | 'delivered' | 'failed' | 'clicked' | 'dismissed';
+  state: 'not_attempted' | 'delivered' | 'failed' | 'pending' | 'clicked' | 'dismissed';
   label: string;
   detail: string;
   status?: DeliveryStatus;
@@ -434,6 +436,8 @@ function buildChannelReceiptBaseLabel(record: ChannelDeliveryRecord): string {
       return '已送达';
     case 'failed':
       return '发送失败';
+    case 'pending':
+      return '已入队，待核验';
     default:
       return record.effectiveStatus;
   }
@@ -461,6 +465,8 @@ function buildChannelReceiptEffectiveDetail(
       return record.lastError
         ? `最近一次渠道发送失败：${record.lastError}`
         : '最近一次渠道发送失败';
+    case 'pending':
+      return '发送接口已接收，尚未在目标会话核验到消息；不会自动重复发送';
     default:
       return '该渠道已有回执记录';
   }
@@ -856,6 +862,9 @@ export class NotificationCenterService {
   constructor(
     private readonly db: Database.Database,
     private readonly botConfigProvider?: () => BotConfig,
+    private readonly verifyGroupPost?: (input: {
+      chatId: string; messageId?: string; text?: string; textHash?: string; sinceAt: number;
+    }) => Promise<{ messageId: string; chatId: string } | undefined>,
   ) {
     this.channelDeliveryRepository = new ChannelDeliveryRepository(db);
   }
@@ -1299,24 +1308,88 @@ export class NotificationCenterService {
       return result;
     }
 
-    const result = await botSender.sendMarkdown(input.title, input.body, {
+    const existing = this.channelDeliveryRepository.getRecord(input.sourceRef, 'glip', 'notice');
+    if (existing?.externalRef && existing.hasSuccessfulDelivery) return { sent: true, messageId: existing.externalRef };
+    // A queued request may already produce a post. Never send it a second time.
+    if (existing?.status === 'pending') {
+      const previous=this.db.prepare('SELECT queue_id FROM bot_delivery_attempts WHERE source_ref=? ORDER BY id DESC LIMIT 1')
+        .get(input.sourceRef) as {queue_id?:string}|undefined;
+      return {sent:false,accepted:Boolean(previous?.queue_id),uncertain:!previous?.queue_id,
+        queueId:previous?.queue_id||undefined,error:existing.lastError||'delivery_pending'};
+    }
+    const sinceAt = Date.now() / 1000;
+    let result = await botSender.sendMarkdown(input.title, input.body, {
       mention: input.mention,
       targetUserId: input.targetUserId,
       targetGroupId: input.targetGroupId,
     });
+
+    if (input.targetGroupId && (result.accepted || result.uncertain)) {
+      result = { ...result, sent: false, error: 'delivery_pending: target chat readback required' };
+      if (this.verifyGroupPost) {
+        try {
+          for (const delay of [0, 1000, 2000]) {
+            if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+            const proof = await this.verifyGroupPost({ chatId: input.targetGroupId,
+              messageId: result.messageId, text: composeNoticeMarkdown(input.title, input.body), sinceAt });
+            if (proof && proof.chatId === input.targetGroupId && proof.messageId) {
+              result = { ...result, sent: true, accepted:true, uncertain:false, messageId: proof.messageId, chatId: proof.chatId, error: undefined };
+              break;
+            }
+          }
+        } catch (error) {
+          result.error = `delivery_pending: readback failed (${error instanceof Error ? error.message : String(error)})`;
+        }
+      }
+    }
+    // Keep only receipt fields, never tokens, headers, message content or an
+    // arbitrary provider response that might echo credentials.
+    const receipt = { accepted: result.accepted, uncertain:result.uncertain, queueId: result.queueId, postId: result.messageId,
+      chatId: result.chatId, httpStatus: result.status, verified: result.sent,
+      textHash: createHash('sha256').update(composeNoticeMarkdown(input.title,input.body).trim().replace(/\r\n/g,'\n')).digest('hex') };
+    this.db.prepare(`INSERT INTO bot_delivery_attempts
+      (source_ref,target_chat_id,queue_id,post_id,http_status,response_json,stage,error,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(input.sourceRef,input.targetGroupId||null,result.queueId||null,
+        result.messageId||null,result.status||null,JSON.stringify(receipt),
+        result.sent?'delivered':result.accepted||result.uncertain?'pending':'failed',result.error||null,now());
 
     this.recordDelivery([
       {
         sourceRef: input.sourceRef,
         channel: 'glip',
         lane: 'notice',
-        status: result.sent ? 'delivered' : 'failed',
-        externalRef: result.messageId,
+        status: result.sent ? 'delivered' : result.accepted || result.uncertain ? 'pending' : 'failed',
+        externalRef: result.sent ? result.messageId : undefined,
         error: result.error,
       },
     ]);
 
     return result;
+  }
+
+  /** Recheck accepted queues; this path never sends another message. */
+  async reconcilePendingGlipNotices(): Promise<number> {
+    if (!this.verifyGroupPost) return 0;
+    const rows=this.db.prepare(`SELECT a.* FROM bot_delivery_attempts a
+      JOIN channel_delivery_records c ON c.source_ref=a.source_ref AND c.channel='glip' AND c.lane='notice'
+      WHERE c.status='pending' AND a.stage='pending' AND a.target_chat_id IS NOT NULL
+      AND a.id=(SELECT MAX(b.id) FROM bot_delivery_attempts b WHERE b.source_ref=a.source_ref)
+      AND a.created_at >= ? ORDER BY COALESCE(a.last_checked_at,0),a.id LIMIT 5`).all(now()-86400) as Array<any>;
+    let verified=0;
+    for(const row of rows){
+      try{
+        const receipt=JSON.parse(row.response_json||'{}');
+        const proof=await this.verifyGroupPost({chatId:row.target_chat_id,messageId:row.post_id||undefined,
+          textHash:receipt.textHash,sinceAt:row.created_at-1});
+        if(!proof||proof.chatId!==row.target_chat_id)continue;
+        this.channelDeliveryRepository.upsertEvents([{sourceRef:row.source_ref,channel:'glip',lane:'notice',status:'delivered',externalRef:proof.messageId}]);
+        receipt.verified=true;receipt.postId=proof.messageId;receipt.chatId=proof.chatId;receipt.verifiedAt=new Date().toISOString();
+        this.db.prepare("UPDATE bot_delivery_attempts SET stage='delivered',post_id=?,response_json=?,error=NULL WHERE id=? AND stage='pending'").run(proof.messageId,JSON.stringify(receipt),row.id);
+        verified++;
+      }catch{/* Keep the accepted request pending; never replay on read errors. */}
+      finally{this.db.prepare('UPDATE bot_delivery_attempts SET last_checked_at=? WHERE id=?').run(now(),row.id);}
+    }
+    return verified;
   }
 
   formatTodoDigest(

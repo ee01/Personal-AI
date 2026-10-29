@@ -4,7 +4,7 @@ import { now } from '../utils/time.js';
 
 export type DeliveryChannel = 'chrome' | 'doubao' | 'glip';
 export type DeliveryLane = 'todo' | 'notice';
-export type DeliveryStatus = 'delivered' | 'failed' | 'clicked' | 'dismissed';
+export type DeliveryStatus = 'delivered' | 'failed' | 'pending' | 'clicked' | 'dismissed';
 
 export interface ChannelDeliveryRecord {
   sourceRef: string;
@@ -178,7 +178,7 @@ export class ChannelDeliveryRepository {
           event.lane,
           event.status,
           event.externalRef ?? null,
-          event.status === 'failed' ? event.error ?? 'delivery_failed' : null,
+          event.status === 'failed' || event.status === 'pending' ? event.error ?? 'delivery_pending' : null,
           isDelivered ? recordedAt : null,
           isDelivered ? recordedAt : null,
           isClicked ? recordedAt : null,

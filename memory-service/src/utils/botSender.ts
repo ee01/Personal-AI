@@ -12,6 +12,10 @@ export type BotConfig = Pick<Config, 'botApiBaseUrl' | 'botToken' | 'botId' | 'b
 
 export interface BotSendResult {
   sent: boolean;
+  accepted?: boolean;
+  uncertain?: boolean;
+  queueId?: string;
+  chatId?: string;
   status?: number;
   statusText?: string;
   messageId?: string;
@@ -125,7 +129,6 @@ export class BotSender {
       if (!response.ok) {
         console.error(
           `[BotSender] Bot API error: ${response.status} ${response.statusText}`,
-          responseBody ? `\nResponse body: ${responseBody.slice(0, 500)}` : '',
         );
         return {
           sent: false,
@@ -135,24 +138,42 @@ export class BotSender {
           error: `Bot API error: ${response.status} ${response.statusText}`,
         };
       } else {
-        console.log(`[BotSender] Message sent: "${title}"`);
         let messageId: string | undefined;
+        let queueId: string | undefined;
+        let chatId: string | undefined;
         try {
           const parsed = responseBody ? JSON.parse(responseBody) as Record<string, unknown> : null;
-          if (parsed && typeof parsed.id === 'string') {
-            messageId = parsed.id;
-          } else if (parsed && typeof parsed.messageId === 'string') {
-            messageId = parsed.messageId;
+          const nested = parsed?.data && typeof parsed.data === 'object' ? parsed.data as Record<string, unknown> : {};
+          const levels = [parsed, nested].filter(Boolean) as Record<string, unknown>[];
+          const text = (key: string) => levels.map(level => level[key]).find(value => typeof value === 'string' && value.trim()) as string | undefined;
+          const rejected = levels.some(level => level.success === false || level.accepted === false ||
+            ['failed', 'failure', 'error', 'rejected', 'denied'].includes(String(level.status || '').toLowerCase()) ||
+            Boolean(level.error) || Boolean(level.detail) || (Array.isArray(level.errors) && level.errors.length > 0) ||
+            (level.code !== undefined && /^\d+$/.test(String(level.code)) && Number(level.code) !== 0 &&
+              (Number(level.code) < 200 || Number(level.code) >= 300)));
+          if (rejected) return { sent: false, accepted: false, status: response.status, responseBody,
+            error: `Bot API rejected: ${text('error') || text('detail') || text('message') || 'business_error'}` };
+          messageId = text('postId') || text('messageId') || text('id');
+          queueId = text('queueId');
+          chatId = text('chatId') || text('groupId');
+          if (useTeamTarget && chatId && chatId !== targetTeamId) {
+            return { sent: false, accepted: false, status: response.status, responseBody,
+              error: 'Bot API receipt chat does not match requested target' };
           }
         } catch {
-          // ignore parse failures, keep raw body only
+          // An HTML page / empty 2xx is not evidence of a message being accepted.
         }
         return {
-          sent: true,
+          sent: Boolean(messageId),
+          accepted: Boolean(messageId || queueId),
+          uncertain: !messageId && !queueId,
+          queueId,
+          chatId,
           status: response.status,
           statusText: response.statusText,
           messageId,
           responseBody,
+          ...(!messageId ? { error: queueId ? 'delivery_pending: Bot API queued the message' : 'delivery_unverified: no message receipt' } : {}),
         };
       }
     } catch (err) {
@@ -160,6 +181,7 @@ export class BotSender {
       console.error('[BotSender] Failed to send message:', message);
       return {
         sent: false,
+        uncertain: true,
         error: message,
       };
     }
