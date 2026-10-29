@@ -1,4 +1,4 @@
-import { MulticaClient, type MulticaAgent, type MulticaProject, type MulticaRuntime, type MulticaWorkspace } from './multicaClient.js';
+import { MulticaApiError, MulticaClient, type MulticaAgent, type MulticaProject, type MulticaRuntime, type MulticaWorkspace } from './multicaClient.js';
 import {
   OFFICIAL_MULTICA_API_ORIGIN,
   OFFICIAL_MULTICA_WEB_ORIGIN,
@@ -153,6 +153,55 @@ export interface MulticaHandlerResult {
   trigger?: { id: string; webhookUrl: string; webhookPath: string };
   remotePlansStopped?: boolean;
   message?: string;
+  upgradedFromHttp?: boolean;
+}
+
+function normalizeMulticaPat(value: string): string {
+  const pat = value.trim();
+  if (!pat) throw new Error('缺少 PAT');
+  for (let index = 0; index < pat.length; index += 1) {
+    const code = pat.charCodeAt(index);
+    if (code < 32 || code === 127 || code > 255) {
+      throw new Error('PAT 里有换行或特殊字符，请求还没发出去。请重新复制，只保留一行 token。');
+    }
+  }
+  return pat;
+}
+
+function httpsUpgradeOrigin(origin: string): string {
+  return origin.startsWith('http://') ? `https://${origin.slice('http://'.length)}` : '';
+}
+
+function sameOriginHost(left: string, right: string): boolean {
+  try {
+    return new URL(left).host === new URL(right).host;
+  } catch {
+    return false;
+  }
+}
+
+function isConnectFailure(error: unknown): boolean {
+  return error instanceof MulticaApiError && error.code === 'network';
+}
+
+async function probeMulticaAccount(
+  apiOrigin: string,
+  webOrigin: string,
+  pat: string,
+  remember: boolean,
+  deps: {
+    clientFactory?: (connection: StoredMulticaConnection) => MulticaClient;
+  },
+): Promise<{ account: { id: string; label: string }; workspaces: MulticaWorkspace[] }> {
+  const probing = deps.clientFactory
+    ? deps.clientFactory({
+      apiOrigin, webOrigin, pat, userId: '', accountLabel: '', workspaceId: '', workspaceSlug: '',
+      allowedWorkspaceIds: [], remember,
+    })
+    : new MulticaClient({ apiOrigin, pat });
+  const account = await probing.getMe();
+  const workspaces = await probing.listWorkspaces();
+  return { account, workspaces };
 }
 
 export async function handleMulticaExtensionMessage(
@@ -184,30 +233,49 @@ export async function handleMulticaExtensionMessage(
       };
     }
     if (type === 'MULTICA_VERIFY') {
-      const pat = String(data.pat || '');
-      const apiOrigin = assertHttpsOrigin(String(data.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN), 'API 地址');
-      const webOrigin = assertHttpsOrigin(String(data.webOrigin || OFFICIAL_MULTICA_WEB_ORIGIN), '网页地址');
-      const probing = deps.clientFactory
-        ? deps.clientFactory({
-          apiOrigin, webOrigin, pat, userId: '', accountLabel: '', workspaceId: '', workspaceSlug: '',
-          allowedWorkspaceIds: [], remember: data.remember === true,
-        })
-        : new MulticaClient({ apiOrigin, pat });
-      const account = await probing.getMe();
-      const workspaces = await probing.listWorkspaces();
+      const pat = normalizeMulticaPat(String(data.pat || ''));
+      let apiOrigin = assertHttpsOrigin(String(data.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN), 'API 地址');
+      let webOrigin = assertHttpsOrigin(String(data.webOrigin || OFFICIAL_MULTICA_WEB_ORIGIN), '网页地址');
+      let upgradedFromHttp = false;
+      let probed: { account: { id: string; label: string }; workspaces: MulticaWorkspace[] };
+      try {
+        probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, data.remember === true, deps);
+      } catch (error) {
+        const httpsOrigin = httpsUpgradeOrigin(apiOrigin);
+        if (!httpsOrigin || !isConnectFailure(error)) throw error;
+        try {
+          probed = await probeMulticaAccount(httpsOrigin, webOrigin, pat, data.remember === true, deps);
+          if (httpsUpgradeOrigin(webOrigin) && sameOriginHost(webOrigin, apiOrigin)) {
+            webOrigin = httpsUpgradeOrigin(webOrigin);
+          }
+          apiOrigin = httpsOrigin;
+          upgradedFromHttp = true;
+        } catch (httpsError) {
+          throw new Error(`${failureMessage(error)}。同主机的 HTTPS 也失败：${failureMessage(httpsError)}`);
+        }
+      }
       const connection: StoredMulticaConnection = {
         apiOrigin,
         webOrigin,
         pat,
-        userId: account.id,
-        accountLabel: account.label,
+        userId: probed.account.id,
+        accountLabel: probed.account.label,
         workspaceId: '',
         workspaceSlug: '',
-        allowedWorkspaceIds: workspaces.map((item) => item.id),
+        allowedWorkspaceIds: probed.workspaces.map((item) => item.id),
         remember: data.remember === true,
       };
       await saveStoredConnection(deps.session, deps.local, connection);
-      return { success: true, connection: toPublicConnection(connection), workspaces };
+      const label = probed.account.label || '账号';
+      return {
+        success: true,
+        connection: toPublicConnection(connection),
+        workspaces: probed.workspaces,
+        upgradedFromHttp,
+        message: upgradedFromHttp
+          ? `已验证 ${label}。浏览器没有把 HTTP 请求发出去，已改用 ${apiOrigin}。请选择 workspace。`
+          : undefined,
+      };
     }
     const stored = await loadStoredConnection(deps.session, deps.local);
     if (!stored) return { success: false, error: '尚未验证 Multica 连接', code: 'not_connected' };

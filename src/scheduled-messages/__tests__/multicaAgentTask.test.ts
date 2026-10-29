@@ -127,6 +127,17 @@ test('client rejects paths outside the allowlist and does not follow redirects o
     (error: unknown) => error instanceof MulticaApiError && error.code === 'path_rejected',
   );
   assert.equal(calls.length, 1);
+  const offline = new MulticaClient({
+    apiOrigin: API,
+    pat: 'pat_secret_value',
+    fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+  });
+  await assert.rejects(offline.getMe(), (error: unknown) => {
+    assert.ok(error instanceof MulticaApiError);
+    assert.match(error.message, /Failed to fetch/);
+    assert.equal(error.message.includes('pat_secret_value'), false);
+    return true;
+  });
 });
 
 test('extension status never returns PAT and rejects untrusted pages or foreign workspaces', async () => {
@@ -193,6 +204,51 @@ test('self-hosted http verify calls the API instead of failing before the reques
   assert.equal(result.success, true);
   assert.equal(result.connection?.apiOrigin, 'http://task.xmnup.com');
   assert.equal(JSON.stringify(result).includes('pat_secret_value'), false);
+});
+
+test('a blocked http verify retries the same host over https and a broken PAT is not sent', async () => {
+  const calls: string[] = [];
+  const session = memoryStore();
+  const local = memoryStore();
+  const sender = { id: 'ext', url: 'chrome-extension://ext/scheduled-messages.html' };
+  const blocked = await handleMulticaExtensionMessage({
+    type: 'MULTICA_VERIFY',
+    data: {
+      apiOrigin: 'http://task.xmnup.com/',
+      webOrigin: 'http://task.xmnup.com/',
+      pat: 'pat_secret_value',
+    },
+  }, sender, {
+    extensionId: 'ext',
+    session,
+    local,
+    clientFactory: (connection) => {
+      calls.push(connection.apiOrigin);
+      if (connection.apiOrigin.startsWith('http://')) {
+        throw new MulticaApiError('无法连接 Multica API：Failed to fetch', 0, 'network');
+      }
+      return {
+        async getMe() { return { id: 'user_12345678', label: 'E' }; },
+        async listWorkspaces() { return [{ id: 'ws_12345678', slug: 'personal', name: 'Personal' }]; },
+      } as never;
+    },
+  });
+  assert.deepEqual(calls, ['http://task.xmnup.com', 'https://task.xmnup.com']);
+  assert.equal(blocked.success, true);
+  assert.equal(blocked.upgradedFromHttp, true);
+  assert.equal(blocked.connection?.apiOrigin, 'https://task.xmnup.com');
+  assert.equal(blocked.connection?.webOrigin, 'https://task.xmnup.com');
+  const dirty = await handleMulticaExtensionMessage({
+    type: 'MULTICA_VERIFY',
+    data: { apiOrigin: 'https://api.multica.ai', webOrigin: 'https://multica.ai', pat: 'pat_secret\u0001value' },
+  }, sender, {
+    extensionId: 'ext',
+    session: memoryStore(),
+    local: memoryStore(),
+    clientFactory: () => { throw new Error('should not send'); },
+  });
+  assert.equal(dirty.success, false);
+  assert.match(dirty.error || '', /换行或特殊字符/);
 });
 
 function provisionHarness(options?: { failCreate?: Error; webhookUrl?: string }) {

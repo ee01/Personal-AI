@@ -96,13 +96,15 @@ export function MulticaAgentTaskPanel(props: {
       const response = await sendMultica('MULTICA_VERIFY', { apiOrigin, webOrigin, pat, remember });
       setPat('');
       setConnected(true);
+      if (response.connection?.apiOrigin) setApiOrigin(response.connection.apiOrigin);
+      if (response.connection?.webOrigin) setWebOrigin(response.connection.webOrigin);
       setAccountLabel(response.connection?.accountLabel || '');
       setUserId(response.connection?.userId || '');
       setWorkspaces(response.workspaces || []);
       setWorkspaceId('');
       setAgents([]);
       setAgentId('');
-      setStatus(`已验证 ${response.connection?.accountLabel || '账号'}。请选择 workspace。`);
+      setStatus(response.message || `已验证 ${response.connection?.accountLabel || '账号'}。请选择 workspace。`);
     } catch (error) {
       setConnected(false);
       setStatus(error instanceof Error ? error.message : '验证失败');
@@ -163,7 +165,7 @@ export function MulticaAgentTaskPanel(props: {
       )}
       {insecure && (
         <p style={hintStyle}>
-          这个地址是 HTTP，PAT 会明文发送。只填写你信任的自托管地址。
+          这个地址是 HTTP。扩展后台经常发不出 HTTP 请求，验证时会改试同主机的 HTTPS。PAT 会明文发送，只填写你信任的地址。
         </p>
       )}
       <label style={{ display: 'block', marginTop: '10px' }}>

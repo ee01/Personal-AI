@@ -190,8 +190,8 @@ export class MulticaClient {
         body: init.body ? JSON.stringify(init.body) : undefined,
         redirect: 'error',
       });
-    } catch {
-      throw new MulticaApiError('无法连接 Multica API', 0, 'network');
+    } catch (error) {
+      throw networkFailure(error, this.options.pat);
     }
     const text = await response.text();
     if (!response.ok) {
@@ -208,6 +208,21 @@ export class MulticaClient {
       throw new MulticaApiError('Multica 返回了无法解析的内容', response.status, 'invalid_response');
     }
   }
+}
+
+function networkFailure(error: unknown, pat: string): MulticaApiError {
+  let detail = '';
+  if (typeof error === 'string') detail = error;
+  else if (error && typeof error === 'object' && 'message' in error) {
+    detail = String((error as { message?: unknown }).message || '');
+  }
+  if (pat) detail = detail.split(pat).join('[REDACTED]');
+  detail = detail.replace(/\s+/g, ' ').trim().slice(0, 180);
+  return new MulticaApiError(
+    detail ? `无法连接 Multica API：${detail}` : '无法连接 Multica API',
+    0,
+    'network',
+  );
 }
 
 function safeMessage(status: number, body: string, pat: string): string {
