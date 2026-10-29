@@ -165,7 +165,7 @@ export function MulticaAgentTaskPanel(props: {
       )}
       {insecure && (
         <p style={hintStyle}>
-          这个地址是 HTTP。扩展后台经常发不出 HTTP 请求，验证时会改试同主机的 HTTPS。PAT 会明文发送，只填写你信任的地址。
+          这个地址保持 HTTP，PAT 会明文发送。扩展后台不能直接发 HTTP，验证时会短暂打开这个网站的后台标签页来发请求，然后关掉。只填写你信任的地址。
         </p>
       )}
       <label style={{ display: 'block', marginTop: '10px' }}>

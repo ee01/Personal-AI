@@ -1,4 +1,5 @@
-import { MulticaApiError, MulticaClient, type MulticaAgent, type MulticaProject, type MulticaRuntime, type MulticaWorkspace } from './multicaClient.js';
+import { MulticaClient, type MulticaAgent, type MulticaProject, type MulticaRuntime, type MulticaWorkspace } from './multicaClient.js';
+import { fetchOnInsecureOrigin } from './multicaInsecureFetch.js';
 import {
   OFFICIAL_MULTICA_API_ORIGIN,
   OFFICIAL_MULTICA_WEB_ORIGIN,
@@ -153,7 +154,6 @@ export interface MulticaHandlerResult {
   trigger?: { id: string; webhookUrl: string; webhookPath: string };
   remotePlansStopped?: boolean;
   message?: string;
-  upgradedFromHttp?: boolean;
 }
 
 function normalizeMulticaPat(value: string): string {
@@ -168,20 +168,11 @@ function normalizeMulticaPat(value: string): string {
   return pat;
 }
 
-function httpsUpgradeOrigin(origin: string): string {
-  return origin.startsWith('http://') ? `https://${origin.slice('http://'.length)}` : '';
-}
-
-function sameOriginHost(left: string, right: string): boolean {
-  try {
-    return new URL(left).host === new URL(right).host;
-  } catch {
-    return false;
-  }
-}
-
-function isConnectFailure(error: unknown): boolean {
-  return error instanceof MulticaApiError && error.code === 'network';
+function multicaClient(options: { apiOrigin: string; pat: string; workspaceId?: string }): MulticaClient {
+  return new MulticaClient({
+    ...options,
+    fetchImpl: options.apiOrigin.startsWith('http://') ? fetchOnInsecureOrigin : undefined,
+  });
 }
 
 async function probeMulticaAccount(
@@ -198,7 +189,7 @@ async function probeMulticaAccount(
       apiOrigin, webOrigin, pat, userId: '', accountLabel: '', workspaceId: '', workspaceSlug: '',
       allowedWorkspaceIds: [], remember,
     })
-    : new MulticaClient({ apiOrigin, pat });
+    : multicaClient({ apiOrigin, pat });
   const account = await probing.getMe();
   const workspaces = await probing.listWorkspaces();
   return { account, workspaces };
@@ -234,26 +225,9 @@ export async function handleMulticaExtensionMessage(
     }
     if (type === 'MULTICA_VERIFY') {
       const pat = normalizeMulticaPat(String(data.pat || ''));
-      let apiOrigin = assertHttpsOrigin(String(data.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN), 'API 地址');
-      let webOrigin = assertHttpsOrigin(String(data.webOrigin || OFFICIAL_MULTICA_WEB_ORIGIN), '网页地址');
-      let upgradedFromHttp = false;
-      let probed: { account: { id: string; label: string }; workspaces: MulticaWorkspace[] };
-      try {
-        probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, data.remember === true, deps);
-      } catch (error) {
-        const httpsOrigin = httpsUpgradeOrigin(apiOrigin);
-        if (!httpsOrigin || !isConnectFailure(error)) throw error;
-        try {
-          probed = await probeMulticaAccount(httpsOrigin, webOrigin, pat, data.remember === true, deps);
-          if (httpsUpgradeOrigin(webOrigin) && sameOriginHost(webOrigin, apiOrigin)) {
-            webOrigin = httpsUpgradeOrigin(webOrigin);
-          }
-          apiOrigin = httpsOrigin;
-          upgradedFromHttp = true;
-        } catch (httpsError) {
-          throw new Error(`${failureMessage(error)}。同主机的 HTTPS 也失败：${failureMessage(httpsError)}`);
-        }
-      }
+      const apiOrigin = assertHttpsOrigin(String(data.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN), 'API 地址');
+      const webOrigin = assertHttpsOrigin(String(data.webOrigin || OFFICIAL_MULTICA_WEB_ORIGIN), '网页地址');
+      const probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, data.remember === true, deps);
       const connection: StoredMulticaConnection = {
         apiOrigin,
         webOrigin,
@@ -266,14 +240,12 @@ export async function handleMulticaExtensionMessage(
         remember: data.remember === true,
       };
       await saveStoredConnection(deps.session, deps.local, connection);
-      const label = probed.account.label || '账号';
       return {
         success: true,
         connection: toPublicConnection(connection),
         workspaces: probed.workspaces,
-        upgradedFromHttp,
-        message: upgradedFromHttp
-          ? `已验证 ${label}。浏览器没有把 HTTP 请求发出去，已改用 ${apiOrigin}。请选择 workspace。`
+        message: apiOrigin.startsWith('http://')
+          ? `已验证 ${probed.account.label || '账号'}。地址保持 ${apiOrigin}。请选择 workspace。`
           : undefined,
       };
     }
@@ -302,7 +274,7 @@ export async function handleMulticaExtensionMessage(
     }
     const client = deps.clientFactory
       ? deps.clientFactory(stored)
-      : new MulticaClient({ apiOrigin: stored.apiOrigin, pat: stored.pat, workspaceId: stored.workspaceId });
+      : multicaClient({ apiOrigin: stored.apiOrigin, pat: stored.pat, workspaceId: stored.workspaceId });
     if (type === 'MULTICA_LIST_RESOURCES') {
       const [agents, projects, runtimes] = await Promise.all([
         client.listAgents(),

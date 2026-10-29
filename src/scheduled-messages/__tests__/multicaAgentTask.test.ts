@@ -21,6 +21,7 @@ import {
   redactMulticaSecrets,
   resolveWebhookUrl,
 } from '../multica/multicaContract.js';
+import { assertHttpResponseStayed } from '../multica/multicaInsecureFetch.js';
 import { provisionMulticaScheduledTask, type ProvisionProgress } from '../multica/multicaProvision.js';
 
 const API = 'https://api.multica.ai';
@@ -206,7 +207,19 @@ test('self-hosted http verify calls the API instead of failing before the reques
   assert.equal(JSON.stringify(result).includes('pat_secret_value'), false);
 });
 
-test('a blocked http verify retries the same host over https and a broken PAT is not sent', async () => {
+test('http verify stays on http and does not follow a redirect off that host', async () => {
+  assert.doesNotThrow(() => assertHttpResponseStayed(
+    'http://task.xmnup.com/api/me',
+    'http://task.xmnup.com/api/me',
+  ));
+  assert.throws(
+    () => assertHttpResponseStayed('http://task.xmnup.com/api/me', 'https://task.xmnup.com/api/me'),
+    /别的地址/,
+  );
+  assert.throws(
+    () => assertHttpResponseStayed('http://task.xmnup.com/api/me', 'http://evil.example/api/me'),
+    /别的地址/,
+  );
   const calls: string[] = [];
   const session = memoryStore();
   const local = memoryStore();
@@ -224,20 +237,13 @@ test('a blocked http verify retries the same host over https and a broken PAT is
     local,
     clientFactory: (connection) => {
       calls.push(connection.apiOrigin);
-      if (connection.apiOrigin.startsWith('http://')) {
-        throw new MulticaApiError('无法连接 Multica API：Failed to fetch', 0, 'network');
-      }
-      return {
-        async getMe() { return { id: 'user_12345678', label: 'E' }; },
-        async listWorkspaces() { return [{ id: 'ws_12345678', slug: 'personal', name: 'Personal' }]; },
-      } as never;
+      throw new MulticaApiError('无法连接 Multica API：Failed to fetch', 0, 'network');
     },
   });
-  assert.deepEqual(calls, ['http://task.xmnup.com', 'https://task.xmnup.com']);
-  assert.equal(blocked.success, true);
-  assert.equal(blocked.upgradedFromHttp, true);
-  assert.equal(blocked.connection?.apiOrigin, 'https://task.xmnup.com');
-  assert.equal(blocked.connection?.webOrigin, 'https://task.xmnup.com');
+  assert.deepEqual(calls, ['http://task.xmnup.com']);
+  assert.equal(blocked.success, false);
+  assert.match(blocked.error || '', /Failed to fetch/);
+  assert.equal(blocked.error?.includes('https://'), false);
   const dirty = await handleMulticaExtensionMessage({
     type: 'MULTICA_VERIFY',
     data: { apiOrigin: 'https://api.multica.ai', webOrigin: 'https://multica.ai', pat: 'pat_secret\u0001value' },
