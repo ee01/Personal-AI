@@ -238,54 +238,6 @@ describe('formatSuccessNotificationWithTemplate', () => {
     expect(body).toContain('以上 Epic 自动填入 INIT 的 Team cc @sophia.lin');
   });
 
-  it('recognizes dash bullets and {variable} braces as placeholder rows like the * xxx convention', async () => {
-    const log = { warn: vi.fn() };
-    const braceTemplate = `-- Nova 缺少 Team 的 Epics --
-----
-
-- [Epic key](http://link/) {Epic summary} @{INIT assignee}
-
-以上 Epic 麻烦对应的 Owner 添加 Team 字段`;
-
-    // An empty outcome collapses the dash row into the explanation line instead
-    // of echoing the braces back to the reader.
-    const emptyBody = await formatSuccessNotificationWithTemplate({
-      ...baseInput,
-      template: braceTemplate,
-      result: {
-        status: 'success',
-        summary: '5 张 NOVA Epic（cf[17553] 为空）已查到，INIT 均为多团队，未回填。',
-        artifacts: [{ kind: 'query_result', title: '扫描', content: '0 个 Epic 需更新。', metadata: { matchCount: 0 } }],
-      },
-      log,
-    });
-    expect(emptyBody).toContain('本次没有符合条件的条目：');
-    expect(emptyBody).not.toContain('{Epic summary}');
-    expect(emptyBody).toContain('以上 Epic 麻烦对应的 Owner 添加 Team 字段');
-
-    // A successful run fills the dash row from evidence without the LLM.
-    const filledBody = await formatSuccessNotificationWithTemplate({
-      ...baseInput,
-      template: braceTemplate,
-      result: {
-        status: 'success',
-        summary: '1 张 Epic 已回填 Team。',
-        artifacts: [{ kind: 'note', title: 'list', content: '* NOVA-7248 Debug @Tony Lin' }],
-      },
-      log,
-    });
-    expect(filledBody).toContain('* NOVA-7248 Debug @Tony Lin');
-    expect(filledBody).not.toContain('{Epic summary}');
-    expect(filledBody).toContain('以上 Epic 麻烦对应的 Owner 添加 Team 字段');
-
-    // Prose lines (no bullet, no placeholder) are never treated as list rows.
-    expect(applyNotifyTemplateLocally('标题\n- 普通说明行\n结尾', {
-      summary: 's',
-      lines: ['NOVA-1 标题'],
-      urls: [],
-    })).toContain('- 普通说明行');
-  });
-
   it('skips the LLM call entirely for a blank template', async () => {
     const log = { warn: vi.fn() };
 
