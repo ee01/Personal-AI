@@ -689,6 +689,64 @@ describe('isEmptyResultOutcome', () => {
   });
 });
 
+describe('enumerated prose evidence blobs', () => {
+  // Shape observed on the real "Nova 缺少 Team 的 Epics" run: one note artifact
+  // enumerating five epics as numbered prose glued with ；.
+  const blob = {
+    status: 'success',
+    summary: '5 张 NOVA Epic（cf[17553] 为空）已查到，全部通过 Parent Link 指向 INIT，INIT assignee 已读取：4 张归 Albert Gu，1 张归 Jennifer Huang。',
+    artifacts: [
+      {
+        kind: 'note',
+        title: 'Epic → INIT assignee 明细',
+        content:
+          '1. NOVA-21784 AIR 2.0 Custom Data Retention Policy → INIT-32929 AIR 2.0 Custom Data Retention Policy，assignee: Albert Gu；2. NOVA-21764 [Production Readiness] Component DoD Checklist → INIT-32270 [Q4] Nova Quality Assurance，assignee: Albert Gu；3. NOVA-20943 [2026 Q4][M18] NOVA/AIR Top 5 E2E User Journeys → INIT-33039 26Q4 AI Full Chains Performance Testing，assignee: Jennifer Huang',
+      },
+    ],
+  };
+
+  it('splits the blob into one evidence row per enumerated item', () => {
+    const evidence = extractNotificationEvidence(blob);
+    expect(evidence.lines.length).toBe(3);
+    expect(evidence.lines[0]).toContain('* NOVA-21784');
+    expect(evidence.lines[0]).not.toContain('1. NOVA-21784');
+    expect(evidence.lines[2]).toContain('NOVA-20943');
+    expect(evidence.lines.join('\n')).not.toContain('；2.');
+  });
+
+  it('treats the run as non-empty so the notify template lists the items', () => {
+    expect(isEmptyResultOutcome(blob)).toBe(false);
+  });
+
+  it('fills the template rows from the blob when the LLM is unavailable', async () => {
+    const generateMock = vi.fn().mockRejectedValue(new Error('llm down'));
+    const log = { warn: vi.fn() };
+    const body = await formatSuccessNotificationWithTemplate({
+      template: `-- Nova 缺少 Team 的 Epics --
+----
+
+* [NOVA-xxx](http://xxx) 标题 xxx @INIT assignee xxx
+* ...
+
+以上 Epic 麻烦对应的 Owner 添加 Team 字段`,
+      title: 'Nova 缺少 Team 的 Epics',
+      task: '查找 JQL',
+      defaultBody: '兜底',
+      result: blob,
+      userDataManager: {},
+      userId: 'u',
+      taskId: 't',
+      actionId: 'a',
+      generate: generateMock,
+      log,
+    });
+    expect(body).toContain('* NOVA-21784');
+    expect(body).toContain('* NOVA-20943');
+    expect(body).toContain('以上 Epic 麻烦对应的 Owner 添加 Team 字段');
+    expect(body).not.toContain('本次没有符合条件的条目');
+  });
+});
+
 describe('appendNotifyStructuredOutputRequirement', () => {
   const metadataWithTarget = { notifyTarget: { type: 'group', glipTeamId: 'team-1' } };
 

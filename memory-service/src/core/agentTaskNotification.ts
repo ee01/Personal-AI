@@ -727,9 +727,8 @@ export function extractNotificationEvidence(
       const art = asRecord(artifact);
       const content = typeof art.content === 'string' ? art.content.trim() : '';
       if (looksLikeListContent(content) && !content.trimStart().startsWith('{')) {
-        for (const line of content.split('\n')) {
-          const trimmed = line.trim();
-          if (trimmed) lines.push(normalizeEvidenceLine(trimmed));
+        for (const item of splitEvidenceItems(content)) {
+          lines.push(normalizeEvidenceLine(item));
         }
         continue;
       }
@@ -946,8 +945,27 @@ function looksLikeListContent(content: string): boolean {
   return (
     /^\*\s+\S+/m.test(trimmed) ||
     /^[-•]\s+[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed) ||
-    /^[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed)
+    /^[A-Z][A-Z0-9]+-\d+\b/m.test(trimmed) ||
+    // Executors also return "1. NOVA-123 …；2. NOVA-456 …" as one prose blob.
+    /\d+[.、)]\s*[A-Z][A-Z0-9]+-\d+\b/.test(trimmed)
   );
+}
+
+/**
+ * Split a list artifact into one row per item: newline lists split on lines,
+ * enumerated prose blobs split before each numbered issue-key marker (also
+ * when items are glued with ；/;). Numbering prefixes are stripped so template
+ * rows read as clean entries.
+ */
+function splitEvidenceItems(content: string): string[] {
+  const normalized = content.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+  const parts = normalized.split(
+    /\n+|(?<=[；;])\s*(?=\d+[.、)]\s*[A-Z][A-Z0-9]+-\d+\b)|(?<!^)\s(?=\d+[.、)]\s*[A-Z][A-Z0-9]+-\d+\b)/g,
+  );
+  return parts
+    .map((part) => part.replace(/^\d+[.、)]\s+/, '').trim())
+    .filter(Boolean);
 }
 
 function normalizeEvidenceLine(line: string): string {
