@@ -50,6 +50,7 @@ import { AgentWorkerRepository } from '../../repositories/AgentWorkerRepository.
 import { RingCentralClient } from '../../integrations/RingCentralClient.js';
 import { getConfig } from '../../config.js';
 import {
+  appendNotifyStructuredOutputRequirement,
   deliverAgentTaskAsMeNotice,
   deliverAgentTaskRunNotifications,
   normalizeAsMeSenderCredentials,
@@ -1329,10 +1330,12 @@ export class ActionExecutor {
       },
     });
     const envelope = await executor.submit({
-      task:
+      task: appendNotifyStructuredOutputRequirement(
         typeof params.task === 'string' && params.task.trim().length > 0
           ? params.task.trim()
           : [action.title, action.description].filter(Boolean).join('\n\n'),
+        params.metadata as Record<string, unknown> | undefined,
+      ),
       mode,
       targetSystem:
         typeof params.targetSystem === 'string' &&

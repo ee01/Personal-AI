@@ -54,6 +54,32 @@ function normalizeNotifyTargetUser(value: unknown): string | undefined {
   return normalized && /^[a-z0-9._-]+$/i.test(normalized) ? normalized : undefined;
 }
 
+/**
+ * The notify pipeline can only fill template rows and match counts from what
+ * the agent actually returns. Users enable notifications without spelling that
+ * out in the task body, so the dispatch layer appends this requirement on
+ * their behalf. It never changes the task's own criteria or write boundary.
+ */
+export function appendNotifyStructuredOutputRequirement(
+  task: string,
+  metadata: Record<string, unknown> | undefined,
+): string {
+  const body = task.trim();
+  if (!body || !metadata) return task;
+  if (body.includes('【结果通知要求（系统补充，不属于原任务）】')) return task;
+  if (metadata.suppressRecoveryNotifications) return task;
+  const notifyTarget = normalizeAgentTaskNotifyTarget(metadata.notifyTarget);
+  if (!notifyTarget) return task;
+  return [
+    body,
+    '',
+    '【结果通知要求（系统补充，不属于原任务）】本任务配置了结果通知，执行完成后系统会把结果整理成通知发出。请在完成原任务的前提下，把结果同时整理成便于通知的结构化输出：',
+    '- 若任务涉及查询或核对多条条目：逐条列出，每行包含条目标识（如 issue key）、标题、可点击链接（如有）及相关负责人（如 assignee）；并在结果中注明本次匹配到的条目数量。',
+    '- 若任务是单一产出：把关键结论和涉及的对象标识写清楚，并注明数量（如 0 条或 1 项）。',
+    '- 保持原任务的判定条件不变；不要为了产出清单而放宽或收窄条件，也不要执行原任务未要求的写入操作。',
+  ].join('\n');
+}
+
 export function normalizeAgentTaskNotifyTarget(
   value: unknown,
 ): AgentTaskNotifyTarget | undefined {

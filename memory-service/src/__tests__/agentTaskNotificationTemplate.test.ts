@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import {
+  appendNotifyStructuredOutputRequirement,
   applyNotifyTemplateLocally,
   enforceTemplateScaffolding,
   extractNotificationEvidence,
@@ -685,5 +686,33 @@ describe('isEmptyResultOutcome', () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe('appendNotifyStructuredOutputRequirement', () => {
+  const metadataWithTarget = { notifyTarget: { type: 'group', glipTeamId: 'team-1' } };
+
+  it('appends the structured-output requirement when a result notification target is configured', () => {
+    const prompt = appendNotifyStructuredOutputRequirement('查找 JQL 并读取 assignee', metadataWithTarget);
+    expect(prompt).toContain('查找 JQL 并读取 assignee');
+    expect(prompt).toContain('结果通知要求');
+    expect(prompt).toContain('注明本次匹配到的条目数量');
+    expect(prompt).toContain('不要执行原任务未要求的写入操作');
+  });
+
+  it('leaves the task untouched without a notify target or when notifications are suppressed', () => {
+    expect(appendNotifyStructuredOutputRequirement('任务', undefined)).toBe('任务');
+    expect(appendNotifyStructuredOutputRequirement('任务', {})).toBe('任务');
+    expect(
+      appendNotifyStructuredOutputRequirement('任务', { ...metadataWithTarget, suppressRecoveryNotifications: true }),
+    ).toBe('任务');
+    expect(
+      appendNotifyStructuredOutputRequirement('任务', { notifyTarget: { type: 'private', targetUserId: 'u1' } }),
+    ).not.toBe('任务');
+  });
+
+  it('keeps the appended requirement idempotent for retries', () => {
+    const once = appendNotifyStructuredOutputRequirement('任务', metadataWithTarget);
+    expect(appendNotifyStructuredOutputRequirement(once, metadataWithTarget)).toBe(once);
   });
 });
