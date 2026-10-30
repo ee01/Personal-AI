@@ -267,6 +267,7 @@
 
 | 能力点 | 所属模块 | 所在文档 | 说明 |
 |---|---|---|---|
+| 方案 B 记忆内核实验规格（未实现） | 记忆架构实验 | [memory_core_v4_spec.md](./features/memory_core_v4_spec.md) | 版本化证据、慢整理/快提取、独立行动出口；Stage 2 adapter 契约与验收门 |
 | 记忆摄入、去重、显著性评估 | 摄入与演化 | [memory_system.md](./memory_system.md) | `IngestionPipeline` / `SalienceScorer`；行为亲密度按实体名和别名进入摄入打分 |
 | 记忆演化与 chunk 合并 | 摄入与演化 | [memory_system.md](./memory_system.md) | ADD/UPDATE/MERGE/NOOP 与 `memory_links`；原文不改写，只动派生 summary/links |
 | 四通道召回 | 召回 | [memory_system.md](./memory_system.md) | Vector / FTS / Graph / Time；搜索页显示召回通道与证据交叉边界回执 |
