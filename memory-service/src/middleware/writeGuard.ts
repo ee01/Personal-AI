@@ -30,6 +30,7 @@ export async function writeGuardMiddleware(
     request.url === '/health' ||
     request.url.startsWith('/docs') ||
     pathOnly === '/mcp' ||
+    pathOnly.startsWith('/webhooks/ringcentral/') ||
     pathOnly.startsWith('/api/v1/admin/key-requests') ||
     pathOnly === '/api/v1/usage/pricing'
   ) {

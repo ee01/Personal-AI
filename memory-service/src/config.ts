@@ -219,6 +219,12 @@ export interface Config {
   ringCentralClientId: string;
   ringCentralClientSecret: string;
   ringCentralJwt: string;
+  /** Secret path segment for POST /webhooks/ringcentral/team-messaging/:token */
+  ringCentralTeamMessagingWebhookToken: string;
+  /** User id whose SQLite DB receives webhook ingests */
+  ringCentralTeamMessagingWebhookUserId: string;
+  /** Public HTTPS base (ngrok/production) used when creating RC subscriptions */
+  ringCentralTeamMessagingWebhookPublicUrl: string;
 }
 
 export type SqliteJournalMode =
@@ -661,6 +667,14 @@ export function getConfig(): Readonly<Config> {
     ringCentralClientId: process.env.RINGCENTRAL_CLIENT_ID || '',
     ringCentralClientSecret: process.env.RINGCENTRAL_CLIENT_SECRET || '',
     ringCentralJwt: process.env.RINGCENTRAL_JWT || '',
+    ringCentralTeamMessagingWebhookToken:
+      process.env.RINGCENTRAL_TM_WEBHOOK_TOKEN || '',
+    ringCentralTeamMessagingWebhookUserId:
+      process.env.RINGCENTRAL_TM_WEBHOOK_USER_ID ||
+      process.env.DEFAULT_USER_ID ||
+      'default',
+    ringCentralTeamMessagingWebhookPublicUrl:
+      process.env.RINGCENTRAL_TM_WEBHOOK_PUBLIC_URL || '',
   };
 
   _config = Object.freeze(config);

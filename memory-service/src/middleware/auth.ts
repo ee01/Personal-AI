@@ -102,6 +102,7 @@ export function createAuthMiddleware(ucm: UserContextManager) {
     if (
       request.url === '/health' ||
       request.url.startsWith('/docs') ||
+      request.url.split('?')[0].startsWith('/webhooks/ringcentral/') ||
       request.url.split('?')[0] === '/mcp' ||
       request.method === 'OPTIONS' ||
       isBrowserProbeRequest(request) ||

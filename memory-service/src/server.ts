@@ -102,6 +102,7 @@ import {
   normalizeRoutePath,
 } from './analytics/capabilityMap.js';
 import { enterUsageContext } from './analytics/usageContext.js';
+import { ringcentralTeamMessagingWebhookRoutes } from './routes/ringcentralTeamMessagingWebhook.js';
 import { isSqliteCorruptError } from './utils/sqliteErrors.js';
 
 // ---------------------------------------------------------------------------
@@ -400,6 +401,8 @@ export async function buildApp(
 
   // A2A Agent Card + JSON-RPC (Block G).
   await app.register(a2aRoutes);
+
+  await app.register(ringcentralTeamMessagingWebhookRoutes, { userContextManager });
 
   // Top-level health check (no prefix) for container orchestrators
   await app.register(healthRoutes);

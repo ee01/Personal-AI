@@ -16,7 +16,9 @@
     "repair:vtab": "tsx tools/repair-sqlite-vtab.ts",
     "repair:analytics": "node tools/repair-analytics-db.mjs",
     "inventory:eval-dataset": "tsx tools/inventory-eval-dataset.mts",
-    "export:eval-dataset-phase1": "tsx tools/export-eval-dataset-phase1.mts"
+    "export:eval-dataset-phase1": "tsx tools/export-eval-dataset-phase1.mts",
+    "rc:tm-webhook": "tsx tools/ringcentral-team-messaging-subscription.mts",
+    "rc:tm-backfill": "tsx tools/ringcentral-team-messaging-backfill.mts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",

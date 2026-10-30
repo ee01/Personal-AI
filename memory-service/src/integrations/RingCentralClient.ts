@@ -2356,4 +2356,137 @@ export class RingCentralClient {
     }
     return displayNames.join(', ');
   }
+
+  /** Paginated Team Messaging posts for historical backfill. */
+  async listPostsPaginated(
+    chatId: string,
+    options?: { sinceAt?: number; pageToken?: string; recordCount?: number },
+  ): Promise<{ posts: RingCentralPost[]; nextPageToken?: string }> {
+    if (!this.isConfigured()) {
+      return { posts: [] };
+    }
+    const query = new URLSearchParams();
+    query.set('recordCount', String(options?.recordCount ?? 50));
+    if (options?.sinceAt && Number.isFinite(options.sinceAt)) {
+      query.set('dateFrom', new Date(options.sinceAt * 1000).toISOString());
+    }
+    if (options?.pageToken) {
+      query.set('pageToken', options.pageToken);
+    }
+    const path = `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts?${query.toString()}`;
+    const result = await this.apiRequestWithRetry(path, { method: 'GET' });
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral list posts failed (${result.status}): ${JSON.stringify(result.body).slice(0, 240)}`,
+      );
+    }
+    const body = ensureObject(result.body);
+    const records = Array.isArray(body.records) ? body.records : [];
+    const posts = (
+      await Promise.all(
+        records
+          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+          .map(async (item) => {
+            const creator = ensureObject(item.creator);
+            const creatorId = toDisplayString(creator.id, item.creatorId) || undefined;
+            return {
+              id: typeof item.id === 'string' ? item.id : '',
+              chatId,
+              text: typeof item.text === 'string' ? item.text : '',
+              creatorId,
+              creatorName: await this.resolvePostCreatorLabel(creator, creatorId),
+              createdAt: typeof item.creationTime === 'string' ? item.creationTime : undefined,
+              raw: item,
+            };
+          }),
+      )
+    ).filter((item) => item.id.length > 0);
+    const navigation = ensureObject(body.navigation);
+    const nextPageToken =
+      typeof navigation.nextPageToken === 'string' ? navigation.nextPageToken : undefined;
+    return { posts, nextPageToken };
+  }
+
+  async listAllChatsForBackfill(recordCount = 100): Promise<RingCentralChatSummary[]> {
+    return this.listChatsAcrossPages(recordCount, RingCentralClient.CHAT_SEARCH_MAX_PAGES);
+  }
+
+  async createTeamMessagingWebhookSubscription(input: {
+    address: string;
+    eventFilters?: string[];
+    expiresIn?: number;
+  }): Promise<Record<string, unknown>> {
+    const eventFilters = input.eventFilters?.length
+      ? input.eventFilters
+      : ['/team-messaging/v1/posts'];
+    const body = {
+      eventFilters,
+      expiresIn: input.expiresIn ?? 630720000,
+      deliveryMode: {
+        transportType: 'WebHook',
+        address: input.address,
+      },
+    };
+    const result = await this.apiRequestWithRetry('/restapi/v1.0/subscription', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral create subscription failed (${result.status}): ${JSON.stringify(result.body).slice(0, 400)}`,
+      );
+    }
+    return ensureObject(result.body);
+  }
+
+  async renewTeamMessagingWebhookSubscription(
+    subscriptionId: string,
+    expiresIn = 630720000,
+  ): Promise<Record<string, unknown>> {
+    const result = await this.apiRequestWithRetry(
+      `/restapi/v1.0/subscription/${encodeURIComponent(subscriptionId)}/renew`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ expiresIn }),
+      },
+    );
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral renew subscription failed (${result.status}): ${JSON.stringify(result.body).slice(0, 400)}`,
+      );
+    }
+    return ensureObject(result.body);
+  }
+
+  async listWebhookSubscriptions(): Promise<Array<Record<string, unknown>>> {
+    const result = await this.apiRequestWithRetry('/restapi/v1.0/subscription', {
+      method: 'GET',
+    });
+    if (!result.ok) {
+      throw new Error(
+        `RingCentral list subscriptions failed (${result.status}): ${JSON.stringify(result.body).slice(0, 240)}`,
+      );
+    }
+    const body = ensureObject(result.body);
+    return Array.isArray(body.records)
+      ? body.records.filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === 'object'),
+        )
+      : [];
+  }
+
+  private async apiRequestWithRetry(
+    path: string,
+    init: RequestInit,
+    attempt = 0,
+  ): Promise<Awaited<ReturnType<RingCentralClient['apiRequest']>>> {
+    const result = await this.apiRequest(path, init);
+    if (result.status === 429 && attempt < 5) {
+      const delayMs = Math.min(30_000, 500 * 2 ** attempt);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return this.apiRequestWithRetry(path, init, attempt + 1);
+    }
+    return result;
+  }
 }
