@@ -1,0 +1,26 @@
+{
+  "scheme_id": "B",
+  "main": {
+    "provider": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "z-ai/glm-5.3",
+    "temperature": 0
+  },
+  "fast": {
+    "provider": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "z-ai/glm-5.3-flash",
+    "temperature": 0
+  },
+  "judge": {
+    "provider": "openrouter",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "anthropic/claude-sonnet-4",
+    "temperature": 0
+  },
+  "embedding": {
+    "provider": "local",
+    "model": "bge-m3",
+    "dimensions": 1024
+  }
+}

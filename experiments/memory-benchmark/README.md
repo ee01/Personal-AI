@@ -61,6 +61,17 @@ interface MemoryBenchmarkAdapter {
 - Default budget **$50** per scheme run (`--budget-usd`).
 - `mode: quality | capacity` — quality waits for real inference; capacity is for throughput experiments (same report fields).
 
+## Model tier policy
+
+| Tier | Model | Use |
+|---|---|---|
+| `main` | `z-ai/glm-5.3` | Cross-memory consolidation, reminder/discovery decisions, Scheme B bounded tool loop, and Letta dreaming |
+| `fast` | `z-ai/glm-5.3-flash` | Per-item ingestion and extraction (including Mem0 `add()` and Supermemory profile/fact updates), entity recognition, short-list reranking, and short summaries |
+| `judge` | Frozen by E-147; non-Z.AI family | Blind scoring against the frozen rubric; keep it outside the answer-model family |
+| embedding | local `bge-m3` (1024 dimensions) | Vector retrieval; OpenRouter is not used for embeddings |
+
+All inference uses OpenRouter's OpenAI-compatible endpoint `https://openrouter.ai/api/v1`, `temperature=0`, fixed model IDs, and a fixed seed where supported. Automatic model fallback is disabled. `config/models.json` records tier IDs and endpoint; `OPENROUTER_API_KEY` belongs only in the ignored `.env` (copy the variable name from `.env.example`).
+
 ## Run (synthetic smoke)
 
 ```bash
