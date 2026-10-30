@@ -6,7 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "rootDir": ".",
+    "rootDir": "../..",
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "adapters/**/*.ts", "tests/**/*.ts"]

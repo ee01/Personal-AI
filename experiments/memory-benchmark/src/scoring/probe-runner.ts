@@ -12,6 +12,11 @@ import {
   type ReplayCheckpoint,
 } from "../clock/virtual-replay.js";
 import { NotificationSink } from "../sink/notification-sink.js";
+import {
+  adapterCostFromExport,
+  buildMergedCostSummary,
+  isCombinedOverBudget,
+} from "../cost/adapter-ledger.js";
 import { CostTracker } from "../cost/tracker.js";
 import { latencySummary } from "../cost/tracker.js";
 import { checkHardGates, scoreProbe } from "../scoring/scorer.js";
@@ -55,7 +60,14 @@ async function runDueProbes(
     if (parseVirtualMs(probe.as_of) > parseVirtualMs(checkpoint.virtual_now)) {
       continue;
     }
-    if (opts.cost.isOverBudget()) {
+    const exported = await opts.adapter.export();
+    const mergedProbe = buildMergedCostSummary(
+      opts.cost.totalUsd(),
+      opts.cost.snapshot().budget_usd,
+      opts.cost.snapshot(),
+      adapterCostFromExport(opts.adapter.schemeId, exported),
+    );
+    if (isCombinedOverBudget(mergedProbe)) {
       return "cost_budget_exceeded";
     }
 
@@ -162,6 +174,13 @@ export async function runBenchmark(opts: ProbeRunnerOptions): Promise<BenchmarkR
   const ingest = latencySummary(ingestLatencies);
   const decideLat = latencySummary(decideLatencies);
   const costSnap = opts.cost.snapshot();
+  const exported = await opts.adapter.export();
+  const cost = buildMergedCostSummary(
+    costSnap.total_usd,
+    costSnap.budget_usd,
+    costSnap,
+    adapterCostFromExport(opts.adapter.schemeId, exported),
+  );
 
   return {
     scheme_id: opts.adapter.schemeId,
@@ -178,15 +197,7 @@ export async function runBenchmark(opts: ProbeRunnerOptions): Promise<BenchmarkR
         ? outcomes.reduce((s, o) => s + o.composite, 0) / outcomes.length
         : 0,
     scene_means,
-    cost: {
-      total_usd: costSnap.total_usd,
-      budget_usd: costSnap.budget_usd,
-      llm_calls: costSnap.llm_calls,
-      input_tokens: costSnap.input_tokens,
-      output_tokens: costSnap.output_tokens,
-      cached_replay_calls: costSnap.cached_replay_calls,
-      live_inference_calls: costSnap.live_inference_calls,
-    },
+    cost,
     latency: {
       ingest_p50_ms: ingest.p50,
       ingest_p95_ms: ingest.p95,

@@ -3,6 +3,12 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StubMemoryAdapter } from "../../adapters/stub-adapter.js";
+import { BaselineSchemeAAdapter } from "../../adapters/baseline/baseline-adapter.js";
+import { createNewCoreSchemeBAdapter } from "../../adapters/new-core/adapter.js";
+import { createMem0SchemeCAdapter } from "../../adapters/mem0/adapter.js";
+import { createSupermemorySchemeDAdapter } from "../../adapters/supermemory/adapter.js";
+import { createLettaSchemeEAdapter } from "../../adapters/letta/adapter.js";
+import type { MemoryBenchmarkAdapter } from "../types.js";
 import type { AuthorityFixture } from "../clock/authority-fixture.js";
 import { AuthorityFixtureStore } from "../clock/authority-fixture.js";
 import { CostTracker } from "../cost/tracker.js";
@@ -67,8 +73,22 @@ async function main() {
   const sink = new NotificationSink();
   const cost = new CostTracker({ max_usd: cli.budgetUsd });
 
-  const adapter = new StubMemoryAdapter(cli.scheme);
   const runId = `run-${Date.now()}`;
+
+  let adapter: MemoryBenchmarkAdapter;
+  if (cli.scheme === "A" || cli.scheme === "baseline") {
+    adapter = new BaselineSchemeAAdapter(cli.scheme === "baseline" ? "A" : cli.scheme);
+  } else if (cli.scheme === "B" || cli.scheme === "new-core") {
+    adapter = await createNewCoreSchemeBAdapter({ schemeId: "B", fresh: true, runId });
+  } else if (cli.scheme === "C" || cli.scheme === "mem0") {
+    adapter = await createMem0SchemeCAdapter({ schemeId: "C", fresh: true, runId });
+  } else if (cli.scheme === "D" || cli.scheme === "supermemory") {
+    adapter = await createSupermemorySchemeDAdapter({ schemeId: "D", fresh: true, runId });
+  } else if (cli.scheme === "E" || cli.scheme === "letta") {
+    adapter = await createLettaSchemeEAdapter({ schemeId: "E", fresh: true, runId });
+  } else {
+    adapter = new StubMemoryAdapter(cli.scheme);
+  }
 
   const report = await runBenchmark({
     adapter,
@@ -89,8 +109,12 @@ async function main() {
 
   console.log(`Wrote ${mdPath}`);
   console.log(
-    `probes ${report.probes_passed}/${report.probes_run}, mean=${report.mean_composite.toFixed(2)}, cost=$${report.cost.total_usd.toFixed(4)}`,
+    `probes ${report.probes_passed}/${report.probes_run}, mean=${report.mean_composite.toFixed(2)}, cost harness/adapter/combined=$${report.cost.harness_usd.toFixed(4)}/$${report.cost.adapter_usd.toFixed(4)}/$${report.cost.combined_usd.toFixed(4)}`,
   );
+
+  if ("close" in adapter && typeof adapter.close === "function") {
+    await adapter.close();
+  }
 }
 
 main().catch((err) => {

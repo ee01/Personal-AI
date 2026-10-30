@@ -7,10 +7,18 @@
   "scripts": {
     "run": "tsx src/cli/run-benchmark.ts",
     "demo": "tsx src/cli/run-benchmark.ts --fixture synthetic-mini",
+    "gates": "tsx src/cli/run-gates.ts",
+    "gates:d": "tsx src/cli/run-gates.ts --scheme D",
+    "gates:e": "tsx src/cli/run-gates.ts --scheme E",
+    "gates:c": "tsx src/cli/run-gates.ts --scheme C",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

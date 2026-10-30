@@ -158,6 +158,67 @@ describe("delete/revoke gates", () => {
     expect(result.ok).toBe(true);
     expect(result.failures).toEqual([]);
   });
+
+  it("scheme B passes delete/revoke gate", async () => {
+    const { createNewCoreSchemeBAdapter } = await import("../adapters/new-core/adapter.js");
+    const adapter = await createNewCoreSchemeBAdapter({ runId: "gate-test", fresh: true });
+    const sample: PersonalMemoryEvent = {
+      ...baseEvent,
+      event_id: "gate:b1",
+      text: "gate sample content for scheme B",
+    };
+    const result = await runDeleteRevokeGate(adapter, sample);
+    await adapter.close();
+    expect(result.ok).toBe(true);
+  });
+
+  it("scheme C passes delete/revoke gate", async () => {
+    const { createMem0SchemeCAdapter, mem0IntegrationAvailable } = await import(
+      "../adapters/mem0/adapter.js"
+    );
+    if (!mem0IntegrationAvailable()) return;
+    const adapter = await createMem0SchemeCAdapter({ runId: "gate-test", fresh: true });
+    const sample: PersonalMemoryEvent = {
+      ...baseEvent,
+      event_id: "gate:c1",
+      text: "gate sample content for scheme C mem0",
+    };
+    const result = await runDeleteRevokeGate(adapter, sample);
+    await adapter.close();
+    expect(result.ok).toBe(true);
+  }, 120_000);
+
+  it("scheme D passes delete/revoke gate", async () => {
+    const { createSupermemorySchemeDAdapter, supermemoryServerReachable } = await import(
+      "../adapters/supermemory/adapter.js"
+    );
+    if (!(await supermemoryServerReachable())) return;
+    const adapter = await createSupermemorySchemeDAdapter({ runId: "gate-test", fresh: true });
+    const sample: PersonalMemoryEvent = {
+      ...baseEvent,
+      event_id: "gate:d1",
+      text: "gate sample content for scheme D supermemory",
+    };
+    const result = await runDeleteRevokeGate(adapter, sample);
+    await adapter.close();
+    expect(result.ok).toBe(true);
+  }, 180_000);
+
+  it("scheme E passes delete/revoke gate", async () => {
+    const { createLettaSchemeEAdapter, lettaServerReachable } = await import(
+      "../adapters/letta/adapter.js"
+    );
+    if (!(await lettaServerReachable())) return;
+    const adapter = await createLettaSchemeEAdapter({ runId: "gate-test", fresh: true });
+    const sample: PersonalMemoryEvent = {
+      ...baseEvent,
+      event_id: "gate:e1",
+      text: "gate sample content for scheme E letta",
+    };
+    const result = await runDeleteRevokeGate(adapter, sample);
+    await adapter.close();
+    expect(result.ok).toBe(true);
+  }, 180_000);
 });
 
 describe("phase1 synthetic sample JSONL", () => {
@@ -220,5 +281,23 @@ describe("scorer", () => {
       },
     );
     expect(failures.some((f) => f.startsWith("future_citation"))).toBe(true);
+  });
+});
+
+describe("six-gate helpers", () => {
+  it("stub passes future evidence hard gate", async () => {
+    const { runFutureEvidenceHardGate } = await import("../src/gates/future-evidence-gate.js");
+    const adapter = new StubMemoryAdapter("future-stub");
+    const result = await runFutureEvidenceHardGate(adapter);
+    expect(result.ok).toBe(true);
+  });
+
+  it("stub passes observable reconciliation gate", async () => {
+    const { runObservableReconciliationGate } = await import(
+      "../src/gates/observable-reconciliation-gate.js"
+    );
+    const adapter = new StubMemoryAdapter("obs-stub");
+    const result = await runObservableReconciliationGate(adapter);
+    expect(result.ok).toBe(true);
   });
 });

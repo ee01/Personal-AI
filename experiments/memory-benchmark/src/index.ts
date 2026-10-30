@@ -11,6 +11,11 @@ export { NotificationSink } from "./sink/notification-sink.js";
 export { runBenchmark } from "./scoring/probe-runner.js";
 export { checkHardGates, scoreProbe } from "./scoring/scorer.js";
 export { CostTracker, latencySummary } from "./cost/tracker.js";
+export {
+  adapterCostFromExport,
+  buildMergedCostSummary,
+  sumExportedCostLedger,
+} from "./cost/adapter-ledger.js";
 export { writeReports, renderMarkdownReport } from "./report/generate.js";
 export { bootstrapStorylineCi } from "./report/bootstrap.js";
 export { runDeleteRevokeGate, runExportGate } from "./gates/adapter-gates.js";

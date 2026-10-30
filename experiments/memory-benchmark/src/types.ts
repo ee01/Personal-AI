@@ -185,6 +185,13 @@ export interface BenchmarkReport {
 }
 
 export interface CostSummary {
+  /** Harness CostTracker only (judge / future harness LLM). */
+  harness_usd: number;
+  /** Adapter export `cost_ledger` (scheme B file ledger, C/D/E harness_consolidation, etc.). */
+  adapter_usd: number;
+  /** harness_usd + adapter_usd; E-155 $50 cap uses this. */
+  combined_usd: number;
+  /** @deprecated Use combined_usd; kept for JSON consumers expecting total_usd. */
   total_usd: number;
   budget_usd: number;
   llm_calls: number;
@@ -192,6 +199,8 @@ export interface CostSummary {
   output_tokens: number;
   cached_replay_calls: number;
   live_inference_calls: number;
+  /** When service-side usage is not in adapter ledger (e.g. Supermemory Local). */
+  reconciliation_note?: string;
 }
 
 export interface LatencySummary {

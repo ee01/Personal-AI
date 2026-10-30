@@ -1,0 +1,36 @@
+{
+  "scheme_id": "E",
+  "run_at": "2026-10-30T17:32:21.957Z",
+  "server_reachable": true,
+  "all_passed": true,
+  "gates": [
+    {
+      "gate": "source_export",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "gate": "idempotency",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "gate": "modify_delete_propagation",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "gate": "delete_revoke_propagation",
+      "ok": true,
+      "failures": []
+    },
+    {
+      "gate": "permission_isolation",
+      "ok": true,
+      "failures": []
+    }
+  ],
+  "notes": [
+    "Core portability gates passed for scheme E."
+  ]
+}
