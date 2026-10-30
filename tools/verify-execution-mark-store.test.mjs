@@ -1,6 +1,56 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { executionHarness } from './helpers/appscript-execution-harness.mjs';
+
+test('owner skips only old receipts without sends, success accounting, or schedule changes', () => {
+  const h = executionHarness(); h.initialize(); h.activate(); h.claim('old');
+  const oldLastExec = h.cell('Last_Exec'); const oldSchedule = h.cell('Schedule_Date');
+  const oldNext = h.cell('Next_Exec');
+  h.advance(3 * 24 * 60 * 60 * 1000);
+  const options = { executionKeys: [h.records()[0].executionKey], beforeDate: '2026-10-26', noReplay: true, originalExecutionsStopped: true };
+  h.context.FRESH_SETUP_TOKEN = 'owner-capability';
+  assert.equal(h.context.handleFreshSetup({ ...options, operation: 'skipHistorical', token: 'owner-capability' }).skipped, 1);
+  const record = h.records()[0];
+  assert.equal(record.state, 'FAILED'); assert.equal(record.resolution.kind, 'owner_skipped');
+  assert.equal(record.resolution.externalOutcome, 'unverified'); assert.equal(record.accountingVersion, 0);
+  assert.equal(h.cell('Exec_Count'), '0'); assert.equal(h.cell('Last_Exec'), oldLastExec);
+  assert.equal(h.cell('Schedule_Date'), oldSchedule); assert.equal(h.cell('Status'), 'Active');
+  assert.equal(h.cell('Next_Exec'), oldNext);
+  assert.equal(h.table('Logs').rows[1][h.table('Logs').rows[0].indexOf('Status')], 'Skipped');
+  const logCount = h.table('Logs').rows.length;
+  assert.equal(h.context.maintenanceSkipHistoricalExecutions(options).duplicates, 1);
+  assert.equal(h.table('Logs').rows.length, logCount);
+  assert.match(h.confirm('old', true).error, /owner_skipped/);
+  assert.match(h.confirm('old', false).error, /owner_skipped/);
+  const next = h.claim('next'); assert.equal(next.success, true); assert.equal(next.duplicate, false);
+  assert.equal(h.records().length, 2);
+});
+
+test('historical skip validates all keys and requires explicit no-replay/stopped attestations', () => {
+  const h = executionHarness(); h.initialize(); h.activate(); h.claim('old');
+  const key = h.records()[0].executionKey;
+  const options = { executionKeys: [key], beforeDate: '2026-10-23', noReplay: true, originalExecutionsStopped: true };
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions(options), /not_historical/);
+  h.advance(3 * 24 * 60 * 60 * 1000); options.beforeDate = '2026-10-26';
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions({ ...options, noReplay: false }), /attestation/);
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions({ ...options, executionKeys: [key, 'absent'] }), /unknown_execution_key/);
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions({ ...options, executionKeys: [key, key] }), /invalid_execution_keys/);
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions({ ...options, beforeDate: '2027-01-01' }), /cutoff/);
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions({ ...options, beforeDate: '2026-02-30' }), /cutoff/);
+  assert.equal(h.records()[0].state, 'CLAIMED'); assert.equal(h.cell('Exec_Count'), '0');
+  assert.throws(() => h.context.handleFreshSetup({ ...options, operation: 'skipHistorical', token: 'invalid' }), /unauthorized/);
+});
+
+test('historical skip does not close a successful receipt and commits its audit atomically', () => {
+  const h = executionHarness(); h.initialize(); h.activate(); h.claim('old'); h.confirm('old');
+  const options = { executionKeys: [h.records()[0].executionKey], beforeDate: '2026-10-26', noReplay: true, originalExecutionsStopped: true };
+  h.advance(3 * 24 * 60 * 60 * 1000);
+  assert.throws(() => h.context.maintenanceSkipHistoricalExecutions(options), /already_settled/);
+  const j = executionHarness(); j.initialize(); j.activate(); j.claim('old'); j.advance(3 * 24 * 60 * 60 * 1000);
+  j.table('Logs').rows[0] = ['invalid'];
+  assert.throws(() => j.context.maintenanceSkipHistoricalExecutions({ ...options, executionKeys: [j.records()[0].executionKey] }), /logs_schema/);
+  assert.equal(j.records()[0].state, 'CLAIMED');
+});
 const hour = 3600000;
 function ready(options) { const h = executionHarness(options); h.initialize(); h.activate(); return h; }
 function legacy(key, success = true, markedAt = '2026-10-23T08:00:00Z') { key = key.startsWith('ek_') ? key : 'ek_' + key; return JSON.stringify({ executionKey: key, messageId: 'M1', rowIndex: 2, success, markedAt }); }
@@ -39,7 +89,7 @@ test('lost response after applied claim never redelivers, lost confirm never dou
   assert.equal(h.claim().success, false); assert.equal(h.claim('other').duplicate, true);
   h.fail({ phase: 'commit', apply: true, throw: true }); assert.equal(h.confirm().success, false);
   assert.equal(h.confirm().duplicate, true); assert.equal(h.cell('Exec_Count'), '1');
-  assert.equal(h.table('Logs').rows.length, 2);
+  assert.equal(h.table('Logs').rows.length, 3); // header + claim + one confirmation
 });
 test('preparation failure cannot authorize a send or advance the migration cursor', () => {
   const h = executionHarness({ properties: { BOT_CLAIM_MARK_ek_k1: legacy('k1') } }); h.initialize();
@@ -58,7 +108,7 @@ test('accounting and Logs failure is atomic, not swallowed', () => {
   const h = ready(); h.claim(); h.table('Logs').rows[0] = ['bad'];
   assert.match(h.confirm().error, /logs_schema/); assert.equal(h.cell('Exec_Count'), '0'); assert.equal(h.records()[0].state, 'CLAIMED');
   const j = ready(); j.claim(); j.fail({ phase: 'commit', code: 403 }); assert.equal(j.confirm().success, false);
-  assert.equal(j.cell('Exec_Count'), '0'); assert.equal(j.table('Logs').rows.length, 1);
+  assert.equal(j.cell('Exec_Count'), '0'); assert.equal(j.table('Logs').rows.length, 2); // claim survives rejected confirmation
 });
 test('2h expiry is UNKNOWN without count; late confirm within 48h works; beyond window refuses', () => {
   const h = ready(); h.claim(); h.advance(3 * hour);
@@ -145,7 +195,7 @@ test('100 rounds of duplicate callback contention retain a single accounting eff
   for (let round = 0; round < 100; round++) {
     const h = ready(); h.claim();
     for (let retry = 0; retry < 10; retry++) assert.equal(h.confirm().success, true);
-    assert.equal(h.cell('Exec_Count'), '1'); assert.equal(h.table('Logs').rows.length, 2);
+    assert.equal(h.cell('Exec_Count'), '1'); assert.equal(h.table('Logs').rows.length, 3); // exactly one claim and confirmation
   }
 });
 

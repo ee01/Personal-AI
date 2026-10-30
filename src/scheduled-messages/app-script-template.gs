@@ -26,10 +26,10 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.2.2';
+var APP_SCRIPT_VERSION = '3.2.3';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
-var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
+var APP_SCRIPT_LAST_UPDATED = '2026-10-31';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -5134,6 +5134,7 @@ function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced,
   if (!entry) throw new Error('late_unknown');
   const record = entry.record;
   if (record.messageId !== String(messageId)) throw new Error('execution_message_mismatch');
+  if (record.resolution && record.resolution.kind === 'owner_skipped') throw new Error('execution_owner_skipped');
   const state = success ? 'CONFIRMED' : 'FAILED';
   if (record.state === 'CONFIRMED' || record.state === 'FAILED') {
     if (record.state !== state) throw new Error('execution_outcome_conflict');
@@ -5153,6 +5154,66 @@ function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced,
   requests.push(executionRecordRequest(store, entry.row, record));
   commitExecutionBatch(store, requests, 'confirm');
   return { success: true, marked: true, duplicate: false, executionKey: key, messageId: messageId, rowIndex: resolved.row };
+}
+
+/** Close only explicitly selected historical receipts; never send or claim work. */
+function maintenanceSkipHistoricalExecutions(options) {
+  options = options || {};
+  const keys = options.executionKeys;
+  const beforeDate = String(options.beforeDate || '');
+  if (options.noReplay !== true || options.originalExecutionsStopped !== true) throw new Error('skip_attestation_required');
+  if (!Array.isArray(keys) || !keys.length || keys.length > 50 ||
+      keys.some(function(key, i) { return typeof key !== 'string' || !key || keys.indexOf(key) !== i; })) throw new Error('invalid_execution_keys');
+  const now = new Date();
+  const today = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const cutoff = parseScheduleDate(beforeDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(beforeDate) || !cutoff ||
+      cutoff.getFullYear() !== Number(beforeDate.slice(0, 4)) ||
+      cutoff.getMonth() + 1 !== Number(beforeDate.slice(5, 7)) ||
+      cutoff.getDate() !== Number(beforeDate.slice(8, 10)) || beforeDate > today) throw new Error('invalid_skip_cutoff');
+  return withExecutionMarkLock(function() {
+    const store = readExecutionStore();
+    // Validate the entire selection before preparing any writes.
+    const selected = keys.map(function(key) {
+      const entry = store.entries.filter(function(e) { return e.record.executionKey === key; })[0];
+      if (!entry) throw new Error('unknown_execution_key');
+      const record = entry.record;
+      if (record.resolution && record.resolution.kind === 'owner_skipped') return { entry: entry, duplicate: true };
+      if (record.state !== 'CLAIMED' && record.state !== 'UNKNOWN') throw new Error('execution_already_settled');
+      if (!isFinite(Date.parse(record.claimAt)) ||
+          Utilities.formatDate(new Date(record.claimAt), Session.getScriptTimeZone(), 'yyyy-MM-dd') >= beforeDate ||
+          !isFinite(Date.parse(record.deadlineAt)) || Date.parse(record.deadlineAt) > now.getTime()) throw new Error('execution_not_historical');
+      return { entry: entry, resolved: executionMessage(store, record.messageId, record.rowHint) };
+    });
+    const requests = [];
+    const closed = [];
+    selected.forEach(function(item) {
+      if (item.duplicate) return;
+      const record = item.entry.record;
+      // FAILED is the existing negative terminal receipt, not a claim that no
+      // external effects happened. Preserve uncertainty and the original state.
+      record.resolution = { kind: 'owner_skipped', reason: 'no_backfill', previousState: record.state,
+        externalOutcome: 'unverified', closedAt: now.toISOString() };
+      record.state = 'FAILED'; record.completedAt = now.toISOString(); record.updatedAt = now.toISOString();
+      record.retainUntil = new Date(now.getTime() + EXECUTION_MARK_MAX_AGE_MS).toISOString();
+      const resolved = item.resolved;
+      record.rowHint = resolved.row;
+      const newer = store.entries.some(function(e) { return e.record.messageId === record.messageId &&
+        e.record.executionKey !== record.executionKey && Date.parse(e.record.claimAt) > Date.parse(record.claimAt); });
+      if (!newer) {
+        const proxy = executionBatchSheet(resolved.sheet, requests, ['Exec_Log'], resolved.headers);
+        const logCol = getColumnIndex(resolved.headers, 'Exec_Log');
+        if (logCol > 0) proxy.getRange(resolved.row, logCol).setValue('⏭ 历史轮次已跳过，不补发；后续按计划执行');
+      }
+      insertPushLog(record.messageId, resolved.message.Topic || '', '用户关闭历史轮次，不补发；未断言历史外部投递结果',
+        resolved.message.Push_Method || '', '', false, 'owner_skipped_no_backfill',
+        parseInt(resolved.message.Exec_Count, 10) || 0, record.executionKey, null, requests, store.logRows[0], 'Skipped');
+      requests.push(executionRecordRequest(store, item.entry.row, record));
+      closed.push(record.executionKey);
+    });
+    if (closed.length) commitExecutionBatch(store, requests, 'owner_skip_historical');
+    return { success: true, skipped: closed.length, duplicates: selected.length - closed.length };
+  });
 }
 
 function purgeSheetExecutionMarks(options, existingStore) {
@@ -5387,6 +5448,7 @@ function getRuntimeHealth() {
  */
 function handleFreshSetup(options) {
   if (!FRESH_SETUP_TOKEN || !options || options.token !== FRESH_SETUP_TOKEN) throw new Error('fresh_setup_unauthorized');
+  if (options.operation === 'skipHistorical') return maintenanceSkipHistoricalExecutions(options);
   if (options.operation !== 'prepare' && options.operation !== 'activate' && options.operation !== 'pause') throw new Error('invalid_setup_operation');
   if (legacyExecutionSources().length) throw new Error('fresh_project_has_legacy_marks');
   if (options.operation === 'prepare') maintenanceInitializeExecutionStore();

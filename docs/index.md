@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-10-30*
+*最后更新: 2026-10-31*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -142,6 +142,7 @@
 | Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
 | 定时消息领取与交付诊断 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | API 领取仅写待确认，不依赖可能过期的 Config 版本；Executor 在执行条件前记录拉取结果，区分请求成功与下游交付 |
+| 历史轮次不补发恢复 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 所有者逐 key 关闭过期未决领取，原子保存 Skipped 审计，不发送、不累计次数，解除对后续轮次的阻塞；Apps Script 3.2.3 |
 | 定时消息持久幂等账本 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet 原子领取/确认、满属性迁移、旧表四步诊断助手、初始化元数据缓存修复（3.0.1）、未知提交冻结、48h 去重与兼容回滚；3.0.0 需维护窗口切换 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检、保留项目私有管理校验值；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
 | 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | 新建任务默认定时送到用户自己的 Multica Autopilot，时间仍由 Jira 触发，结果在 Multica；PAT 仅用于本机配置管理，到期使用 webhook 凭据；已有任务继续由 Jira Rule 触发 memory-service 入队 `delegate_agent`，执行器由 Options registry 选择。成功通知分执行/整理/投递三段；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |

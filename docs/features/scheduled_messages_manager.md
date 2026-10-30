@@ -245,6 +245,7 @@
 - `_ExecutionMarkControl`：`Control_JSON` 表头及单个控制记录，含 mode、epoch、迁移 manifest/cursor、pending operation、lastOperation、清理时间。启动和维护均不写 Script Properties；Properties 即使满额仍可复制与切换。没有 CacheService 依赖。
 - 状态为 `CLAIMED → CONFIRMED / FAILED`；超过 2 小时仅转 `UNKNOWN`，不推断外部失败、不累计失败次数。UNKNOWN 可在原 48 小时回调窗口内确认，超窗返回 `late_unknown`，继续保留待对账。已知终态重复确认无新增次数；相反结果返回 `execution_outcome_conflict`。
 - 当前调度器同日去重，occurrence 由消息 ID、脚本时区执行日和计划字段组成；行号/领取分钟不参与 occurrence。所有更早未决记录都阻止新领取，计划修改也不会隐式重放。旧数据标为 legacy，不猜测历史 occurrence。发送策略后续若支持多实例/更频繁计划，必须同步升级 occurrence 契约。
+- 3.2.3 提供明确“不补发”的历史关闭维护操作 `maintenanceSkipHistoricalExecutions`：必须逐个指定 execution key、脚本时区截止日期，并确认 `noReplay` 和原执行已结束；只允许关闭截止日前且已过领取期限的 CLAIMED/UNKNOWN。同一锁和原子批次保存 `resolution.kind=owner_skipped`、Logs 的 `Skipped` 行和行内跳过提示。为兼容旧账本读取器，底层使用 FAILED 终态，但保留原状态并明确历史外部结果未核实；不宣称未送达、不发送、不增加次数、不改 Last_Exec、Next_Exec 或用户计划。关闭后拒绝晚到回调覆盖决定；重复关闭不重复记账。具备已有管理能力密钥的所有者可通过 `freshSetup` POST 的 `skipHistorical` 操作调用，密钥只放请求体；普通匿名请求不可调用。此操作不会恢复已暂停的任务，也不会自动清理其他未决项。
 - 领取锁内按 ID 唯一定位（rowHint 仅提示）、检查 Active、比对候选原始快照、核对当日成功和遗留 pending。终态确认首次增加 Exec_Count（包含真实失败尝试），重复不变。较新账本实例存在时，历史确认只增加次数并记历史 Logs，不覆盖当前展示。
 - 领取、确认、迁移、清理和维护共用 ScriptLock。对手动编辑、独立脚本项目与外部 Sheets 写入无隔离保证；必须收拢为单一写入项目。
 
@@ -305,8 +306,8 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.2.1';
-  var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
+  var APP_SCRIPT_VERSION = '3.2.3';
+  var APP_SCRIPT_LAST_UPDATED = '2026-10-31';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -838,7 +839,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 | Content       | String   | 实际发送内容                                |
 | Push_Method   | Enum     | AsMe / Bot / AI / JiraAutomation / Outreach / AgentTask |
 | Target        | String   | 发送目标                                    |
-| Status        | Enum     | Claimed（领取审计行）/ Expired（超时隔离行）/ Success / Failed |
+| Status        | Enum     | Claimed（领取审计行）/ Expired（超时隔离行）/ Skipped（所有者关闭历史轮次，不补发）/ Success / Failed |
 | Error         | String   | 错误信息                                    |
 | Exec_Count    | Number   | 第几次执行                                  |
 | Execution_Key | String   | 单次执行幂等键                              |
