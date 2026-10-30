@@ -1991,7 +1991,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.2\.1';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.2\.2';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);
@@ -2364,7 +2364,8 @@ result = getMessageCurrentTimeWithReleaseInfo({
   assert.equal(context.result.autoMarkOnFetch.marked, false);
   assert.equal(context.result.autoMarkOnFetch.claimed, true);
   assert.equal(context.result.autoMarkOnFetch.success, true);
-  assert.equal(logs.length, 0);
+  assert.equal(logs.length, 1, 'claim writes its Claimed audit row');
+  assert.equal(logs[0][0][6], 'Claimed');
   assert.equal(
     updates.some(update => update.row === 2 && update.col === headers.indexOf('Status') + 1 && update.value === 'Done'),
     false,
@@ -2441,7 +2442,8 @@ result = getMessageCurrentTimeWithReleaseInfo({
   assert.equal(context.result.autoMarkOnFetch.claimed, true);
   assert.ok(updates.some(update => update.row === 2 && update.col === headers.indexOf('Exec_Log') + 1 && update.value === '⏳ API 已领取待确认'));
   assert.equal(updates.some(update => update.col === headers.indexOf('Exec_Count') + 1), false);
-  assert.equal(logs.length, 0);
+  assert.equal(logs.length, 1, 'claim writes its Claimed audit row');
+  assert.equal(logs[0][0][6], 'Claimed');
 });
 
 test('Apps Script filters the E119 daily JiraAutomation row by execution state rather than Next_Exec', () => {

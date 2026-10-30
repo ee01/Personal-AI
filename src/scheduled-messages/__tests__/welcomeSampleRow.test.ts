@@ -35,7 +35,7 @@ test('welcome demo row follows MESSAGES_SCHEMA so Next_Exec is not written into 
 });
 
 test('welcome demo A1 range covers every Messages schema column', () => {
-  assert.equal(columnIndexToName(MESSAGES_SCHEMA.columns.length), 'AN');
+  assert.equal(columnIndexToName(MESSAGES_SCHEMA.columns.length), 'BA');
   assert.notEqual(
     columnIndexToName(MESSAGES_SCHEMA.columns.length),
     'AA',

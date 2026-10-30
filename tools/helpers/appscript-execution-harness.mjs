@@ -26,6 +26,7 @@ export function executionHarness(options = {}) {
   const sheet = (id) => ({
     getSheetId: () => id,
     getMaxRows: () => tables.find(t => t.id === id).maxRows,
+    insertRowAfter(row) { const t = tables.find(t => t.id === id); t.rows.splice(row, 0, []); t.maxRows++; },
     getDataRange: () => ({ getDisplayValues: () => structuredClone(tables.find(t => t.id === id).rows) }),
     getRange: (row, col) => ({
       setValue(value) { this.setValues([[value]]); },

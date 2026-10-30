@@ -43,6 +43,7 @@ test('an imported orphan pending row remains blocked after 2h without poisoning 
   assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), true);
   assert.equal(h.records().length, 0); assert.equal(h.cell('Exec_Count'), '0');
   assert.match(h.cell('Exec_Log'), /trigger_delivery_failed/);
+  assert.ok(h.table('Logs').rows.some(row => row[6] === 'Expired'), 'orphan quarantine closes the trail in Logs');
   // The quarantine marker clears the pending condition: later scans must not
   // re-enter the lock or pay another UrlFetch snapshot for this row.
   const reads = h.apiReads();
@@ -61,6 +62,7 @@ test('expiring a real stale claim rewrites the sheet marker in the same commit',
   assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), true);
   assert.equal(h.records()[0].state, 'UNKNOWN');
   assert.match(h.cell('Exec_Log'), /trigger_delivery_failed/);
+  assert.ok(h.table('Logs').rows.some(row => row[6] === 'Expired'), 'expiry closes the trail in Logs');
   assert.equal(h.context.isClaimPendingLog(h.cell('Exec_Log')), false);
   const reads = h.apiReads();
   assert.equal(h.context.isClaimPendingBlockingReclaim(row(), '2026-10-23', new h.context.Date(), 2), false);
@@ -86,7 +88,27 @@ test('health is read-only and does not manufacture a first-poll or delivery rece
   h.setup('prepare'); h.setup('activate'); const before = h.events.length;
   assert.equal(h.context.getRuntimeHealth().firstPollAt, ''); assert.equal(h.events.length, before);
   h.claim(); assert.ok(h.context.getRuntimeHealth().firstPollAt);
-  assert.equal(h.table('Logs').rows.length, 1);
+  // The claim itself now owes a visible audit row; the health probe adds none.
+  const logs = h.table('Logs').rows;
+  assert.equal(logs.length, 2, 'header plus exactly one claim audit row');
+  assert.equal(logs[0][6], 'Status');
+  assert.equal(logs[1][6], 'Claimed');
+  assert.equal(logs[1][1], 'M1');
+  assert.equal(h.context.getRuntimeHealth().firstPollAt, h.context.getRuntimeHealth().firstPollAt);
+});
+
+test('claims leave a Claimed audit row and confirms close the trail', () => {
+  const h = candidate(); h.setup('prepare'); h.setup('activate');
+  h.claim('k1');
+  let rows = h.table('Logs').rows;
+  assert.equal(rows.length, 2, 'header plus the claim audit row');
+  assert.equal(rows[1][6], 'Claimed');
+  assert.equal(rows[1][1], 'M1');
+  h.confirm('k1');
+  rows = h.table('Logs').rows;
+  assert.equal(rows.length, 3, 'confirm adds the final outcome row on top');
+  assert.equal(rows[1][6], 'Success');
+  assert.equal(rows[2][6], 'Claimed');
 });
 
 test('retirement wrapper removes only known send handlers and writes a public receipt without sending', async () => {

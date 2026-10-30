@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.2.1';
+var APP_SCRIPT_VERSION = '3.2.2';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-10-29';
@@ -1015,7 +1015,7 @@ function normalizeBotmanRecipientToken(token) {
  * @param {string} executionKey - 单次执行幂等键（可选）
  * @param {object} sendResultMeta - 实际发送结果元数据（可选）
  */
-function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount, executionKey, sendResultMeta, requests, logHeaders) {
+function insertPushLog(messageId, topic, content, pushMethod, target, success, errorMsg, execCount, executionKey, sendResultMeta, requests, logHeaders, statusOverride) {
   try {
     const logsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Logs');
     if (!logsSheet) {
@@ -1026,7 +1026,7 @@ function insertPushLog(messageId, topic, content, pushMethod, target, success, e
     
     const now = new Date();
     const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-    const status = success ? 'Success' : 'Failed';
+    const status = statusOverride || (success ? 'Success' : 'Failed');
     const error = errorMsg || '';
     const sentChatId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentChatId) : '';
     const sentPostId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentPostId) : '';
@@ -3120,18 +3120,34 @@ function expireStaleClaimAsDeliveryFailed(rowData, rowIndex) {
     });
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
     const logColumn = getColumnIndex(store.messageRows[0], 'Exec_Log');
+    const quarantineReason = requests.length
+      ? '领取超时未确认，已隔离待人工核对'
+      : '旧系统领取记录，已隔离待人工核对';
     if (sheet && logColumn > 0 && rowIndex) {
       if (requests.length) {
         // Rewrite the sheet-side ⏳ marker in the same atomic commit: otherwise
         // the stale text re-enters this lock on every scan and burns a UrlFetch
         // snapshot per row per minute without ever clearing the condition.
         executionBatchSheet(sheet, requests, null, store.messageRows[0]).getRange(rowIndex, logColumn)
-          .setValue(TRIGGER_DELIVERY_FAILED_LOG + '：领取超时未确认，已隔离待人工核对');
+          .setValue(TRIGGER_DELIVERY_FAILED_LOG + '：' + quarantineReason);
       } else if (!entries.length) {
         // Orphan claim text with no CLAIMED ledger record (e.g. imported from a
         // 2.x sheet, or already expired to UNKNOWN): quarantine the text so
         // scans stop paying one REST snapshot for this row on every poll.
-        sheet.getRange(rowIndex, logColumn).setValue(TRIGGER_DELIVERY_FAILED_LOG + '：旧系统领取记录，已隔离待人工核对');
+        sheet.getRange(rowIndex, logColumn).setValue(TRIGGER_DELIVERY_FAILED_LOG + '：' + quarantineReason);
+      }
+    }
+    // Close the trail in Logs so an expired claim is distinguishable from one
+    // that never happened. Best effort — logging never blocks the quarantine.
+    if (requests.length || !entries.length) {
+      try {
+        insertPushLog(String(rowData.ID || ''), rowData.Topic || '', '领取超时未确认，已隔离待人工核对',
+          rowData.Push_Method || '', '', false, 'claim_timeout_quarantined',
+          parseInt(rowData.Exec_Count, 10) || 0, '', null,
+          requests.length ? requests : null,
+          requests.length ? store.logRows[0] : undefined, 'Expired');
+      } catch (logError) {
+        Logger.log('跳过隔离日志: ' + logError);
       }
     }
     if (requests.length) commitExecutionBatch(store, requests, 'expire');
@@ -5086,6 +5102,18 @@ function claimSheetExecution(messageId, rowIndex, candidate, executionKey) {
     const column = getColumnIndex(resolved.headers, c);
     if (column > 0) proxy.getRange(resolved.row, column).setValue(updates[c]);
   });
+  // Claim-confirm messages owe the Logs sheet a visible trail too: the claim
+  // marks the start of the delivery lifecycle, so a claim that later stalls is
+  // distinguishable from one that never happened. Best effort only — a Logs
+  // schema problem must never block claiming.
+  if (isClaimConfirmMessage(message)) {
+    try {
+      insertPushLog(messageId, message.Topic || '', '已领取，等待下游确认', message.Push_Method || '',
+        '', false, '', parseInt(message.Exec_Count, 10) || 0, key, null, requests, store.logRows[0], 'Claimed');
+    } catch (logError) {
+      Logger.log('跳过领取日志: ' + logError);
+    }
+  }
   commitExecutionBatch(store, requests, 'claim');
   return { success: true, claimed: true, duplicate: false, stage: 'claimed', messageId: messageId, rowIndex: resolved.row, executionKey: key, logMessage: updates.Exec_Log };
 }
