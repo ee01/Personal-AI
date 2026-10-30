@@ -15,7 +15,8 @@
     "migrate:multiuser": "tsx scripts/migrate-to-multiuser.ts",
     "repair:vtab": "tsx tools/repair-sqlite-vtab.ts",
     "repair:analytics": "node tools/repair-analytics-db.mjs",
-    "inventory:eval-dataset": "tsx tools/inventory-eval-dataset.mts"
+    "inventory:eval-dataset": "tsx tools/inventory-eval-dataset.mts",
+    "export:eval-dataset-phase1": "tsx tools/export-eval-dataset-phase1.mts"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",

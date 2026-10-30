@@ -1,0 +1,6 @@
+{
+  "records": [
+    { "entity_key": "ALPHA-1", "status": "done", "as_of_day": "2026-01-16", "note": "synthetic fixture" },
+    { "entity_key": "ALPHA-1", "status": "reopened", "as_of_day": "2026-01-17", "note": "synthetic fixture" }
+  ]
+}

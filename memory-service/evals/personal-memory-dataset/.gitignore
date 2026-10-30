@@ -1,0 +1,3 @@
+# T3 raw text — local only; never push production exports
+**/events.jsonl
+**/repair-audit.jsonl

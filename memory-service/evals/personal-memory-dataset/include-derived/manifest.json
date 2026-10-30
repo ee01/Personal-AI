@@ -1,0 +1,39 @@
+{
+  "phase": "T1-export",
+  "manifestId": "include-derived",
+  "tier": "T3",
+  "capturedAt": "2026-10-30T08:16:34.791Z",
+  "userId": "esone.qiu",
+  "phase0Manifest": "phase0-prod-esone.qiu-2026-10-30.json",
+  "database": {
+    "path": "/Users/rcadmin/personal-ai/memory-service/data/users/esone.qiu/memory.db",
+    "sshTarget": "rcadmin@10.32.56.212",
+    "userDataDir": "/Users/rcadmin/personal-ai/memory-service/data/users/esone.qiu"
+  },
+  "files": {
+    "events": "events.jsonl",
+    "storylineIndex": "storyline-index.json",
+    "repairAudit": "repair-audit.jsonl",
+    "report": "REPORT.md"
+  },
+  "counts": {
+    "events": 26122,
+    "raw_messages": 13484,
+    "discarded_messages": 1727,
+    "capsules": 735,
+    "markdown_files": 673,
+    "derived_chunks": 10329,
+    "derived_reflection_threads": 901
+  },
+  "storylineTotals": {
+    "storylines": 11236,
+    "with_at_least_2": 197,
+    "with_at_least_5": 35,
+    "with_at_least_10": 12
+  },
+  "contentHashes": {
+    "events.jsonl": "9fbe491fc4db2c216f948faf6ae188ba276c16e54462e259344f0d35e652418d",
+    "storyline-index.json": "4160c4fc6e08b13606f8092373331225eded5845ab6ff5ec3bb6e410092b6f29"
+  },
+  "replayOrdering": "observed_at asc, event_id asc"
+}

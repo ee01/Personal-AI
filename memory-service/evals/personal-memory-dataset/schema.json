@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "personal-memory-dataset/event/v1",
+  "title": "PersonalMemoryEvent",
+  "type": "object",
+  "required": [
+    "event_id",
+    "source",
+    "source_type",
+    "occurred_at",
+    "observed_at",
+    "scope",
+    "group_id",
+    "thread_root",
+    "sender",
+    "text",
+    "metadata",
+    "acl",
+    "provenance"
+  ],
+  "properties": {
+    "event_id": { "type": "string" },
+    "source": {
+      "type": "string",
+      "enum": [
+        "messages_raw",
+        "source_memory_capsule",
+        "markdown_file",
+        "chunk",
+        "reflection_thread"
+      ]
+    },
+    "source_type": { "type": "string" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "scope": { "type": "string" },
+    "group_id": { "type": ["string", "null"] },
+    "thread_root": { "type": ["string", "null"] },
+    "sender": { "type": ["string", "null"] },
+    "text": { "type": "string" },
+    "metadata": { "type": "object" },
+    "acl": {
+      "type": "object",
+      "required": ["scope", "trust_class"],
+      "properties": {
+        "scope": { "type": "string" },
+        "trust_class": { "type": ["string", "null"] }
+      }
+    },
+    "provenance": { "type": "object" },
+    "replay_seq": { "type": "integer", "minimum": 1 }
+  },
+  "additionalProperties": false
+}

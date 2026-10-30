@@ -1,0 +1,5 @@
+{
+  "fixture_id": "synthetic-mini",
+  "virtual_days": 3,
+  "description": "Minimal smoke fixture for harness demo (not the 160-point set)."
+}

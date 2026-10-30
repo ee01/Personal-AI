@@ -1,0 +1,19 @@
+{
+  "name": "@personal-ai/memory-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared memory benchmark harness (E-141 / E-144): virtual clock replay, adapter interface, probes, cost tracking",
+  "scripts": {
+    "run": "tsx src/cli/run-benchmark.ts",
+    "demo": "tsx src/cli/run-benchmark.ts --fixture synthetic-mini",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
