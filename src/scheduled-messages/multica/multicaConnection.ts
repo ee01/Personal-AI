@@ -1,5 +1,4 @@
 import { MulticaClient, type MulticaAgent, type MulticaProject, type MulticaRuntime, type MulticaWorkspace } from './multicaClient.js';
-import { fetchOnInsecureOrigin } from './multicaInsecureFetch.js';
 import {
   OFFICIAL_MULTICA_API_ORIGIN,
   OFFICIAL_MULTICA_WEB_ORIGIN,
@@ -169,10 +168,7 @@ function normalizeMulticaPat(value: string): string {
 }
 
 function multicaClient(options: { apiOrigin: string; pat: string; workspaceId?: string }): MulticaClient {
-  return new MulticaClient({
-    ...options,
-    fetchImpl: options.apiOrigin.startsWith('http://') ? fetchOnInsecureOrigin : undefined,
-  });
+  return new MulticaClient(options);
 }
 
 async function probeMulticaAccount(

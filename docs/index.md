@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-10-29*
+*最后更新: 2026-10-30*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -144,7 +144,7 @@
 | 定时消息领取与交付诊断 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | API 领取仅写待确认，不依赖可能过期的 Config 版本；Executor 在执行条件前记录拉取结果，区分请求成功与下游交付 |
 | 定时消息持久幂等账本 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet 原子领取/确认、满属性迁移、旧表四步诊断助手、初始化元数据缓存修复（3.0.1）、未知提交冻结、48h 去重与兼容回滚；3.0.0 需维护窗口切换 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检、保留项目私有管理校验值；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
-| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | 新建任务默认定时送到用户自己的 Multica Autopilot，时间仍由 Jira 触发，结果在 Multica；已有任务继续由 Jira Rule 触发 memory-service 入队 `delegate_agent`，执行器由 Options registry 选择。成功通知分执行/整理/投递三段；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |
+| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | 新建任务默认定时送到用户自己的 Multica Autopilot，时间仍由 Jira 触发，结果在 Multica；PAT 仅用于本机配置管理，到期使用 webhook 凭据；已有任务继续由 Jira Rule 触发 memory-service 入队 `delegate_agent`，执行器由 Options registry 选择。成功通知分执行/整理/投递三段；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |
 | 执行器连通性测试 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options「测试 / 深度测试」；`POST /agent-executors/:id/probe`；stage=dns/connect/auth/ready；缓存 5 分钟；不跑 LLM |
 | Agent Worker 远程执行 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | ACP `runtime=remote` 入队 `awaiting_claim`；pair/heartbeat/claim/report + lease fencing；Desktop 内嵌或 headless `install.sh` |
 | Agent Workflow 多 Agent 编排 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 标准消息入口 workflow（`ANALYSIS_TYPE=agentWorkflow`）；低置信度复核和保存样例删除都有本地边界回执 |

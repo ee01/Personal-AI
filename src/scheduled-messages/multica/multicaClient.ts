@@ -77,7 +77,8 @@ export class MulticaClient {
     fetchImpl?: FetchLike;
   }) {
     this.origin = assertHttpsOrigin(options.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN, 'API 地址');
-    this.fetchImpl = options.fetchImpl || fetch;
+    // Native fetch requires its global receiver in extension service workers.
+    this.fetchImpl = options.fetchImpl || ((input, init) => globalThis.fetch(input, init));
     if (!options.pat.trim()) throw new MulticaApiError('缺少 PAT', 0, 'missing_pat');
   }
 

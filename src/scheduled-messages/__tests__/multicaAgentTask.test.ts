@@ -21,7 +21,6 @@ import {
   redactMulticaSecrets,
   resolveWebhookUrl,
 } from '../multica/multicaContract.js';
-import { assertHttpResponseStayed } from '../multica/multicaInsecureFetch.js';
 import { provisionMulticaScheduledTask, type ProvisionProgress } from '../multica/multicaProvision.js';
 
 const API = 'https://api.multica.ai';
@@ -108,6 +107,26 @@ test('schedule-only edits keep an already ready Multica task on its saved agent'
     Agent_Multica_Workspace_ID: 'ws_12345678',
     Content: 'same',
   }, { Content: 'same', Agent_Multica_Agent_ID: '', Agent_Multica_Workspace_ID: '' }), true);
+});
+
+test('default transport preserves the global fetch receiver for HTTP and HTTPS', async () => {
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async function (input, init) {
+    assert.equal(this, globalThis);
+    calls.push(String(input));
+    assert.equal(init?.redirect, 'error');
+    return new Response(JSON.stringify({ id: 'user_12345678' }));
+  };
+  try {
+    for (const apiOrigin of ['http://multica.test', 'https://multica.test']) {
+      const client = new MulticaClient({ apiOrigin, pat: 'test_pat' });
+      assert.equal((await client.getMe()).id, 'user_12345678');
+    }
+    assert.deepEqual(calls, ['http://multica.test/api/me', 'https://multica.test/api/me']);
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test('client rejects paths outside the allowlist and does not follow redirects or echo PAT', async () => {
@@ -208,18 +227,6 @@ test('self-hosted http verify calls the API instead of failing before the reques
 });
 
 test('http verify stays on http and does not follow a redirect off that host', async () => {
-  assert.doesNotThrow(() => assertHttpResponseStayed(
-    'http://task.xmnup.com/api/me',
-    'http://task.xmnup.com/api/me',
-  ));
-  assert.throws(
-    () => assertHttpResponseStayed('http://task.xmnup.com/api/me', 'https://task.xmnup.com/api/me'),
-    /别的地址/,
-  );
-  assert.throws(
-    () => assertHttpResponseStayed('http://task.xmnup.com/api/me', 'http://evil.example/api/me'),
-    /别的地址/,
-  );
   const calls: string[] = [];
   const session = memoryStore();
   const local = memoryStore();
