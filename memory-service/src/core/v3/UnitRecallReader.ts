@@ -19,6 +19,7 @@
 
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
+import { getBusinessTimeSec } from '../../clock/businessClock.js';
 import { rerankDeepRecall } from './DeepRecallReranker.js';
 
 export interface UnitRecallCandidate {
@@ -211,7 +212,7 @@ export class UnitRecallReader {
 
       // F5 fix: temporal gate — current mode checks valid_from/to is active now.
       if (policyGate.temporalMode === 'current') {
-        const nowSec = Math.floor(Date.now() / 1000);
+        const nowSec = getBusinessTimeSec();
         if (row.valid_from != null && row.valid_from > nowSec) continue;
         if (row.valid_to != null && row.valid_to <= nowSec) continue;
       } else if (policyGate.temporalMode === 'historical' && policyGate.asOfValid != null) {
@@ -289,8 +290,8 @@ export class UnitRecallReader {
         try {
         this.db.prepare(`INSERT INTO recall_lane_metrics(owner_user_id,tenant_id,surface,lane,elapsed_ms,candidate_count,created_at,traffic_class)
           VALUES (?,?,?,?,?,?,?,'production')`).run(options.policy.ownerUserId,options.policy.tenantId??'default',
-            options.policy.accessibilityMode==='passive'?'passive':'active',result.lane,Date.now()-started,result.candidates.length,Math.floor(Date.now()/1000));
-        this.db.prepare('DELETE FROM recall_lane_metrics WHERE created_at<?').run(Math.floor(Date.now()/1000)-30*86400);
+            options.policy.accessibilityMode==='passive'?'passive':'active',result.lane,Date.now()-started,result.candidates.length,getBusinessTimeSec());
+        this.db.prepare('DELETE FROM recall_lane_metrics WHERE created_at<?').run(getBusinessTimeSec()-30*86400);
         } catch {
           // Observability must never fail retrieval during a concurrent writer.
         }

@@ -12,6 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import type Database from 'better-sqlite3';
 
 import { ContextRecallService } from '../core/ContextRecallService.js';
+import { now } from '../utils/time.js';
 import { KeystoneBriefService } from '../core/KeystoneBriefService.js';
 import { isV3ReadShadowEnabled } from '../core/v3/v3ReadShadow.js';
 import { buildWeaveStats } from '../core/weaveStats.js';
@@ -636,7 +637,7 @@ export async function contextRecallRoutes(app: FastifyInstance): Promise<void> {
           try {
             db.prepare(`INSERT INTO recall_lane_metrics(owner_user_id,tenant_id,surface,lane,elapsed_ms,candidate_count,created_at,traffic_class)
               VALUES (?,'default','passive','fast',?,?,?,'production')`)
-              .run(request.userId??request.userContext.userId,Date.now()-startedAt,result.matches?.length??0,Math.floor(Date.now()/1000));
+              .run(request.userId??request.userContext.userId,Date.now()-startedAt,result.matches?.length??0,now());
           } catch { /* Telemetry cannot change a passive response. */ }
         }
         return reply.send(result);

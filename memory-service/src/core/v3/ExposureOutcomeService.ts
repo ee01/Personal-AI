@@ -7,6 +7,7 @@
 
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { now } from '../../utils/time.js';
 
 import {
   classifyOutcomeImpact,
@@ -23,7 +24,7 @@ export class ExposureOutcomeService {
   /** Record a raw exposure batch (per-request). No lifecycle impact (I9). */
   recordExposures(requestId: string, records: ExposureRecord[]): number {
     if (records.length === 0) return 0;
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
     const stmt = this.db.prepare(
       `INSERT INTO memory_exposures
         (request_id, unit_id, surface, rank, shown, quieted, no_result, policy_version, created_at)
@@ -56,7 +57,7 @@ export class ExposureOutcomeService {
     impact: string;
     newStability: number;
   } {
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
     this.db
       .prepare(
         `INSERT INTO memory_outcomes (unit_id, outcome_type, surface, task_context, created_at)
@@ -100,7 +101,7 @@ export class ExposureOutcomeService {
 
   /** Prune raw exposures older than the retention window (30 days). */
   pruneStaleExposures(): number {
-    const cutoff = Math.floor(Date.now() / 1000) - EXPOSURE_RETENTION_DAYS * 86400;
+    const cutoff = now() - EXPOSURE_RETENTION_DAYS * 86400;
     const result = this.db
       .prepare(`DELETE FROM memory_exposures WHERE created_at < ?`)
       .run(cutoff);

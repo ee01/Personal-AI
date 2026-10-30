@@ -1317,7 +1317,7 @@ export class NotificationCenterService {
       return {sent:false,accepted:Boolean(previous?.queue_id),uncertain:!previous?.queue_id,
         queueId:previous?.queue_id||undefined,error:existing.lastError||'delivery_pending'};
     }
-    const sinceAt = Date.now() / 1000;
+    const sinceAt = now();
     let result = await botSender.sendMarkdown(input.title, input.body, {
       mention: input.mention,
       targetUserId: input.targetUserId,

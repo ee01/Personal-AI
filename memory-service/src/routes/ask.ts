@@ -21,6 +21,7 @@ import type {
   ClaimAttributionReceipt,
 } from '../types/index.js';
 import { ActiveRecallService } from '../core/ActiveRecallService.js';
+import { now } from '../utils/time.js';
 import { reconcileModelConfig } from '../core/v3/ReconcileModel.js';
 import { getUsageContext } from '../analytics/usageContext.js';
 import { MeetingOutcomeBinderService } from '../core/MeetingOutcomeBinderService.js';
@@ -927,7 +928,7 @@ function isHistoricalRecallIntent(
   const range = parsedIntent.filters.timeRange;
   if (!range) return false;
 
-  const currentTime = Math.floor(Date.now() / 1000);
+  const currentTime = now();
   const thirtyDaysAgo = currentTime - 30 * 86400;
   return range.end < thirtyDaysAgo;
 }

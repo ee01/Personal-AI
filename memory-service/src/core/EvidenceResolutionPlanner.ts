@@ -1,4 +1,5 @@
 import { getLLMClient } from '../llm/LLMClient.js';
+import { now } from '../utils/time.js';
 
 export type EvidenceResolutionScene = 'outreach' | 'ask' | 'reflection';
 export type EvidenceResolutionState =
@@ -380,7 +381,7 @@ function inferSourceAnchor(input: EvidenceResolutionInput): string | undefined {
 }
 
 function parseEtaFromText(text: string): number | undefined {
-  const currentTime = Math.floor(Date.now() / 1000);
+  const currentTime = now();
   const lower = text.toLowerCase();
   const dayMatch = lower.match(/(\d+)\s*(day|days|天)/);
   if (dayMatch) {

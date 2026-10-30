@@ -11,6 +11,7 @@ import { UnitTruthMaintainer } from './UnitTruthMaintainer.js';
 import { EpisodeRepository } from './EpisodeRepository.js';
 import { truthCandidates } from './TruthCandidatePlan.js';
 import { reconcileModelConfig,reconcileModelVersion,reconcileModelOptions } from './ReconcileModel.js';
+import { now } from '../../utils/time.js';
 
 type Phase = 'B' | 'C' | 'D';
 export interface JudgeResult { decision: ReconcileDecision; reason: string }
@@ -38,7 +39,7 @@ export function protectedUnit(unit: Pick<ReconcileUnit,'memory_form'|'kind'|'sub
 export class SleepReconciliation {
   constructor(private db: Database.Database, private judge?: ReconcileJudge) {}
 
-  async run(at = Math.floor(Date.now()/1000)) {
+  async run(at = now()) {
     const result: Record<string, unknown> = {};
     if (!isConsolidationPhaseEnabled('A')) return result;
     const night=new Date(at*1000).toISOString().slice(0,10);
@@ -58,7 +59,7 @@ export class SleepReconciliation {
       }
     }
     this.db.prepare('UPDATE reconcile_nightly_runs SET finished_at=?,result_json=? WHERE night=?')
-      .run(Math.floor(Date.now()/1000),JSON.stringify(result),night);
+      .run(at,JSON.stringify(result),night);
     return result;
   }
 

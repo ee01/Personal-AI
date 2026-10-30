@@ -13,6 +13,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { now } from '../../utils/time.js';
 
 export type UnitVectorChannel = '' | 'e5';
 
@@ -120,7 +121,7 @@ export class UnitEmbeddingWorker {
               `UPDATE projection_outbox SET status = 'done', attempts = attempts + 1, updated_at = ?
                WHERE projection_key = ?`,
             )
-            .run(Math.floor(Date.now() / 1000), task.projection_key);
+            .run(now(), task.projection_key);
           done += 1;
         } else {
           // View missing (e.g. unit superseded): mark stale, never re-embed.
@@ -129,7 +130,7 @@ export class UnitEmbeddingWorker {
               `UPDATE projection_outbox SET status = 'stale', updated_at = ?
                WHERE projection_key = ?`,
             )
-            .run(Math.floor(Date.now() / 1000), task.projection_key);
+            .run(now(), task.projection_key);
           failed += 1;
         }
       } catch (err) {
@@ -139,7 +140,7 @@ export class UnitEmbeddingWorker {
             `UPDATE projection_outbox SET attempts = attempts + 1, last_error = ?, updated_at = ?
              WHERE projection_key = ?`,
           )
-          .run((err as Error).message.slice(0, 200), Math.floor(Date.now() / 1000), task.projection_key);
+          .run((err as Error).message.slice(0, 200), now(), task.projection_key);
       }
     }
     return { done, failed, skipped: 0 };

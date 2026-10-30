@@ -5,6 +5,7 @@ import { EpisodeRepository } from '../core/v3/EpisodeRepository.js';
 import { reconcileModelVersion } from '../core/v3/ReconcileModel.js';
 import { sourcesFor } from '../core/v3/ReconcileTruth.js';
 import { unitPromotionEligible } from '../core/WriteProvenanceGate.js';
+import { now } from '../utils/time.js';
 
 export async function reconciliationRoutes(app: FastifyInstance) {
   app.get('/reconciliation/profiles',async request=>{
@@ -28,7 +29,7 @@ export async function reconciliationRoutes(app: FastifyInstance) {
       const unit=db.prepare('SELECT * FROM memory_units WHERE id=? AND owner_user_id=?').get(ids[0],userId) as any;
       if(!unit || slot.slot_value!==unit.text || unit.sensitivity==='restricted'||!['active','provisional'].includes(unit.status)||!unitPromotionEligible(db,unit.id)
         ||!sourcesFor(db,unit.id).some(s=>s.evidence_class!=='system_inference'))return false;
-      const at=Math.floor(Date.now()/1000);
+      const at=now();
       db.prepare('UPDATE profile_slots SET status=?,current_revision=current_revision+1,updated_at=? WHERE id=?')
         .run(request.body.accept?'active':'rejected',at,slot.id);
       if(request.body.accept) {
@@ -95,13 +96,13 @@ export async function reconciliationRoutes(app: FastifyInstance) {
       AND n.owner_user_id=? AND o.owner_user_id=? AND n.sensitivity!='restricted' AND o.sensitivity!='restricted'`)
       .get(request.params.id,userId,userId,userId);
     if(!receipt) return reply.code(404).send({error:'receipt not found'});
-    if(!new UnitTruthMaintainer(db,new EpisodeRepository(db)).revertReconcileDecision(request.params.id,Math.floor(Date.now()/1000))) {
+    if(!new UnitTruthMaintainer(db,new EpisodeRepository(db)).revertReconcileDecision(request.params.id,now())) {
       return reply.code(409).send({error:'receipt is not applied or has newer revisions; no changes made'});
     }
     return {reverted:true};
   });
   app.get('/reconciliation/metrics',async request=>{
-    const {db,userId}=request.userContext, since=Math.floor(Date.now()/1000)-7*86400;
+    const {db,userId}=request.userContext, since=now()-7*86400;
     const rows=db.prepare(`SELECT surface,lane,elapsed_ms FROM (SELECT surface,lane,elapsed_ms FROM recall_lane_metrics
       WHERE owner_user_id=? AND created_at>=? AND traffic_class='production' ORDER BY created_at DESC,id DESC LIMIT 10000) ORDER BY elapsed_ms`)
       .all(userId,since) as Array<{surface:string;lane:string;elapsed_ms:number}>;

@@ -9,6 +9,7 @@ import {
   triageAttention,
   wallTime,
 } from './AttentionTriage.js';
+import { now } from '../utils/time.js';
 
 export const attentionMode = () =>
   ['shadow', 'lens', 'remind'].includes(
@@ -67,7 +68,7 @@ export class AttentionService {
     messageId: string,
     kinds: string[] = [],
     unitId?: string,
-    at = Math.floor(Date.now() / 1000),
+    at = now(),
   ) {
     if (attentionMode() === 'off') return null;
     const r = this.db
@@ -262,7 +263,7 @@ export class AttentionService {
       .prepare('SELECT * FROM attention_items WHERE id=? AND user_id=?')
       .get(id, this.userId) as AttentionItem | undefined;
   }
-  listForPosts(postIds: string[], at = Math.floor(Date.now() / 1000)) {
+  listForPosts(postIds: string[], at = now()) {
     if (!['lens', 'remind'].includes(attentionMode()) || !postIds.length)
       return [];
     this.maintain(at);
@@ -311,7 +312,7 @@ export class AttentionService {
       | 'not_relevant'
       | 'dismissed'
       | 'cancelled',
-    at = Math.floor(Date.now() / 1000),
+    at = now(),
   ) {
     return this.db.transaction(() => {
       const item = this.get(id);
@@ -403,7 +404,7 @@ export class AttentionService {
         id,
       );
   }
-  maintain(at = Math.floor(Date.now() / 1000)) {
+  maintain(at = now()) {
     this.db.transaction(() => {
       const rows = this.db
         .prepare(
@@ -431,7 +432,7 @@ export class AttentionService {
       }
     })();
   }
-  dueCandidates(at = Math.floor(Date.now() / 1000)): NotificationCandidate[] {
+  dueCandidates(at = now()): NotificationCandidate[] {
     if (attentionMode() !== 'remind') return [];
     this.maintain(at);
     return (
@@ -492,7 +493,7 @@ export class AttentionService {
       this.closeAction(item.accepted_action_id, 'done', at);
     return Boolean(changed);
   }
-  reconcile(at = Math.floor(Date.now() / 1000)) {
+  reconcile(at = now()) {
     this.maintain(at);
     let completed = 0;
     const items = this.db
@@ -542,7 +543,7 @@ export class AttentionService {
     }
     return { completed, llmCalls: 0 };
   }
-  openLoops(at = Math.floor(Date.now() / 1000)) {
+  openLoops(at = now()) {
     if (attentionMode() === 'off' || attentionMode() === 'shadow') return [];
     return this.db
       .prepare(
@@ -554,7 +555,7 @@ export class AttentionService {
     id: string,
     key: 'manager' | 'role',
     value: string,
-    at = Math.floor(Date.now() / 1000),
+    at = now(),
   ) {
     const item = this.get(id);
     if (!item) throw new Error('attention_not_found');

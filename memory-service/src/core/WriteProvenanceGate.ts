@@ -2,6 +2,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { now } from '../utils/time.js';
 
 export const ORIGIN_CLASSES = ['owner', 'observed', 'agent', 'untrusted', 'system'] as const;
 export const SESSION_KINDS = ['interactive', 'heartbeat', 'cron', 'subagent', 'reflection', 'dream', 'import'] as const;
@@ -85,7 +86,7 @@ export function recordRecallExposures(db: Database.Database, ids: string[], surf
     for (const [rank, id] of [...new Set(ids)].entries()) {
       const unit = id.startsWith('unit:') ? id.slice(5) : id;
       const found = db.prepare('SELECT id FROM memory_units WHERE id=?').get(unit) as {id:string}|undefined;
-      insert.run(requestId, found?.id ?? null, id, surface, turnId ?? null, rank, Math.floor(Date.now()/1000));
+      insert.run(requestId, found?.id ?? null, id, surface, turnId ?? null, rank, now());
       count++;
     }
     return count;
@@ -117,7 +118,7 @@ export function applyTurnTaint(db: Database.Database, input: ProvenanceInput): P
   if (declaredNetwork) {
     db.prepare(`INSERT INTO memory_turn_taint(session_id,turn_id,tainted,updated_at) VALUES (?,?,1,?)
       ON CONFLICT(session_id) DO UPDATE SET turn_id=excluded.turn_id,tainted=1,updated_at=excluded.updated_at`)
-      .run(sessionId, typeof meta.turn_id === 'string' ? meta.turn_id : null, Math.floor(Date.now()/1000));
+      .run(sessionId, typeof meta.turn_id === 'string' ? meta.turn_id : null, now());
   }
   const row = db.prepare('SELECT tainted FROM memory_turn_taint WHERE session_id=?').get(sessionId) as {tainted:number}|undefined;
   return row?.tainted && (role === 'assistant' || role === 'tool' || declaredNetwork)

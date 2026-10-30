@@ -23,6 +23,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { getLLMClient, LLMClient } from '../../llm/LLMClient.js';
 import { LLMBudgetExceededError } from '../../llm/llmErrors.js';
+import { now } from '../../utils/time.js';
 import { parseLLMFallbacks } from '../../llm/LLMTarget.js';
 import { getConfig } from '../../config.js';
 import { runWithUsageContext } from '../../analytics/usageContext.js';
@@ -165,7 +166,7 @@ export class ExtractionWorker {
       .prepare(`SELECT job_id FROM ingest_jobs WHERE episode_id = ? LIMIT 1`)
       .get(episodeId) as { job_id: string } | undefined;
     if (existing) return null;
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
     const jobId = `job-${randomUUID()}`;
     this.db
       .prepare(
@@ -242,7 +243,7 @@ export class ExtractionWorker {
   private claimJob():
     | { jobId: string; episodeId: string; attempts: number }
     | null {
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
     // F6 fix: also claim expired-lease jobs (worker died mid-processing).
     // The CASE + conditional WHERE ensures we only take jobs that are
     // either not claimed, or whose lease has genuinely expired.
@@ -354,7 +355,7 @@ export class ExtractionWorker {
           (job_id, result_hash, contract_version, candidate_batch_json, created_at)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(job.jobId, resultHash, EXTRACTION_CONTRACT_VERSION, batchJson, Math.floor(Date.now() / 1000));
+      .run(job.jobId, resultHash, EXTRACTION_CONTRACT_VERSION, batchJson, now());
 
     if (parsed.batch.candidates.length === 0) {
       // Zero facts is a terminal SUCCESS with a visible reason.
@@ -474,7 +475,7 @@ export class ExtractionWorker {
   private handleBudgetExceeded(
     job: { jobId: string; episodeId: string; attempts: number },
   ): 'budget' {
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
     const nextUtcMidnightSec = Math.ceil(nowSec / 86400) * 86400 + 60;
     this.db
       .prepare(
@@ -496,7 +497,7 @@ export class ExtractionWorker {
     errorClass: string,
     detail: string,
   ): 'retryable' | 'dead_letter' {
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
     if (job.attempts >= MAX_EXTRACTION_ATTEMPTS) {
       this.db
         .prepare(
@@ -528,7 +529,7 @@ export class ExtractionWorker {
          WHERE job_id = ?`,
       )
       .run(status, status === 'extracted_zero' || status === 'integrated' ? detail : null,
-        Math.floor(Date.now() / 1000), jobId);
+        now(), jobId);
   }
 
   private parseJsonLoose(content: string): unknown {

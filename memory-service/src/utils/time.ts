@@ -5,11 +5,13 @@
  * the SQLite schema and keep numeric values compact.
  */
 
+import { getBusinessTimeSec } from '../clock/businessClock.js';
+
 /**
- * Current Unix timestamp in seconds.
+ * Current Unix timestamp in seconds (business clock when injected, else wall clock).
  */
 export function now(): number {
-  return Math.floor(Date.now() / 1000);
+  return getBusinessTimeSec();
 }
 
 /**

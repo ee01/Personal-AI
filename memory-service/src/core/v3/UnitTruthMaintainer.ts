@@ -1,5 +1,6 @@
 import { episodePromotionEligible } from '../WriteProvenanceGate.js';
 import { applyReconciliation, revertReconciliation, resolveReconcileConfirmation } from './ReconcileTruth.js';
+import { now } from '../../utils/time.js';
 /**
  * v3 UnitTruthMaintainer (memory-foundation plan §5.6): the single entry
  * point for memory-unit state changes in the v3 schema.
@@ -139,13 +140,13 @@ function normalizeText(text: string): string {
 }
 
 export class UnitTruthMaintainer {
-  resolveReconcileConfirmation(id:string,answer:string,owner:string,at=Math.floor(Date.now()/1000)) {
+  resolveReconcileConfirmation(id:string,answer:string,owner:string,at=now()) {
     return resolveReconcileConfirmation(this.db,id,answer,owner,at);
   }
-  revertReconcileDecision(receiptId:string,at=Math.floor(Date.now()/1000)):boolean {
+  revertReconcileDecision(receiptId:string,at=now()):boolean {
     return revertReconciliation(this.db,receiptId,at);
   }
-  applyReconcileDecision(receiptId: string, at = Math.floor(Date.now()/1000)): boolean {
+  applyReconcileDecision(receiptId: string, at = now()): boolean {
     return applyReconciliation(this.db, receiptId, at);
   }
   constructor(
@@ -235,7 +236,7 @@ export class UnitTruthMaintainer {
     candidateHash: string,
   ): ProposeResult {
     const tenantId = actor.tenantId ?? 'default';
-    const nowSec = Math.floor(Date.now() / 1000);
+    const nowSec = now();
 
     // Conflict scope: tenant + owner + subject + predicate + scope (plan §5.6).
     const conflicting = this.db
@@ -362,7 +363,7 @@ export class UnitTruthMaintainer {
     if (finalDecision === 'disputed') {
       // Create the counter-claim as its own provisional unit.
       const counterId = randomUUID();
-      const now = Math.floor(Date.now() / 1000);
+      const nowSec = now();
       this.db
         .prepare(
           `INSERT INTO memory_units
@@ -388,14 +389,14 @@ export class UnitTruthMaintainer {
           candidate.observedAt ?? null,
           candidate.observedAt ? 'source_timestamp' : null,
           candidate.observedAt ?? null,
-          now,
+          nowSec,
           candidate.scopeLocator ?? conflicting.scope_locator,
           candidate.sensitivity ?? 'internal',
           JSON.stringify([...new Set(sources.map((s) => s.evidenceClass))]),
-          now,
-          now,
+          nowSec,
+          nowSec,
         );
-      this.writeSources(counterId, newSources, now);
+      this.writeSources(counterId, newSources, nowSec);
       this.writeRevision(counterId, 1, 'disputed', conflicting.id, counterId, actor, workUnitKey);
 
       // Mark the ORIGINAL unit as disputed AND advance current_revision to
@@ -534,7 +535,7 @@ export class UnitTruthMaintainer {
         actor.actorId,
         requestId,
         TRUTH_POLICY_VERSION,
-        Math.floor(Date.now() / 1000),
+        now(),
       );
   }
 
@@ -600,7 +601,7 @@ export class UnitTruthMaintainer {
         targetType,
         targetId,
         targetRevision,
-        Math.floor(Date.now() / 1000),
+        now(),
       );
     return {
       workUnitKey,
