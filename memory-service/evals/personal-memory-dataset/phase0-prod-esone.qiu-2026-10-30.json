@@ -1,0 +1,342 @@
+{
+  "phase": "T0",
+  "capturedAt": "2026-10-30T07:01:34.140Z",
+  "userId": "esone.qiu",
+  "database": {
+    "path": "/Users/rcadmin/personal-ai/memory-service/data/users/esone.qiu/memory.db",
+    "access": "remote_sqlite3_via_ssh",
+    "sshTarget": "rcadmin@10.32.56.212",
+    "sizeBytes": 1382752256,
+    "mtimeIso": "2026-09-11T06:42:44.000Z",
+    "sha256": "5664614e0e7c7bf4d7a3beb943bca2c1917077bbf5e6d904fb9401ddb6c17ddb"
+  },
+  "migrations": {
+    "latestApplied": "066_confirm_request_resume_action.sql",
+    "latestAppliedId": 66,
+    "repoHeadMigration": "081_bot_delivery_readback_cursor.sql",
+    "behindRepo": 15
+  },
+  "schemaNotes": [
+    "messages_raw.origin_class 未迁移（074+）；promotion 视图统计跳过"
+  ],
+  "tableCounts": [
+    {
+      "table": "messages_raw",
+      "count": 14610
+    },
+    {
+      "table": "chunks",
+      "count": 10822
+    },
+    {
+      "table": "memory_metadata",
+      "count": 18280
+    },
+    {
+      "table": "entities",
+      "count": 14208
+    },
+    {
+      "table": "reflection_threads",
+      "count": 901
+    },
+    {
+      "table": "source_memory_capsules",
+      "count": 843
+    },
+    {
+      "table": "memory_units",
+      "count": 0,
+      "note": "missing"
+    },
+    {
+      "table": "ingest_jobs",
+      "count": 0,
+      "note": "missing"
+    },
+    {
+      "table": "memory_import_batches",
+      "count": 0
+    },
+    {
+      "table": "calendar_events",
+      "count": 845
+    }
+  ],
+  "messagesRawBySource": [
+    {
+      "source_type": "glip",
+      "count": 11775,
+      "min_ts": 0,
+      "max_ts": 1787941740
+    },
+    {
+      "source_type": "",
+      "count": 868,
+      "min_ts": 0,
+      "max_ts": 0
+    },
+    {
+      "source_type": "calendar",
+      "count": 822,
+      "min_ts": 1778291100,
+      "max_ts": 1788337800
+    },
+    {
+      "source_type": "jira",
+      "count": 339,
+      "min_ts": 1778564446,
+      "max_ts": 1787896904
+    },
+    {
+      "source_type": "meeting",
+      "count": 313,
+      "min_ts": 0,
+      "max_ts": 1785207650
+    },
+    {
+      "source_type": "web",
+      "count": 285,
+      "min_ts": 1780541465,
+      "max_ts": 1787195410
+    },
+    {
+      "source_type": "system",
+      "count": 161,
+      "min_ts": 1762226732,
+      "max_ts": 1778568203
+    },
+    {
+      "source_type": "doubao_chat",
+      "count": 19,
+      "min_ts": 1784902262,
+      "max_ts": 1785918898
+    },
+    {
+      "source_type": "outreach_question",
+      "count": 17,
+      "min_ts": 1776333387,
+      "max_ts": 1787037442
+    },
+    {
+      "source_type": "outreach_reply",
+      "count": 10,
+      "min_ts": 1776333510,
+      "max_ts": 1787038249
+    },
+    {
+      "source_type": "g",
+      "count": 1,
+      "min_ts": 0,
+      "max_ts": 0
+    }
+  ],
+  "glip": {
+    "total": 11775,
+    "withPlausibleTimestamp": 11727,
+    "plausibleTimestampFloor": 1577836800,
+    "minTimestampIso": "2025-02-13T16:00:00.000Z",
+    "maxTimestampIso": "2026-08-28T18:29:00.000Z",
+    "distinctGroups": 586,
+    "storylines": {
+      "definition": "group_id : coalesce(metadata.threadRootPostId, metadata.postId, messages_raw.id)",
+      "total": 11281,
+      "withAtLeast2Messages": 197,
+      "withAtLeast5Messages": 35,
+      "withAtLeast10Messages": 12,
+      "topStorylinesByCount": [
+        {
+          "storyline_key": "161723932678:82575746727940",
+          "message_count": 14,
+          "min_ts": 1786500731,
+          "max_ts": 1787048856
+        },
+        {
+          "storyline_key": "1497300893698:82404734517252",
+          "message_count": 14,
+          "min_ts": 1786093054,
+          "max_ts": 1786338739
+        },
+        {
+          "storyline_key": "1463750737922:82752526385156",
+          "message_count": 14,
+          "min_ts": 1787049035,
+          "max_ts": 1787189166
+        },
+        {
+          "storyline_key": "1497300893698:82404227022852",
+          "message_count": 13,
+          "min_ts": 1785987243,
+          "max_ts": 1786172482
+        },
+        {
+          "storyline_key": "155923783686:83096935727108",
+          "message_count": 12,
+          "min_ts": 1787892546,
+          "max_ts": 1787905765
+        },
+        {
+          "storyline_key": "1497300893698:82925946855428",
+          "message_count": 12,
+          "min_ts": 1787551824,
+          "max_ts": 1787875290
+        },
+        {
+          "storyline_key": "1497300893698:82534896418820",
+          "message_count": 12,
+          "min_ts": 1786431249,
+          "max_ts": 1787036726
+        },
+        {
+          "storyline_key": "1626251722754:81266610708484",
+          "message_count": 11,
+          "min_ts": 1782802630,
+          "max_ts": 1782875188
+        },
+        {
+          "storyline_key": "161723932678:82750690705412",
+          "message_count": 10,
+          "min_ts": 1787034167,
+          "max_ts": 1787218499
+        },
+        {
+          "storyline_key": "1497300893698:82793486213124",
+          "message_count": 10,
+          "min_ts": 1787118253,
+          "max_ts": 1787212415
+        },
+        {
+          "storyline_key": "149043404806:82577403265028",
+          "message_count": 10,
+          "min_ts": 1786518340,
+          "max_ts": 1787712129
+        },
+        {
+          "storyline_key": "144411459590:82320254468100",
+          "message_count": 10,
+          "min_ts": 1785827914,
+          "max_ts": 1786345369
+        },
+        {
+          "storyline_key": "146265923590:80700998639620",
+          "message_count": 9,
+          "min_ts": 1781156106,
+          "max_ts": 1782274813
+        },
+        {
+          "storyline_key": "1497300893698:82762043293700",
+          "message_count": 8,
+          "min_ts": 1787065611,
+          "max_ts": 1787068410
+        },
+        {
+          "storyline_key": "54490570758:81930406371332",
+          "message_count": 7,
+          "min_ts": 1784687632,
+          "max_ts": 1785740779
+        }
+      ]
+    },
+    "evalSamplingHint": {
+      "targetIndependentStorylinesFor160Cases": 20,
+      "storylinesMeetingMin2Messages": 197,
+      "sufficientFor160PointDesign": true,
+      "note": "独立 storyline（≥2 条 glip）数量达到 LongMemEval/本项 160 点设计对「≥20 条故事线」的下限；仍需按场景分层抽样，不能假设每线可产 8 个判定点。"
+    }
+  },
+  "chunks": {
+    "total": 10822,
+    "bySourceType": [
+      {
+        "source_type": "glip",
+        "count": 3148
+      },
+      {
+        "source_type": "web",
+        "count": 2975
+      },
+      {
+        "source_type": "reflection_thread",
+        "count": 1706
+      },
+      {
+        "source_type": "calendar",
+        "count": 833
+      },
+      {
+        "source_type": "daily_log",
+        "count": 704
+      },
+      {
+        "source_type": "null",
+        "count": 534
+      },
+      {
+        "source_type": "meeting",
+        "count": 351
+      },
+      {
+        "source_type": "",
+        "count": 320
+      },
+      {
+        "source_type": "jira",
+        "count": 121
+      },
+      {
+        "source_type": "dream",
+        "count": 58
+      },
+      {
+        "source_type": "reflection",
+        "count": 28
+      },
+      {
+        "source_type": "markdown",
+        "count": 24
+      },
+      {
+        "source_type": "doubao_chat",
+        "count": 19
+      },
+      {
+        "source_type": "user_core",
+        "count": 1
+      }
+    ]
+  },
+  "memoryMetadata": {
+    "total": 18280,
+    "byConsolidationLevel": [
+      {
+        "consolidation_level": "archived",
+        "count": 8322
+      },
+      {
+        "consolidation_level": "forgotten",
+        "count": 4396
+      },
+      {
+        "consolidation_level": "temporary",
+        "count": 4608
+      },
+      {
+        "consolidation_level": "working",
+        "count": 954
+      }
+    ]
+  },
+  "v3": {
+    "tablesPresent": [],
+    "memoryUnits": null,
+    "ingestJobs": null
+  },
+  "sourceMemory": {
+    "capsules": 843
+  },
+  "markdownDirs": [],
+  "contentHashes": {
+    "databaseSha256": null,
+    "manifestSelfSha256": "d03c8df5bd199ba416ab7afa041285bf4bfa4de2ef335d473b02d1d3e6570f4f"
+  }
+}

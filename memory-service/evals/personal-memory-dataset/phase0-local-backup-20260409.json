@@ -1,0 +1,213 @@
+{
+  "phase": "T0",
+  "capturedAt": "2026-10-30T06:59:38.648Z",
+  "userId": "esone.qiu",
+  "database": {
+    "path": "/Users/Esone/git/personal-ai/memory-service/data/users/esone.qiu/memory.db.bak-20260409-103132",
+    "access": "local_readonly",
+    "sshTarget": null,
+    "sizeBytes": 55115776,
+    "mtimeIso": "2026-04-09T02:31:32.443Z",
+    "sha256": "859adfb0960faaf6d640923d1a78e938d56b55f11023ad04cc09efbedd40a864"
+  },
+  "migrations": {
+    "latestApplied": "015_channel_delivery_records.sql",
+    "latestAppliedId": 15,
+    "repoHeadMigration": "081_bot_delivery_readback_cursor.sql",
+    "behindRepo": 66
+  },
+  "schemaNotes": [
+    "messages_raw.origin_class 未迁移（074+）；promotion 视图统计跳过"
+  ],
+  "tableCounts": [
+    {
+      "table": "messages_raw",
+      "count": 21
+    },
+    {
+      "table": "chunks",
+      "count": 935
+    },
+    {
+      "table": "memory_metadata",
+      "count": 890
+    },
+    {
+      "table": "entities",
+      "count": 3
+    },
+    {
+      "table": "reflection_threads",
+      "count": 103
+    },
+    {
+      "table": "source_memory_capsules",
+      "count": 0,
+      "note": "missing"
+    },
+    {
+      "table": "memory_units",
+      "count": 0,
+      "note": "missing"
+    },
+    {
+      "table": "ingest_jobs",
+      "count": 0,
+      "note": "missing"
+    },
+    {
+      "table": "memory_import_batches",
+      "count": 0,
+      "note": "missing"
+    },
+    {
+      "table": "calendar_events",
+      "count": 0,
+      "note": "missing"
+    }
+  ],
+  "messagesRawBySource": [
+    {
+      "source_type": "manual",
+      "count": 17,
+      "min_ts": 1773639838,
+      "max_ts": 1773800142
+    },
+    {
+      "source_type": "outreach_question",
+      "count": 2,
+      "min_ts": 1774842333,
+      "max_ts": 1775096984
+    },
+    {
+      "source_type": "outreach_reply",
+      "count": 2,
+      "min_ts": 1774842415,
+      "max_ts": 1775112997
+    }
+  ],
+  "glip": {
+    "total": 0,
+    "withPlausibleTimestamp": 0,
+    "plausibleTimestampFloor": 1577836800,
+    "minTimestampIso": null,
+    "maxTimestampIso": null,
+    "distinctGroups": 0,
+    "storylines": {
+      "definition": "group_id : coalesce(metadata.threadRootPostId, metadata.postId, messages_raw.id)",
+      "total": 0,
+      "withAtLeast2Messages": 0,
+      "withAtLeast5Messages": 0,
+      "withAtLeast10Messages": 0,
+      "topStorylinesByCount": []
+    },
+    "evalSamplingHint": {
+      "targetIndependentStorylinesFor160Cases": 20,
+      "storylinesMeetingMin2Messages": 0,
+      "sufficientFor160PointDesign": false,
+      "note": "独立 storyline 不足 20 条（≥2 消息/线）；160 判定点需放宽单线采样、降低每线判定点数，或扩大导出时间窗/补历史回填。"
+    }
+  },
+  "chunks": {
+    "total": 935,
+    "bySourceType": [
+      {
+        "source_type": "daily_log",
+        "count": 537
+      },
+      {
+        "source_type": "reflection_thread",
+        "count": 358
+      },
+      {
+        "source_type": "reflection",
+        "count": 21
+      },
+      {
+        "source_type": "dream",
+        "count": 17
+      },
+      {
+        "source_type": "user_core",
+        "count": 1
+      },
+      {
+        "source_type": "project_summary",
+        "count": 1
+      }
+    ]
+  },
+  "memoryMetadata": {
+    "total": 890,
+    "byConsolidationLevel": [
+      {
+        "consolidation_level": "archived",
+        "count": 170
+      },
+      {
+        "consolidation_level": "forgotten",
+        "count": 687
+      },
+      {
+        "consolidation_level": "temporary",
+        "count": 33
+      }
+    ]
+  },
+  "v3": {
+    "tablesPresent": [],
+    "memoryUnits": null,
+    "ingestJobs": null
+  },
+  "sourceMemory": {
+    "capsules": null
+  },
+  "markdownDirs": [
+    {
+      "dir": "daily",
+      "file_count": 292,
+      "min_mtime_iso": "2026-03-04T09:42:10.038Z",
+      "max_mtime_iso": "2026-04-03T15:00:11.785Z"
+    },
+    {
+      "dir": "projects",
+      "file_count": 1,
+      "min_mtime_iso": "2026-03-16T15:00:12.986Z",
+      "max_mtime_iso": "2026-03-16T15:00:12.986Z"
+    },
+    {
+      "dir": "reflection-threads",
+      "file_count": 61,
+      "min_mtime_iso": "2026-03-17T04:08:40.131Z",
+      "max_mtime_iso": "2026-04-10T10:23:57.315Z"
+    },
+    {
+      "dir": "dreams",
+      "file_count": 10,
+      "min_mtime_iso": "2026-03-11T03:32:36.269Z",
+      "max_mtime_iso": "2026-03-28T19:00:24.939Z"
+    },
+    {
+      "dir": "reports",
+      "file_count": 1,
+      "min_mtime_iso": "2026-03-10T09:55:41.168Z",
+      "max_mtime_iso": "2026-03-10T09:55:41.168Z"
+    },
+    {
+      "dir": "agent",
+      "file_count": 0,
+      "min_mtime_iso": null,
+      "max_mtime_iso": null
+    },
+    {
+      "dir": "entities",
+      "file_count": 0,
+      "min_mtime_iso": null,
+      "max_mtime_iso": null
+    }
+  ],
+  "contentHashes": {
+    "databaseSha256": "859adfb0960faaf6d640923d1a78e938d56b55f11023ad04cc09efbedd40a864",
+    "manifestSelfSha256": "5ef5706f323f621d1cc8f00f2867abc3366413677bb813461cf9c19fcbb5c51c"
+  }
+}
