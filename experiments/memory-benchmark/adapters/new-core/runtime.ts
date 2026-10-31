@@ -46,6 +46,7 @@ import {
   VersionConflictError,
 } from "./envelope.js";
 import { InMemoryCostLedger, openRouterChat, type SharedCostLedger } from "./llm.js";
+import { readAblationFromEnv, type AblationMode } from "../../src/ablation/config.js";
 
 const OWNER = "benchmark-owner";
 const TENANT = "benchmark-tenant";
@@ -77,6 +78,7 @@ export class NewCoreRuntime {
   private ledger: SharedCostLedger;
   private ledgerFilePath: string | null = null;
   private models = loadModelsConfig();
+  private ablation: AblationMode = readAblationFromEnv();
   private truth: NewCoreTruthMaintainer;
   private recallCache = new Map<string, RecallResult>();
   private derivedSnippets: string[] = [];
@@ -226,6 +228,15 @@ export class NewCoreRuntime {
       return { virtual_day: day, latency_ms: monotonicNowMs() - t0, cached_replay: true };
     }
 
+    if (this.ablation === "no_background_consolidation") {
+      this.db
+        .prepare("INSERT INTO consolidation_days (virtual_day, completed_at_ms) VALUES (?,?)")
+        .run(day, atMs);
+      bumpWatermark(this.db, "consolidated", atMs);
+      clearBusinessClock();
+      return { virtual_day: day, latency_ms: monotonicNowMs() - t0, cached_replay: true };
+    }
+
     this.inFlightConsolidation = day;
     this.traceConsolidate("start", day, 0, atMs);
 
@@ -247,7 +258,7 @@ export class NewCoreRuntime {
       for (const fact of extracted.facts) {
         this.appendFact(fact, row);
       }
-      if (extracted.artifact) {
+      if (extracted.artifact && this.ablation !== "no_link_precalc") {
         this.appendArtifact(extracted.artifact, row);
       }
       this.db
@@ -290,7 +301,10 @@ export class NewCoreRuntime {
 
     if (raw) {
       try {
-        const parsed = JSON.parse(raw) as unknown;
+        const { parseJsonFromLlmText } = await import(
+          "../../../../memory-service/src/llm/parseLlmJson.js"
+        );
+        const parsed = parseJsonFromLlmText<unknown>(raw);
         const { parseExtractionBatch } = await import(
           "../../../../memory-service/src/core/v3/ExtractionContract.js"
         );
@@ -315,6 +329,9 @@ export class NewCoreRuntime {
     }
 
     let artifact: { type: string; subject: string; text: string; refs: string[] } | undefined;
+    if (this.ablation === "no_link_precalc") {
+      return { facts, artifact: undefined, modelCalls };
+    }
     const ticket = row.body.match(/\b([A-Z]+-\d+)\b/);
     if (ticket) {
       artifact = {
@@ -430,12 +447,22 @@ export class NewCoreRuntime {
     this.traceRecall(qHash, "fts", monotonicNowMs() - t0, asMs);
     const denseHits = this.denseChannel(queryVec, scope, asMs, 40);
     this.traceRecall(qHash, "dense", monotonicNowMs() - t0, asMs);
-    const recentHits = this.recentChannel(query.text, scope, asMs, 20);
-    this.traceRecall(qHash, "recent", monotonicNowMs() - t0, asMs);
-    const cardHits = this.cardChannel(query.text, scope, asMs, 32);
-    this.traceRecall(qHash, "cards", monotonicNowMs() - t0, asMs);
+    const channelLists: string[][] = [ftsHits, denseHits];
+    if (this.ablation === "raw_hybrid_only") {
+      /* fts + dense only */
+    } else if (this.ablation === "no_link_precalc") {
+      const recentHits = this.recentChannel(query.text, scope, asMs, 20);
+      this.traceRecall(qHash, "recent", monotonicNowMs() - t0, asMs);
+      channelLists.push(recentHits);
+    } else {
+      const recentHits = this.recentChannel(query.text, scope, asMs, 20);
+      this.traceRecall(qHash, "recent", monotonicNowMs() - t0, asMs);
+      const cardHits = this.cardChannel(query.text, scope, asMs, 32);
+      this.traceRecall(qHash, "cards", monotonicNowMs() - t0, asMs);
+      channelLists.push(recentHits, cardHits);
+    }
 
-    const merged = rrfMerge([ftsHits, denseHits, recentHits, cardHits], 5, (id) =>
+    const merged = rrfMerge(channelLists, 5, (id) =>
       this.loadEventForRecall(id, scope, asMs),
     );
 
@@ -668,6 +695,7 @@ export class NewCoreRuntime {
       schema: "memory-core-v4-export-v1",
       spec_version: SPEC_VERSION,
       scheme_id: "B",
+      ablation_mode: this.ablation,
       models: this.models,
       watermarks: readWatermarks(this.db),
       acl_epoch: Number(getMeta(this.db, "acl_epoch")) || 0,
