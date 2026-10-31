@@ -5,8 +5,24 @@ import {
   type ProxyLedgerEntry,
 } from "./proxy-ledger.js";
 import { loadModelsConfig } from "../../adapters/new-core/config.js";
+import {
+  resolveBenchmarkRunContext,
+  type ActiveBenchmarkRun,
+  type BenchmarkRunContext,
+} from "./proxy-attribution.js";
 
 const UPSTREAM = "https://openrouter.ai/api/v1";
+export const DEFAULT_BENCHMARK_PROXY_PORT = 4555;
+
+export function parseBenchmarkProxyPort(): number {
+  const raw = process.env.MEMORY_BENCHMARK_PROXY_PORT?.trim();
+  if (!raw) return DEFAULT_BENCHMARK_PROXY_PORT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`invalid_MEMORY_BENCHMARK_PROXY_PORT:${raw}`);
+  }
+  return n;
+}
 
 function upstreamUrl(upstreamBase: string, clientPath: string): string {
   const path = clientPath.startsWith("/v1/") ? clientPath.slice(3) : clientPath;
@@ -19,6 +35,8 @@ export interface OpenRouterProxyOptions {
   ledgerPath: string;
   upstreamBase?: string;
   apiKey?: string;
+  /** 0 = OS-assigned (embedded harness); fixed port for standalone */
+  port?: number;
 }
 
 export interface OpenRouterProxyHandle {
@@ -26,6 +44,8 @@ export interface OpenRouterProxyHandle {
   port: number;
   ledgerPath: string;
   stop(): Promise<void>;
+  /** Standalone only: register harness run for D/E server traffic without X-Benchmark-Run */
+  setActiveRun?(run: ActiveBenchmarkRun | null): void;
 }
 
 function tierFromHeaders(headers: http.IncomingHttpHeaders): string {
@@ -100,7 +120,7 @@ async function fetchGenerationCost(
 }
 
 function recordFromJsonBody(
-  opts: OpenRouterProxyOptions,
+  ctx: BenchmarkRunContext,
   path: string,
   tier: string,
   label: string,
@@ -129,8 +149,8 @@ function recordFromJsonBody(
     const resolvedTier = tier === "unknown" ? inferTier(model) : tier;
     const entry: ProxyLedgerEntry = {
       at: new Date().toISOString(),
-      scheme_id: opts.schemeId,
-      run_id: opts.runId,
+      scheme_id: ctx.scheme_id,
+      run_id: ctx.run_id,
       tier: resolvedTier,
       label,
       generation_id,
@@ -141,12 +161,12 @@ function recordFromJsonBody(
       path,
       streaming,
     };
-    appendProxyLedgerEntry(opts.ledgerPath, entry);
+    appendProxyLedgerEntry(ctx.ledger_path, entry);
   })();
 }
 
 async function forwardNonStreaming(
-  opts: OpenRouterProxyOptions,
+  ctx: BenchmarkRunContext,
   targetPath: string,
   tier: string,
   label: string,
@@ -173,7 +193,7 @@ async function forwardNonStreaming(
   try {
     const json = JSON.parse(text) as Record<string, unknown>;
     await recordFromJsonBody(
-      opts,
+      ctx,
       targetPath,
       tier,
       label,
@@ -193,7 +213,7 @@ async function forwardNonStreaming(
 }
 
 async function forwardStreaming(
-  opts: OpenRouterProxyOptions,
+  ctx: BenchmarkRunContext,
   targetPath: string,
   tier: string,
   label: string,
@@ -261,7 +281,7 @@ async function forwardStreaming(
 
   if (lastData) {
     await recordFromJsonBody(
-      opts,
+      ctx,
       targetPath,
       tier,
       label,
@@ -274,36 +294,97 @@ async function forwardStreaming(
   }
 }
 
-export async function startOpenRouterProxy(
-  options: OpenRouterProxyOptions,
-): Promise<OpenRouterProxyHandle> {
-  const upstreamBase = (options.upstreamBase ?? UPSTREAM).replace(/\/+$/, "");
-  const apiKey =
-    options.apiKey?.trim() ||
-    process.env.OPENROUTER_API_KEY?.trim() ||
-    process.env.OPENAI_API_KEY?.trim() ||
-    "";
+interface ProxyServerConfig {
+  embedded: OpenRouterProxyOptions | null;
+  activeRun: { current: ActiveBenchmarkRun | null };
+  upstreamBase: string;
+  apiKey: string;
+  port: number;
+}
 
-  const server = http.createServer(async (req, res) => {
+function handleControlRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  activeRun: { current: ActiveBenchmarkRun | null },
+  rawBody: string,
+): boolean {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  if (url.pathname === "/_benchmark/health" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        active_run: activeRun.current,
+      }),
+    );
+    return true;
+  }
+  if (url.pathname === "/_benchmark/active-run" && req.method === "POST") {
+    try {
+      const body = JSON.parse(rawBody || "{}") as {
+        run_id?: string;
+        scheme_id?: string;
+        ledger_path?: string;
+        clear?: boolean;
+      };
+      if (body.clear) {
+        activeRun.current = null;
+      } else if (body.run_id && body.scheme_id && body.ledger_path) {
+        activeRun.current = {
+          run_id: body.run_id,
+          scheme_id: body.scheme_id,
+          ledger_path: body.ledger_path,
+          started_at: new Date().toISOString(),
+        };
+      } else {
+        res.writeHead(400);
+        res.end("missing run_id/scheme_id/ledger_path");
+        return true;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, active_run: activeRun.current }));
+    } catch {
+      res.writeHead(400);
+      res.end("invalid_json");
+    }
+    return true;
+  }
+  return false;
+}
+
+function createProxyServer(config: ProxyServerConfig): http.Server {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const targetPath = url.pathname + url.search;
+
+    if (targetPath.startsWith("/_benchmark/")) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(chunk as Buffer);
+      }
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      if (handleControlRequest(req, res, config.activeRun, rawBody)) return;
+      res.writeHead(404);
+      res.end("not_found");
+      return;
+    }
+
     if (req.method !== "POST" && req.method !== "GET") {
       res.writeHead(405);
       res.end("method_not_allowed");
       return;
     }
 
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    const targetPath = url.pathname + url.search;
-
     if (req.method === "GET") {
-      if (!apiKey) {
+      if (!config.apiKey) {
         res.writeHead(503);
         res.end("missing_api_key");
         return;
       }
       try {
-        const upstream = await fetch(upstreamUrl(upstreamBase, targetPath), {
+        const upstream = await fetch(upstreamUrl(config.upstreamBase, targetPath), {
           method: "GET",
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: { Authorization: `Bearer ${config.apiKey}` },
         });
         const body = await upstream.text();
         res.writeHead(upstream.status, { "Content-Type": "application/json" });
@@ -315,7 +396,7 @@ export async function startOpenRouterProxy(
       return;
     }
 
-    if (!apiKey) {
+    if (!config.apiKey) {
       res.writeHead(503);
       res.end("missing_api_key");
       return;
@@ -335,6 +416,18 @@ export async function startOpenRouterProxy(
       return;
     }
 
+    const ctx = resolveBenchmarkRunContext({
+      headers: req.headers,
+      embedded: config.embedded
+        ? {
+            run_id: config.embedded.runId,
+            scheme_id: config.embedded.schemeId,
+            ledger_path: config.embedded.ledgerPath,
+          }
+        : null,
+      activeRun: config.activeRun.current,
+    });
+
     const tier = tierFromHeaders(req.headers);
     const label = labelFromHeaders(req.headers);
     const streaming = bodyJson.stream === true;
@@ -342,25 +435,25 @@ export async function startOpenRouterProxy(
     try {
       if (streaming) {
         await forwardStreaming(
-          options,
+          ctx,
           targetPath,
           tier,
           label,
           bodyJson,
-          apiKey,
-          upstreamBase,
+          config.apiKey,
+          config.upstreamBase,
           res,
         );
         return;
       }
       const forwarded = await forwardNonStreaming(
-        options,
+        ctx,
         targetPath,
         tier,
         label,
         bodyJson,
-        apiKey,
-        upstreamBase,
+        config.apiKey,
+        config.upstreamBase,
       );
       res.writeHead(forwarded.status, forwarded.headers);
       res.end(forwarded.body);
@@ -369,26 +462,84 @@ export async function startOpenRouterProxy(
       res.end(String((err as Error).message));
     }
   });
+}
 
-  await new Promise<void>((resolve, reject) => {
+async function listenServer(server: http.Server, port: number): Promise<number> {
+  await new Promise<void>((resolvePromise, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.listen(port, "127.0.0.1", () => resolvePromise());
   });
-
   const addr = server.address();
   if (!addr || typeof addr === "string") {
     throw new Error("proxy_listen_failed");
   }
+  return addr.port;
+}
 
-  const baseUrl = `http://127.0.0.1:${addr.port}/v1`;
+export async function startOpenRouterProxy(
+  options: OpenRouterProxyOptions,
+): Promise<OpenRouterProxyHandle> {
+  const upstreamBase = (options.upstreamBase ?? UPSTREAM).replace(/\/+$/, "");
+  const apiKey =
+    options.apiKey?.trim() ||
+    process.env.OPENROUTER_API_KEY?.trim() ||
+    process.env.OPENAI_API_KEY?.trim() ||
+    "";
+
+  const activeRun = { current: null as ActiveBenchmarkRun | null };
+  const server = createProxyServer({
+    embedded: options,
+    activeRun,
+    upstreamBase,
+    apiKey,
+    port: options.port ?? 0,
+  });
+
+  const boundPort = await listenServer(server, options.port ?? 0);
+  const baseUrl = `http://127.0.0.1:${boundPort}/v1`;
 
   return {
     baseUrl,
-    port: addr.port,
+    port: boundPort,
     ledgerPath: options.ledgerPath,
     stop: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
+      new Promise<void>((resolvePromise, reject) => {
+        server.close((err) => (err ? reject(err) : resolvePromise()));
       }),
+    setActiveRun: (run) => {
+      activeRun.current = run;
+    },
+  };
+}
+
+export async function startStandaloneOpenRouterProxy(input?: {
+  port?: number;
+}): Promise<OpenRouterProxyHandle> {
+  const upstreamBase = UPSTREAM;
+  const apiKey =
+    process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || "";
+  const port = input?.port ?? parseBenchmarkProxyPort();
+  const activeRun = { current: null as ActiveBenchmarkRun | null };
+  const server = createProxyServer({
+    embedded: null,
+    activeRun,
+    upstreamBase,
+    apiKey,
+    port,
+  });
+  const boundPort = await listenServer(server, port);
+  const baseUrl = `http://127.0.0.1:${boundPort}/v1`;
+
+  return {
+    baseUrl,
+    port: boundPort,
+    ledgerPath: "",
+    stop: () =>
+      new Promise<void>((resolvePromise, reject) => {
+        server.close((err) => (err ? reject(err) : resolvePromise()));
+      }),
+    setActiveRun: (run) => {
+      activeRun.current = run;
+    },
   };
 }
