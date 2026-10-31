@@ -4,6 +4,22 @@ These environments are parallel upstream checkouts in sibling directories. Do no
 
 Test host: macOS Apple Silicon, Python 3.12 (uv), Node 24 / Bun 1.3.9, Colima Docker 28.3.3, Ollama 0.11.10. All local listeners bind to loopback. LLM calls use OpenRouter (`https://openrouter.ai/api/v1`) with shared `fast` tier `z-ai/glm-5.3-flash`; embeddings remain local `bge-m3` (1024 dimensions). Letta is configured with the same OpenRouter model. No memory SaaS is used. Telemetry is disabled for all three candidates. The key is sourced from ignored `experiments/memory-benchmark/.env`; it is never stored here.
 
+## Memory-benchmark cost proxy (E-167)
+
+Full-matrix harness runs (**A–E**) should route **all** OpenRouter-compatible LLM traffic through the local accounting proxy so `proxy_usd` matches OpenRouter key usage.
+
+**Startup order (strict):**
+
+1. **Proxy (foreground or dedicated terminal):** `cd experiments/memory-benchmark && npm run proxy` — listens on `127.0.0.1:4555` by default (`MEMORY_BENCHMARK_PROXY_PORT`).
+2. **Export reuse URL for harness:** `export MEMORY_BENCHMARK_PROXY_URL=http://127.0.0.1:4555/v1` (harness registers the active run on the proxy; D/E server calls without `X-Benchmark-Run` use that window).
+3. **D/E only when needed:** Supermemory @ `6767`, Letta App Server @ `4500`, with OpenAI-compatible base URL pointing at the proxy (not raw OpenRouter):
+   - `envs/start-supermemory-with-proxy.sh`
+   - `envs/start-letta-with-proxy.sh`
+4. **Harness / matrix:** `npm run verify-cost-proxy` or `npm run run -- --scheme … --fixture synthetic-mini`.
+5. **Teardown:** stop Letta and Supermemory, then stop the proxy (Ctrl-C).
+
+**Attribution:** in-process harness calls may send `X-Benchmark-Run` / `X-Benchmark-Scheme`; Mem0 Python worker gets an explicit `OPENAI_API_BASE_URL` to the proxy (not env inheritance). Supermemory / Letta rely on the active run window while a harness run is in progress.
+
 ## Pinned sources and models
 
 Official quickstarts: [Mem0 OSS Python](https://docs.mem0.ai/open-source/python-quickstart) and [local Ollama](https://docs.mem0.ai/cookbooks/companions/local-companion-ollama); [Supermemory Local](https://github.com/supermemoryai/supermemory/blob/main/apps/docs/self-hosting/quickstart.mdx) and [multilingual embeddings](https://github.com/supermemoryai/supermemory/blob/main/apps/docs/self-hosting/embeddings.mdx); [Letta App Server](https://docs.letta.com/self-hosting/app-server/quickstart) and [MemFS](https://docs.letta.com/letta-code/memfs).
@@ -61,7 +77,7 @@ export SUPERMEMORY_NO_OPEN=1 SUPERMEMORY_HIDE_API_KEY_IN_LOGS=1
 export SUPERMEMORY_EMBEDDING_PROVIDER=local
 export SUPERMEMORY_EMBEDDING_MODEL=Xenova/bge-m3
 export SUPERMEMORY_EMBEDDING_DIMENSIONS=1024
-export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+export OPENAI_BASE_URL=http://127.0.0.1:4555/v1
 export OPENAI_MODEL=z-ai/glm-5.3-flash
 set -a && source ../personal-ai/experiments/memory-benchmark/.env && set +a
 export OPENAI_API_KEY="$OPENROUTER_API_KEY"
@@ -81,6 +97,8 @@ bun run build
 export LETTA_CONFIG_DIR="$PWD/local-state/config"
 export LETTA_HOME="$PWD/local-state/home"
 export LETTA_TELEMETRY_DISABLED=1
+export OPENAI_API_BASE_URL=http://127.0.0.1:4555/v1
+export OPENAI_BASE_URL=http://127.0.0.1:4555/v1
 set -a && source ../personal-ai/experiments/memory-benchmark/.env && set +a
 mkdir -p "$LETTA_CONFIG_DIR" "$LETTA_HOME"
 ./letta.js server --backend local --listen ws://127.0.0.1:4500

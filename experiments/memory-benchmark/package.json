@@ -6,6 +6,8 @@
   "description": "Shared memory benchmark harness (E-141 / E-144): virtual clock replay, adapter interface, probes, cost tracking",
   "scripts": {
     "run": "tsx src/cli/run-benchmark.ts",
+    "proxy": "tsx src/cli/run-proxy.ts",
+    "verify-cost-proxy": "tsx src/cli/verify-cost-proxy.ts",
     "demo": "tsx src/cli/run-benchmark.ts --fixture synthetic-mini",
     "gates": "tsx src/cli/run-gates.ts",
     "gates:d": "tsx src/cli/run-gates.ts --scheme D",

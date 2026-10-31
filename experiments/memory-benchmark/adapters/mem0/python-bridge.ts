@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBenchmarkDotenv } from "./load-env.js";
+import { resolveBenchmarkProxyBaseForClients } from "../../src/cost/benchmark-proxy-session.js";
 
 export interface Mem0WorkerOptions {
   mem0Checkout?: string;
@@ -67,13 +68,13 @@ export class Mem0PythonWorker {
       throw new Error(`MEM0_WORKER_MISSING:${workerScript}`);
     }
 
+    const proxyBase = resolveBenchmarkProxyBaseForClients();
     const env = {
       ...process.env,
       MEM0_TELEMETRY: "false",
       MEM0_QDRANT_PATH: this.opts.qdrantPath,
       MEM0_COLLECTION: this.opts.collection,
-      OPENAI_API_BASE_URL:
-        process.env.OPENAI_API_BASE_URL?.trim() || "https://openrouter.ai/api/v1",
+      OPENAI_API_BASE_URL: proxyBase,
       OPENAI_MODEL: process.env.MEM0_FAST_MODEL ?? "z-ai/glm-5.3-flash",
       OPENAI_API_KEY: process.env.OPENROUTER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
       ...this.opts.env,

@@ -82,6 +82,8 @@ export async function openRouterChat(
     "",
   );
   const url = `${base}/chat/completions`;
+  const activeRunId = process.env.MEMORY_BENCHMARK_ACTIVE_RUN_ID?.trim();
+  const activeSchemeId = process.env.MEMORY_BENCHMARK_ACTIVE_SCHEME_ID?.trim();
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -91,6 +93,8 @@ export async function openRouterChat(
       "X-Title": "memory-benchmark-scheme-B",
       "X-Memory-Benchmark-Tier": tier,
       "X-Memory-Benchmark-Label": label,
+      ...(activeRunId ? { "X-Benchmark-Run": activeRunId } : {}),
+      ...(activeSchemeId ? { "X-Benchmark-Scheme": activeSchemeId } : {}),
     },
     body: JSON.stringify({
       model: tierCfg.model,
