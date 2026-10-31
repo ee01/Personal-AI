@@ -1,0 +1,273 @@
+{
+  "scheme_id": "D",
+  "run_id": "run-1793421151350",
+  "mode": "quality",
+  "fixture_id": "synthetic-mini",
+  "events_ingested": 4,
+  "consolidations": 3,
+  "probes_run": 3,
+  "probes_passed": 3,
+  "hard_gate_failures": 0,
+  "mean_composite": 94.44444444444444,
+  "scene_means": {
+    "message_sidecar": 95.83333333333333,
+    "proactive_discovery": 91.66666666666666
+  },
+  "cost": {
+    "harness_usd": 0,
+    "adapter_usd": 0.0027456,
+    "total_usd": 0.0027456,
+    "combined_usd": 0.0027456,
+    "proxy_usd": 0.0027456,
+    "proxy_calls": 3,
+    "budget_usd": 50,
+    "llm_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cached_replay_calls": 0,
+    "live_inference_calls": 0,
+    "reconciliation_note": "需 OpenRouter Activity 对账（Supermemory Local 服务端抽取无 token 回传）"
+  },
+  "latency": {
+    "ingest_p50_ms": 548.364291,
+    "ingest_p95_ms": 585.929041,
+    "ingest_p99_ms": 585.929041,
+    "decide_p50_ms": 70.54237499999999,
+    "decide_p95_ms": 74.20608300000004,
+    "decide_p99_ms": 74.20608300000004
+  },
+  "outcomes": [
+    {
+      "probe": {
+        "probe_id": "p2",
+        "storyline_key": "g1:t1",
+        "scene": "message_sidecar",
+        "as_of": "2026-01-15T12:00:00.000Z",
+        "scope": "work",
+        "checkpoint": "pre_consolidation",
+        "scene_input": {
+          "scene_id": "p2",
+          "text": "Please review the draft specification.",
+          "thread_id": "t1",
+          "group_id": "g1"
+        },
+        "visible_evidence_ids": [
+          "syn:001"
+        ],
+        "required_facts": [],
+        "forbidden_assertions": [
+          "lunch"
+        ],
+        "allowed_actions": [
+          "silence",
+          "show_sidecar"
+        ],
+        "trigger_window": {
+          "start": "2026-01-15T08:00:00.000Z",
+          "end": "2026-01-15T23:59:59.000Z"
+        },
+        "should_trigger": false,
+        "silence_reason": "no_commitment_in_current_message",
+        "latency_budget_ms": 500
+      },
+      "decide": {
+        "action": "silence",
+        "output_text": "",
+        "cited_event_ids": [],
+        "latency_ms": 62.14854100000002
+      },
+      "recall": {
+        "hits": [
+          {
+            "event_id": "syn:001",
+            "text": "Reminder: ship harness by Friday.",
+            "observed_at": "2026-01-15T08:00:05.000Z",
+            "scope": "work"
+          },
+          {
+            "event_id": "syn:002",
+            "text": "Unrelated lunch plan.",
+            "observed_at": "2026-01-15T09:00:10.000Z",
+            "scope": "work"
+          }
+        ],
+        "latency_ms": 0.02183300000001509,
+        "cached_replay": true
+      },
+      "scores": {
+        "F": 1,
+        "E": 1,
+        "D": 1,
+        "N": 1,
+        "L": 1
+      },
+      "composite": 100,
+      "hard_gate_failures": [],
+      "passed": true
+    },
+    {
+      "probe": {
+        "probe_id": "p1",
+        "storyline_key": "g1:t1",
+        "scene": "message_sidecar",
+        "as_of": "2026-01-15T23:59:00.000Z",
+        "scope": "work",
+        "checkpoint": "post_consolidation",
+        "scene_input": {
+          "scene_id": "p1",
+          "text": "Did we confirm shipping the harness by Friday?",
+          "thread_id": "t1",
+          "group_id": "g1"
+        },
+        "visible_evidence_ids": [
+          "syn:001",
+          "syn:002"
+        ],
+        "required_facts": [
+          "harness",
+          "Friday"
+        ],
+        "forbidden_assertions": [
+          "wrong-owner"
+        ],
+        "allowed_actions": [
+          "show_sidecar",
+          "silence"
+        ],
+        "target_object": "harness",
+        "trigger_window": {
+          "start": "2026-01-15T08:00:00.000Z",
+          "end": "2026-01-15T23:59:59.000Z"
+        },
+        "should_trigger": true,
+        "latency_budget_ms": 500
+      },
+      "decide": {
+        "action": "show_sidecar",
+        "output_text": "Reminder: ship harness by Friday.",
+        "cited_event_ids": [
+          "syn:001"
+        ],
+        "latency_ms": 70.54237499999999
+      },
+      "recall": {
+        "hits": [
+          {
+            "event_id": "syn:001",
+            "text": "Reminder: ship harness by Friday.",
+            "observed_at": "2026-01-15T08:00:05.000Z",
+            "scope": "work"
+          },
+          {
+            "event_id": "syn:002",
+            "text": "Unrelated lunch plan.",
+            "observed_at": "2026-01-15T09:00:10.000Z",
+            "scope": "work"
+          }
+        ],
+        "latency_ms": 0.021083999999973457,
+        "cached_replay": true
+      },
+      "scores": {
+        "F": 1,
+        "E": 0.6666666666666666,
+        "D": 1,
+        "N": 1,
+        "L": 1
+      },
+      "composite": 91.66666666666666,
+      "hard_gate_failures": [],
+      "passed": true
+    },
+    {
+      "probe": {
+        "probe_id": "p3",
+        "storyline_key": "g2:t2",
+        "scene": "proactive_discovery",
+        "as_of": "2026-01-17T23:59:00.000Z",
+        "scope": "work",
+        "checkpoint": "post_consolidation",
+        "scene_input": {
+          "scene_id": "p3",
+          "text": "Track follow-up on ALPHA-1 reopening.",
+          "thread_id": "t2",
+          "group_id": "g2",
+          "recall_query": "ALPHA-1 reopening follow-up"
+        },
+        "visible_evidence_ids": [
+          "syn:003",
+          "syn:004"
+        ],
+        "required_facts": [
+          "ALPHA-1"
+        ],
+        "forbidden_assertions": [],
+        "allowed_actions": [
+          "send_notification",
+          "silence",
+          "show_sidecar"
+        ],
+        "trigger_window": {
+          "start": "2026-01-17T00:00:00.000Z",
+          "end": "2026-01-17T23:59:59.000Z"
+        },
+        "should_trigger": true,
+        "latency_budget_ms": 800
+      },
+      "decide": {
+        "action": "send_notification",
+        "output_text": "Follow up on ALPHA-1 reopening.",
+        "cited_event_ids": [
+          "syn:004"
+        ],
+        "latency_ms": 74.20608300000004
+      },
+      "recall": {
+        "hits": [
+          {
+            "event_id": "syn:004",
+            "text": "Follow up on ALPHA-1 reopening.",
+            "observed_at": "2026-01-17T10:00:00.000Z",
+            "scope": "work"
+          },
+          {
+            "event_id": "syn:003",
+            "text": "Ticket ALPHA-1 marked done in tracker.",
+            "observed_at": "2026-01-16T00:00:00.000Z",
+            "scope": "work"
+          },
+          {
+            "event_id": "syn:002",
+            "text": "Unrelated lunch plan.",
+            "observed_at": "2026-01-15T09:00:10.000Z",
+            "scope": "work"
+          },
+          {
+            "event_id": "syn:001",
+            "text": "Reminder: ship harness by Friday.",
+            "observed_at": "2026-01-15T08:00:05.000Z",
+            "scope": "work"
+          }
+        ],
+        "latency_ms": 0.02166600000055041,
+        "cached_replay": true
+      },
+      "scores": {
+        "F": 1,
+        "E": 0.6666666666666666,
+        "D": 1,
+        "N": 1,
+        "L": 1
+      },
+      "composite": 91.66666666666666,
+      "hard_gate_failures": [],
+      "passed": true
+    }
+  ],
+  "storyline_ci": {
+    "mean": 93.70000000000228,
+    "ci_low": 91.66666666666666,
+    "ci_high": 100,
+    "n_storylines": 2
+  }
+}

@@ -1,0 +1,226 @@
+{
+  "scheme_id": "A",
+  "run_id": "run-1793421183916",
+  "mode": "quality",
+  "fixture_id": "synthetic-mini",
+  "events_ingested": 4,
+  "consolidations": 3,
+  "probes_run": 3,
+  "probes_passed": 3,
+  "hard_gate_failures": 0,
+  "mean_composite": 67.22222222222221,
+  "scene_means": {
+    "message_sidecar": 55,
+    "proactive_discovery": 91.66666666666666
+  },
+  "cost": {
+    "harness_usd": 0,
+    "adapter_usd": 0,
+    "total_usd": 0,
+    "combined_usd": 0,
+    "proxy_usd": 0.01344696,
+    "proxy_calls": 8,
+    "budget_usd": 50,
+    "llm_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cached_replay_calls": 0,
+    "live_inference_calls": 0
+  },
+  "latency": {
+    "ingest_p50_ms": 2772.2587920000005,
+    "ingest_p95_ms": 5233.597334,
+    "ingest_p99_ms": 5233.597334,
+    "decide_p50_ms": 11.515957999999955,
+    "decide_p95_ms": 454.26708300000064,
+    "decide_p99_ms": 454.26708300000064
+  },
+  "outcomes": [
+    {
+      "probe": {
+        "probe_id": "p2",
+        "storyline_key": "g1:t1",
+        "scene": "message_sidecar",
+        "as_of": "2026-01-15T12:00:00.000Z",
+        "scope": "work",
+        "checkpoint": "pre_consolidation",
+        "scene_input": {
+          "scene_id": "p2",
+          "text": "Please review the draft specification.",
+          "thread_id": "t1",
+          "group_id": "g1"
+        },
+        "visible_evidence_ids": [
+          "syn:001"
+        ],
+        "required_facts": [],
+        "forbidden_assertions": [
+          "lunch"
+        ],
+        "allowed_actions": [
+          "silence",
+          "show_sidecar"
+        ],
+        "trigger_window": {
+          "start": "2026-01-15T08:00:00.000Z",
+          "end": "2026-01-15T23:59:59.000Z"
+        },
+        "should_trigger": false,
+        "silence_reason": "no_commitment_in_current_message",
+        "latency_budget_ms": 500
+      },
+      "decide": {
+        "action": "silence",
+        "output_text": "",
+        "cited_event_ids": [],
+        "latency_ms": 454.26708300000064
+      },
+      "recall": {
+        "hits": [],
+        "latency_ms": 0.001916999999593827,
+        "cached_replay": true
+      },
+      "scores": {
+        "F": 1,
+        "E": 1,
+        "D": 1,
+        "N": 1,
+        "L": 1
+      },
+      "composite": 100,
+      "hard_gate_failures": [],
+      "passed": true
+    },
+    {
+      "probe": {
+        "probe_id": "p1",
+        "storyline_key": "g1:t1",
+        "scene": "message_sidecar",
+        "as_of": "2026-01-15T23:59:00.000Z",
+        "scope": "work",
+        "checkpoint": "post_consolidation",
+        "scene_input": {
+          "scene_id": "p1",
+          "text": "Did we confirm shipping the harness by Friday?",
+          "thread_id": "t1",
+          "group_id": "g1"
+        },
+        "visible_evidence_ids": [
+          "syn:001",
+          "syn:002"
+        ],
+        "required_facts": [
+          "harness",
+          "Friday"
+        ],
+        "forbidden_assertions": [
+          "wrong-owner"
+        ],
+        "allowed_actions": [
+          "show_sidecar",
+          "silence"
+        ],
+        "target_object": "harness",
+        "trigger_window": {
+          "start": "2026-01-15T08:00:00.000Z",
+          "end": "2026-01-15T23:59:59.000Z"
+        },
+        "should_trigger": true,
+        "latency_budget_ms": 500
+      },
+      "decide": {
+        "action": "silence",
+        "output_text": "",
+        "cited_event_ids": [],
+        "latency_ms": 7.672042000000147
+      },
+      "recall": {
+        "hits": [],
+        "latency_ms": 0.0015419999999721767,
+        "cached_replay": true
+      },
+      "scores": {
+        "F": 0,
+        "E": 0,
+        "D": 0,
+        "N": 0,
+        "L": 1
+      },
+      "composite": 10,
+      "hard_gate_failures": [],
+      "passed": true
+    },
+    {
+      "probe": {
+        "probe_id": "p3",
+        "storyline_key": "g2:t2",
+        "scene": "proactive_discovery",
+        "as_of": "2026-01-17T23:59:00.000Z",
+        "scope": "work",
+        "checkpoint": "post_consolidation",
+        "scene_input": {
+          "scene_id": "p3",
+          "text": "Track follow-up on ALPHA-1 reopening.",
+          "thread_id": "t2",
+          "group_id": "g2",
+          "recall_query": "ALPHA-1 reopening follow-up"
+        },
+        "visible_evidence_ids": [
+          "syn:003",
+          "syn:004"
+        ],
+        "required_facts": [
+          "ALPHA-1"
+        ],
+        "forbidden_assertions": [],
+        "allowed_actions": [
+          "send_notification",
+          "silence",
+          "show_sidecar"
+        ],
+        "trigger_window": {
+          "start": "2026-01-17T00:00:00.000Z",
+          "end": "2026-01-17T23:59:59.000Z"
+        },
+        "should_trigger": true,
+        "latency_budget_ms": 800
+      },
+      "decide": {
+        "action": "send_notification",
+        "output_text": "Follow up on ALPHA-1 reopening.",
+        "cited_event_ids": [
+          "syn:004"
+        ],
+        "latency_ms": 11.515957999999955
+      },
+      "recall": {
+        "hits": [
+          {
+            "event_id": "syn:004",
+            "text": "Follow up on ALPHA-1 reopening.",
+            "observed_at": "2026-01-17T10:00:00.000Z",
+            "scope": "work"
+          }
+        ],
+        "latency_ms": 6.372792000000118,
+        "cached_replay": false
+      },
+      "scores": {
+        "F": 1,
+        "E": 0.6666666666666666,
+        "D": 1,
+        "N": 1,
+        "L": 1
+      },
+      "composite": 91.66666666666666,
+      "hard_gate_failures": [],
+      "passed": true
+    }
+  ],
+  "storyline_ci": {
+    "mean": 72.60958333333237,
+    "ci_low": 10,
+    "ci_high": 100,
+    "n_storylines": 2
+  }
+}
