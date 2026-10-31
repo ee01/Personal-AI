@@ -20,6 +20,22 @@ PROBES = EVENTS.parent / "probes/development.v1.1.jsonl"
 LEDGERS = BENCH / ".local/proxy-ledger"
 POLICY = BENCH / ".local/windowed-budget.json"
 SCHEMES = "ABCDE"
+ACTIVE_CHILD = None
+
+def terminate_cell(child):
+    if child is None or child.poll() is not None: return
+    try: os.killpg(child.pid,signal.SIGTERM)
+    except ProcessLookupError: return
+    try: child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid,signal.SIGKILL);child.wait()
+
+def stop_requested(signum, _frame):
+    # Pause provider traffic before stopping this run's exact child process group.
+    write(POLICY,{"paused":True})
+    terminate_cell(ACTIVE_CHILD)
+    raise SystemExit(128+signum)
+
 
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +174,9 @@ def summarize(plan, state):
     return summary
 
 def main():
+    global ACTIVE_CHILD
+    signal.signal(signal.SIGTERM,stop_requested)
+    signal.signal(signal.SIGINT,stop_requested)
     OUT.mkdir(parents=True,exist_ok=True)
     plan_path=OUT/"matrix-plan.json"
     plan=json.loads(plan_path.read_text()) if plan_path.exists() else make_plan()
@@ -171,6 +190,8 @@ def main():
     state_path=OUT/"matrix-status.json"
     state=json.loads(state_path.read_text()) if state_path.exists() else {"completed":[],"failed":[],"skipped":[],"safety_stopped_schemes":[]}
     finished=set(state["completed"])|{x["id"] for x in state["failed"]}|{x["id"] for x in state["skipped"]}
+    state.pop("runner_error",None)
+    state["stopped"]=False
     previous_scheme=None
     try:
         for cell in cells:
@@ -210,15 +231,14 @@ def main():
             env=os.environ.copy();env["MEMORY_BENCHMARK_BUDGET_POLICY"]=str(POLICY)
             with (cell_out/"cli.log").open("w") as log:
                 with subprocess.Popen(cmd,cwd=BENCH,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True) as child:
+                    ACTIVE_CHILD=child
                     try: code=child.wait(timeout=7200)
                     except subprocess.TimeoutExpired:
                         # This process group was created solely for this cell. Never
                         # kill by executable name or leave an npx grandchild billing.
-                        os.killpg(child.pid,signal.SIGTERM)
-                        try: child.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            os.killpg(child.pid,signal.SIGKILL);child.wait()
+                        terminate_cell(child)
                         code=124
+                    finally: ACTIVE_CHILD=None
             reports=list(cell_out.glob("report.json")) or list(cell_out.glob(f"{scheme}-run-*.json"))
             report=json.loads(reports[-1].read_text()) if reports else {}
             rec={"id":cell["id"],"exit_code":code,"seconds":time.monotonic()-started,"proxy_delta":totals()["total"]-before["total"],"probes":report.get("probes_run",0),"stopped_reason":report.get("stopped_reason")}
