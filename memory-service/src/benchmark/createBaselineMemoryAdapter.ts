@@ -15,6 +15,10 @@ import { MemoryLineageService } from '../core/MemoryLineageService.js';
 import { UserContextManager } from '../core/UserContextManager.js';
 import type { IngestPayload, RecallScope, SourceType } from '../types/index.js';
 import { resetConfigForTests } from '../config.js';
+import {
+  applyBaselineBenchmarkLlmEnv,
+  isBenchmarkLiveLlmEnabled,
+} from './benchmarkLlmEnv.js';
 
 const BENCHMARK_USER_ID = 'benchmark-scheme-a';
 
@@ -129,13 +133,46 @@ export interface CreateBaselineAdapterOptions {
   schemeId?: string;
   dataRoot?: string;
   fresh?: boolean;
+  /** When set, route memory-service LLM calls through this OpenAI-compatible base (proxy). */
+  openAiBaseUrl?: string;
+  modelsConfigPath?: string;
+  /** Default: true when OPENROUTER_API_KEY is set and openAiBaseUrl provided. */
+  liveLlm?: boolean;
+}
+
+function readProxyGenerationIds(): string[] {
+  const ledgerPath = process.env.MEMORY_BENCHMARK_PROXY_LEDGER?.trim();
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) return [];
+  const ids: string[] = [];
+  for (const line of fs.readFileSync(ledgerPath, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as { generation_id?: string | null; scheme_id?: string };
+      if (row.scheme_id && row.scheme_id !== 'A') continue;
+      if (row.generation_id) ids.push(row.generation_id);
+    } catch {
+      /* skip */
+    }
+  }
+  return ids;
 }
 
 export async function createBaselineMemoryAdapter(
   options: CreateBaselineAdapterOptions = {},
 ): Promise<BaselineMemoryAdapter> {
   applyHarnessServiceEnv();
+  if (options.openAiBaseUrl) {
+    const live =
+      options.liveLlm ??
+      Boolean(process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim());
+    applyBaselineBenchmarkLlmEnv({
+      openAiBaseUrl: options.openAiBaseUrl,
+      modelsPath: options.modelsConfigPath,
+      enableLive: live,
+    });
+  }
   const schemeId = options.schemeId ?? 'A';
+  const useLiveExtraction = isBenchmarkLiveLlmEnabled();
   const dataRoot = options.dataRoot ?? defaultDataRoot();
   const usersDir = path.join(dataRoot, 'users', BENCHMARK_USER_ID);
 
@@ -168,7 +205,7 @@ export async function createBaselineMemoryAdapter(
     sender: event.sender ?? undefined,
     groupId: event.group_id ?? undefined,
     timestamp: parseVirtualSec(event.observed_at),
-    skipExtraction: true,
+    skipExtraction: !useLiveExtraction,
     metadata: {
       ...event.metadata,
       postId: event.event_id,
@@ -360,6 +397,8 @@ export async function createBaselineMemoryAdapter(
         reconcile_nightly_runs,
         user_id: BENCHMARK_USER_ID,
         data_root: dataRoot,
+        live_llm: useLiveExtraction,
+        openrouter_generation_ids: readProxyGenerationIds(),
       };
     },
 
