@@ -12,7 +12,7 @@ import type {
   RecallResult,
 } from "../../src/types.js";
 import { SupermemoryRuntime } from "./runtime.js";
-import { defaultSupermemoryCheckout, SupermemoryClient } from "./client.js";
+import { createSupermemoryClient, defaultSupermemoryCheckout, SupermemoryClient } from "./client.js";
 import { loadBenchmarkDotenv, openRouterKeyPresent } from "./load-env.js";
 
 function defaultDataRoot(): string {
@@ -91,6 +91,7 @@ export class SupermemorySchemeDAdapter implements MemoryBenchmarkAdapter {
 
   async close(): Promise<void> {
     if (this.runtime) {
+      await this.runtime.flushPending();
       this.runtime.close();
       this.runtime = null;
     }

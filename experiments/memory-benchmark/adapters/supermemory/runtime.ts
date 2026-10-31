@@ -18,7 +18,7 @@ import {
 import { contentHash } from "../new-core/hash.js";
 import { loadModelsConfig } from "../new-core/config.js";
 import { InMemoryCostLedger, openRouterChat, type SharedCostLedger } from "../new-core/llm.js";
-import { SupermemoryClient } from "./client.js";
+import { createSupermemoryClient, SupermemoryClient } from "./client.js";
 import {
   bumpAclEpoch,
   getMeta,
@@ -48,6 +48,11 @@ export function documentIdForEvent(eventId: string): string {
   return `${sanitized.slice(0, 80)}_${h}`;
 }
 
+function ingestBatchFlushSize(): number {
+  const n = Number(process.env.SUPERMEMORY_INGEST_BATCH_FLUSH ?? 32);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 32;
+}
+
 export class SupermemoryRuntime {
   readonly schemeId = "D";
   private db: Database.Database;
@@ -61,11 +66,13 @@ export class SupermemoryRuntime {
   private deletedEvents = new Set<string>();
   private clockAudit: Array<{ op: string; group: "virtual_harness" | "native_supermemory_api" }> =
     [];
+  /** doc ids submitted to Supermemory but not yet confirmed `done` */
+  private pendingDocs = new Map<string, Set<string>>();
 
   constructor(opts: SupermemoryRuntimeOptions) {
     this.db = openRegistryDb(opts.dbPath);
     this.runKey = opts.runKey;
-    this.client = opts.client ?? new SupermemoryClient();
+    this.client = opts.client ?? createSupermemoryClient();
     this.ledger =
       opts.costLedger ??
       new InMemoryCostLedger(Number(process.env.MEMORY_B_SCHEME_BUDGET_USD ?? 50));
@@ -81,6 +88,26 @@ export class SupermemoryRuntime {
 
   private cacheKey(query: RecallQuery, asOf: string, scope: string): string {
     return `${scope}|${asOf}|${query.text}|${getMeta(this.db, "acl_epoch")}`;
+  }
+
+  private trackPending(ns: string, docId: string): void {
+    let set = this.pendingDocs.get(ns);
+    if (!set) {
+      set = new Set();
+      this.pendingDocs.set(ns, set);
+    }
+    set.add(docId);
+  }
+
+  async flushPending(namespace?: string): Promise<void> {
+    const namespaces = namespace ? [namespace] : [...this.pendingDocs.keys()];
+    for (const ns of namespaces) {
+      const set = this.pendingDocs.get(ns);
+      if (!set || set.size === 0) continue;
+      const ids = [...set];
+      await this.client.waitDocumentsDone(ns, ids);
+      set.clear();
+    }
   }
 
   async ingest(event: PersonalMemoryEvent): Promise<void> {
@@ -129,7 +156,11 @@ export class SupermemoryRuntime {
       await this.client.addDocument(ns, docId, event.text, metadata);
       this.clockAudit.push({ op: `sm.add:${event.event_id}`, group: "native_supermemory_api" });
     }
-    await this.client.waitDocumentDone(ns, docId);
+    this.trackPending(ns, docId);
+    const pending = this.pendingDocs.get(ns);
+    if (pending && pending.size >= ingestBatchFlushSize()) {
+      await this.flushPending(ns);
+    }
     const nativeMs = performance.now() - t0;
     this.derivedSnippets.push(`ingest:native_ms=${nativeMs.toFixed(1)}:${event.event_id}`);
 
@@ -158,6 +189,7 @@ export class SupermemoryRuntime {
   }
 
   async consolidate(virtualNow: string): Promise<ConsolidateResult> {
+    await this.flushPending();
     const t0 = performance.now();
     const day = virtualDayKey(virtualNow);
     const atMs = parseVirtualMs(virtualNow);
@@ -216,6 +248,7 @@ export class SupermemoryRuntime {
   }
 
   async recall(query: RecallQuery, asOf: string, scope: string): Promise<RecallResult> {
+    await this.flushPending(this.ns(scope));
     const t0 = performance.now();
     this.clockAudit.push({ op: "recall", group: "virtual_harness" });
     if (query.scope !== scope || parseRevokedScopes(this.db).has(scope)) {
@@ -338,6 +371,7 @@ export class SupermemoryRuntime {
   }
 
   async export(): Promise<Record<string, unknown>> {
+    await this.flushPending();
     const recallCacheEventIds = [
       ...new Set(
         [...this.recallCache.values()].flatMap((r) =>

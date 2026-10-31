@@ -7,6 +7,50 @@ export interface SupermemoryClientOptions {
   apiKey?: string;
   pollIntervalMs?: number;
   ingestDeadlineMs?: number;
+  /** Server-side embedding workers (for batch deadline estimation). */
+  embeddingConcurrent?: number;
+  ingestMsPerDoc?: number;
+}
+
+export function resolveIngestDeadlineMs(override?: number): number {
+  if (override != null) return override;
+  const fromEnv = process.env.SUPERMEMORY_INGEST_DEADLINE_MS?.trim();
+  if (fromEnv) {
+    const n = Number(fromEnv);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 600_000;
+}
+
+export function resolveEmbeddingConcurrent(override?: number): number {
+  if (override != null) return Math.max(1, override);
+  const fromEnv = process.env.SUPERMEMORY_EMBEDDING_CONCURRENT?.trim();
+  if (fromEnv) {
+    const n = Number(fromEnv);
+    if (Number.isFinite(n) && n > 0) return Math.max(1, Math.floor(n));
+  }
+  return 2;
+}
+
+/** Wall-clock budget for finishing N queued documents on a 2-worker embed queue. */
+export function deadlineMsForBatch(
+  docCount: number,
+  baseMs: number,
+  opts?: { concurrent?: number; msPerDoc?: number },
+): number {
+  if (docCount <= 0) return baseMs;
+  const concurrent = opts?.concurrent ?? resolveEmbeddingConcurrent();
+  const msPerDoc =
+    opts?.msPerDoc ??
+    (Number(process.env.SUPERMEMORY_INGEST_MS_PER_DOC) > 0
+      ? Number(process.env.SUPERMEMORY_INGEST_MS_PER_DOC)
+      : 5_000);
+  const queueMs = Math.ceil(docCount / concurrent) * msPerDoc;
+  return Math.max(baseMs, queueMs + 60_000);
+}
+
+export function createSupermemoryClient(opts: SupermemoryClientOptions = {}): SupermemoryClient {
+  return new SupermemoryClient(opts);
 }
 
 export interface SearchHit {
@@ -24,6 +68,8 @@ export class SupermemoryClient {
   private apiKey: string;
   private pollIntervalMs: number;
   private ingestDeadlineMs: number;
+  private embeddingConcurrent: number;
+  private ingestMsPerDoc: number;
 
   constructor(opts: SupermemoryClientOptions = {}) {
     this.origin = (opts.origin ?? process.env.SUPERMEMORY_ORIGIN ?? "http://127.0.0.1:6767").replace(
@@ -32,7 +78,13 @@ export class SupermemoryClient {
     );
     this.apiKey = opts.apiKey ?? resolveApiKey();
     this.pollIntervalMs = opts.pollIntervalMs ?? 500;
-    this.ingestDeadlineMs = opts.ingestDeadlineMs ?? 120_000;
+    this.ingestDeadlineMs = resolveIngestDeadlineMs(opts.ingestDeadlineMs);
+    this.embeddingConcurrent = resolveEmbeddingConcurrent(opts.embeddingConcurrent);
+    this.ingestMsPerDoc =
+      opts.ingestMsPerDoc ??
+      (Number(process.env.SUPERMEMORY_INGEST_MS_PER_DOC) > 0
+        ? Number(process.env.SUPERMEMORY_INGEST_MS_PER_DOC)
+        : 5_000);
   }
 
   headers(): Record<string, string> {
@@ -93,15 +145,50 @@ export class SupermemoryClient {
   }
 
   async waitDocumentDone(namespace: string, id: string): Promise<void> {
-    const deadline = Date.now() + this.ingestDeadlineMs;
-    let doc = await this.getDocument(namespace, id);
-    while (doc.system?.status !== "done" && Date.now() < deadline) {
-      await sleep(this.pollIntervalMs);
-      doc = await this.getDocument(namespace, id);
+    await this.waitDocumentsDone(namespace, [id]);
+  }
+
+  async waitDocumentsDone(
+    namespace: string,
+    ids: string[],
+    opts?: { deadlineMs?: number },
+  ): Promise<void> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return;
+
+    const deadline =
+      Date.now() +
+      (opts?.deadlineMs ??
+        deadlineMsForBatch(unique.length, this.ingestDeadlineMs, {
+          concurrent: this.embeddingConcurrent,
+          msPerDoc: this.ingestMsPerDoc,
+        }));
+
+    const pending = new Set(unique);
+    let lastStatus = new Map<string, string>();
+
+    while (pending.size > 0 && Date.now() < deadline) {
+      for (const id of [...pending]) {
+        const doc = await this.getDocument(namespace, id);
+        const status = doc.system?.status ?? "unknown";
+        lastStatus.set(id, status);
+        if (status === "done") {
+          pending.delete(id);
+          continue;
+        }
+        if (status === "failed") {
+          throw new Error(`SUPERMEMORY_INGEST_FAILED:${namespace}/${id}:failed`);
+        }
+      }
+      if (pending.size > 0) {
+        await sleep(this.pollIntervalMs);
+      }
     }
-    if (doc.system?.status !== "done") {
+
+    if (pending.size > 0) {
+      const sample = [...pending][0]!;
       throw new Error(
-        `SUPERMEMORY_INGEST_TIMEOUT:${namespace}/${id}:${doc.system?.status ?? "unknown"}`,
+        `SUPERMEMORY_INGEST_TIMEOUT:${namespace}/${sample}:${lastStatus.get(sample) ?? "unknown"}`,
       );
     }
   }
