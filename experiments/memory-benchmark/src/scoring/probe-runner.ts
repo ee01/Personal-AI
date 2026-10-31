@@ -38,6 +38,7 @@ export interface ProbeRunnerOptions {
   runId: string;
   /** @deprecated Per-probe `checkpoint` on ProbePoint. */
   probeCheckpoint?: "pre_consolidation" | "post_consolidation";
+  proxyLedgerPath?: string;
 }
 
 async function runDueProbes(
@@ -47,6 +48,7 @@ async function runDueProbes(
     adapter: MemoryBenchmarkAdapter;
     sink: NotificationSink;
     cost: CostTracker;
+    proxyLedgerPath?: string;
     gateCtx: {
       eventsById: Map<string, PersonalMemoryEvent>;
       revokedScopes: Set<string>;
@@ -66,8 +68,9 @@ async function runDueProbes(
       opts.cost.snapshot().budget_usd,
       opts.cost.snapshot(),
       adapterCostFromExport(opts.adapter.schemeId, exported),
+      opts.proxyLedgerPath,
     );
-    if (isCombinedOverBudget(mergedProbe)) {
+    if (isCombinedOverBudget(mergedProbe, opts.proxyLedgerPath)) {
       return "cost_budget_exceeded";
     }
 
@@ -151,6 +154,7 @@ export async function runBenchmark(opts: ProbeRunnerOptions): Promise<BenchmarkR
           adapter: opts.adapter,
           sink,
           cost: opts.cost,
+          proxyLedgerPath: opts.proxyLedgerPath,
           gateCtx,
           decideLatencies,
           outcomes,
@@ -180,6 +184,7 @@ export async function runBenchmark(opts: ProbeRunnerOptions): Promise<BenchmarkR
     costSnap.budget_usd,
     costSnap,
     adapterCostFromExport(opts.adapter.schemeId, exported),
+    opts.proxyLedgerPath,
   );
 
   return {

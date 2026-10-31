@@ -28,9 +28,11 @@ type InnerAdapter = {
 export class BaselineSchemeAAdapter implements MemoryBenchmarkAdapter {
   readonly schemeId: string;
   private inner: InnerAdapter | null = null;
+  private readonly openAiBaseUrl?: string;
 
-  constructor(schemeId = "A") {
+  constructor(schemeId = "A", openAiBaseUrl?: string) {
     this.schemeId = schemeId;
+    this.openAiBaseUrl = openAiBaseUrl;
   }
 
   async init(): Promise<void> {
@@ -41,6 +43,7 @@ export class BaselineSchemeAAdapter implements MemoryBenchmarkAdapter {
     this.inner = (await mod.createBaselineMemoryAdapter({
       schemeId: this.schemeId,
       fresh: true,
+      openAiBaseUrl: this.openAiBaseUrl,
     })) as InnerAdapter;
   }
 
@@ -87,8 +90,9 @@ export class BaselineSchemeAAdapter implements MemoryBenchmarkAdapter {
 
 export async function createBaselineSchemeAAdapter(
   schemeId = "A",
+  openAiBaseUrl?: string,
 ): Promise<BaselineSchemeAAdapter> {
-  const adapter = new BaselineSchemeAAdapter(schemeId);
+  const adapter = new BaselineSchemeAAdapter(schemeId, openAiBaseUrl);
   await adapter.init();
   return adapter;
 }

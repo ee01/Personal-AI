@@ -72,7 +72,8 @@ export class Mem0PythonWorker {
       MEM0_TELEMETRY: "false",
       MEM0_QDRANT_PATH: this.opts.qdrantPath,
       MEM0_COLLECTION: this.opts.collection,
-      OPENAI_API_BASE_URL: "https://openrouter.ai/api/v1",
+      OPENAI_API_BASE_URL:
+        process.env.OPENAI_API_BASE_URL?.trim() || "https://openrouter.ai/api/v1",
       OPENAI_MODEL: process.env.MEM0_FAST_MODEL ?? "z-ai/glm-5.3-flash",
       OPENAI_API_KEY: process.env.OPENROUTER_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
       ...this.opts.env,

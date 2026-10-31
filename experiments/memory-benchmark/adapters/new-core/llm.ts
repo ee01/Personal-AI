@@ -76,17 +76,26 @@ export async function openRouterChat(
 
   const tierCfg = config[tier];
   const t0 = performance.now();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const proxyBase = process.env.MEMORY_BENCHMARK_OPENROUTER_PROXY?.trim();
+  const base = (proxyBase || tierCfg.base_url || "https://openrouter.ai/api/v1").replace(
+    /\/+$/,
+    "",
+  );
+  const url = `${base}/chat/completions`;
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://personal-ai.local/memory-benchmark",
       "X-Title": "memory-benchmark-scheme-B",
+      "X-Memory-Benchmark-Tier": tier,
+      "X-Memory-Benchmark-Label": label,
     },
     body: JSON.stringify({
       model: tierCfg.model,
       temperature: tierCfg.temperature,
+      usage: { include: true },
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -112,12 +121,19 @@ export async function openRouterChat(
   }
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
-    usage?: OpenRouterUsage;
+    usage?: OpenRouterUsage & { cost?: number; total_cost?: number };
+    id?: string;
   };
   const text = json.choices?.[0]?.message?.content ?? "";
   const inTok = json.usage?.prompt_tokens ?? Math.ceil((system.length + user.length) / 4);
   const outTok = json.usage?.completion_tokens ?? Math.ceil(text.length / 4);
-  const cost_usd = estimateOpenRouterCost(tierCfg.model, inTok, outTok);
+  const usageCost =
+    typeof json.usage?.cost === "number"
+      ? json.usage.cost
+      : typeof json.usage?.total_cost === "number"
+        ? json.usage.total_cost
+        : undefined;
+  const cost_usd = usageCost ?? estimateOpenRouterCost(tierCfg.model, inTok, outTok);
   ledger.settle(
     {
       tier,

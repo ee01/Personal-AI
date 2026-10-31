@@ -1,4 +1,5 @@
 import type { CostSummary } from "../types.js";
+import { proxyTotalsFromFile } from "./proxy-ledger.js";
 
 interface LedgerRow {
   cost_usd?: number;
@@ -43,13 +44,17 @@ export function buildMergedCostSummary(
     live_inference_calls: number;
   },
   adapterPart: AdapterCostFromExport,
+  proxyLedgerPath?: string,
 ): CostSummary {
   const combined_usd = harnessUsd + adapterPart.adapter_usd;
+  const proxy = proxyLedgerPath ? proxyTotalsFromFile(proxyLedgerPath) : { proxy_usd: 0, proxy_calls: 0, generation_ids: [] };
   return {
     harness_usd: harnessUsd,
     adapter_usd: adapterPart.adapter_usd,
     total_usd: combined_usd,
     combined_usd,
+    proxy_usd: proxy.proxy_usd,
+    proxy_calls: proxy.proxy_calls,
     budget_usd: budgetUsd,
     llm_calls: harnessSnap.llm_calls,
     input_tokens: harnessSnap.input_tokens,
@@ -60,6 +65,15 @@ export function buildMergedCostSummary(
   };
 }
 
-export function isCombinedOverBudget(cost: CostSummary): boolean {
+export function isCombinedOverBudget(
+  cost: CostSummary,
+  proxyLedgerPath?: string,
+): boolean {
+  if (proxyLedgerPath) {
+    return cost.proxy_usd > cost.budget_usd;
+  }
+  if (cost.proxy_calls > 0 || cost.proxy_usd > 0) {
+    return cost.proxy_usd > cost.budget_usd;
+  }
   return cost.combined_usd > cost.budget_usd;
 }

@@ -16,7 +16,7 @@ export function renderMarkdownReport(report: BenchmarkReport): string {
     `- **probes**: ${report.probes_passed}/${report.probes_run} passed`,
     `- **mean composite**: ${report.mean_composite.toFixed(2)}`,
     `- **storyline bootstrap 95% CI**: [${ci.ci_low.toFixed(2)}, ${ci.ci_high.toFixed(2)}] (n=${ci.n_storylines})`,
-    `- **cost (harness / adapter / combined)**: $${report.cost.harness_usd.toFixed(4)} / $${report.cost.adapter_usd.toFixed(4)} / $${report.cost.combined_usd.toFixed(4)} / $${report.cost.budget_usd} (live ${report.cost.live_inference_calls}, cached ${report.cost.cached_replay_calls})`,
+    `- **cost (harness / adapter / combined / proxy)**: $${report.cost.harness_usd.toFixed(4)} / $${report.cost.adapter_usd.toFixed(4)} / $${report.cost.combined_usd.toFixed(4)} / $${report.cost.proxy_usd.toFixed(4)} (${report.cost.proxy_calls} proxy calls) / $${report.cost.budget_usd} budget (live ${report.cost.live_inference_calls}, cached ${report.cost.cached_replay_calls})`,
     `- **latency decide p95**: ${report.latency.decide_p95_ms.toFixed(1)} ms`,
   ];
   if (report.stopped_reason) {

@@ -10,9 +10,9 @@ export interface ModelTierConfig {
 
 export interface NewCoreModelsConfig {
   scheme_id: string;
-  main: ModelTierConfig;
-  fast: ModelTierConfig;
-  judge: ModelTierConfig;
+  main: ModelTierConfig & { base_url?: string };
+  fast: ModelTierConfig & { base_url?: string };
+  judge: ModelTierConfig & { base_url?: string };
   embedding: { provider: string; model: string; dimensions: number };
 }
 

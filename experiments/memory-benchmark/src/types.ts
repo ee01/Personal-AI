@@ -189,8 +189,11 @@ export interface CostSummary {
   harness_usd: number;
   /** Adapter export `cost_ledger` (scheme B file ledger, C/D/E harness_consolidation, etc.). */
   adapter_usd: number;
-  /** harness_usd + adapter_usd; E-155 $50 cap uses this. */
+  /** harness_usd + adapter_usd; reference when proxy ledger is absent. */
   combined_usd: number;
+  /** OpenRouter proxy ledger — authoritative spend for $50 cap when set. */
+  proxy_usd: number;
+  proxy_calls: number;
   /** @deprecated Use combined_usd; kept for JSON consumers expecting total_usd. */
   total_usd: number;
   budget_usd: number;

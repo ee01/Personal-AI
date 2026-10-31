@@ -30,6 +30,8 @@ describe("adapter cost ledger merge", () => {
     expect(summary.harness_usd).toBe(0);
     expect(summary.adapter_usd).toBeCloseTo(0.00571, 5);
     expect(summary.combined_usd).toBeCloseTo(0.00571, 5);
+    expect(summary.proxy_usd).toBe(0);
+    expect(summary.proxy_calls).toBe(0);
     expect(summary.total_usd).toBe(summary.combined_usd);
   });
 

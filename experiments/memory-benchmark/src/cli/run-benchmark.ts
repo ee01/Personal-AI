@@ -16,6 +16,20 @@ import { loadEventsJsonl, loadProbesJsonl } from "../data/load.js";
 import { writeReports } from "../report/generate.js";
 import { runBenchmark } from "../scoring/probe-runner.js";
 import { NotificationSink } from "../sink/notification-sink.js";
+import { loadBenchmarkDotenv } from "../../adapters/mem0/load-env.js";
+import {
+  startBenchmarkProxySession,
+  stopBenchmarkProxySession,
+} from "../cost/benchmark-proxy-session.js";
+
+function resolveSchemeLetter(raw: string): string {
+  if (raw === "baseline") return "A";
+  if (raw === "new-core") return "B";
+  if (raw === "mem0") return "C";
+  if (raw === "supermemory") return "D";
+  if (raw === "letta") return "E";
+  return raw.length === 1 ? raw.toUpperCase() : raw;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(__dirname, "../..");
@@ -61,6 +75,7 @@ function fixturePaths(fixture: string) {
 
 async function main() {
   const cli = parseArgs(process.argv);
+  loadBenchmarkDotenv();
   const paths = fixturePaths(cli.fixture);
   const eventsPath = cli.events ?? paths.events;
   const probesPath = cli.probes ?? paths.probes;
@@ -74,10 +89,20 @@ async function main() {
   const cost = new CostTracker({ max_usd: cli.budgetUsd });
 
   const runId = `run-${Date.now()}`;
+  const schemeLetter = resolveSchemeLetter(cli.scheme);
+
+  const proxySession = await startBenchmarkProxySession({
+    runId,
+    schemeId: schemeLetter,
+  });
 
   let adapter: MemoryBenchmarkAdapter;
+  try {
   if (cli.scheme === "A" || cli.scheme === "baseline") {
-    adapter = new BaselineSchemeAAdapter(cli.scheme === "baseline" ? "A" : cli.scheme);
+    adapter = new BaselineSchemeAAdapter(
+      cli.scheme === "baseline" ? "A" : cli.scheme,
+      proxySession.handle.baseUrl,
+    );
   } else if (cli.scheme === "B" || cli.scheme === "new-core") {
     adapter = await createNewCoreSchemeBAdapter({ schemeId: "B", fresh: true, runId });
   } else if (cli.scheme === "C" || cli.scheme === "mem0") {
@@ -100,6 +125,7 @@ async function main() {
     fixtureId: cli.fixture,
     runId,
     mode: "quality",
+    proxyLedgerPath: proxySession.handle.ledgerPath,
   });
 
   await mkdir(cli.outDir, { recursive: true });
@@ -109,11 +135,14 @@ async function main() {
 
   console.log(`Wrote ${mdPath}`);
   console.log(
-    `probes ${report.probes_passed}/${report.probes_run}, mean=${report.mean_composite.toFixed(2)}, cost harness/adapter/combined=$${report.cost.harness_usd.toFixed(4)}/$${report.cost.adapter_usd.toFixed(4)}/$${report.cost.combined_usd.toFixed(4)}`,
+    `probes ${report.probes_passed}/${report.probes_run}, mean=${report.mean_composite.toFixed(2)}, cost harness/adapter/combined/proxy=$${report.cost.harness_usd.toFixed(4)}/$${report.cost.adapter_usd.toFixed(4)}/$${report.cost.combined_usd.toFixed(4)}/$${report.cost.proxy_usd.toFixed(4)}`,
   );
 
   if ("close" in adapter && typeof adapter.close === "function") {
     await adapter.close();
+  }
+  } finally {
+    await stopBenchmarkProxySession(proxySession);
   }
 }
 
