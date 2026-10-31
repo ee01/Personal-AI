@@ -1009,7 +1009,7 @@ Rules:
 
     const raw = await llm.generateJSON<LLMExtraction>(prompt, {
       temperature: 0.2,
-      maxTokens: 1500,
+      maxTokens: 4096,
       systemPrompt:
         'You are an entity extraction assistant. Return only valid JSON.',
     });

@@ -8,6 +8,11 @@ import { ProfileManager } from './ProfileManager.js';
 import { assertValidUserId, isValidUserId } from '../utils/userIdentity.js';
 import { isSqliteCorruptError } from '../utils/sqliteErrors.js';
 
+export interface UserContextManagerOptions {
+  /** Benchmark / long-running harness: do not close DB after idle timeout. */
+  disableIdleEviction?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -41,19 +46,27 @@ export class UserContextManager {
   private contexts = new Map<string, UserContext>();
   private usersBaseDir: string;
   private maxIdleMs: number;
+  private idleEvictionEnabled: boolean;
   private evictTimer: NodeJS.Timeout | null = null;
 
-  constructor(baseDataDir: string, maxIdleMs = 30 * 60 * 1000) {
+  constructor(
+    baseDataDir: string,
+    maxIdleMs = 30 * 60 * 1000,
+    options?: UserContextManagerOptions,
+  ) {
     this.usersBaseDir = path.join(baseDataDir, 'users');
     this.maxIdleMs = maxIdleMs;
+    this.idleEvictionEnabled = !options?.disableIdleEviction;
 
     // Ensure base directory exists
     if (!fs.existsSync(this.usersBaseDir)) {
       fs.mkdirSync(this.usersBaseDir, { recursive: true });
     }
 
-    // Evict idle contexts every 5 minutes
-    this.evictTimer = setInterval(() => this.evictIdle(), 5 * 60 * 1000);
+    // Evict idle contexts every 5 minutes (unless disabled for harness runs)
+    if (this.idleEvictionEnabled) {
+      this.evictTimer = setInterval(() => this.evictIdle(), 5 * 60 * 1000);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -189,6 +202,7 @@ export class UserContextManager {
   }
 
   private evictIdle(): void {
+    if (!this.idleEvictionEnabled) return;
     const now = Date.now();
     for (const [userId, ctx] of this.contexts) {
       if (now - ctx.lastAccessedAt > this.maxIdleMs) {

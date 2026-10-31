@@ -20,6 +20,12 @@ import {
   isBenchmarkLiveLlmEnabled,
 } from './benchmarkLlmEnv.js';
 
+export type BenchmarkAblationMode =
+  | 'none'
+  | 'raw_hybrid_only'
+  | 'no_background_consolidation'
+  | 'no_link_precalc';
+
 const BENCHMARK_USER_ID = 'benchmark-scheme-a';
 
 function applyHarnessServiceEnv(): void {
@@ -138,6 +144,7 @@ export interface CreateBaselineAdapterOptions {
   modelsConfigPath?: string;
   /** Default: true when OPENROUTER_API_KEY is set and openAiBaseUrl provided. */
   liveLlm?: boolean;
+  ablation?: BenchmarkAblationMode;
 }
 
 function readProxyGenerationIds(): string[] {
@@ -172,6 +179,7 @@ export async function createBaselineMemoryAdapter(
     });
   }
   const schemeId = options.schemeId ?? 'A';
+  const ablation = options.ablation ?? 'none';
   const useLiveExtraction = isBenchmarkLiveLlmEnabled();
   const dataRoot = options.dataRoot ?? defaultDataRoot();
   const usersDir = path.join(dataRoot, 'users', BENCHMARK_USER_ID);
@@ -181,7 +189,9 @@ export async function createBaselineMemoryAdapter(
   }
   fs.mkdirSync(dataRoot, { recursive: true });
 
-  const userContextManager = new UserContextManager(dataRoot);
+  const userContextManager = new UserContextManager(dataRoot, 30 * 60 * 1000, {
+    disableIdleEviction: true,
+  });
   const ctx = userContextManager.getContext(BENCHMARK_USER_ID);
   const db = ctx.db;
   const pipeline = new IngestionPipeline(db, ctx.userDataManager, BENCHMARK_USER_ID);
@@ -245,9 +255,19 @@ export async function createBaselineMemoryAdapter(
       const day = virtualNow.slice(0, 10);
       const atSec = parseVirtualSec(virtualNow);
       const t0 = performance.now();
+      if (ablation === 'no_background_consolidation') {
+        consolidationDays.add(day);
+        return {
+          virtual_day: day,
+          latency_ms: performance.now() - t0,
+          cached_replay: true,
+        };
+      }
       inFlightConsolidation = day;
       await runWithBusinessClockAtAsync(atSec, async () => {
-        await sleep.run(atSec);
+        if (ablation !== 'no_link_precalc') {
+          await sleep.run(atSec);
+        }
       });
       consolidationDays.add(day);
       derivedSnippets.push(`consolidation:${day}`);
@@ -272,12 +292,16 @@ export async function createBaselineMemoryAdapter(
       }
 
       const atSec = parseVirtualSec(asOf);
+      const recallChannels =
+        ablation === 'raw_hybrid_only' || ablation === 'no_link_precalc'
+          ? (['fts', 'vector'] as const)
+          : undefined;
       const hits: HarnessRecallHit[] = await runWithBusinessClockAtAsync(atSec, async () => {
         const result = await recallService.recall({
           query: query.text,
           scope: scope as RecallScope,
           topK: 8,
-          channels: ['fts'],
+          ...(recallChannels ? { channels: [...recallChannels] } : {}),
         });
         return (result.items ?? [])
           .filter((item) => {
@@ -398,6 +422,7 @@ export async function createBaselineMemoryAdapter(
         user_id: BENCHMARK_USER_ID,
         data_root: dataRoot,
         live_llm: useLiveExtraction,
+        ablation_mode: ablation,
         openrouter_generation_ids: readProxyGenerationIds(),
       };
     },

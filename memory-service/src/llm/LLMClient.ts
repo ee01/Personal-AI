@@ -22,6 +22,7 @@ import {
   SCENARIO_TEMPERATURE,
   type LLMScenario,
 } from './modelSampling.js';
+import { parseJsonFromLlmText } from './parseLlmJson.js';
 import {
   classifyLLMError,
   LLMAllTargetsFailedError,
@@ -1001,16 +1002,8 @@ export class LLMClient {
    * Parse a string as JSON, stripping markdown code-block wrappers if present.
    */
   private parseJSON<T>(text: string): T {
-    let cleaned = text.trim();
-
-    // Strip markdown code block fences (```json ... ``` or ``` ... ```)
-    const codeBlockMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-    if (codeBlockMatch) {
-      cleaned = codeBlockMatch[1].trim();
-    }
-
     try {
-      return JSON.parse(cleaned) as T;
+      return parseJsonFromLlmText<T>(text);
     } catch (err) {
       throw new Error(
         `[LLMClient] Failed to parse JSON response: ${(err as Error).message}\nRaw text: ${text.slice(0, 500)}`,
