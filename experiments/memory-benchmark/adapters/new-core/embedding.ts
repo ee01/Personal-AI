@@ -83,7 +83,8 @@ export async function embedText(text: string): Promise<Float32Array> {
       cachedDim = expectedDim;
       embeddingBackend = "ollama-bge-m3";
       return vec;
-    } catch {
+    } catch (error) {
+      if (process.env.MEMORY_BENCHMARK_STRICT_BGE === "1") throw error;
       embeddingBackend = "fallback-bow";
     }
   }

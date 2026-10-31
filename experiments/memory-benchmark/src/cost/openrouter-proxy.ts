@@ -1,3 +1,4 @@
+import { budgetBlockReason } from "./budget-guard.js";
 import http from "node:http";
 import { URL } from "node:url";
 import {
@@ -353,6 +354,7 @@ function handleControlRequest(
 }
 
 function createProxyServer(config: ProxyServerConfig): http.Server {
+  let previousRequest: Promise<void> = Promise.resolve();
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const targetPath = url.pathname + url.search;
@@ -432,7 +434,21 @@ function createProxyServer(config: ProxyServerConfig): http.Server {
     const label = labelFromHeaders(req.headers);
     const streaming = bodyJson.stream === true;
 
+    // Serialize guarded requests so every next call sees the prior settled ledger.
+    const policyPath = process.env.MEMORY_BENCHMARK_BUDGET_POLICY;
+    let release: (() => void) | undefined;
+    if (policyPath) {
+      const prior = previousRequest;
+      previousRequest = new Promise<void>(resolve => { release = resolve; });
+      await prior;
+    }
     try {
+      const blocked = policyPath ? budgetBlockReason(policyPath, ctx.scheme_id) : undefined;
+      if (blocked) {
+        res.writeHead(402, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: blocked, type: "benchmark_budget_stop" } }));
+        return;
+      }
       if (streaming) {
         await forwardStreaming(
           ctx,
@@ -460,6 +476,8 @@ function createProxyServer(config: ProxyServerConfig): http.Server {
     } catch (err) {
       res.writeHead(502);
       res.end(String((err as Error).message));
+    } finally {
+      release?.();
     }
   });
 }
