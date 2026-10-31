@@ -18,6 +18,7 @@ import {
 import { contentHash } from "../new-core/hash.js";
 import { loadModelsConfig } from "../new-core/config.js";
 import { InMemoryCostLedger, openRouterChat, type SharedCostLedger } from "../new-core/llm.js";
+import { documentContentForIngest } from "./content.js";
 import { createSupermemoryClient, SupermemoryClient } from "./client.js";
 import {
   bumpAclEpoch,
@@ -68,6 +69,15 @@ export class SupermemoryRuntime {
     [];
   /** doc ids submitted to Supermemory but not yet confirmed `done` */
   private pendingDocs = new Map<string, Set<string>>();
+  private pendingDocEvents = new Map<string, Map<string, string>>();
+  private ingestFailures: Array<{
+    event_id: string;
+    doc_id: string;
+    namespace: string;
+    status: string;
+    message?: string;
+  }> = [];
+  private maxQueuedWaitMs = 0;
 
   constructor(opts: SupermemoryRuntimeOptions) {
     this.db = openRegistryDb(opts.dbPath);
@@ -90,13 +100,32 @@ export class SupermemoryRuntime {
     return `${scope}|${asOf}|${query.text}|${getMeta(this.db, "acl_epoch")}`;
   }
 
-  private trackPending(ns: string, docId: string): void {
+  private trackPending(ns: string, docId: string, eventId: string): void {
     let set = this.pendingDocs.get(ns);
     if (!set) {
       set = new Set();
       this.pendingDocs.set(ns, set);
     }
     set.add(docId);
+    let events = this.pendingDocEvents.get(ns);
+    if (!events) {
+      events = new Map();
+      this.pendingDocEvents.set(ns, events);
+    }
+    events.set(docId, eventId);
+  }
+
+  private recordIngestFailure(input: {
+    event_id: string;
+    doc_id: string;
+    namespace: string;
+    status: string;
+    message?: string;
+  }): void {
+    this.ingestFailures.push(input);
+    this.derivedSnippets.push(
+      `ingest_failure:${input.status}:${input.event_id}:${input.doc_id}`,
+    );
   }
 
   async flushPending(namespace?: string): Promise<void> {
@@ -105,7 +134,21 @@ export class SupermemoryRuntime {
       const set = this.pendingDocs.get(ns);
       if (!set || set.size === 0) continue;
       const ids = [...set];
-      await this.client.waitDocumentsDone(ns, ids);
+      const { failures, maxQueuedWaitMs } = await this.client.waitDocumentsDone(ns, ids);
+      this.maxQueuedWaitMs = Math.max(this.maxQueuedWaitMs, maxQueuedWaitMs);
+      const eventMap = this.pendingDocEvents.get(ns);
+      for (const f of failures) {
+        const eventId = eventMap?.get(f.id) ?? f.id;
+        this.recordIngestFailure({
+          event_id: eventId,
+          doc_id: f.id,
+          namespace: f.namespace,
+          status: f.status,
+          message: "supermemory_embed_failed",
+        });
+        set.delete(f.id);
+        eventMap?.delete(f.id);
+      }
       set.clear();
     }
   }
@@ -142,21 +185,36 @@ export class SupermemoryRuntime {
       source_version: sourceVersion,
       source: event.source,
       source_type: event.source_type,
+      benchmark_plaintext: true,
     };
 
+    const content = documentContentForIngest(event.text);
     const t0 = performance.now();
     const prior = this.db
       .prepare("SELECT sm_document_id FROM evidence_events WHERE event_id=? AND tombstone=0 LIMIT 1")
       .get(event.event_id) as { sm_document_id: string } | undefined;
 
-    if (prior?.sm_document_id) {
-      await this.client.patchDocument(ns, docId, event.text, metadata);
-      this.clockAudit.push({ op: `sm.patch:${event.event_id}`, group: "native_supermemory_api" });
-    } else {
-      await this.client.addDocument(ns, docId, event.text, metadata);
-      this.clockAudit.push({ op: `sm.add:${event.event_id}`, group: "native_supermemory_api" });
+    try {
+      if (prior?.sm_document_id) {
+        await this.client.patchDocument(ns, docId, content, metadata);
+        this.clockAudit.push({ op: `sm.patch:${event.event_id}`, group: "native_supermemory_api" });
+      } else {
+        await this.client.addDocument(ns, docId, content, metadata);
+        this.clockAudit.push({ op: `sm.add:${event.event_id}`, group: "native_supermemory_api" });
+      }
+    } catch (err) {
+      if (err instanceof VersionConflictError) throw err;
+      this.recordIngestFailure({
+        event_id: event.event_id,
+        doc_id: docId,
+        namespace: ns,
+        status: "submit_error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
     }
-    this.trackPending(ns, docId);
+
+    this.trackPending(ns, docId, event.event_id);
     const pending = this.pendingDocs.get(ns);
     if (pending && pending.size >= ingestBatchFlushSize()) {
       await this.flushPending(ns);
@@ -396,6 +454,9 @@ export class SupermemoryRuntime {
       derived_snippets: [...this.derivedSnippets],
       in_flight_consolidation: this.inFlightConsolidation,
       clock_audit: this.clockAudit,
+      ingest_failures: this.ingestFailures,
+      ingest_failure_count: this.ingestFailures.length,
+      max_queued_wait_ms: this.maxQueuedWaitMs,
       capability_notes: {
         supermemory_dreaming: "server-side optional; harness uses main-tier day digest only",
         url_ingestion: false,

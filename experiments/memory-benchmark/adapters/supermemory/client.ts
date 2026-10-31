@@ -53,6 +53,17 @@ export function createSupermemoryClient(opts: SupermemoryClientOptions = {}): Su
   return new SupermemoryClient(opts);
 }
 
+export interface SupermemoryIngestFailure {
+  id: string;
+  namespace: string;
+  status: string;
+}
+
+export interface WaitDocumentsResult {
+  failures: SupermemoryIngestFailure[];
+  maxQueuedWaitMs: number;
+}
+
 export interface SearchHit {
   content?: string;
   chunk?: string;
@@ -144,17 +155,17 @@ export class SupermemoryClient {
     );
   }
 
-  async waitDocumentDone(namespace: string, id: string): Promise<void> {
-    await this.waitDocumentsDone(namespace, [id]);
+  async waitDocumentDone(namespace: string, id: string): Promise<WaitDocumentsResult> {
+    return this.waitDocumentsDone(namespace, [id]);
   }
 
   async waitDocumentsDone(
     namespace: string,
     ids: string[],
     opts?: { deadlineMs?: number },
-  ): Promise<void> {
+  ): Promise<WaitDocumentsResult> {
     const unique = [...new Set(ids.filter(Boolean))];
-    if (unique.length === 0) return;
+    if (unique.length === 0) return { failures: [], maxQueuedWaitMs: 0 };
 
     const deadline =
       Date.now() +
@@ -165,24 +176,38 @@ export class SupermemoryClient {
         }));
 
     const pending = new Set(unique);
-    let lastStatus = new Map<string, string>();
+    const lastStatus = new Map<string, string>();
+    const queuedSince = new Map<string, number>();
+    const failures: SupermemoryIngestFailure[] = [];
+    let maxQueuedWaitMs = 0;
+    const now = () => Date.now();
 
-    while (pending.size > 0 && Date.now() < deadline) {
+    while (pending.size > 0 && now() < deadline) {
       for (const id of [...pending]) {
         const doc = await this.getDocument(namespace, id);
         const status = doc.system?.status ?? "unknown";
         lastStatus.set(id, status);
+        if (status === "queued" || status === "extracting") {
+          if (!queuedSince.has(id)) queuedSince.set(id, now());
+        } else {
+          queuedSince.delete(id);
+        }
         if (status === "done") {
           pending.delete(id);
           continue;
         }
         if (status === "failed") {
-          throw new Error(`SUPERMEMORY_INGEST_FAILED:${namespace}/${id}:failed`);
+          failures.push({ id, namespace, status: "failed" });
+          pending.delete(id);
         }
       }
       if (pending.size > 0) {
         await sleep(this.pollIntervalMs);
       }
+    }
+
+    for (const [id, since] of queuedSince) {
+      maxQueuedWaitMs = Math.max(maxQueuedWaitMs, now() - since);
     }
 
     if (pending.size > 0) {
@@ -191,6 +216,8 @@ export class SupermemoryClient {
         `SUPERMEMORY_INGEST_TIMEOUT:${namespace}/${sample}:${lastStatus.get(sample) ?? "unknown"}`,
       );
     }
+
+    return { failures, maxQueuedWaitMs };
   }
 
   async search(
