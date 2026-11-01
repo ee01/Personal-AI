@@ -70,6 +70,14 @@ def release_stage_transient_retries(state, stage, state_path):
         state["stage_transient_retried"] = sorted(retried)
         write(state_path, state)
         print(json.dumps({"event": "stage_transient_retry", "stage": stage, "cells": released}), flush=True)
+    return released
+
+def finished_set(state):
+    return set(state["completed"]) | {x["id"] for x in state["failed"]} | {x["id"] for x in state["skipped"]}
+
+def initial_pending(cells, state):
+    finished = finished_set(state)
+    return [c for c in cells if c["id"] not in finished]
 
 def terminate_cell(child):
     if child is None or child.poll() is not None: return
@@ -259,18 +267,26 @@ def main():
         if cid and cid not in valid_cell_ids:
             state["skipped"].append({"id": cid, "reason": "superseded_by_dense_window_policy"})
     state["failed"] = [r for r in state.get("failed", []) if (r.get("id") if isinstance(r, dict) else r) in valid_cell_ids]
-    finished=set(state["completed"])|{x["id"] for x in state["failed"]}|{x["id"] for x in state["skipped"]}
     state.pop("runner_error",None)
     state["stopped"]=False
     previous_scheme=None
     previous_stage=None
+    pending=initial_pending(cells, state)
+    idx=0
     try:
-        for cell in cells:
-            if cell["id"] in finished: continue
+        while idx < len(pending):
+            cell=pending[idx]
             stage=cell["stage"]
             if previous_stage and previous_stage != stage:
-                release_stage_transient_retries(state, previous_stage, state_path)
-                finished=set(state["completed"])|{x["id"] for x in state["failed"]}|{x["id"] for x in state["skipped"]}
+                released=release_stage_transient_retries(state, previous_stage, state_path)
+                if released:
+                    released_set=set(released)
+                    prepend=[c for c in cells if c["id"] in released_set]
+                    done_ids={c["id"] for c in pending[:idx]}
+                    prepend=[c for c in prepend if c["id"] not in done_ids]
+                    tail=[c for c in pending[idx:] if c["id"] not in released_set]
+                    pending=pending[:idx]+prepend+tail
+                    continue
             scheme=cell["scheme"]
             ceilings,current=policy(plan,plan["stages"][cell["stage"]])
             reason = None
@@ -282,7 +298,7 @@ def main():
             if cell["stage"].startswith("expanded-") and not summary["expansion_required"]:reason="8h_controls_do_not_require_expansion"
             if cell["stage"] in ["repeat-builds","ablations"] and summary["expansion_required"]:reason="8h_policy_failed_controls_reserve_for_expansion_and_replay"
             if reason:
-                state["skipped"].append({"id":cell["id"],"reason":reason});write(state_path,state);continue
+                state["skipped"].append({"id":cell["id"],"reason":reason});write(state_path,state);idx+=1;continue
             if previous_scheme and previous_scheme!=scheme:
                 time.sleep(65)
                 write(OUT/f"key-switch-{len(state['completed'])+len(state['failed'])}.json",key_snapshot())
@@ -294,12 +310,12 @@ def main():
             if cell.get("review"):
                 current_summary=summarize(plan,state)
                 if not current_summary["paired_controls"][scheme]["complete"]:
-                    state["skipped"].append({"id":cell["id"],"reason":"incomplete_paired_control"});write(state_path,state);continue
+                    state["skipped"].append({"id":cell["id"],"reason":"incomplete_paired_control"});write(state_path,state);idx+=1;continue
                 cmd=["npx","tsx","src/cli/review-windowed-pairs.ts","--scheme",scheme,"--out",str(cell_out)]
             elif cell["stage"]=="mini-7d":
                 cmd=["npx","tsx","src/cli/run-windowed-mini.ts","--scheme",scheme,"--fixture","production-mini-7d","--out",str(cell_out),"--adapter-run-id",f"e155-8h-mini-{scheme}","--fresh","true" if cell["replay"]=="live" else "false"]
                 if cell["replay"]=="cache" and f"mini-7d/{scheme}/live" not in state["completed"]:
-                    state["skipped"].append({"id":cell["id"],"reason":"no_complete_live_replay"});write(state_path,state);continue
+                    state["skipped"].append({"id":cell["id"],"reason":"no_complete_live_replay"});write(state_path,state);idx+=1;continue
             else:
                 cmd=["npx","tsx","src/cli/run-windowed.ts","--scheme",scheme,"--events",cell["events"],"--probes",str(PROBES),"--as-of",cell["as_of"],"--strategy",cell["strategy"],"--ablation",cell["ablation"],"--run-id",run_id,"--out",str(cell_out),"--hours",str(cell.get("hours",8))]
             before=totals();started=time.monotonic()
@@ -328,6 +344,7 @@ def main():
             print(json.dumps({"event":"cell_end",**rec}),flush=True)
             summarize(plan,state)
             previous_stage=stage
+            idx+=1
         if previous_stage:
             release_stage_transient_retries(state, previous_stage, state_path)
         state.update({"current":None,"finished":True});write(state_path,state)
