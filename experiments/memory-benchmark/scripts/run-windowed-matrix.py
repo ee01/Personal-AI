@@ -285,7 +285,7 @@ def main():
     for path,key in [(PROBES,"golden_sha256"),(EVENTS,"events_sha256"),(BENCH/"config/models.json","models_sha256"),(OLD/"slice-events.jsonl","slice_sha256")]:
         if hashlib.sha256(path.read_bytes()).hexdigest()!=plan[key]: raise RuntimeError("frozen_input_changed:"+str(path))
     plan["stages"].update({"expanded-24h":.75,"expanded-72h":.85})
-    implementation_files=["src/cli/run-windowed.ts","src/cli/review-windowed-pairs.ts","src/windowed/adapter.ts","src/windowed/history.ts","src/windowed/baseline-bge.ts","adapters/new-core/embedding.ts","src/cost/budget-guard.ts","src/cost/openrouter-proxy.ts","src/cli/run-windowed-mini.ts","scripts/run-windowed-matrix.py"]
+    implementation_files=["src/cli/run-windowed.ts","src/cli/review-windowed-pairs.ts","src/windowed/adapter.ts","src/windowed/history.ts","src/windowed/baseline-bge.ts","src/windowed/ingest-extraction.ts","adapters/new-core/embedding.ts","src/cost/budget-guard.ts","src/cost/openrouter-proxy.ts","src/cli/run-windowed-mini.ts","scripts/run-windowed-matrix.py"]
     plan["implementation_sha256"]={p:hashlib.sha256((BENCH/p).read_bytes()).hexdigest() for p in implementation_files}
     write(plan_path,plan)
     cells=schedule(plan); write(OUT/"schedule.json",cells)

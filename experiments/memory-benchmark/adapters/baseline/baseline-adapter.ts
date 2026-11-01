@@ -9,6 +9,7 @@ import type {
   RecallQuery,
   RecallResult,
 } from "../../src/types.js";
+import { readAblationFromEnv } from "../../src/ablation/config.js";
 
 type InnerAdapter = {
   schemeId: string;
@@ -30,9 +31,12 @@ export class BaselineSchemeAAdapter implements MemoryBenchmarkAdapter {
   private inner: InnerAdapter | null = null;
   private readonly openAiBaseUrl?: string;
 
-  constructor(schemeId = "A", openAiBaseUrl?: string) {
+  private readonly fresh: boolean;
+
+  constructor(schemeId = "A", openAiBaseUrl?: string, fresh = true) {
     this.schemeId = schemeId;
     this.openAiBaseUrl = openAiBaseUrl;
+    this.fresh = fresh;
   }
 
   async init(): Promise<void> {
@@ -40,10 +44,12 @@ export class BaselineSchemeAAdapter implements MemoryBenchmarkAdapter {
     const mod = await import(
       "../../../../memory-service/src/benchmark/createBaselineMemoryAdapter.js"
     );
-    this.inner = (await mod.createBaselineMemoryAdapter({
+    const { createBaselineMemoryAdapter } = mod;
+    this.inner = (await createBaselineMemoryAdapter({
       schemeId: this.schemeId,
-      fresh: true,
+      fresh: this.fresh,
       openAiBaseUrl: this.openAiBaseUrl,
+      ablation: readAblationFromEnv(),
     })) as InnerAdapter;
   }
 
@@ -91,8 +97,9 @@ export class BaselineSchemeAAdapter implements MemoryBenchmarkAdapter {
 export async function createBaselineSchemeAAdapter(
   schemeId = "A",
   openAiBaseUrl?: string,
+  fresh = true,
 ): Promise<BaselineSchemeAAdapter> {
-  const adapter = new BaselineSchemeAAdapter(schemeId, openAiBaseUrl);
+  const adapter = new BaselineSchemeAAdapter(schemeId, openAiBaseUrl, fresh);
   await adapter.init();
   return adapter;
 }

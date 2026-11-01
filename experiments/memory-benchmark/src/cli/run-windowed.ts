@@ -19,6 +19,7 @@ import { buildAdapterDecideInput, buildAdapterRecallQuery } from "../scene/adapt
 import { checkHardGates, scoreProbe } from "../scoring/scorer.js";
 import { writeReports } from "../report/generate.js";
 import { proxyTotalsFromFile } from "../cost/proxy-ledger.js";
+import { applyWindowedIngestEnv, capIngestEventText } from "../windowed/ingest-extraction.js";
 import type { BenchmarkReport, MemoryBenchmarkAdapter, ProbeRunOutcome } from "../types.js";
 
 const args = new Map<string, string>();
@@ -35,6 +36,7 @@ async function main() {
   if (![8,24,72].includes(hours)) throw new Error("invalid_window_hours");
   const strategy = args.get("--strategy") ?? "8h";
   if (!["8h", "full"].includes(strategy)) throw new Error("invalid_strategy");
+  applyWindowedIngestEnv(strategy as "8h" | "full");
   const events = await loadEventsJsonl(required("--events"));
   const probes = (await loadProbesJsonl(required("--probes"))).filter(p => p.as_of === asOf);
   if (probes.some(p => !(p.scene_input.text || p.scene_input.recall_query || p.scene_input.scene_id))) throw new Error("missing_scene_only_query");
@@ -87,15 +89,18 @@ async function main() {
     };
     try {
       let previousDay: string | undefined;
+      const deferMidIngestConsolidate = strategy === "full";
       for (const event of recent) {
         const day = event.observed_at.slice(0, 10);
-        if (previousDay && day !== previousDay) {
+        if (previousDay && day !== previousDay && !deferMidIngestConsolidate) {
           await checkBudget();
           await adapter.consolidate(`${previousDay}T23:59:59.999Z`); consolidations++;
         }
         previousDay = day;
         await checkBudget();
-        const t0 = performance.now(); await adapter.ingest(event); ingestTimes.push(performance.now() - t0); ingested++;
+        const t0 = performance.now();
+        await adapter.ingest(capIngestEventText(event));
+        ingestTimes.push(performance.now() - t0); ingested++;
         if (ingested % 20 === 0) console.log(JSON.stringify({ event: "ingest", runId, ingested, total: recent.length }));
       }
       await score("pre_consolidation");

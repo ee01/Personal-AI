@@ -723,7 +723,10 @@ export class IngestionPipeline {
     catch (error) { console.warn('[attention] triage skipped', error); }
 
     // ---- 7b. Focus project timeline extraction (best-effort, non-blocking) ----
-    if (matchedProjects.length > 0) {
+    if (
+      matchedProjects.length > 0 &&
+      process.env.MEMORY_BENCHMARK_SKIP_PROJECT_TIMELINE !== '1'
+    ) {
       try {
         const { ProjectTimelineExtractor } = await import(
           './ProjectTimelineExtractor.js'
@@ -773,6 +776,7 @@ export class IngestionPipeline {
     }
 
     try {
+      if (process.env.MEMORY_BENCHMARK_SKIP_CONTEXT_FRAMES !== '1') {
       this.contextExpansion.upsertFrameFromMessage({
         messageId: id,
         content: contentNormalized,
@@ -789,6 +793,7 @@ export class IngestionPipeline {
         summary,
         metadata: payload.metadata,
       });
+      }
     } catch (err) {
       console.warn(
         '[IngestionPipeline] Context frame update failed:',
@@ -798,6 +803,7 @@ export class IngestionPipeline {
 
     // ---- 8. Append to daily markdown log ----
     try {
+      if (process.env.MEMORY_BENCHMARK_SKIP_DAILY_LOG_APPEND !== '1') {
       const udm = this.userDataManager;
       if (udm?.isInitialized) {
         const dateStr = formatDate(ts);
@@ -810,6 +816,7 @@ export class IngestionPipeline {
         const group = payload.groupName ? ` in ${payload.groupName}` : '';
         const line = `- **${time}** [${sender}${group}]: ${summary ?? contentNormalized.slice(0, 200)}\n`;
         udm.appendToFile(logPath, line, header);
+      }
       }
     } catch (err) {
       console.warn(
@@ -950,10 +957,20 @@ export class IngestionPipeline {
   ): Promise<LLMExtraction> {
     const llm = getLLMClient();
     const ownerAuthored = this.isOwnerAuthoredPayload(payload);
+    let messageBody = payload.content;
+    if (process.env.MEMORY_BENCHMARK_WINDOWED_INGEST_ISOLATED === '1') {
+      const limit = Number(
+        process.env.MEMORY_BENCHMARK_INGEST_EXTRACTION_BYTE_LIMIT ?? 8192,
+      );
+      const buf = Buffer.from(messageBody, 'utf8');
+      if (buf.length > limit) {
+        messageBody = buf.subarray(0, limit).toString('utf8');
+      }
+    }
 
     const prompt = `Given the following message content and context, extract structured information.
 
-Message: "${payload.content}"
+Message: "${messageBody.replace(/"/g, '\\"')}"
 Sender: ${payload.sender ?? 'unknown'}
 Group: ${payload.groupName ?? 'unknown'}
 Time: ${new Date(ts * 1000).toISOString()}
