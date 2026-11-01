@@ -1036,8 +1036,15 @@ Rules:
 
     const raw = await llm.generateJSON<LLMExtraction>(prompt, {
       temperature: 0.2,
-      maxTokens: 4096,
-      retryCount: isBenchmarkLiveLlmEnabled() ? 1 : undefined,
+      maxTokens: Number(
+        process.env.MEMORY_BENCHMARK_INGEST_EXTRACTION_MAX_TOKENS ?? 4096,
+      ),
+      retryCount:
+        process.env.MEMORY_BENCHMARK_WINDOWED_INGEST_ISOLATED === '1'
+          ? 0
+          : isBenchmarkLiveLlmEnabled()
+            ? 1
+            : undefined,
       timeoutMs: isBenchmarkLiveLlmEnabled() ? 180_000 : undefined,
       systemPrompt:
         'You are an entity extraction assistant. Return only valid JSON.',

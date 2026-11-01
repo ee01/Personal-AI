@@ -13,6 +13,8 @@ export function applyWindowedIngestEnv(strategy: "8h" | "full"): void {
   process.env.MEMORY_BENCHMARK_SKIP_DAILY_LOG_APPEND ??= "1";
   process.env.MEMORY_BENCHMARK_SKIP_CONTEXT_FRAMES ??= "1";
   process.env.MEMORY_BENCHMARK_SKIP_PROJECT_TIMELINE ??= "1";
+  process.env.RECONCILE_B_MODE = "off";
+  process.env.MEMORY_BENCHMARK_INGEST_EXTRACTION_MAX_TOKENS ??= "2048";
 }
 
 export function capIngestEventText(event: PersonalMemoryEvent): PersonalMemoryEvent {

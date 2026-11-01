@@ -22,6 +22,9 @@ POLICY = BENCH / ".local/windowed-budget.json"
 SCHEMES = "ABCDE"
 ACTIVE_CHILD = None
 CELL_TIMEOUT_SEC = 4 * 3600
+FULL_CELL_MIN_TIMEOUT_SEC = 2 * 3600
+FULL_CELL_MAX_TIMEOUT_SEC = 10 * 3600
+FULL_CELL_SEC_PER_VISIBLE_EVENT = 45
 DENSE_WINDOW_AS_OF = frozenset(
     {
         "2026-08-18T06:51:44.000Z",
@@ -30,6 +33,31 @@ DENSE_WINDOW_AS_OF = frozenset(
     }
 )
 DENSE_STAGE_PROBE_EXPECT = 24  # 3 windows × 8 probes
+
+def count_visible_events(cell):
+    path = pathlib.Path(cell["events"])
+    as_of = cell["as_of"]
+    end = datetime.fromisoformat(as_of.replace("Z", "+00:00")).timestamp()
+    n = 0
+    with path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            obs = datetime.fromisoformat(rec["observed_at"].replace("Z", "+00:00")).timestamp()
+            if obs <= end:
+                n += 1
+    return n
+
+def cell_timeout_sec(cell):
+    if cell.get("strategy") != "full":
+        return CELL_TIMEOUT_SEC
+    try:
+        visible = count_visible_events(cell)
+    except OSError:
+        visible = 200
+    est = max(FULL_CELL_MIN_TIMEOUT_SEC, int(visible * FULL_CELL_SEC_PER_VISIBLE_EVENT))
+    return min(FULL_CELL_MAX_TIMEOUT_SEC, est)
 
 def is_transient_cell_failure(rec: dict) -> bool:
     reason = str(rec.get("stopped_reason") or "").lower()
@@ -360,11 +388,12 @@ def main():
             else:
                 cmd=["npx","tsx","src/cli/run-windowed.ts","--scheme",scheme,"--events",cell["events"],"--probes",str(PROBES),"--as-of",cell["as_of"],"--strategy",cell["strategy"],"--ablation",cell["ablation"],"--run-id",run_id,"--out",str(cell_out),"--hours",str(cell.get("hours",8))]
             before=totals();started=time.monotonic()
+            timeout=cell_timeout_sec(cell)
             env=os.environ.copy();env["MEMORY_BENCHMARK_BUDGET_POLICY"]=str(POLICY)
             with (cell_out/"cli.log").open("w") as log:
                 with subprocess.Popen(cmd,cwd=BENCH,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True) as child:
                     ACTIVE_CHILD=child
-                    try: code=child.wait(timeout=CELL_TIMEOUT_SEC)
+                    try: code=child.wait(timeout=timeout)
                     except subprocess.TimeoutExpired:
                         # This process group was created solely for this cell. Never
                         # kill by executable name or leave an npx grandchild billing.

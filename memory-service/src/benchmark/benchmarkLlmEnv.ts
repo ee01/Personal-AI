@@ -59,6 +59,7 @@ export function applyBaselineBenchmarkLlmEnv(options: {
   process.env.INGEST_LLM_EXTRACTION_ENABLED = 'true';
   // Benchmark policy: single configured tier only — no provider/model fallback chains.
   process.env.LLM_FALLBACKS = '';
+  process.env.LLM_FALLBACK_ON_JSON_PARSE = 'false';
   process.env.MEMORY_EXTRACTION_LLM_FALLBACKS = `openai/${models.main.model}`;
   process.env.LLM_REQUEST_TIMEOUT_MS = '180000';
   process.env.RECONCILE_CHEAP_TARGET = `openai/${models.main.model}`;
