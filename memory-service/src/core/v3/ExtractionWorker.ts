@@ -74,8 +74,15 @@ export function resetExtractionLlmClient(): void {
 
 export function getExtractionLLMClient(): LLMClient {
   if (extractionClient !== undefined) return extractionClient;
+  if (
+    process.env.MEMORY_BENCHMARK_WINDOWED_INGEST_ISOLATED === '1' ||
+    isBenchmarkLiveLlmEnabled()
+  ) {
+    extractionClient = getLLMClient();
+    return extractionClient;
+  }
   const raw = process.env.MEMORY_EXTRACTION_LLM_FALLBACKS?.trim();
-  if (!raw || isBenchmarkLiveLlmEnabled()) {
+  if (!raw) {
     extractionClient = getLLMClient();
     return extractionClient;
   }
@@ -165,6 +172,7 @@ export class ExtractionWorker {
    * changes land as unit revisions via the maintainer path, not re-extraction.
    */
   enqueueEpisode(episodeId: string): string | null {
+    if (process.env.MEMORY_BENCHMARK_WINDOWED_INGEST_ISOLATED === '1') return null;
     if (!isV3ShadowWriteEnabled()) return null;
     if (!episodePromotionEligible(this.db, episodeId)) return null;
     const existing = this.db
