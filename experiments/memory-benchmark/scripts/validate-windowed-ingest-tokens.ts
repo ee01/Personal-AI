@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { loadBenchmarkDotenv } from "../adapters/mem0/load-env.js";
 import { loadEventsJsonl } from "../src/data/load.js";
 import { BaselineSchemeAAdapter } from "../adapters/baseline/baseline-adapter.js";
-import { applyWindowedIngestEnv, capIngestEventText } from "../src/windowed/ingest-extraction.js";
+import { applyIngestIsolation, capIngestEventText, resolveIngestIsolation } from "../src/windowed/ingest-extraction.js";
 import { startBenchmarkProxySession, stopBenchmarkProxySession } from "../src/cost/benchmark-proxy-session.js";
 
 const N = Number(process.env.VALIDATE_N ?? 20);
@@ -15,7 +15,8 @@ const EVENTS = resolve(
 
 async function main() {
   loadBenchmarkDotenv();
-  applyWindowedIngestEnv("full");
+  const isolation = resolveIngestIsolation("paired-control", "full");
+  applyIngestIsolation(isolation);
   const events = (await loadEventsJsonl(EVENTS))
     .filter(e => e.observed_at <= "2026-08-18T06:51:44.000Z")
     .sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at))
@@ -27,7 +28,7 @@ async function main() {
   await adapter.init();
   try {
     for (const event of events) {
-      await adapter.ingest(capIngestEventText(event));
+      await adapter.ingest(capIngestEventText(event, isolation));
     }
   } finally {
     await adapter.close();

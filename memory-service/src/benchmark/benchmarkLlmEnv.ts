@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resetConfigForTests } from '../config.js';
+import { resetLlmClientSingleton } from '../llm/LLMClient.js';
+import { resetExtractionLlmClient } from '../core/v3/ExtractionWorker.js';
 
 export interface BenchmarkModelTier {
   provider: string;
@@ -63,6 +65,20 @@ export function applyBaselineBenchmarkLlmEnv(options: {
   process.env.MEMORY_EXTRACTION_LLM_FALLBACKS = `openai/${models.main.model}`;
   process.env.LLM_REQUEST_TIMEOUT_MS = '180000';
   process.env.RECONCILE_CHEAP_TARGET = `openai/${models.main.model}`;
-  process.env.RECONCILE_B_MODE = 'on';
+  const isolated =
+    process.env.MEMORY_BENCHMARK_WINDOWED_INGEST_ISOLATED === '1';
+  if (isolated) {
+    process.env.RECONCILE_B_MODE = 'off';
+    process.env.MEMORY_WRITE_V3_SHADOW = '0';
+    process.env.ATTENTION_TRIAGE_ENABLED = 'off';
+    process.env.MEMORY_BENCHMARK_SKIP_DAILY_LOG_APPEND = '1';
+    process.env.MEMORY_BENCHMARK_SKIP_CONTEXT_FRAMES = '1';
+    process.env.MEMORY_BENCHMARK_SKIP_PROJECT_TIMELINE = '1';
+    process.env.MEMORY_BENCHMARK_INGEST_EXTRACTION_MAX_TOKENS ??= '2048';
+  } else {
+    process.env.RECONCILE_B_MODE = 'on';
+  }
   resetConfigForTests();
+  resetLlmClientSingleton();
+  resetExtractionLlmClient();
 }

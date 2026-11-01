@@ -19,7 +19,11 @@ import { buildAdapterDecideInput, buildAdapterRecallQuery } from "../scene/adapt
 import { checkHardGates, scoreProbe } from "../scoring/scorer.js";
 import { writeReports } from "../report/generate.js";
 import { proxyTotalsFromFile } from "../cost/proxy-ledger.js";
-import { applyWindowedIngestEnv, capIngestEventText } from "../windowed/ingest-extraction.js";
+import {
+  applyIngestIsolation,
+  capIngestEventText,
+  resolveIngestIsolation,
+} from "../windowed/ingest-extraction.js";
 import type { BenchmarkReport, MemoryBenchmarkAdapter, ProbeRunOutcome } from "../types.js";
 
 const args = new Map<string, string>();
@@ -36,7 +40,9 @@ async function main() {
   if (![8,24,72].includes(hours)) throw new Error("invalid_window_hours");
   const strategy = args.get("--strategy") ?? "8h";
   if (!["8h", "full"].includes(strategy)) throw new Error("invalid_strategy");
-  applyWindowedIngestEnv(strategy as "8h" | "full");
+  const matrixStage = args.get("--stage") ?? "";
+  const ingestIsolation = resolveIngestIsolation(matrixStage, strategy as "8h" | "full");
+  applyIngestIsolation(ingestIsolation);
   const events = await loadEventsJsonl(required("--events"));
   const probes = (await loadProbesJsonl(required("--probes"))).filter(p => p.as_of === asOf);
   if (probes.some(p => !(p.scene_input.text || p.scene_input.recall_query || p.scene_input.scene_id))) throw new Error("missing_scene_only_query");
@@ -89,7 +95,8 @@ async function main() {
     };
     try {
       let previousDay: string | undefined;
-      const deferMidIngestConsolidate = strategy === "full";
+      const deferMidIngestConsolidate =
+        ingestIsolation.enabled && ingestIsolation.defer_mid_ingest_consolidate;
       for (const event of recent) {
         const day = event.observed_at.slice(0, 10);
         if (previousDay && day !== previousDay && !deferMidIngestConsolidate) {
@@ -99,7 +106,7 @@ async function main() {
         previousDay = day;
         await checkBudget();
         const t0 = performance.now();
-        await adapter.ingest(capIngestEventText(event));
+        await adapter.ingest(capIngestEventText(event, ingestIsolation));
         ingestTimes.push(performance.now() - t0); ingested++;
         if (ingested % 20 === 0) console.log(JSON.stringify({ event: "ingest", runId, ingested, total: recent.length }));
       }
@@ -123,10 +130,22 @@ async function main() {
       hard_gate_failures: outcomes.reduce((n,o) => n + o.hard_gate_failures.length, 0), mean_composite: outcomes.reduce((n,o) => n+o.composite,0)/(outcomes.length||1),
       scene_means: Object.fromEntries(Object.entries(scenes).map(([k,v])=>[k,v.reduce((a,b)=>a+b,0)/v.length])), cost, outcomes, stopped_reason: stopped,
       latency: { ingest_p50_ms: ingest.p50, ingest_p95_ms: ingest.p95, ingest_p99_ms: ingest.p99, decide_p50_ms: decide.p50, decide_p95_ms: decide.p95, decide_p99_ms: decide.p99 },
+      ...(ingestIsolation.enabled
+        ? {
+            ingest_isolation: true,
+            ingest_isolation_detail: {
+              stage: ingestIsolation.stage,
+              strategy: ingestIsolation.strategy,
+              text_cap_utf8_bytes: ingestIsolation.text_cap_utf8_bytes,
+              bypasses: ingestIsolation.bypasses,
+              defer_mid_ingest_consolidate: ingestIsolation.defer_mid_ingest_consolidate,
+            },
+          }
+        : { ingest_isolation: false }),
     };
     await writeReports(report, join(out, "report.json"), join(out, "report.md"));
     await writeFile(join(out,"retrieval-traces.json"), JSON.stringify(traces,null,2));
-    await writeFile(join(out,"execution.json"), JSON.stringify({ strategy, hours, as_of: asOf, started, local_index_ms: indexMs, wall_ms: Date.now()-started, visible_events: visible.length, recent_events: recent.length, probes_expected: probes.length, isolation: "as_of window; B decision SAVEPOINT rollback; A/C/D/E read-only decision audit", generation_evidence: proxyTotalsFromFile(session.handle.ledgerPath), stopped }, null, 2));
+    await writeFile(join(out,"execution.json"), JSON.stringify({ strategy, hours, matrix_stage: matrixStage || undefined, as_of: asOf, started, local_index_ms: indexMs, wall_ms: Date.now()-started, visible_events: visible.length, recent_events: recent.length, probes_expected: probes.length, ingest_isolation: ingestIsolation.enabled, ingest_isolation_detail: ingestIsolation.enabled ? ingestIsolation : undefined, isolation: "as_of window; B decision SAVEPOINT rollback; A/C/D/E read-only decision audit", generation_evidence: proxyTotalsFromFile(session.handle.ledgerPath), stopped }, null, 2));
     if (stopped) process.exitCode = 2;
   } finally {
     if (adapter && "close" in adapter) await (adapter as MemoryBenchmarkAdapter & { close(): Promise<void> }).close();

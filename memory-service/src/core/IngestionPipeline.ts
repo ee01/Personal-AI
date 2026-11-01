@@ -499,6 +499,10 @@ export class IngestionPipeline {
     // The worker only runs when MEMORY_WRITE_V3_SHADOW is enabled; legacy
     // chunk/FTS/entity supply is untouched by this path.
     try {
+      if (
+        process.env.MEMORY_BENCHMARK_WINDOWED_INGEST_ISOLATED !== '1' &&
+        process.env.MEMORY_WRITE_V3_SHADOW === '1'
+      ) {
       const { ExtractionWorker } = await import('./v3/ExtractionWorker.js');
       const worker = new ExtractionWorker(
         this.db,
@@ -514,6 +518,7 @@ export class IngestionPipeline {
             (err as Error).message,
           );
         });
+      }
       }
     } catch (err) {
       console.warn(

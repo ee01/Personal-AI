@@ -1130,3 +1130,8 @@ export function getLLMClient(): LLMClient {
   }
   return _instance;
 }
+
+/** Benchmark / test: drop cached client after process.env LLM routing changes. */
+export function resetLlmClientSingleton(): void {
+  _instance = null;
+}

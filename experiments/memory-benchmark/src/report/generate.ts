@@ -22,6 +22,14 @@ export function renderMarkdownReport(report: BenchmarkReport): string {
   if (report.stopped_reason) {
     lines.push(`- **stopped**: ${report.stopped_reason}`);
   }
+  if (report.ingest_isolation) {
+    const d = report.ingest_isolation_detail;
+    lines.push(
+      `- **ingest isolation**: enabled (${d?.stage ?? "paired-control"}, cap ${d?.text_cap_utf8_bytes ?? "?"} UTF-8 bytes)`,
+    );
+  } else if (report.ingest_isolation === false) {
+    lines.push(`- **ingest isolation**: off (native ingest path)`);
+  }
   lines.push(``, `## Scene means`, ``);
   for (const [scene, mean] of Object.entries(report.scene_means)) {
     lines.push(`- ${scene}: ${mean.toFixed(2)}`);

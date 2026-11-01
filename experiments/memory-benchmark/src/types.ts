@@ -1,4 +1,6 @@
 /** Phase 1 personal memory event (aligns with memory-service/evals/personal-memory-dataset/schema.json). */
+import type { AblationMode } from "./ablation/config.js";
+
 export interface PersonalMemoryEvent {
   event_id: string;
   source: string;
@@ -171,6 +173,7 @@ export interface BenchmarkReport {
   run_id: string;
   mode: "quality" | "capacity";
   fixture_id: string;
+  ablation_mode?: AblationMode;
   events_ingested: number;
   consolidations: number;
   probes_run: number;
@@ -182,6 +185,15 @@ export interface BenchmarkReport {
   latency: LatencySummary;
   outcomes: ProbeRunOutcome[];
   stopped_reason?: string;
+  /** Set when paired-control windowed ingest isolation (8KiB cap + sidecar bypass) was active. */
+  ingest_isolation?: boolean;
+  ingest_isolation_detail?: {
+    stage: string;
+    strategy: string;
+    text_cap_utf8_bytes: number;
+    bypasses: string[];
+    defer_mid_ingest_consolidate: boolean;
+  };
 }
 
 export interface CostSummary {

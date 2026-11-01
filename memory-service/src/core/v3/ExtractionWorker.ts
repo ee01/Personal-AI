@@ -68,6 +68,10 @@ export function isV3ShadowWriteEnabled(): boolean {
  */
 let extractionClient: LLMClient | undefined;
 
+export function resetExtractionLlmClient(): void {
+  extractionClient = undefined;
+}
+
 export function getExtractionLLMClient(): LLMClient {
   if (extractionClient !== undefined) return extractionClient;
   const raw = process.env.MEMORY_EXTRACTION_LLM_FALLBACKS?.trim();

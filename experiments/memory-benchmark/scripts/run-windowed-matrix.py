@@ -258,7 +258,7 @@ def schedule(plan):
 def summarize(plan, state):
     cost = totals()
     paired_expect = plan.get("window_policy", {}).get("paired_control_probe_expect", DENSE_STAGE_PROBE_EXPECT)
-    summary = {"version": plan["version"], "status": state, "costs_including_prior_attempts": cost, "new_run_proxy_usd":cost["total"]-plan["prior_costs"]["total"], "coverage":{}, "paired_controls":{}, "winner":None, "quality_equivalence":"not established; complete paired controls and difference review required"}
+    summary = {"version": plan["version"], "status": state, "costs_including_prior_attempts": cost, "new_run_proxy_usd":cost["total"]-plan["prior_costs"]["total"], "coverage":{}, "paired_controls":{}, "ingest_isolation_by_cell":{}, "winner":None, "quality_equivalence":"not established; complete paired controls and difference review required"}
     for scheme in SCHEMES:
         records = []
         for path in (OUT/f"first-build/{scheme}").glob("**/report.json"):
@@ -298,6 +298,17 @@ def summarize(plan, state):
         reviews=json.loads(review_path.read_text()) if review_path.exists() else []
         judge_failed=any(any(r["review"].get(k) for k in ["material_regression","old_evidence_omission","safety_regression"]) for r in reviews)
         summary["paired_controls"][scheme]={"judge_complete":(OUT/f"paired-control/{scheme}/review/complete.json").exists(),"judge_regression":judge_failed,"paired_probes":len(common),"complete":complete,"acceptance_score_drop":drop,"added_acceptance_errors":added,"added_safety_failures":added_safety,"old_evidence_fact_regressions":old_omissions,"exploratory_numeric_rule_passed":passed,"difference_review_required":True,"window_expansion_required":complete and not passed}
+    for path in OUT.glob("**/execution.json"):
+        try:
+            execution = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        rel = str(path.parent.relative_to(OUT))
+        if execution.get("ingest_isolation") is not None:
+            summary["ingest_isolation_by_cell"][rel] = {
+                "ingest_isolation": execution.get("ingest_isolation"),
+                "detail": execution.get("ingest_isolation_detail"),
+            }
     summary["expansion_required"]=any(c["window_expansion_required"] or c["judge_regression"] for c in summary["paired_controls"].values())
     if summary["expansion_required"]:
         summary["quality_equivalence"]="8h control regression; uniform 24h/72h slice diagnostics required; no winner"
@@ -386,7 +397,7 @@ def main():
                 if cell["replay"]=="cache" and f"mini-7d/{scheme}/live" not in state["completed"]:
                     state["skipped"].append({"id":cell["id"],"reason":"no_complete_live_replay"});write(state_path,state);idx+=1;continue
             else:
-                cmd=["npx","tsx","src/cli/run-windowed.ts","--scheme",scheme,"--events",cell["events"],"--probes",str(PROBES),"--as-of",cell["as_of"],"--strategy",cell["strategy"],"--ablation",cell["ablation"],"--run-id",run_id,"--out",str(cell_out),"--hours",str(cell.get("hours",8))]
+                cmd=["npx","tsx","src/cli/run-windowed.ts","--scheme",scheme,"--events",cell["events"],"--probes",str(PROBES),"--as-of",cell["as_of"],"--strategy",cell["strategy"],"--ablation",cell["ablation"],"--run-id",run_id,"--out",str(cell_out),"--hours",str(cell.get("hours",8)),"--stage",cell["stage"]]
             before=totals();started=time.monotonic()
             timeout=cell_timeout_sec(cell)
             env=os.environ.copy();env["MEMORY_BENCHMARK_BUDGET_POLICY"]=str(POLICY)
@@ -402,7 +413,9 @@ def main():
                     finally: ACTIVE_CHILD=None
             reports=list(cell_out.glob("report.json")) or list(cell_out.glob(f"{scheme}-run-*.json"))
             report=json.loads(reports[-1].read_text()) if reports else {}
-            rec={"id":cell["id"],"exit_code":code,"seconds":time.monotonic()-started,"proxy_delta":totals()["total"]-before["total"],"probes":report.get("probes_run",0),"stopped_reason":report.get("stopped_reason")}
+            exec_path=cell_out/"execution.json"
+            execution=json.loads(exec_path.read_text()) if exec_path.exists() else {}
+            rec={"id":cell["id"],"exit_code":code,"seconds":time.monotonic()-started,"proxy_delta":totals()["total"]-before["total"],"probes":report.get("probes_run",0),"stopped_reason":report.get("stopped_reason"),"ingest_isolation":execution.get("ingest_isolation", report.get("ingest_isolation"))}
             expected=40 if cell["stage"]=="mini-7d" else 8
             if code==0 and ((cell.get("review") and (cell_out/"complete.json").exists()) or (rec["probes"]==expected and not rec["stopped_reason"])):state["completed"].append(cell["id"])
             else:state["failed"].append(rec)
