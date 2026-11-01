@@ -2,15 +2,15 @@
 /** Offline: ingest N events under windowed full isolation; report proxy input_tokens median. */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadBenchmarkDotenv } from "../../adapters/mem0/load-env.js";
-import { loadEventsJsonl } from "../data/load.js";
-import { BaselineSchemeAAdapter } from "../../adapters/baseline/baseline-adapter.js";
-import { applyWindowedIngestEnv, capIngestEventText } from "../windowed/ingest-extraction.js";
-import { startBenchmarkProxySession, stopBenchmarkProxySession } from "../cost/benchmark-proxy-session.js";
+import { loadBenchmarkDotenv } from "../adapters/mem0/load-env.js";
+import { loadEventsJsonl } from "../src/data/load.js";
+import { BaselineSchemeAAdapter } from "../adapters/baseline/baseline-adapter.js";
+import { applyWindowedIngestEnv, capIngestEventText } from "../src/windowed/ingest-extraction.js";
+import { startBenchmarkProxySession, stopBenchmarkProxySession } from "../src/cost/benchmark-proxy-session.js";
 
 const N = Number(process.env.VALIDATE_N ?? 20);
 const EVENTS = resolve(
-  "../../../memory-service/evals/personal-memory-dataset/raw-only/events.jsonl",
+  "../../memory-service/evals/personal-memory-dataset/raw-only/events.jsonl",
 );
 
 async function main() {
