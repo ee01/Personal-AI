@@ -11,8 +11,8 @@ Consolidation occurs at earlier day boundaries and at T, never at a later day-en
 The densest 202-event window is first. Schedule:
 
 1. A→E build-1, all 56 probes each.
-2. Each scheme on the same 304-event slice: full native historical processing vs 8h processing + common history. A frozen non-z-ai judge reviews substantive paired output differences, separate from deterministic rubric scores.
-3. If numeric control thresholds or judge reviews flag a regression, run uniform 24h and 72h slice diagnostics for every scheme. These have separate labels; original 8h repeats/ablations are skipped rather than treating expanded runs as equivalent repeats. Diagnostics do not automatically establish an expanded-policy winner.
+2. Each scheme on the same 304-event slice: full native historical processing vs 8h processing + common history. A frozen non-z-ai judge reviews substantive paired output differences, separate from deterministic rubric scores. **Judge tier (2026-11-01):** `config/models.json` uses `openai/gpt-4.1` (non–z-ai). OpenRouter removed `anthropic/claude-sonnet-4`; `claude-sonnet-4.6` is also blocked by this workspace’s OpenRouter guardrails/ZDR (`judge_http_404`). Verified live with `GET /models` and a probe completion; recorded in `matrix-plan.json` `window_policy.judge_model`.
+3. If numeric control thresholds or judge reviews flag a regression, run uniform 24h and 72h slice diagnostics for every scheme. These have separate labels; original 8h repeats/ablations are skipped rather than treating expanded runs as equivalent repeats. Diagnostics do not automatically establish an expanded-policy winner. **Dense-window trim (2026-11-01):** like paired-control, `expanded-24h`, `expanded-72h`, and `repeat-builds` run only the three dense as-of instants (06:51 / 09:51 / 15:51 UTC on 2026-08-18); sparse w4–w7 are not scheduled (`skipped: sparse` in plan). Ablations already used dense windows only.
 4. Otherwise, build-2/3 and A/B three ablations under the same 8h conditions.
 5. Continuous production-mini-7d replay: live and cache runs separately. A cache run requires a completed live run. All actual cache calls remain in the budget.
 

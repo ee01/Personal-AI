@@ -33,6 +33,15 @@ DENSE_WINDOW_AS_OF = frozenset(
     }
 )
 DENSE_STAGE_PROBE_EXPECT = 24  # 3 windows × 8 probes
+DENSE_WINDOW_STAGES = frozenset(
+    {
+        "paired-control",
+        "ablations",
+        "expanded-24h",
+        "expanded-72h",
+        "repeat-builds",
+    }
+)
 
 def count_visible_events(cell):
     path = pathlib.Path(cell["events"])
@@ -230,7 +239,7 @@ def schedule(plan):
     dense_windows.sort(key=lambda w: w["as_of"])
 
     def windows_for_stage(stage: str):
-        if stage in ("paired-control", "ablations"):
+        if stage in DENSE_WINDOW_STAGES:
             return dense_windows
         return all_windows
 
