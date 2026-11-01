@@ -91,7 +91,17 @@ def consume_retry_requests(cells, state, pending, idx, valid_cell_ids, state_pat
     if not isinstance(requested, list):
         return pending
     consumed = set(state.get("retry_requested_consumed") or [])
-    todo = [cid for cid in requested if isinstance(cid, str) and cid in valid_cell_ids and cid not in consumed]
+    skipped_ids = {
+        x.get("id") if isinstance(x, dict) else x for x in state.get("skipped", [])
+    }
+    todo = [
+        cid
+        for cid in requested
+        if isinstance(cid, str)
+        and cid in valid_cell_ids
+        and cid not in consumed
+        and cid not in skipped_ids
+    ]
     if not todo:
         return pending
     todo_set = set(todo)
