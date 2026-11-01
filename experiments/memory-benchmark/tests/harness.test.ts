@@ -284,6 +284,15 @@ describe("scorer", () => {
   });
 });
 
+describe("ablation config", () => {
+  it("parses CLI ablation aliases", async () => {
+    const { parseAblationMode } = await import("../src/ablation/config.js");
+    expect(parseAblationMode("raw_hybrid_only")).toBe("raw_hybrid_only");
+    expect(parseAblationMode("no-consolidation")).toBe("no_background_consolidation");
+    expect(parseAblationMode(undefined)).toBe("none");
+  });
+});
+
 describe("six-gate helpers", () => {
   it("stub passes future evidence hard gate", async () => {
     const { runFutureEvidenceHardGate } = await import("../src/gates/future-evidence-gate.js");
@@ -299,5 +308,54 @@ describe("six-gate helpers", () => {
     const adapter = new StubMemoryAdapter("obs-stub");
     const result = await runObservableReconciliationGate(adapter);
     expect(result.ok).toBe(true);
+  });
+
+  it("stub passes intraday derived as_of hard gate", async () => {
+    const { runIntradayDerivedAsOfHardGate } = await import(
+      "../src/gates/intraday-derived-asof-gate.js"
+    );
+    const adapter = new StubMemoryAdapter("intraday-stub");
+    const result = await runIntradayDerivedAsOfHardGate(adapter);
+    expect(result.ok).toBe(true);
+  });
+
+  it("production-mini-7d stub scheduling gate passes", async () => {
+    const { runProductionMini7dStubSchedulingGate } = await import(
+      "../src/gates/intraday-derived-asof-gate.js"
+    );
+    const result = await runProductionMini7dStubSchedulingGate();
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("rescore revision 2", () => {
+  it("maps action_not_allowed to quality_violations", async () => {
+    const { rescoreProbeOutcome } = await import("../src/scoring/rescore-v2.js");
+    const outcome = {
+      probe: {
+        probe_id: "t",
+        storyline_key: "s",
+        scene: "message_sidecar",
+        as_of: "2026-01-01T12:00:00.000Z",
+        scope: "work",
+        scene_input: { text: "x" },
+        visible_evidence_ids: [],
+        required_facts: [],
+        forbidden_assertions: [],
+        allowed_actions: ["silence"],
+        trigger_window: { start: "2026-01-01T00:00:00.000Z", end: "2026-01-02T00:00:00.000Z" },
+        should_trigger: false,
+        latency_budget_ms: 500,
+      },
+      decide: { action: "show_sidecar", output_text: "hi", cited_event_ids: [], latency_ms: 1 },
+      scores: { F: 0, E: 1, D: 0, N: 0, L: 1 },
+      composite: 35,
+      hard_gate_failures: ["action_not_allowed:show_sidecar"],
+      passed: false,
+    };
+    const r = rescoreProbeOutcome(outcome);
+    expect(r.quality_violations).toEqual(["action_not_allowed:show_sidecar"]);
+    expect(r.safety_violations).toEqual([]);
+    expect(r.runtime_safety_stop).toBe(false);
   });
 });

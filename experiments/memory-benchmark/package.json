@@ -13,6 +13,7 @@
     "gates:d": "tsx src/cli/run-gates.ts --scheme D",
     "gates:e": "tsx src/cli/run-gates.ts --scheme E",
     "gates:c": "tsx src/cli/run-gates.ts --scheme C",
+    "rescore": "tsx src/cli/rescore-report.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
