@@ -31,6 +31,46 @@ DENSE_WINDOW_AS_OF = frozenset(
 )
 DENSE_STAGE_PROBE_EXPECT = 24  # 3 windows × 8 probes
 
+def is_transient_cell_failure(rec: dict) -> bool:
+    reason = str(rec.get("stopped_reason") or "").lower()
+    if rec.get("exit_code") == 124:
+        return True
+    needles = (
+        "fetch failed",
+        "econnreset",
+        "econnrefused",
+        "etimedout",
+        "socket hang up",
+        "supermemory_ingest_timeout",
+        "timed out after",
+        "network",
+        "503",
+        "502",
+        "429",
+    )
+    return any(n in reason for n in needles)
+
+def release_stage_transient_retries(state, stage, state_path):
+    """Drop one-shot retries for failed cells in `stage` (network/timeout class only)."""
+    retried = set(state.get("stage_transient_retried") or [])
+    kept = []
+    released = []
+    for rec in state.get("failed") or []:
+        cid = rec.get("id") if isinstance(rec, dict) else None
+        if not cid or not cid.startswith(f"{stage}/"):
+            kept.append(rec)
+            continue
+        if cid in retried or not is_transient_cell_failure(rec):
+            kept.append(rec)
+            continue
+        retried.add(cid)
+        released.append(cid)
+    if released:
+        state["failed"] = kept
+        state["stage_transient_retried"] = sorted(retried)
+        write(state_path, state)
+        print(json.dumps({"event": "stage_transient_retry", "stage": stage, "cells": released}), flush=True)
+
 def terminate_cell(child):
     if child is None or child.poll() is not None: return
     try: os.killpg(child.pid,signal.SIGTERM)
@@ -223,9 +263,14 @@ def main():
     state.pop("runner_error",None)
     state["stopped"]=False
     previous_scheme=None
+    previous_stage=None
     try:
         for cell in cells:
             if cell["id"] in finished: continue
+            stage=cell["stage"]
+            if previous_stage and previous_stage != stage:
+                release_stage_transient_retries(state, previous_stage, state_path)
+                finished=set(state["completed"])|{x["id"] for x in state["failed"]}|{x["id"] for x in state["skipped"]}
             scheme=cell["scheme"]
             ceilings,current=policy(plan,plan["stages"][cell["stage"]])
             reason = None
@@ -282,6 +327,9 @@ def main():
             write(state_path,state)
             print(json.dumps({"event":"cell_end",**rec}),flush=True)
             summarize(plan,state)
+            previous_stage=stage
+        if previous_stage:
+            release_stage_transient_retries(state, previous_stage, state_path)
         state.update({"current":None,"finished":True});write(state_path,state)
     except BaseException as error:
         state.update({"runner_error":repr(error),"finished":False,"stopped":True})

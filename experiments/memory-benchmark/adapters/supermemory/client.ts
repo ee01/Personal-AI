@@ -242,14 +242,40 @@ export class SupermemoryClient {
   }
 
   async documentMissing(namespace: string, id: string): Promise<boolean> {
-    const res = await fetch(
-      `${this.origin}/ns/${encodeURIComponent(namespace)}/document/${encodeURIComponent(id)}`,
-      { method: "GET", headers: this.headers() },
-    );
-    return res.status === 404;
+    for (let attempt = 0; attempt < FETCH_RETRY_ATTEMPTS; attempt++) {
+      try {
+        const res = await fetch(
+          `${this.origin}/ns/${encodeURIComponent(namespace)}/document/${encodeURIComponent(id)}`,
+          { method: "GET", headers: this.headers() },
+        );
+        return res.status === 404;
+      } catch (err) {
+        if (attempt >= FETCH_RETRY_ATTEMPTS - 1 || !isRetryableFetchError(err)) {
+          throw err;
+        }
+        await sleep(FETCH_RETRY_BASE_MS * 2 ** attempt);
+      }
+    }
+    return false;
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < FETCH_RETRY_ATTEMPTS; attempt++) {
+      try {
+        return await this.requestOnce<T>(path, init);
+      } catch (err) {
+        lastErr = err;
+        if (attempt >= FETCH_RETRY_ATTEMPTS - 1 || !isRetryableFetchError(err)) {
+          throw err;
+        }
+        await sleep(FETCH_RETRY_BASE_MS * 2 ** attempt);
+      }
+    }
+    throw lastErr;
+  }
+
+  private async requestOnce<T>(path: string, init: RequestInit): Promise<T> {
     const response = await fetch(`${this.origin}${path}`, {
       ...init,
       headers: { ...this.headers(), ...(init.headers as Record<string, string>) },
@@ -278,6 +304,30 @@ function resolveApiKey(): string {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/** Network / transport errors worth retrying (not HTTP 4xx business errors). */
+export function isRetryableFetchError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const cause =
+    err instanceof Error && err.cause
+      ? err.cause instanceof Error
+        ? err.cause.message
+        : String(err.cause)
+      : "";
+  const blob = `${msg} ${cause}`.toLowerCase();
+  return (
+    blob.includes("fetch failed") ||
+    blob.includes("econnreset") ||
+    blob.includes("econnrefused") ||
+    blob.includes("etimedout") ||
+    blob.includes("socket hang up") ||
+    blob.includes("network") ||
+    blob.includes("aborted")
+  );
+}
+
+const FETCH_RETRY_ATTEMPTS = 3;
+const FETCH_RETRY_BASE_MS = 500;
 
 export function defaultSupermemoryCheckout(): string {
   const here = dirname(fileURLToPath(import.meta.url));

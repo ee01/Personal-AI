@@ -19,7 +19,7 @@ import { contentHash } from "../new-core/hash.js";
 import { loadModelsConfig } from "../new-core/config.js";
 import { InMemoryCostLedger, openRouterChat, type SharedCostLedger } from "../new-core/llm.js";
 import { documentContentForIngest } from "./content.js";
-import { createSupermemoryClient, SupermemoryClient } from "./client.js";
+import { createSupermemoryClient, SupermemoryClient, isRetryableFetchError } from "./client.js";
 import {
   bumpAclEpoch,
   getMeta,
@@ -152,7 +152,10 @@ export class SupermemoryRuntime {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("SUPERMEMORY_INGEST_TIMEOUT")) throw err;
+        const transient =
+          msg.includes("SUPERMEMORY_INGEST_TIMEOUT") || isRetryableFetchError(err);
+        if (!transient) throw err;
+        const status = msg.includes("SUPERMEMORY_INGEST_TIMEOUT") ? "timeout" : "network";
         for (const id of ids) {
           if (!set.has(id)) continue;
           const eventId = eventMap?.get(id) ?? id;
@@ -160,7 +163,7 @@ export class SupermemoryRuntime {
             event_id: eventId,
             doc_id: id,
             namespace: ns,
-            status: "timeout",
+            status,
             message: msg.slice(0, 500),
           });
         }
