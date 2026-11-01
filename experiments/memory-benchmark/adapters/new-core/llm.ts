@@ -58,6 +58,35 @@ export interface OpenRouterUsage {
   total_tokens?: number;
 }
 
+/** Cap completion size; above max successful B paired-control call (12618 output tokens). */
+export const OPENROUTER_CHAT_MAX_TOKENS = 16_384;
+
+const OPENROUTER_CHAT_TIMEOUT_MS = 180_000;
+
+function settleOpenRouterHttpFailure(
+  ledger: SharedCostLedger,
+  tier: "main" | "fast" | "judge",
+  label: string,
+  atVirtual: string,
+  latency_ms: number,
+  worstCaseUsd: number,
+  reason: string,
+): void {
+  ledger.settle(
+    {
+      tier,
+      label: `${label}:http_${reason}`,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost_usd: 0,
+      latency_ms,
+      cached_replay: false,
+      at_virtual: atVirtual,
+    },
+    worstCaseUsd,
+  );
+}
+
 /** OpenRouter chat completion; returns null when key missing (caller uses heuristic). */
 export async function openRouterChat(
   config: NewCoreModelsConfig,
@@ -84,42 +113,55 @@ export async function openRouterChat(
   const url = `${base}/chat/completions`;
   const activeRunId = process.env.MEMORY_BENCHMARK_ACTIVE_RUN_ID?.trim();
   const activeSchemeId = process.env.MEMORY_BENCHMARK_ACTIVE_SCHEME_ID?.trim();
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://personal-ai.local/memory-benchmark",
-      "X-Title": "memory-benchmark-scheme-B",
-      "X-Memory-Benchmark-Tier": tier,
-      "X-Memory-Benchmark-Label": label,
-      ...(activeRunId ? { "X-Benchmark-Run": activeRunId } : {}),
-      ...(activeSchemeId ? { "X-Benchmark-Scheme": activeSchemeId } : {}),
-    },
-    body: JSON.stringify({
-      model: tierCfg.model,
-      temperature: tierCfg.temperature,
-      usage: { include: true },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://personal-ai.local/memory-benchmark",
+        "X-Title": "memory-benchmark-scheme-B",
+        "X-Memory-Benchmark-Tier": tier,
+        "X-Memory-Benchmark-Label": label,
+        ...(activeRunId ? { "X-Benchmark-Run": activeRunId } : {}),
+        ...(activeSchemeId ? { "X-Benchmark-Scheme": activeSchemeId } : {}),
+      },
+      body: JSON.stringify({
+        model: tierCfg.model,
+        temperature: tierCfg.temperature,
+        max_tokens: OPENROUTER_CHAT_MAX_TOKENS,
+        usage: { include: true },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+      signal: AbortSignal.timeout(OPENROUTER_CHAT_TIMEOUT_MS),
+    });
+  } catch {
+    const latency_ms = performance.now() - t0;
+    settleOpenRouterHttpFailure(
+      ledger,
+      tier,
+      label,
+      atVirtual,
+      latency_ms,
+      worstCaseUsd,
+      "fetch_failed",
+    );
+    return null;
+  }
   const latency_ms = performance.now() - t0;
   if (!res.ok) {
-    ledger.settle(
-      {
-        tier,
-        label: `${label}:http_${res.status}`,
-        input_tokens: 0,
-        output_tokens: 0,
-        cost_usd: 0,
-        latency_ms,
-        cached_replay: false,
-        at_virtual: atVirtual,
-      },
+    settleOpenRouterHttpFailure(
+      ledger,
+      tier,
+      label,
+      atVirtual,
+      latency_ms,
       worstCaseUsd,
+      String(res.status),
     );
     return null;
   }
