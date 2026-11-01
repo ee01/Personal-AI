@@ -134,22 +134,39 @@ export class SupermemoryRuntime {
       const set = this.pendingDocs.get(ns);
       if (!set || set.size === 0) continue;
       const ids = [...set];
-      const { failures, maxQueuedWaitMs } = await this.client.waitDocumentsDone(ns, ids);
-      this.maxQueuedWaitMs = Math.max(this.maxQueuedWaitMs, maxQueuedWaitMs);
       const eventMap = this.pendingDocEvents.get(ns);
-      for (const f of failures) {
-        const eventId = eventMap?.get(f.id) ?? f.id;
-        this.recordIngestFailure({
-          event_id: eventId,
-          doc_id: f.id,
-          namespace: f.namespace,
-          status: f.status,
-          message: "supermemory_embed_failed",
-        });
-        set.delete(f.id);
-        eventMap?.delete(f.id);
+      try {
+        const { failures, maxQueuedWaitMs } = await this.client.waitDocumentsDone(ns, ids);
+        this.maxQueuedWaitMs = Math.max(this.maxQueuedWaitMs, maxQueuedWaitMs);
+        for (const f of failures) {
+          const eventId = eventMap?.get(f.id) ?? f.id;
+          this.recordIngestFailure({
+            event_id: eventId,
+            doc_id: f.id,
+            namespace: f.namespace,
+            status: f.status,
+            message: "supermemory_embed_failed",
+          });
+          set.delete(f.id);
+          eventMap?.delete(f.id);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("SUPERMEMORY_INGEST_TIMEOUT")) throw err;
+        for (const id of ids) {
+          if (!set.has(id)) continue;
+          const eventId = eventMap?.get(id) ?? id;
+          this.recordIngestFailure({
+            event_id: eventId,
+            doc_id: id,
+            namespace: ns,
+            status: "timeout",
+            message: msg.slice(0, 500),
+          });
+        }
+        set.clear();
+        eventMap?.clear();
       }
-      set.clear();
     }
   }
 
