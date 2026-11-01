@@ -1175,7 +1175,7 @@ Rules:
   ): Array<{ type: EntityType; name: string }> {
     const result: Array<{ type: EntityType; name: string }> = [];
 
-    for (const [category, names] of Object.entries(extraction.entities)) {
+    for (const [category, names] of Object.entries(extraction.entities ?? {})) {
       const entityType = ENTITY_CATEGORY_MAP[category];
       if (!entityType || !Array.isArray(names)) continue;
 

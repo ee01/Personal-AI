@@ -79,6 +79,36 @@ def initial_pending(cells, state):
     finished = finished_set(state)
     return [c for c in cells if c["id"] not in finished]
 
+def consume_retry_requests(cells, state, pending, idx, valid_cell_ids, state_path):
+    """Read retry-requests.json once per id; re-queue cells at the next boundary (idx=-1 = startup)."""
+    req_path = OUT / "retry-requests.json"
+    if not req_path.exists():
+        return pending
+    try:
+        requested = json.loads(req_path.read_text())
+    except json.JSONDecodeError:
+        return pending
+    if not isinstance(requested, list):
+        return pending
+    consumed = set(state.get("retry_requested_consumed") or [])
+    todo = [cid for cid in requested if isinstance(cid, str) and cid in valid_cell_ids and cid not in consumed]
+    if not todo:
+        return pending
+    todo_set = set(todo)
+    state["failed"] = [r for r in state.get("failed", []) if (r.get("id") if isinstance(r, dict) else r) not in todo_set]
+    state["completed"] = [c for c in state.get("completed", []) if c not in todo_set]
+    consumed |= todo_set
+    state["retry_requested_consumed"] = sorted(consumed)
+    write(state_path, state)
+    prepend = [c for c in cells if c["id"] in todo_set]
+    if idx < 0:
+        pending = prepend + [c for c in pending if c["id"] not in todo_set]
+    else:
+        tail = pending[idx + 1 :]
+        pending = pending[: idx + 1] + prepend + [c for c in tail if c["id"] not in todo_set]
+    print(json.dumps({"event": "retry_requested", "cells": todo}), flush=True)
+    return pending
+
 def terminate_cell(child):
     if child is None or child.poll() is not None: return
     try: os.killpg(child.pid,signal.SIGTERM)
@@ -272,6 +302,7 @@ def main():
     previous_scheme=None
     previous_stage=None
     pending=initial_pending(cells, state)
+    pending=consume_retry_requests(cells, state, pending, -1, valid_cell_ids, state_path)
     idx=0
     try:
         while idx < len(pending):
@@ -344,6 +375,7 @@ def main():
             print(json.dumps({"event":"cell_end",**rec}),flush=True)
             summarize(plan,state)
             previous_stage=stage
+            pending=consume_retry_requests(cells, state, pending, idx, valid_cell_ids, state_path)
             idx+=1
         if previous_stage:
             release_stage_transient_retries(state, previous_stage, state_path)
