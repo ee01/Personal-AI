@@ -70,6 +70,8 @@ export function applyIngestIsolation(config: IngestIsolationConfig): void {
     WINDOWED_INGEST_EXTRACTION_BYTE_LIMIT,
   );
   process.env.MEMORY_BENCHMARK_INGEST_EXTRACTION_MAX_TOKENS ??= "2048";
+  process.env.PROACTIVE_SCHEDULER_ENABLED = "0";
+  process.env.PROACTIVE_BACKGROUND_ENABLED = "0";
 }
 
 /** @deprecated Use applyIngestIsolation(resolveIngestIsolation(...)) */

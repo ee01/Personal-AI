@@ -59,6 +59,21 @@ function labelFromHeaders(headers: http.IncomingHttpHeaders): string {
   return (Array.isArray(raw) ? raw[0] : raw)?.trim() || "chat";
 }
 
+function callsiteFromHeaders(headers: http.IncomingHttpHeaders): string[] | undefined {
+  const raw = headers["x-memory-benchmark-callsite"];
+  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+      return parsed;
+    }
+  } catch {
+    return [text];
+  }
+  return undefined;
+}
+
 function parseCost(usage: Record<string, unknown> | undefined): number {
   if (!usage) return 0;
   for (const key of ["cost", "total_cost", "generation_cost"]) {
@@ -130,6 +145,7 @@ function recordFromJsonBody(
   requestModel: string | null,
   apiKey: string,
   upstreamBase: string,
+  callsite?: string[],
 ): Promise<void> {
   return (async () => {
     const usage = json.usage as Record<string, unknown> | undefined;
@@ -161,6 +177,7 @@ function recordFromJsonBody(
       cost_usd,
       path,
       streaming,
+      ...(callsite?.length ? { callsite } : {}),
     };
     appendProxyLedgerEntry(ctx.ledger_path, entry);
   })();
@@ -174,6 +191,7 @@ async function forwardNonStreaming(
   bodyJson: Record<string, unknown>,
   apiKey: string,
   upstreamBase: string,
+  callsite?: string[],
 ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
   const injected = {
     ...bodyJson,
@@ -203,6 +221,7 @@ async function forwardNonStreaming(
       requestModel,
       apiKey,
       upstreamBase,
+      callsite,
     );
   } catch {
     /* non-json error body */
@@ -222,6 +241,7 @@ async function forwardStreaming(
   apiKey: string,
   upstreamBase: string,
   res: http.ServerResponse,
+  callsite?: string[],
 ): Promise<void> {
   const injected = {
     ...bodyJson,
@@ -291,6 +311,7 @@ async function forwardStreaming(
       requestModel,
       apiKey,
       upstreamBase,
+      callsite,
     );
   }
 }
@@ -432,6 +453,7 @@ function createProxyServer(config: ProxyServerConfig): http.Server {
 
     const tier = tierFromHeaders(req.headers);
     const label = labelFromHeaders(req.headers);
+    const callsite = callsiteFromHeaders(req.headers);
     const streaming = bodyJson.stream === true;
 
     // Serialize guarded requests so every next call sees the prior settled ledger.
@@ -459,6 +481,7 @@ function createProxyServer(config: ProxyServerConfig): http.Server {
           config.apiKey,
           config.upstreamBase,
           res,
+          callsite,
         );
         return;
       }
@@ -470,6 +493,7 @@ function createProxyServer(config: ProxyServerConfig): http.Server {
         bodyJson,
         config.apiKey,
         config.upstreamBase,
+        callsite,
       );
       res.writeHead(forwarded.status, forwarded.headers);
       res.end(forwarded.body);

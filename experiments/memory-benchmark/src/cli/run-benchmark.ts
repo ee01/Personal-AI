@@ -17,6 +17,7 @@ import { writeReports } from "../report/generate.js";
 import { runBenchmark } from "../scoring/probe-runner.js";
 import { NotificationSink } from "../sink/notification-sink.js";
 import { loadBenchmarkDotenv } from "../../adapters/mem0/load-env.js";
+import { applyAblationEnv, parseAblationMode } from "../ablation/config.js";
 import {
   startBenchmarkProxySession,
   stopBenchmarkProxySession,
@@ -42,6 +43,10 @@ interface CliArgs {
   outDir: string;
   budgetUsd: number;
   scheme: string;
+  ablation: string;
+  fresh: boolean;
+  /** Persisted adapter state key (live + cache replay pair). Defaults to report run id. */
+  adapterRunId?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -50,6 +55,8 @@ function parseArgs(argv: string[]): CliArgs {
     outDir: join(pkgRoot, "out"),
     budgetUsd: 50,
     scheme: "stub",
+    ablation: "none",
+    fresh: true,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -60,6 +67,11 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === "--out" && argv[i + 1]) args.outDir = resolve(argv[++i]!);
     else if (a === "--budget-usd" && argv[i + 1]) args.budgetUsd = Number(argv[++i]);
     else if (a === "--scheme" && argv[i + 1]) args.scheme = argv[++i];
+    else if (a === "--ablation" && argv[i + 1]) args.ablation = argv[++i]!;
+    else if (a === "--fresh" && argv[i + 1]) {
+      const v = argv[++i]!.toLowerCase();
+      args.fresh = v !== "false" && v !== "0" && v !== "no";
+    } else if (a === "--adapter-run-id" && argv[i + 1]) args.adapterRunId = argv[++i];
   }
   return args;
 }
@@ -75,6 +87,8 @@ function fixturePaths(fixture: string) {
 
 async function main() {
   const cli = parseArgs(process.argv);
+  const ablationMode = parseAblationMode(cli.ablation);
+  applyAblationEnv(ablationMode);
   loadBenchmarkDotenv();
   const paths = fixturePaths(cli.fixture);
   const eventsPath = cli.events ?? paths.events;
@@ -89,6 +103,7 @@ async function main() {
   const cost = new CostTracker({ max_usd: cli.budgetUsd });
 
   const runId = `run-${Date.now()}`;
+  const adapterRunId = cli.adapterRunId ?? runId;
   const schemeLetter = resolveSchemeLetter(cli.scheme);
 
   const proxySession = await startBenchmarkProxySession({
@@ -102,15 +117,32 @@ async function main() {
     adapter = new BaselineSchemeAAdapter(
       cli.scheme === "baseline" ? "A" : cli.scheme,
       proxySession.handle.baseUrl,
+      cli.fresh,
     );
   } else if (cli.scheme === "B" || cli.scheme === "new-core") {
-    adapter = await createNewCoreSchemeBAdapter({ schemeId: "B", fresh: true, runId });
+    adapter = await createNewCoreSchemeBAdapter({
+      schemeId: "B",
+      fresh: cli.fresh,
+      runId: adapterRunId,
+    });
   } else if (cli.scheme === "C" || cli.scheme === "mem0") {
-    adapter = await createMem0SchemeCAdapter({ schemeId: "C", fresh: true, runId });
+    adapter = await createMem0SchemeCAdapter({
+      schemeId: "C",
+      fresh: cli.fresh,
+      runId: adapterRunId,
+    });
   } else if (cli.scheme === "D" || cli.scheme === "supermemory") {
-    adapter = await createSupermemorySchemeDAdapter({ schemeId: "D", fresh: true, runId });
+    adapter = await createSupermemorySchemeDAdapter({
+      schemeId: "D",
+      fresh: cli.fresh,
+      runId: adapterRunId,
+    });
   } else if (cli.scheme === "E" || cli.scheme === "letta") {
-    adapter = await createLettaSchemeEAdapter({ schemeId: "E", fresh: true, runId });
+    adapter = await createLettaSchemeEAdapter({
+      schemeId: "E",
+      fresh: cli.fresh,
+      runId: adapterRunId,
+    });
   } else {
     adapter = new StubMemoryAdapter(cli.scheme);
   }
@@ -126,6 +158,7 @@ async function main() {
     runId,
     mode: "quality",
     proxyLedgerPath: proxySession.handle.ledgerPath,
+    ablation_mode: ablationMode,
   });
 
   await mkdir(cli.outDir, { recursive: true });

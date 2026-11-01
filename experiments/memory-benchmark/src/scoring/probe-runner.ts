@@ -25,6 +25,7 @@ import {
   buildAdapterRecallQuery,
 } from "../scene/adapter-input.js";
 import { parseVirtualMs } from "../clock/virtual-time.js";
+import type { AblationMode } from "../ablation/config.js";
 
 export interface ProbeRunnerOptions {
   adapter: MemoryBenchmarkAdapter;
@@ -39,6 +40,7 @@ export interface ProbeRunnerOptions {
   /** @deprecated Per-probe `checkpoint` on ProbePoint. */
   probeCheckpoint?: "pre_consolidation" | "post_consolidation";
   proxyLedgerPath?: string;
+  ablation_mode?: AblationMode;
 }
 
 async function runDueProbes(
@@ -192,6 +194,7 @@ export async function runBenchmark(opts: ProbeRunnerOptions): Promise<BenchmarkR
     run_id: opts.runId,
     mode: opts.mode ?? "quality",
     fixture_id: opts.fixtureId,
+    ablation_mode: opts.ablation_mode ?? "none",
     events_ingested: replay.events_ingested,
     consolidations: replay.consolidations,
     probes_run: outcomes.length,

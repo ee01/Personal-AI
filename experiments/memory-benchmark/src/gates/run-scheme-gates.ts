@@ -1,6 +1,10 @@
 import { execSync } from "node:child_process";
 import type { MemoryBenchmarkAdapter } from "../types.js";
 import { runFutureEvidenceHardGate } from "./future-evidence-gate.js";
+import {
+  runIntradayDerivedAsOfHardGate,
+  runProductionMini7dStubSchedulingGate,
+} from "./intraday-derived-asof-gate.js";
 import { runObservableReconciliationGate } from "./observable-reconciliation-gate.js";
 import {
   runDeleteRevokePropagationGate,
@@ -149,6 +153,25 @@ export async function runSchemeGates(options: RunSchemeGatesOptions): Promise<Sc
     } finally {
       await futureAdapter.close();
     }
+
+    const intradayAdapter = await options.createAdapter(`${runId}-intraday`);
+    try {
+      gates.push({
+        gate: "intraday_derived_as_of",
+        ...(await runIntradayDerivedAsOfHardGate(intradayAdapter)),
+      });
+    } finally {
+      await intradayAdapter.close();
+    }
+
+    if (scheme === "A") {
+      const fixtureGate = await runProductionMini7dStubSchedulingGate();
+      gates.push({
+        gate: "production_mini_7d_stub_schedule",
+        ok: fixtureGate.ok,
+        failures: fixtureGate.failures,
+      });
+    }
   } catch (e) {
     notes.push(`gate_runner_error:${e instanceof Error ? e.message : String(e)}`);
     gates.push({
@@ -166,7 +189,7 @@ export async function runSchemeGates(options: RunSchemeGatesOptions): Promise<Sc
   } else if (gates.some((g) => g.candidate_limitation)) {
     notes.push(`Scheme ${scheme}: passed with candidate_limitation annotations.`);
   } else {
-    notes.push(`Scheme ${scheme}: all six gates passed.`);
+    notes.push(`Scheme ${scheme}: all hard gates passed (${gates.length} checks).`);
   }
 
   return {

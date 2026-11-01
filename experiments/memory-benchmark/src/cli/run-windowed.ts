@@ -18,7 +18,7 @@ import { CostTracker, latencySummary } from "../cost/tracker.js";
 import { buildAdapterDecideInput, buildAdapterRecallQuery } from "../scene/adapter-input.js";
 import { checkHardGates, scoreProbe } from "../scoring/scorer.js";
 import { writeReports } from "../report/generate.js";
-import { proxyTotalsFromFile } from "../cost/proxy-ledger.js";
+import { proxyTotalsFromFile, readProxyLedger } from "../cost/proxy-ledger.js";
 import {
   applyIngestIsolation,
   capIngestEventText,
@@ -41,6 +41,8 @@ async function main() {
   const strategy = args.get("--strategy") ?? "8h";
   if (!["8h", "full"].includes(strategy)) throw new Error("invalid_strategy");
   const matrixStage = args.get("--stage") ?? "";
+  const validateMaxEvents = Number(args.get("--validate-max-events") ?? 0);
+  const validateIngestOnly = validateMaxEvents > 0;
   const ingestIsolation = resolveIngestIsolation(matrixStage, strategy as "8h" | "full");
   applyIngestIsolation(ingestIsolation);
   const events = await loadEventsJsonl(required("--events"));
@@ -73,6 +75,7 @@ async function main() {
     const gateCtx = { eventsById: new Map(events.map(e => [e.event_id, e])), revokedScopes: new Set<string>(), deletedEventIds: new Set<string>() };
     const policyPath = process.env.MEMORY_BENCHMARK_BUDGET_POLICY;
     const checkBudget = async () => {
+      if (validateIngestOnly) return;
       if (!policyPath) throw new Error("missing_budget_policy");
       const { budgetBlockReason } = await import("../cost/budget-guard.js");
       const reason = budgetBlockReason(policyPath, scheme);
@@ -108,7 +111,39 @@ async function main() {
         const t0 = performance.now();
         await adapter.ingest(capIngestEventText(event, ingestIsolation));
         ingestTimes.push(performance.now() - t0); ingested++;
+        if (validateIngestOnly && ingested >= validateMaxEvents) break;
         if (ingested % 20 === 0) console.log(JSON.stringify({ event: "ingest", runId, ingested, total: recent.length }));
+      }
+      if (validateIngestOnly) {
+        const ledger = readProxyLedger(session.handle.ledgerPath);
+        const fastTokens = ledger
+          .filter(r => r.tier === "fast")
+          .map(r => r.input_tokens)
+          .filter(n => n > 0)
+          .sort((a, b) => a - b);
+        const fastMedian = fastTokens[Math.floor(fastTokens.length / 2)] ?? 0;
+        const fastMax = fastTokens.length ? Math.max(...fastTokens) : 0;
+        const heavy = ledger
+          .filter(r => r.tier === "fast" && r.input_tokens > 8000)
+          .map(r => ({ input_tokens: r.input_tokens, model: r.model, callsite: r.callsite }));
+        console.log(
+          JSON.stringify(
+            {
+              validate_ingest_only: true,
+              events_ingested: ingested,
+              fast_input_tokens_median: fastMedian,
+              fast_input_tokens_max: fastMax,
+              fast_llm_calls: fastTokens.length,
+              heavy_fast_calls: heavy,
+              ok: fastMedian > 0 && fastMedian <= 2000 && fastMax <= 8000,
+              ledger: session.handle.ledgerPath,
+            },
+            null,
+            2,
+          ),
+        );
+        if (!(fastMedian > 0 && fastMedian <= 2000 && fastMax <= 8000)) process.exitCode = 2;
+        return;
       }
       await score("pre_consolidation");
       await checkBudget();

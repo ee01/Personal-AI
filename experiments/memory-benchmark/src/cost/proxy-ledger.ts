@@ -15,6 +15,8 @@ export interface ProxyLedgerEntry {
   cost_usd: number;
   path: string;
   streaming: boolean;
+  /** Top stack frames when LLM_TRACE_CALLSITE=1 (memory-service → proxy). */
+  callsite?: string[];
 }
 
 function benchmarkPkgRoot(): string {
