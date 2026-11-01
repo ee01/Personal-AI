@@ -51,13 +51,16 @@ export function applyBaselineBenchmarkLlmEnv(options: {
     process.env.OPENROUTER_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || '';
   if (!apiKey) return;
 
-  process.env[ LIVE_ENV ] = 'true';
+  process.env[LIVE_ENV] = 'true';
   process.env.OPENAI_API_KEY = apiKey;
   process.env.OPENAI_API_BASE_URL = options.openAiBaseUrl.replace(/\/+$/, '');
   process.env.LLM_PROVIDER = 'openai';
   process.env.OPENAI_MODEL = models.main.model;
   process.env.INGEST_LLM_EXTRACTION_ENABLED = 'true';
-  process.env.MEMORY_EXTRACTION_LLM_FALLBACKS = `openai/${models.fast.model}`;
+  // Benchmark policy: single configured tier only — no provider/model fallback chains.
+  process.env.LLM_FALLBACKS = '';
+  process.env.MEMORY_EXTRACTION_LLM_FALLBACKS = `openai/${models.main.model}`;
+  process.env.LLM_REQUEST_TIMEOUT_MS = '180000';
   process.env.RECONCILE_CHEAP_TARGET = `openai/${models.main.model}`;
   process.env.RECONCILE_B_MODE = 'on';
   resetConfigForTests();

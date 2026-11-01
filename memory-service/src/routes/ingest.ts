@@ -56,7 +56,7 @@ const ingestDecisionSchema = {
     },
     extractionStatus: {
       type: 'string' as const,
-      enum: ['extracted', 'skipped', 'unavailable'],
+      enum: ['extracted', 'skipped', 'unavailable', 'extraction_timeout'],
     },
     shouldIndex: { type: 'boolean' as const },
     indexed: { type: 'boolean' as const },

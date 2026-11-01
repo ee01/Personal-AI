@@ -4,16 +4,9 @@
  */
 export function documentContentForIngest(text: string): string {
   const trimmed = text.trim();
-  if (/^https?:\/\/\S+$/i.test(trimmed)) {
-    return `benchmark-plaintext:\n${text}`;
+  if (trimmed.startsWith("benchmark-plaintext:")) {
+    return text;
   }
-  const firstLine = text.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  if (
-    (firstLine.startsWith("http://") || firstLine.startsWith("https://")) &&
-    firstLine.length <= 2048 &&
-    trimmed.length <= 4096
-  ) {
-    return `benchmark-plaintext:\n${text}`;
-  }
-  return text;
+  // Always wrap so the server treats payload as plaintext, not a fetchable URL.
+  return `benchmark-plaintext:\n${text}`;
 }

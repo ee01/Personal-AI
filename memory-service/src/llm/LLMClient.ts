@@ -14,6 +14,7 @@
 
 import type { Config } from '../config.js';
 import { getConfig } from '../config.js';
+import { isBenchmarkLiveLlmEnabled } from '../benchmark/benchmarkLlmEnv.js';
 import { recordLlmUsage } from '../analytics/UsageRecorder.js';
 import {
   buildSamplingPayload,
@@ -399,6 +400,9 @@ export class LLMClient {
     const primarySpec = primaryTargetSpec(this.config.llmProvider, ctx);
     const openaiUrl = this.getOpenAIChatCompletionsUrl();
     const primary = resolveTarget(primarySpec, ctx, openaiUrl, GROQ_BASE_URL);
+    if (isBenchmarkLiveLlmEnabled()) {
+      return [primary];
+    }
     const fallbacks = this.config.llmFallbacks.map((spec) =>
       resolveTarget(spec, ctx, openaiUrl, GROQ_BASE_URL),
     );

@@ -53,6 +53,17 @@ export function conversationMetaKey(scope: string): string {
   return `letta_conversation:${scope}`;
 }
 
+export const LETTA_MEMFS_MAX_FILE_CHARS = 19_000;
+
+function splitTextForMemfs(body: string, maxChars: number): string[] {
+  if (body.length <= maxChars) return [body];
+  const chunks: string[] = [];
+  for (let i = 0; i < body.length; i += maxChars) {
+    chunks.push(body.slice(i, i + maxChars));
+  }
+  return chunks;
+}
+
 function memfsDocumentBody(
   event: PersonalMemoryEvent,
   sourceVersion: string,
@@ -70,6 +81,53 @@ observed_at: ${event.observed_at}
 scope: ${event.scope}
 
 ${body}`;
+}
+
+async function writeMemfsEvidence(
+  client: LettaAppClient,
+  agentId: string,
+  memPath: string,
+  event: PersonalMemoryEvent,
+  sourceVersion: string,
+  body: string,
+  commitLabel: string,
+): Promise<void> {
+  const maxBody = LETTA_MEMFS_MAX_FILE_CHARS - 800;
+  const bodyChunks = splitTextForMemfs(body, maxBody);
+
+  if (bodyChunks.length === 1) {
+    const doc = memfsDocumentBody(event, sourceVersion, bodyChunks[0]!);
+    await client.writeMemoryFile(agentId, memPath, doc, commitLabel);
+    return;
+  }
+
+  const dir = memPath.replace(/\/[^/]+$/, "");
+  const fileStem = (memPath.split("/").pop() ?? "evidence").replace(/\.md$/i, "");
+  const partPaths: string[] = [];
+  for (let i = 0; i < bodyChunks.length; i++) {
+    const partPath = `${dir}/${fileStem}.part${i + 1}.md`;
+    partPaths.push(partPath);
+    const partDoc = memfsDocumentBody(
+      event,
+      sourceVersion,
+      `Part ${i + 1}/${bodyChunks.length}\n\n${bodyChunks[i]}`,
+    );
+    await client.writeMemoryFile(
+      agentId,
+      partPath,
+      partDoc,
+      `${commitLabel} part ${i + 1}`,
+    );
+  }
+  const indexLinks = partPaths
+    .map((p, i) => `- [part ${i + 1}](./${p.split("/").pop()})`)
+    .join("\n");
+  const indexDoc = memfsDocumentBody(
+    event,
+    sourceVersion,
+    `Evidence split across ${bodyChunks.length} parts (Letta memfs limit).\n\n${indexLinks}`,
+  );
+  await client.writeMemoryFile(agentId, memPath, indexDoc, `${commitLabel} index`);
 }
 
 export class LettaRuntime {
@@ -188,12 +246,14 @@ export class LettaRuntime {
       throw new VersionConflictError(event.event_id);
     }
 
-    const doc = memfsDocumentBody(event, sourceVersion, event.text);
     const t0 = performance.now();
-    await this.client.writeMemoryFile(
+    await writeMemfsEvidence(
+      this.client,
       agentId,
       memPath,
-      doc,
+      event,
+      sourceVersion,
+      event.text,
       `ingest ${event.event_id}@${sourceVersion}`,
     );
     const nativeMs = performance.now() - t0;

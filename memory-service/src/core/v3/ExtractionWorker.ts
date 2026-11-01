@@ -26,6 +26,7 @@ import { LLMBudgetExceededError } from '../../llm/llmErrors.js';
 import { now } from '../../utils/time.js';
 import { parseLLMFallbacks } from '../../llm/LLMTarget.js';
 import { getConfig } from '../../config.js';
+import { isBenchmarkLiveLlmEnabled } from '../../benchmark/benchmarkLlmEnv.js';
 import { runWithUsageContext } from '../../analytics/usageContext.js';
 import { EpisodeRepository } from './EpisodeRepository.js';
 import { UnitTruthMaintainer, type UnitEvidenceClass } from './UnitTruthMaintainer.js';
@@ -70,7 +71,7 @@ let extractionClient: LLMClient | undefined;
 export function getExtractionLLMClient(): LLMClient {
   if (extractionClient !== undefined) return extractionClient;
   const raw = process.env.MEMORY_EXTRACTION_LLM_FALLBACKS?.trim();
-  if (!raw) {
+  if (!raw || isBenchmarkLiveLlmEnabled()) {
     extractionClient = getLLMClient();
     return extractionClient;
   }

@@ -21,6 +21,15 @@ LEDGERS = BENCH / ".local/proxy-ledger"
 POLICY = BENCH / ".local/windowed-budget.json"
 SCHEMES = "ABCDE"
 ACTIVE_CHILD = None
+CELL_TIMEOUT_SEC = 4 * 3600
+DENSE_WINDOW_AS_OF = frozenset(
+    {
+        "2026-08-18T06:51:44.000Z",
+        "2026-08-18T09:51:44.000Z",
+        "2026-08-18T15:51:44.000Z",
+    }
+)
+DENSE_STAGE_PROBE_EXPECT = 24  # 3 windows × 8 probes
 
 def terminate_cell(child):
     if child is None or child.poll() is not None: return
@@ -88,7 +97,9 @@ def make_plan():
     old_costs = totals()
     # Key headroom and authorized 5x$50 cap both apply. Reserve $2 against key exhaustion.
     ceiling = min(245.0, old_costs["total"] + key["limit_remaining"] - 2)
-    return {"version": "8h-v1", "created": datetime.now(timezone.utc).isoformat(), "golden": "v1.1", "golden_sha256": hashlib.sha256(PROBES.read_bytes()).hexdigest(), "events_sha256": hashlib.sha256(EVENTS.read_bytes()).hexdigest(), "models_sha256": hashlib.sha256((BENCH/"config/models.json").read_bytes()).hexdigest(), "slice_sha256": hashlib.sha256((OLD/"slice-events.jsonl").read_bytes()).hexdigest(), "prior_costs": old_costs, "key_start": key, "total_ceiling_usd": ceiling, "windows": windows, "stages": {"first-build": .35, "paired-control": .65, "repeat-builds": .85, "ablations": .9, "expanded-24h": .75, "expanded-72h": .85, "mini-7d": 1.0}, "old_results": str(OLD.relative_to(ROOT)), "quality_rules": {"max_acceptance_score_drop": 5, "max_added_errors": 1, "max_added_safety_failures": 0, "old_evidence_omissions": 0}, "limitations": ["candidate + common historical hybrid retrieval; not native full-history build", "deterministic rubric plus frozen non-z-ai judge for paired differences; not a statistical equivalence claim", "7 storylines are not independent statistical samples", "local raw embeddings reusable; generated memory and answers never reused between builds", "unknown historical attribution remains in total budget"], "decision_context": {"top_k":20,"max_utf8_bytes":12000}, "budget_reserve": "Each scheme stops new calls at $49 (below authorized $50); key reserve $2. Actual in-flight cost is settled before the next call."}
+    sparse = [w for w in windows if w["as_of"] not in DENSE_WINDOW_AS_OF]
+    dense = [w for w in windows if w["as_of"] in DENSE_WINDOW_AS_OF]
+    return {"version": "8h-v1", "created": datetime.now(timezone.utc).isoformat(), "golden": "v1.1", "golden_sha256": hashlib.sha256(PROBES.read_bytes()).hexdigest(), "events_sha256": hashlib.sha256(EVENTS.read_bytes()).hexdigest(), "models_sha256": hashlib.sha256((BENCH/"config/models.json").read_bytes()).hexdigest(), "slice_sha256": hashlib.sha256((OLD/"slice-events.jsonl").read_bytes()).hexdigest(), "prior_costs": old_costs, "key_start": key, "total_ceiling_usd": ceiling, "windows": windows, "window_policy": {"dense_as_of": sorted(DENSE_WINDOW_AS_OF), "dense_windows": dense, "skipped_sparse": [{"as_of": w["as_of"], "event_count": w["event_count"], "probes": w["probes"], "reason": "sparse"} for w in sparse], "paired_control_probe_expect": DENSE_STAGE_PROBE_EXPECT, "cell_timeout_sec": CELL_TIMEOUT_SEC}, "stages": {"first-build": .35, "paired-control": .65, "repeat-builds": .85, "ablations": .9, "expanded-24h": .75, "expanded-72h": .85, "mini-7d": 1.0}, "old_results": str(OLD.relative_to(ROOT)), "quality_rules": {"max_acceptance_score_drop": 5, "max_added_errors": 1, "max_added_safety_failures": 0, "old_evidence_omissions": 0}, "limitations": ["candidate + common historical hybrid retrieval; not native full-history build", "deterministic rubric plus frozen non-z-ai judge for paired differences; not a statistical equivalence claim", "7 storylines are not independent statistical samples", "local raw embeddings reusable; generated memory and answers never reused between builds", "unknown historical attribution remains in total budget"], "decision_context": {"top_k":20,"max_utf8_bytes":12000}, "budget_reserve": "Each scheme stops new calls at $49 (below authorized $50); key reserve $2. Actual in-flight cost is settled before the next call."}
 
 def gates_ok(scheme):
     if scheme in "ABC": path = BENCH / f"reports/e155-intraday-gates-2026-10-31/scheme-{scheme}.json"
@@ -98,10 +109,18 @@ def gates_ok(scheme):
     return not report.get("skipped") and all(gates.get(k) is True for k in ["future_evidence_hard", "intraday_derived_as_of"])
 
 def schedule(plan):
-    windows = sorted(plan["windows"], key=lambda w: -w["event_count"])
+    all_windows = sorted(plan["windows"], key=lambda w: -w["event_count"])
+    dense_windows = [w for w in all_windows if w["as_of"] in DENSE_WINDOW_AS_OF]
+    dense_windows.sort(key=lambda w: w["as_of"])
+
+    def windows_for_stage(stage: str):
+        if stage in ("paired-control", "ablations"):
+            return dense_windows
+        return all_windows
+
     cells = []
     def add(stage, scheme, label, strategy="8h", events=EVENTS, ablation="none"):
-        for i, window in enumerate(windows):
+        for i, window in enumerate(windows_for_stage(stage)):
             cells.append({"id":f"{stage}/{scheme}/{label}/w{i+1}", "stage":stage,"scheme":scheme,"as_of":window["as_of"],"strategy":strategy,"events":str(events),"ablation":ablation})
     for s in SCHEMES: add("first-build",s,"build-1")
     for s in SCHEMES:
@@ -122,6 +141,7 @@ def schedule(plan):
 
 def summarize(plan, state):
     cost = totals()
+    paired_expect = plan.get("window_policy", {}).get("paired_control_probe_expect", DENSE_STAGE_PROBE_EXPECT)
     summary = {"version": plan["version"], "status": state, "costs_including_prior_attempts": cost, "new_run_proxy_usd":cost["total"]-plan["prior_costs"]["total"], "coverage":{}, "paired_controls":{}, "winner":None, "quality_equivalence":"not established; complete paired controls and difference review required"}
     for scheme in SCHEMES:
         records = []
@@ -156,7 +176,7 @@ def summarize(plan, state):
             if old_ids and new[i]["scores"]["F"] < full[i]["scores"]["F"]: old_omissions.append(i)
         safety = lambda o: [f for f in o["hard_gate_failures"] if any(x in f for x in ["future","scope_leak","deleted","revoked"])]
         added_safety = sum(bool(set(safety(new[i]))-set(safety(full[i]))) for i in common)
-        complete = len(full)==56 and len(new)==56
+        complete = len(full)==paired_expect and len(new)==paired_expect
         passed = complete and drop is not None and drop<=5 and added<=1 and not added_safety and not old_omissions
         review_path=OUT/f"paired-control/{scheme}/review/reviews.json"
         reviews=json.loads(review_path.read_text()) if review_path.exists() else []
@@ -179,7 +199,11 @@ def main():
     signal.signal(signal.SIGINT,stop_requested)
     OUT.mkdir(parents=True,exist_ok=True)
     plan_path=OUT/"matrix-plan.json"
-    plan=json.loads(plan_path.read_text()) if plan_path.exists() else make_plan()
+    if plan_path.exists():
+        plan = json.loads(plan_path.read_text())
+        plan["window_policy"] = make_plan()["window_policy"]
+    else:
+        plan = make_plan()
     for path,key in [(PROBES,"golden_sha256"),(EVENTS,"events_sha256"),(BENCH/"config/models.json","models_sha256"),(OLD/"slice-events.jsonl","slice_sha256")]:
         if hashlib.sha256(path.read_bytes()).hexdigest()!=plan[key]: raise RuntimeError("frozen_input_changed:"+str(path))
     plan["stages"].update({"expanded-24h":.75,"expanded-72h":.85})
@@ -189,6 +213,12 @@ def main():
     cells=schedule(plan); write(OUT/"schedule.json",cells)
     state_path=OUT/"matrix-status.json"
     state=json.loads(state_path.read_text()) if state_path.exists() else {"completed":[],"failed":[],"skipped":[],"safety_stopped_schemes":[]}
+    valid_cell_ids = {c["id"] for c in cells}
+    for rec in list(state.get("failed", [])):
+        cid = rec.get("id") if isinstance(rec, dict) else rec
+        if cid and cid not in valid_cell_ids:
+            state["skipped"].append({"id": cid, "reason": "superseded_by_dense_window_policy"})
+    state["failed"] = [r for r in state.get("failed", []) if (r.get("id") if isinstance(r, dict) else r) in valid_cell_ids]
     finished=set(state["completed"])|{x["id"] for x in state["failed"]}|{x["id"] for x in state["skipped"]}
     state.pop("runner_error",None)
     state["stopped"]=False
@@ -232,7 +262,7 @@ def main():
             with (cell_out/"cli.log").open("w") as log:
                 with subprocess.Popen(cmd,cwd=BENCH,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True) as child:
                     ACTIVE_CHILD=child
-                    try: code=child.wait(timeout=7200)
+                    try: code=child.wait(timeout=CELL_TIMEOUT_SEC)
                     except subprocess.TimeoutExpired:
                         # This process group was created solely for this cell. Never
                         # kill by executable name or leave an npx grandchild billing.

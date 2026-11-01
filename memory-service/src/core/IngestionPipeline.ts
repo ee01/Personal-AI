@@ -35,6 +35,7 @@ import { SalienceScorer } from './SalienceScorer.js';
 import { TruthMaintainer } from './TruthMaintainer.js';
 import { RecallContextExpansionService } from './RecallContextExpansionService.js';
 import { getLLMClient } from '../llm/LLMClient.js';
+import { isBenchmarkLiveLlmEnabled } from '../benchmark/benchmarkLlmEnv.js';
 import { EmbeddingClient } from '../llm/EmbeddingClient.js';
 import type { UserDataManager } from '../storage/UserDataManager.js';
 import { chunkText } from '../utils/chunking.js';
@@ -360,6 +361,7 @@ export class IngestionPipeline {
 
     // ---- 2. LLM entity extraction (non-blocking on failure) ----
     let extraction: LLMExtraction | null = null;
+    let extractionTimedOut = false;
     const skip =
       payload.skipExtraction === true || !isIngestExtractionEnabled() || (gateEnabled() && !provenance.promotionEligible);
 
@@ -370,17 +372,25 @@ export class IngestionPipeline {
           ts,
         );
       } catch (err) {
-        console.warn(
-          '[IngestionPipeline] LLM extraction failed, proceeding without entities:',
-          (err as Error).message,
-        );
+        const message = (err as Error).message ?? String(err);
+        if (/timed out after/i.test(message)) {
+          extractionTimedOut = true;
+          console.warn('[IngestionPipeline] LLM extraction timed out:', message);
+        } else {
+          console.warn(
+            '[IngestionPipeline] LLM extraction failed, proceeding without entities:',
+            message,
+          );
+        }
       }
     }
     const extractionStatus = skip
       ? 'skipped'
       : extraction
         ? 'extracted'
-        : 'unavailable';
+        : extractionTimedOut
+          ? 'extraction_timeout'
+          : 'unavailable';
 
     // P0a-2: schema-v2 flat contract + legacy metadata.metadata decoder;
     // string `priority` maps to numeric importance via the server-side
@@ -848,7 +858,7 @@ export class IngestionPipeline {
     extraction: LLMExtraction | null;
     salienceScore: number | undefined;
     salienceComponents: IngestSalienceComponents | undefined;
-    extractionStatus: 'extracted' | 'skipped' | 'unavailable';
+    extractionStatus: 'extracted' | 'skipped' | 'unavailable' | 'extraction_timeout';
     shouldIndex: boolean;
     indexed: boolean;
     supplyDecoupled?: boolean;
@@ -1010,6 +1020,8 @@ Rules:
     const raw = await llm.generateJSON<LLMExtraction>(prompt, {
       temperature: 0.2,
       maxTokens: 4096,
+      retryCount: isBenchmarkLiveLlmEnabled() ? 1 : undefined,
+      timeoutMs: isBenchmarkLiveLlmEnabled() ? 180_000 : undefined,
       systemPrompt:
         'You are an entity extraction assistant. Return only valid JSON.',
     });

@@ -65,6 +65,7 @@ const INGEST_EXTRACTION_STATUSES = [
   'extracted',
   'skipped',
   'unavailable',
+  'extraction_timeout',
 ] as const satisfies readonly IngestExtractionStatus[];
 
 const INGEST_TRUST_CLASSES = [
@@ -122,7 +123,7 @@ const ingestDecisionSchema = {
     },
     extractionStatus: {
       type: 'string' as const,
-      enum: ['extracted', 'skipped', 'unavailable'],
+      enum: ['extracted', 'skipped', 'unavailable', 'extraction_timeout'],
     },
     shouldIndex: { type: 'boolean' as const },
     indexed: { type: 'boolean' as const },

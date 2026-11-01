@@ -917,7 +917,11 @@ export type IngestDecisionReason =
   | 'recalled_exposure';
 
 export type IngestDedupeReason = 'post_id' | 'content_source_sender';
-export type IngestExtractionStatus = 'extracted' | 'skipped' | 'unavailable';
+export type IngestExtractionStatus =
+  | 'extracted'
+  | 'skipped'
+  | 'unavailable'
+  | 'extraction_timeout';
 export type IngestTrustClass = 'trusted' | 'internal' | 'untrusted';
 export type IngestSanitization = 'clean' | 'flagged';
 
