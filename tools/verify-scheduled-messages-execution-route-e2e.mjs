@@ -252,6 +252,14 @@ async function installRoutes(page) {
   await page.route('https://script.google.com/macros/s/scheduled-route-e2e/exec**', async (route) => {
     const url = route.request().url();
 
+    if (new URL(url).searchParams.get('action') === 'getRuntimeHealth') {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        success: true, spreadsheetId: sheetId, scriptVersion: '3.2.3',
+        executionStoreSchemaVersion: 1, mode: 'sheet_primary', ready: true,
+      }) });
+      return;
+    }
+
     if (url.includes('dryRun=true')) {
       await route.fulfill({
         contentType: 'application/json',
@@ -320,6 +328,7 @@ try {
         messagesSheetId: 101,
         logsSheetId: 102,
         sheet_version: '2.7',
+        appScriptVersion: '3.2.3',
         created_by: 'Personal AI Extension',
         created_at: '2026-05-26T06:00:00.000Z',
         botAutomation: {
@@ -394,7 +403,7 @@ try {
   await page.getByRole('button', { name: /新增/ }).click();
   await page.getByRole('heading', { name: /新增定时消息/ }).waitFor({ timeout: 15000 });
   await page.locator('text=预计下次执行').first().waitFor({ timeout: 15000 });
-  await page.getByRole('tab', { name: '🤖 Bot（机器人）' }).click();
+  await page.getByRole('tab', { name: '🤖 Bot', exact: true }).click();
   await page.locator('text=预计下次执行').first().waitFor({ timeout: 15000 });
   await page.getByRole('tab', { name: '🤖 AI Report' }).click();
   await page.locator('text=预计下次执行').first().waitFor({ timeout: 15000 });
@@ -423,9 +432,10 @@ try {
   await page.locator('text=验证范围：项目 mThor，样例 Milestone FF。').first().waitFor({ timeout: 15000 });
   await page.locator('text=不代表真实 Jira Rule 已同步').first().waitFor({ timeout: 15000 });
   await page.locator('text=手动运行 Timeline Sync Rule 后刷新状态').first().waitFor({ timeout: 15000 });
-  await page.getByRole('button', { name: '取消' }).click();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
 
-  await page.getByRole('button', { name: /帮我问/ }).click();
+  await page.getByRole('button', { name: /新增/ }).click();
+  await page.getByRole('tab', { name: /帮我问/ }).click();
   await page.getByRole('heading', { name: /新增主动询问/ }).waitFor({ timeout: 15000 });
   await page.locator('text=memory-service · Outreach Runtime').first().waitFor({ timeout: 15000 });
 
@@ -442,6 +452,8 @@ try {
         sheet_version: '2.7',
         created_by: 'Personal AI Extension',
         created_at: '2026-05-26T06:00:00.000Z',
+        appScriptVersion: '3.2.3',
+        webAppUrl: 'https://script.google.com/macros/s/scheduled-route-e2e/exec',
       },
     });
   }, { targetSheetId: sheetId });
@@ -463,9 +475,8 @@ try {
   await unconfiguredPage.getByRole('button', { name: /新增/ }).click();
   await unconfiguredPage.getByRole('heading', { name: /新增定时消息/ }).waitFor({ timeout: 15000 });
   await unconfiguredPage.locator('text=预计下次执行').first().waitFor({ timeout: 15000 });
-  await unconfiguredPage.locator('text=可预览 · 待配置').first().waitFor({ timeout: 15000 });
-  await unconfiguredPage.locator('text=发送配置待完成').first().waitFor({ timeout: 15000 });
-  await unconfiguredPage.locator('text=不会写入 Messages、不会发送，也不会创建 Jira Rule').first().waitFor({ timeout: 15000 });
+  // AsMe keeps its mail fallback; Bot configuration gating is checked after
+  // selecting the Bot tab below, rather than on the default AsMe form.
   await unconfiguredPage.getByRole('button', { name: /配置 @ 人发送能力/ }).click();
   await unconfiguredPage.getByRole('heading', { name: /配置 Bot 推送/ }).waitFor({ timeout: 15000 });
   assert.equal(
@@ -489,13 +500,15 @@ try {
     timeout: 15000,
   });
 
-  const unconfiguredBotButton = unconfiguredPage.getByRole('tab', { name: /Bot（机器人）/ });
+  const unconfiguredBotButton = unconfiguredPage.getByRole('tab', { name: /^🤖 Bot/ });
   assert.equal(
     await unconfiguredBotButton.isDisabled(),
     false,
     'Bot option should remain selectable so users can fill the draft before completing setup',
   );
   await unconfiguredBotButton.click();
+  await unconfiguredPage.locator('text=发送配置待完成').first().waitFor({ timeout: 15000 });
+  await unconfiguredPage.locator('text=不会写入 Messages、不会发送，也不会创建 Jira Rule').first().waitFor({ timeout: 15000 });
   await unconfiguredPage.locator('text=发送配置').first().waitFor({ timeout: 15000 });
   await unconfiguredPage.locator('text=需要先完成配置').first().waitFor({ timeout: 15000 });
   await unconfiguredPage.locator('text=当前发送方式还缺少必要配置').first().waitFor({ timeout: 15000 });
