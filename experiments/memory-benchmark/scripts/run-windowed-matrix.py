@@ -122,12 +122,40 @@ def consume_retry_requests(cells, state, pending, idx, valid_cell_ids, state_pat
     if not req_path.exists():
         return pending
     try:
-        requested = json.loads(req_path.read_text())
+        req_raw = req_path.read_text()
+        requested = json.loads(req_raw)
     except json.JSONDecodeError:
         return pending
     if not isinstance(requested, list):
         return pending
+    req_hash = hashlib.sha256(req_raw.encode()).hexdigest()
+    prev_hash = state.get("retry_requests_sha256")
     consumed = set(state.get("retry_requested_consumed") or [])
+    requested_ids = {cid for cid in requested if isinstance(cid, str)}
+    if prev_hash != req_hash:
+        state["retry_requests_sha256"] = req_hash
+        consumed -= requested_ids
+    failed_by_id = {
+        r.get("id"): r
+        for r in state.get("failed") or []
+        if isinstance(r, dict) and r.get("id")
+    }
+    for cid in requested_ids:
+        if cid not in consumed or cid not in failed_by_id:
+            continue
+        prev_sig = (state.get("retry_failure_signatures") or {}).get(cid)
+        rec = failed_by_id[cid]
+        sig = f"{rec.get('exit_code')}:{rec.get('stopped_reason') or ''}"
+        cli = OUT.joinpath(*cid.split("/"), "cli.log")
+        if cli.exists():
+            try:
+                tail = cli.read_text(errors="replace").strip().split("\n")[-1][:240]
+                sig = hashlib.sha256(tail.encode()).hexdigest()[:16]
+            except OSError:
+                pass
+        if prev_sig != sig:
+            consumed.discard(cid)
+            state.setdefault("retry_failure_signatures", {})[cid] = sig
     skipped_ids = {
         x.get("id") if isinstance(x, dict) else x for x in state.get("skipped", [])
     }
