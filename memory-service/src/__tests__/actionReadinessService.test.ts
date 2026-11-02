@@ -271,6 +271,13 @@ describe('ActionReadinessService', () => {
     ).toBe('ready');
     expect(actionRepo.getById(action.id)?.queueStatus).toBe('queued');
     expect(actionRepo.getById(action.id)?.approvedAt).toBeUndefined();
+    // Two probes in the same second must not reuse a possibly archived chat.
+    await service.probeAction(action);
+    const firstHeaders = fetchMock.mock.calls[0][1]?.headers as Record<string, string>;
+    const secondHeaders = fetchMock.mock.calls[1][1]?.headers as Record<string, string>;
+    expect(firstHeaders['x-openclaw-session-key']).toMatch(/^readiness:openclaw:google_drive:write:test-user:/);
+    expect(secondHeaders['x-openclaw-session-key']).not.toBe(firstHeaders['x-openclaw-session-key']);
+    expect(actionRepo.getById(action.id)?.queueStatus).toBe('queued');
   });
 
   it('blocks missing required inputs locally and skips the network probe', async () => {

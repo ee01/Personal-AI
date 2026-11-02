@@ -635,6 +635,9 @@ export class ActionReadinessService {
     }
 
     const targetLabel = scope.targetSystem ?? probeExecutor.label;
+    // A previous probe session may have been archived by the gateway. Each
+    // probe is a separate readonly attempt; never reopen or reuse old chats.
+    const probeAttemptId = `${checkedAt}:${randomUUID()}`;
     const executor = createAgentExecutor(probeExecutor, {
       delegationService: this.delegationService,
       userId: this.userId ?? 'default',
@@ -651,9 +654,9 @@ export class ActionReadinessService {
       targetSystem: scope.targetSystem,
       threadId: action.threadId ?? action.id,
       runId: action.runId,
-      actionId: `${action.id}:readiness-probe:${checkedAt}`,
-      idempotencyKey: `pai:${action.id}:readiness-probe:${checkedAt}`,
-      sessionKey: `readiness:${scope.scopeKey}:${this.userId ?? 'default'}`,
+      actionId: `${action.id}:readiness-probe:${probeAttemptId}`,
+      idempotencyKey: `pai:${action.id}:readiness-probe:${probeAttemptId}`,
+      sessionKey: `readiness:${scope.scopeKey}:${this.userId ?? 'default'}:${probeAttemptId}`,
       metadata: {
         probeOnly: true,
         originalActionId: action.id,

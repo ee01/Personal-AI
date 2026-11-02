@@ -1,6 +1,6 @@
 # Action Readiness Contracts / 执行就绪契约
 
-_最后更新: 2026-08-13_
+_最后更新: 2026-11-02_
 
 执行就绪契约是 `delegate_agent` / `delegate_openclaw` 的 dispatch 前门禁。它回答的不是“这个动作值不值得做”，而是“当前连接、鉴权、目标能力、必填输入和结果证明是否足以安全开始执行”。执行器选型与 Gateway/ACP 运行时见 [Agent Executor Runtime](./agent_executor_runtime.md)。
 
@@ -19,6 +19,8 @@ _最后更新: 2026-08-13_
 ### 修复后只重测能力
 
 用户修复配置后点击“修复后重测”，Memory Service 发送专用 probe：只检查连接、鉴权和 capability，不携带原任务正文，也不执行 Jira / Drive 等业务读写。probe 成功只把 contract 改成 `ready`；原动作仍保持原 queue status，写操作仍需独立人工批准。
+
+每次 probe 使用带独立随机 attempt ID 的会话与幂等键，即使同一秒内重测也不复用旧会话。网关归档历史探测会话后，新探测不会因 `Session is archived` 再次阻断队列；系统也不恢复旧聊天、不重跑原业务动作。
 
 ## Contract 模型
 
