@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-10-31*
+*最后更新: 2026-11-02*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -141,7 +141,7 @@
 | 队列可视化与改期建议 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 拥挤槽位、展开快照回执、建议依据、建议处理对象与操作边界 |
 | Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
 | 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
-| 定时消息领取与交付诊断 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | API 领取仅写待确认，不依赖可能过期的 Config 版本；Executor 在执行条件前记录拉取结果，区分请求成功与下游交付 |
+| 定时消息领取与交付诊断 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | API 领取仅写待确认；Executor 1.8.2 将 AgentTask 协议分支与确认回调置于独立条件容器，避免提交后跳过确认；区分执行服务受理与群投递 |
 | 历史轮次不补发恢复 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 所有者逐 key 关闭过期未决领取，原子保存 Skipped 审计，不发送、不累计次数，解除对后续轮次的阻塞；Apps Script 3.2.3 |
 | 定时消息持久幂等账本 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet 原子领取/确认、满属性迁移、旧表四步诊断助手、初始化元数据缓存修复（3.0.1）、未知提交冻结、48h 去重与兼容回滚；3.0.0 需维护窗口切换 |
 | App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检、保留项目私有管理校验值；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
@@ -283,7 +283,7 @@
 | 反思本地研究补查 | 反思与梦境 | [memory_system.md](./memory_system.md) | 反思 run 内查询本地记忆和派生证据；详情页显示本轮研究范围、trace 卡、研究证据采用回执和手动推进 / 动作 / transcript / 会话导航控件边界 |
 | 梦境重放 | 反思与梦境 | [memory_system.md](./memory_system.md) | `DreamInsights.vue` / `dreams/*.md`，含本页范围、复核视图筛选、只读边界和可见复核入口 |
 | 动作队列 | 动作与确认 | [memory_system.md](./memory_system.md) | `ActionQueue.vue` / `proposed_actions`；按最近活动时间倒序；筛选空结果、普通动作、按钮 hover/读屏和操作提交都有边界回执 |
-| 执行就绪契约 | 动作与确认 | [action_readiness_contracts.md](./features/action_readiness_contracts.md) | `delegate_openclaw` dispatch 前按鉴权、能力、输入与 proof 失败关闭；`agent_task` 只检查 gateway 连接层；probe 不提交原任务，Reflection 不堆积阻断动作 |
+| 执行就绪契约 | 动作与确认 | [action_readiness_contracts.md](./features/action_readiness_contracts.md) | dispatch 前按鉴权、能力、输入与 proof 失败关闭；`agent_task` 只检查 gateway；probe 使用独立会话避免归档故障、不提交原任务，Reflection 不堆积阻断动作 |
 | OpenClaw 外部委派 | 动作与确认 | [memory_system.md](./memory_system.md) | `delegate_openclaw` / Gateway `agent.wait` 超时后 30/60/120s 确认最多 3 次；带 `remoteRunId` 的 running 不盲回收 |
 | 决策中心 | 动作与确认 | [memory_system.md](./memory_system.md) | `DecisionCenter.vue` / `confirm_requests`；通知深链未命中显示已读队列与部分失败口径，审核包复制与处理按钮显示剪贴板/证据/写入边界 |
 | 记忆搜索结果页 | 记忆探索界面 | [memory_system.md](./memory_system.md) | `SearchResultPage.vue`；普通搜索零 Recall LLM，用户可主动请求带证据 ID、快照/缓存/耗时回执的结果总结；类型筛选和安全打开边界保持可见 |

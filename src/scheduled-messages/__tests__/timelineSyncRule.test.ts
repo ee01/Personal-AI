@@ -1592,7 +1592,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.8.1');
+  assert.equal(template._metadata.version, '1.8.2');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1991,7 +1991,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.2\.2';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.2\.3';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);

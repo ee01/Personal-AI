@@ -122,7 +122,7 @@
     "verify:scheduled-messages-one-click-setup:e2e": "node tools/verify-scheduled-messages-one-click-setup-e2e.mjs",
     "verify:scheduled-messages-config-sync:e2e": "node tools/verify-scheduled-messages-config-sync-e2e.mjs",
     "verify:scheduled-messages-execution-route:e2e": "node tools/verify-scheduled-messages-execution-route-e2e.mjs",
-    "verify:scheduled-messages-jira-rule-sync": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-scheduled-messages-jira-rule-sync.ts",
+    "verify:scheduled-messages-jira-rule-sync": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-scheduled-messages-jira-rule-sync.ts && node --test tools/verify-agent-task-rule-branches.test.mjs",
     "verify:scheduled-messages-maintenance-actions": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-scheduled-messages-maintenance-actions.ts",
     "verify:scheduled-messages-timeline-cache": "node tools/verify-scheduled-messages-timeline-cache.mjs",
     "verify:scheduled-messages-health-recovery:e2e": "node tools/verify-scheduled-messages-health-recovery-e2e.mjs",

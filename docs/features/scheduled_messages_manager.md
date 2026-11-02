@@ -767,6 +767,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 自托管地址支持 HTTP 和 HTTPS，均由扩展 Service Worker 直接请求（保留原生 fetch 的全局调用上下文），不打开源站标签页，不自动切换协议，不跟随重定向。默认官方地址仍是 HTTPS；HTTP 会在界面标明 PAT 明文发送。排查请求请打开扩展 Service Worker 的 Network。
 - 到期执行不读取本机 PAT。创建时 PAT 换取 webhook，完整地址保存在隐藏表 `_AgentBindings`；Jira 通过 Apps Script 领取协议、host、含随机密钥的 path，再 POST 触发 Autopilot，Multica 按已配置的 Agent 执行。Webhook 本身是触发凭据，隐藏表不是权限隔离，能读表或领取结果的人应视为能访问该凭据。
 - Jira Executor Rule ≥ 1.8.1 在 `agentProvider=multica` 时按领取结果里的协议 POST `http://{host}/{path}` 或 `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。
+- Executor Rule 1.8.2 修复 AgentTask 嵌套条件结构：Legacy 下游 POST 后的接受/拒绝回调使用独立 `jira.condition.container.block`；Multica 的协议选择与回执判断分别包在容器中，先投递再确认。`skipped` / `ignored` 使用 ANY，避免互斥状态被错误要求同时成立。确认仅表示调度请求被执行服务接受，不等于业务结果或群消息已送达。
 - 保存不会立即执行。Jira 规则还没写上调度校验值时，行保持暂停，回执是「Multica 已创建，计划尚未启用」。成功回执是「已安排，时间由 Jira 触发；执行与结果在 Multica」。
 - 断开连接只删除本机 PAT，不停止已经接好的 Webhook 和周期任务。复制表格时 Multica 行会被暂停，绑定表不跟着复制；spreadsheet id 对不上时脚本清掉 webhook。
 - Messages 2.14 只增加公开列：`Agent_Provider`、`Agent_Binding_ID`、`Agent_Multica_Workspace_ID`、`Agent_Multica_Workspace_Slug`、`Agent_Multica_Agent_ID`、`Agent_Multica_Project_ID`、`Agent_Multica_Autopilot_ID`、`Agent_Multica_Trigger_ID`、`Agent_Multica_Web_Origin`、`Agent_Multica_Api_Origin`、`Agent_Multica_User_ID`、`Agent_Provision_State`、`Agent_Content_Revision`。Webhook URL 在隐藏表 `_AgentBindings`。
