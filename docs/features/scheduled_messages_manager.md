@@ -764,7 +764,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 
 - 新建「帮我做」默认 `Agent_Provider=multica`。旧行保持 `legacy_memory` 或空值，仍走上面的 memory-service / Dify 路径，不会自动迁移。
 - 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。PAT 只留在扩展 session；勾选「记住这台设备」才进本机 local storage。PAT、webhook URL 不进 Messages、不进日志、不进页面可复制内容。
-- 自托管地址支持 HTTP 和 HTTPS，均由扩展 Service Worker 直接请求（保留原生 fetch 的全局调用上下文），不打开源站标签页，不自动切换协议，不跟随重定向。默认官方地址仍是 HTTPS；HTTP 会在界面标明 PAT 明文发送。排查请求请打开扩展 Service Worker 的 Network。
+- 连接表单里的 API 地址和网页地址默认都是 `http://task.xmnup.com`，并直接展开。已保存的连接仍用当时验证过的地址。自托管地址支持 HTTP 和 HTTPS，均由扩展 Service Worker 直接请求（保留原生 fetch 的全局调用上下文），不打开源站标签页，不自动切换协议，不跟随重定向。HTTP 会在界面标明 PAT 明文发送。排查请求请打开扩展 Service Worker 的 Network。
 - 到期执行不读取本机 PAT。创建时 PAT 换取 webhook，完整地址保存在隐藏表 `_AgentBindings`；Jira 通过 Apps Script 领取协议、host、含随机密钥的 path，再 POST 触发 Autopilot，Multica 按已配置的 Agent 执行。Webhook 本身是触发凭据，隐藏表不是权限隔离，能读表或领取结果的人应视为能访问该凭据。
 - Jira Executor Rule ≥ 1.8.1 在 `agentProvider=multica` 时按领取结果里的协议 POST `http://{host}/{path}` 或 `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。
 - Executor Rule 1.8.2 修复 AgentTask 嵌套条件结构：Legacy 下游 POST 后的接受/拒绝回调使用独立 `jira.condition.container.block`；Multica 的协议选择与回执判断分别包在容器中，先投递再确认。`skipped` / `ignored` 使用 ANY，避免互斥状态被错误要求同时成立。确认仅表示调度请求被执行服务接受，不等于业务结果或群消息已送达。

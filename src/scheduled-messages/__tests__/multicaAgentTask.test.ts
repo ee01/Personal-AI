@@ -176,6 +176,29 @@ test('extension status never returns PAT and rejects untrusted pages or foreign 
     remember: false,
   };
   assert.equal(JSON.stringify(toPublicConnection(stored)).includes('pat_secret_value'), false);
+  const fresh = toPublicConnection(null);
+  assert.equal(fresh.connected, false);
+  assert.equal(fresh.apiOrigin, 'http://task.xmnup.com');
+  assert.equal(fresh.webOrigin, 'http://task.xmnup.com');
+  const omitted = await handleMulticaExtensionMessage({
+    type: 'MULTICA_VERIFY',
+    data: { pat: 'pat_secret_value' },
+  }, sender, {
+    extensionId: 'ext',
+    session: memoryStore(),
+    local: memoryStore(),
+    clientFactory: (connection) => {
+      assert.equal(connection.apiOrigin, 'http://task.xmnup.com');
+      assert.equal(connection.webOrigin, 'http://task.xmnup.com');
+      return {
+        async getMe() { return { id: 'user_12345678', label: 'E' }; },
+        async listWorkspaces() { return []; },
+      } as never;
+    },
+  });
+  assert.equal(omitted.success, true);
+  assert.equal(omitted.connection?.apiOrigin, 'http://task.xmnup.com');
+  assert.equal(omitted.connection?.webOrigin, 'http://task.xmnup.com');
   await session.set({ multicaConnectionSession: stored });
   const status = await handleMulticaExtensionMessage({ type: 'MULTICA_STATUS' }, sender, {
     extensionId: 'ext', session, local,

@@ -1,5 +1,7 @@
 import { MulticaClient, type MulticaAgent, type MulticaProject, type MulticaRuntime, type MulticaWorkspace } from './multicaClient.js';
 import {
+  DEFAULT_MULTICA_API_ORIGIN,
+  DEFAULT_MULTICA_WEB_ORIGIN,
   OFFICIAL_MULTICA_API_ORIGIN,
   OFFICIAL_MULTICA_WEB_ORIGIN,
   assertHttpsOrigin,
@@ -43,8 +45,8 @@ export function toPublicConnection(stored: StoredMulticaConnection | null): Publ
   if (!stored?.pat || !stored.userId) {
     return {
       connected: false,
-      apiOrigin: OFFICIAL_MULTICA_API_ORIGIN,
-      webOrigin: OFFICIAL_MULTICA_WEB_ORIGIN,
+      apiOrigin: DEFAULT_MULTICA_API_ORIGIN,
+      webOrigin: DEFAULT_MULTICA_WEB_ORIGIN,
       userId: '',
       accountLabel: '',
       workspaceId: '',
@@ -221,8 +223,8 @@ export async function handleMulticaExtensionMessage(
     }
     if (type === 'MULTICA_VERIFY') {
       const pat = normalizeMulticaPat(String(data.pat || ''));
-      const apiOrigin = assertHttpsOrigin(String(data.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN), 'API 地址');
-      const webOrigin = assertHttpsOrigin(String(data.webOrigin || OFFICIAL_MULTICA_WEB_ORIGIN), '网页地址');
+      const apiOrigin = assertHttpsOrigin(String(data.apiOrigin || DEFAULT_MULTICA_API_ORIGIN), 'API 地址');
+      const webOrigin = assertHttpsOrigin(String(data.webOrigin || DEFAULT_MULTICA_WEB_ORIGIN), '网页地址');
       const probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, data.remember === true, deps);
       const connection: StoredMulticaConnection = {
         apiOrigin,

@@ -1,5 +1,7 @@
 export const OFFICIAL_MULTICA_API_ORIGIN = 'https://api.multica.ai';
 export const OFFICIAL_MULTICA_WEB_ORIGIN = 'https://multica.ai';
+export const DEFAULT_MULTICA_API_ORIGIN = 'http://task.xmnup.com';
+export const DEFAULT_MULTICA_WEB_ORIGIN = 'http://task.xmnup.com';
 export const MULTICA_WEBHOOK_PATH_PREFIX = '/api/webhooks/autopilots/';
 export const MULTICA_BINDING_MARKER_PREFIX = 'PAI_BINDING:';
 export const MULTICA_IDEMPOTENCY_LIMIT = 128;

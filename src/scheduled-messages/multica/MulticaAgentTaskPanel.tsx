@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { useEffect, useState } from 'react';
 import {
-  OFFICIAL_MULTICA_API_ORIGIN,
-  OFFICIAL_MULTICA_WEB_ORIGIN,
+  DEFAULT_MULTICA_API_ORIGIN,
+  DEFAULT_MULTICA_WEB_ORIGIN,
 } from './multicaContract.js';
 import { sendMulticaExtensionMessage } from './multicaConnection.js';
 
@@ -31,9 +31,9 @@ export function MulticaAgentTaskPanel(props: {
   disabled?: boolean;
   onChange: (draft: MulticaDraft) => void;
 }): JSX.Element {
-  const [advanced, setAdvanced] = useState(false);
-  const [apiOrigin, setApiOrigin] = useState(OFFICIAL_MULTICA_API_ORIGIN);
-  const [webOrigin, setWebOrigin] = useState(OFFICIAL_MULTICA_WEB_ORIGIN);
+  const [advanced, setAdvanced] = useState(true);
+  const [apiOrigin, setApiOrigin] = useState(DEFAULT_MULTICA_API_ORIGIN);
+  const [webOrigin, setWebOrigin] = useState(DEFAULT_MULTICA_WEB_ORIGIN);
   const [pat, setPat] = useState('');
   const [remember, setRemember] = useState(false);
   const [accountLabel, setAccountLabel] = useState('');
@@ -80,8 +80,8 @@ export function MulticaAgentTaskPanel(props: {
       const connection = response.connection;
       if (!connection?.connected) return;
       setConnected(true);
-      setApiOrigin(connection.apiOrigin || OFFICIAL_MULTICA_API_ORIGIN);
-      setWebOrigin(connection.webOrigin || OFFICIAL_MULTICA_WEB_ORIGIN);
+      setApiOrigin(connection.apiOrigin || DEFAULT_MULTICA_API_ORIGIN);
+      setWebOrigin(connection.webOrigin || DEFAULT_MULTICA_WEB_ORIGIN);
       setAccountLabel(connection.accountLabel || '');
       setUserId(connection.userId || '');
       setRemember(connection.remember === true);
@@ -165,7 +165,7 @@ export function MulticaAgentTaskPanel(props: {
       )}
       {insecure && (
         <p style={hintStyle}>
-          这个地址保持 HTTP，PAT 会明文发送。扩展后台不能直接发 HTTP，验证时会短暂打开这个网站的后台标签页来发请求，然后关掉。只填写你信任的地址。
+          这个地址是 HTTP，PAT 会明文发送。请求由扩展后台直接发出，不会改成 HTTPS。只填写你信任的地址。
         </p>
       )}
       <label style={{ display: 'block', marginTop: '10px' }}>
