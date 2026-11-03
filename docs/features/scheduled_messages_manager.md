@@ -306,8 +306,8 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.2.3';
-  var APP_SCRIPT_LAST_UPDATED = '2026-10-31';
+  var APP_SCRIPT_VERSION = '3.3.0';
+  var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -629,7 +629,7 @@ Google Sheets（统一数据源）
         ├─→ Bot 私发/群发 → Dify botman jumpboard → botman
         ├─→ AsMe RingCentral sender → Dify RingCentral sender workflow → RingCentral
         ├─→ AI Report → 行级 AI_Endpoint（默认 Dify AI report app）
-        └─→ AgentTask → Dify agent-task jumpboard → memory-service /agent-tasks/execute
+        └─→ AgentTask → Dify HTTP Relay → Memory Service 或 Multica Webhook
     ↓
 memory-service runtime（Outreach）
     ├─→ 模板同步 / runtime overlay
@@ -646,7 +646,7 @@ memory-service runtime（AgentTask）
     └─→ AR result cache（仅 AR binding 需要）
 ```
 
-Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../src/scheduled-messages/dify/README.md)：`agent-task-jumpboard.yml`、`botman-jumpboard.yml`、`ringcentral_dify_workflow_split_credentials.yml`、`AI report.yml`。Jira 因出站限制不能直连 botman / memory-service 时，由这些 Workflow 做跳板；Chrome AR 即时刷新仍直连 memory-service。
+Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../src/scheduled-messages/dify/README.md)：`http-relay.yml`（当前统一 AgentTask 转发）、`agent-task-jumpboard.yml`（旧版兼容）、`botman-jumpboard.yml`、`ringcentral_dify_workflow_split_credentials.yml`、`AI report.yml`。Jira 因出站限制不能直连 botman / memory-service 时，由这些 Workflow 做跳板；Chrome AR 即时刷新仍直连 memory-service。
 
 ### 核心组件
 
@@ -715,7 +715,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 
 - 将 `Push_Method = AgentTask` 的 Messages 行视为 Agent task 计划，可一次性执行、按日历重复，或按 Timeline Milestone 每个版本再执行一次。Timeline 行清空 `Schedule_Date` 并填写 `Timeline_*`，执行器不将其标为 Done。Sheet 保存 `Agent_Task_ID`、`Agent_Executor`、`Agent_Notify_Template`、`Agent_Notify_Success_Receipt`、`Agent_Trigger_Source`、`Agent_AR_Binding_ID` 和最近触发摘要；任务描述统一写在 `Content`（旧列 `Agent_Task_Prompt` 已退役并由 schema updater 物理删除）。不保存完整 run/transcript/artifact。
 - Jira Executor Rule 仍每分钟运行，但先通过 AppScript 读取 Sheet 并筛选 due 行。没有到期 AgentTask 时不会访问 memory-service；命中到期行时才返回 AgentTask webhook payload。
-- 因 Jira 不能直连 memory-service，Executor Rule ≥ 1.6.0 把 AgentTask 转到 Dify agent-task jumpboard（[src/scheduled-messages/dify/agent-task-jumpboard.yml](../../src/scheduled-messages/dify/agent-task-jumpboard.yml)），由 Dify 再 POST `/api/v1/agent-tasks/execute`。跳板必须带 memory-service 全权 `API_KEY`（Dify 环境变量 `MEMORY_SERVICE_API_KEY` + `X-User-Id`），不是个人 `pak.…`；缺 key 会 401 `authentication_required`。Chrome AR 即时刷新仍直连 memory-service，不受该跳板影响。跳板和 Apps Script **不再**把空 executor 填成 `openclaw`；空值走 Options「Agent Task 默认执行器」，显式实例 id（包括本机 `openclaw`）原样透传。
+- Executor Rule ≥ 1.9.0 的 Memory / Multica AgentTask 共用 Dify HTTP Relay 分支。Apps Script ≥ 3.3.0 校验调度 capability 后生成 URL、POST、headers、body；Memory 的服务端 Key/目标优先读取脚本属性 `AGENT_TASK_MEMORY_API_KEY / URL / USER_ID`，旧 Config 可在受保护领取时导入。Dify 只做目标/头白名单校验和 GET/POST 转发，Apps Script 按本次领取时冻结的 provider 判断接受/拒绝，并以 executionKey 原子去重确认。完整导入、属性、环境变量及升级顺序见 [Dify 配置说明](../../src/scheduled-messages/dify/README.md)。Chrome AR 即时刷新仍直连 Memory。旧的 agent-task-jumpboard.yml 保留作旧规则兼容，不是新规则的目标应用。
 - Executor Rule ≥ 1.6.1 在领取成功（`executed=true`）后、进入各发送分支前，会用 Log action 把本次 `messageId` / `topic` / `pushMethod` / `targetType` / `executionKey` / `rowIndex` 写入 Jira Automation audit log，方便对照 Apps Script 偶发超时或 404 时实际领到的任务。
 - AppScript ≥ 2.12.1 的 webhook payload 以 `Content` 为 `task`（缺列时兜底旧 `Agent_Task_Prompt`），并附带选中的 `executor`（空则省略，由 memory-service 用 Agent Task 默认）、`successReceipt`（读 `Agent_Notify_Success_Receipt`，空/`Y` 默认开）、`notifyVia`（读 `Agent_Notify_Via`，空/`bot` 默认 Bot，`asme` 表示成功结果以本人身份发送）。`notifyVia=asme` 时会附带 Sheet `ringcentral_sender_*` 凭据（与顶部 AsMe 发消息 tab 同一套 token），以及仅在 Glip 目标非空时构造的 `notifyTarget`。
 - AppScript 在返回 AgentTask webhook 前检查 `Config!agent_task_webhook_url` 或行级 `AI_Endpoint`。缺失时不会领取该任务，也不会写 `Last_Exec`，避免配置错误导致任务静默跳过。
@@ -769,12 +769,12 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - 修改任务正文、Agent 或 project 时更新原 Autopilot；只改时间、主题且绑定完整时可沿用原绑定，不要求重新填写 PAT。更换 workspace / 账号 / API 地址须选择「保存时新建 Autopilot 和 Webhook」。新建替代绑定或改回 Memory 时，先暂停 Sheet 计划、停用旧 Webhook，再保存新配置；失败保持暂停且显示失败原因，旧 Autopilot 不删除，已有执行不被取消；更换绑定需要本机 PAT 仍能访问旧绑定，不能用另一个账号的 PAT 停用原账号的 Webhook。替代创建重试使用同一新绑定 ID，避免重复创建。
 - 连接表单里的 API 地址和网页地址默认都是 `http://task.xmnup.com`，并直接展开。已保存的连接仍用当时验证过的地址。自托管地址支持 HTTP 和 HTTPS，均由扩展 Service Worker 直接请求（保留原生 fetch 的全局调用上下文），不打开源站标签页，不自动切换协议，不跟随重定向。HTTP 会在界面标明 PAT 明文发送。排查请求请打开扩展 Service Worker 的 Network。
 - 到期执行不读取本机 PAT。创建时 PAT 换取 webhook，完整地址保存在隐藏表 `_AgentBindings`；Jira 通过 Apps Script 领取协议、host、含随机密钥的 path，再 POST 触发 Autopilot，Multica 按已配置的 Agent 执行。Webhook 本身是触发凭据，隐藏表不是权限隔离，能读表或领取结果的人应视为能访问该凭据。
-- Jira Executor Rule ≥ 1.8.1 在 `agentProvider=multica` 时按领取结果里的协议 POST `http://{host}/{path}` 或 `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。
+- Jira Executor Rule ≥ 1.9.0 不再直接向 Multica POST，而是把 Apps Script 的统一请求封装送给 Dify HTTP Relay；保留 Idempotency-Key。Dify 返回有界传输回执，Jira 通过带 capability 的 GET 调用 `confirmAgentTaskRelay`，Apps Script 要求 2xx 和 `accepted/duplicate + run_id` 才回写「已送达」。`skipped/ignored` 记拒绝；网络、5xx、缺 ID 或无法解析保持未确认，不自动重发。时间源仍是 Jira，不创建 Multica cron。
 - Executor Rule 1.8.2 修复 AgentTask 嵌套条件结构：Legacy 下游 POST 后的接受/拒绝回调使用独立 `jira.condition.container.block`；Multica 的协议选择与回执判断分别包在容器中，先投递再确认。`skipped` / `ignored` 使用 ANY，避免互斥状态被错误要求同时成立。确认仅表示调度请求被执行服务接受，不等于业务结果或群消息已送达。
 - 保存不会立即执行。Jira 规则还没写上调度校验值时，行保持暂停，回执是「Multica 已创建，计划尚未启用」。成功回执是「已安排，时间由 Jira 触发；执行与结果在 Multica」。
 - 断开连接只删除本机 PAT，不停止已经接好的 Webhook 和周期任务。复制表格时 Multica 行会被暂停，绑定表不跟着复制；spreadsheet id 对不上时脚本清掉 webhook。
 - Messages 2.14 只增加公开列：`Agent_Provider`、`Agent_Binding_ID`、`Agent_Multica_Workspace_ID`、`Agent_Multica_Workspace_Slug`、`Agent_Multica_Agent_ID`、`Agent_Multica_Project_ID`、`Agent_Multica_Autopilot_ID`、`Agent_Multica_Trigger_ID`、`Agent_Multica_Web_Origin`、`Agent_Multica_Api_Origin`、`Agent_Multica_User_ID`、`Agent_Provision_State`、`Agent_Content_Revision`。Webhook URL 在隐藏表 `_AgentBindings`。
-- 真实 Jira 出站、用户 PAT 和 Apps Script 部署不在这次代码落地里验证。线上要手动升级脚本和 Executor Rule 后才会生效。
+- 统一 Relay 的本地测试覆盖真实脚本领取/账本、Workflow Code 节点及受控 HTTP GET/POST；线上 Dify 导入/网络策略、真实 Jira 出站、用户 PAT 和 Apps Script 部署仍需发布后验证。先 Publish 新 Relay 并更新扩展 app key，再升级脚本和 Executor Rule。普通 Dify 输入日志可能保留 Key/Webhook，输出脱敏不等于输入自动遮罩。
 
 #### 7. AR 绑定来源
 

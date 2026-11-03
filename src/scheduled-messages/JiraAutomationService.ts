@@ -1,3 +1,4 @@
+import { ensureAgentTaskRelayCapability } from './agentTaskRelayConfig';
 /**
  * Jira Automation 服务
  * 负责创建和管理 Bot 推送的 Jira Automation 规则
@@ -23,6 +24,7 @@ export const JIRA_RULE_VERSION = JIRA_EXECUTOR_RULE_VERSION;
 export const JIRA_RULE_LAST_UPDATED = JIRA_EXECUTOR_RULE_LAST_UPDATED;
 
 export interface JiraAutomationConfig {
+  sheetId?: string;
   jiraUrl: string;  // Jira 实例 URL，如 https://jira.ringcentral.com
   projectKey: string;  // 项目 Key，如 MTR
   token?: string;  // Personal Access Token (可选，用于认证)
@@ -58,6 +60,7 @@ interface CreateRuleContext {
   webAppUrl: string;
   userEmail: string;
   envConfig: Awaited<ReturnType<typeof getEnvConfig>>;
+  schedulerCapability?: string;
 }
 
 function escapeJsonStringValue(value?: string): string {
@@ -304,7 +307,8 @@ export class JiraAutomationService {
       .replace(/{{USER_EMAIL}}/g, context.userEmail)
       .replace(/{{PROJECT_KEY}}/g, config.projectKey)
       .replace(/{{PROJECT_ID}}/g, context.projectId)
-      .replace(/{{USER_KEY}}/g, context.userKey);
+      .replace(/{{USER_KEY}}/g, context.userKey)
+      .replace(/{{MULTICA_SCHEDULER_CAPABILITY}}/g, encodeURIComponent(context.schedulerCapability || ''));
 
     return replaceScheduledMessagesDifyJumpboardPlaceholders(
       replaceRingCentralSenderPlaceholders(payloadString, config.ringCentralSender, context.envConfig),
@@ -317,6 +321,10 @@ export class JiraAutomationService {
     config: JiraAutomationConfig,
     context: CreateRuleContext
   ): Promise<BotAutomationRule> {
+    if (kind === 'executor') {
+      const stored = await chrome.storage.local.get('scheduledMessagesConfig');
+      context.schedulerCapability = await ensureAgentTaskRelayCapability(config.sheetId || stored.scheduledMessagesConfig?.sheetId || '');
+    }
     const rulePayloadString = this.buildRulePayloadString(kind, context, config);
     const rulePayload = JSON.parse(rulePayloadString);
     delete rulePayload._metadata;

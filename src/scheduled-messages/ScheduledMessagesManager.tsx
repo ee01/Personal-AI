@@ -12830,7 +12830,7 @@ const BotConfigDialog: React.FC<{
           console.warn('旧 Bot executor rule 已不存在，继续创建新 rule:', deleteError);
         }
 
-        const executorRule = await jiraService.createBotExecutorRule(jiraConfig, normalizedConfig.webAppUrl);
+        const executorRule = await jiraService.createBotExecutorRule({ ...jiraConfig, sheetId: normalizedConfig.sheetId }, normalizedConfig.webAppUrl);
         const timelineSyncRule = existingBotAutomation.timelineSyncRule?.ruleId
           ? existingBotAutomation.timelineSyncRule
           : await jiraService.createTimelineSyncRule(jiraConfig, normalizedConfig.webAppUrl);
@@ -12840,7 +12840,7 @@ const BotConfigDialog: React.FC<{
           timelineSyncRule,
         };
       } else if (mode === 'create') {
-        nextBotAutomation = await jiraService.createBotAutomationRules(jiraConfig, normalizedConfig.webAppUrl);
+        nextBotAutomation = await jiraService.createBotAutomationRules({ ...jiraConfig, sheetId: normalizedConfig.sheetId }, normalizedConfig.webAppUrl);
       } else if (mode === 'upgrade-sync-only') {
         if (!existingBotAutomation.executorRule?.ruleId) {
           throw new Error('缺少执行规则，无法仅升级 Timeline Sync Rule，请改用修复模式。');
@@ -12859,7 +12859,7 @@ const BotConfigDialog: React.FC<{
 
         if (!nextBotAutomation.executorRule?.ruleId) {
           nextBotAutomation.executorRule = await jiraService.createBotExecutorRule(
-            jiraConfig,
+            { ...jiraConfig, sheetId: normalizedConfig.sheetId },
             normalizedConfig.webAppUrl
           );
         }

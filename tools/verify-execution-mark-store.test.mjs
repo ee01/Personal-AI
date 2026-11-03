@@ -89,7 +89,7 @@ test('lost response after applied claim never redelivers, lost confirm never dou
   assert.equal(h.claim().success, false); assert.equal(h.claim('other').duplicate, true);
   h.fail({ phase: 'commit', apply: true, throw: true }); assert.equal(h.confirm().success, false);
   assert.equal(h.confirm().duplicate, true); assert.equal(h.cell('Exec_Count'), '1');
-  assert.equal(h.table('Logs').rows.length, 3); // header + claim + one confirmation
+  assert.equal(h.table('Logs').rows.length, 2); // header + one lifecycle row evolved from Claim to confirmation
 });
 test('preparation failure cannot authorize a send or advance the migration cursor', () => {
   const h = executionHarness({ properties: { BOT_CLAIM_MARK_ek_k1: legacy('k1') } }); h.initialize();
@@ -195,7 +195,7 @@ test('100 rounds of duplicate callback contention retain a single accounting eff
   for (let round = 0; round < 100; round++) {
     const h = ready(); h.claim();
     for (let retry = 0; retry < 10; retry++) assert.equal(h.confirm().success, true);
-    assert.equal(h.cell('Exec_Count'), '1'); assert.equal(h.table('Logs').rows.length, 3); // exactly one claim and confirmation
+    assert.equal(h.cell('Exec_Count'), '1'); assert.equal(h.table('Logs').rows.length, 2); // exactly one claim and confirmation
   }
 });
 

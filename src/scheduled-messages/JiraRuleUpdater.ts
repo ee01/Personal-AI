@@ -1,3 +1,4 @@
+import { ensureAgentTaskRelayCapability } from './agentTaskRelayConfig';
 /**
  * Jira Automation Rule 自动更新器
  * 负责检测和更新用户已部署的 Jira Automation 规则
@@ -379,7 +380,9 @@ export class JiraRuleUpdater {
       'userinfo',
       'multicaSchedulerCapability',
     ]);
-    const multicaCapability = typeof multicaSchedulerCapability === 'string' ? multicaSchedulerCapability : '';
+    const multicaCapability = kind === 'executor'
+      ? await ensureAgentTaskRelayCapability(this.config?.sheetId || '')
+      : (typeof multicaSchedulerCapability === 'string' ? multicaSchedulerCapability : '');
     
     // 保持原有的规则名称前缀（用户名部分）
     const nameMatch = existingRule.name.match(/^\[([^\]]+)\]/);

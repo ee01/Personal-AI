@@ -26,10 +26,10 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.2.4';
+var APP_SCRIPT_VERSION = '3.3.0';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
-var APP_SCRIPT_LAST_UPDATED = '2026-10-31';
+var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -461,6 +461,120 @@ function buildMulticaAgentTaskClaim(message, messageId, executionKey, evaluation
   };
 }
 
+// Unified AgentTask transport. Secrets leave only through an authenticated relay claim.
+function requireAgentTaskRelayCapability(parameters) {
+  var context = loadMulticaClaimContext(parameters);
+  if (!multicaCapabilityMatches(context.capability, context.expectedCapability)) throw new Error('relay_capability_required');
+  return context;
+}
+
+function getAgentTaskRelayMemoryConfig() {
+  var properties = PropertiesService.getScriptProperties();
+  var legacy = getAgentTaskWebhookConfigFromSheet();
+  var url = String(properties.getProperty('AGENT_TASK_MEMORY_URL') || legacy.webhookUrl || '').trim();
+  var token = String(properties.getProperty('AGENT_TASK_MEMORY_API_KEY') || legacy.authToken || '').trim();
+  var userId = String(properties.getProperty('AGENT_TASK_MEMORY_USER_ID') || legacy.userId || '').trim();
+  if (!url || !token || !userId) throw new Error('relay_memory_configuration_required');
+  // Import the existing deployment's key only after capability verification. Never expose it through probes.
+  if (!properties.getProperty('AGENT_TASK_MEMORY_API_KEY')) properties.setProperty('AGENT_TASK_MEMORY_API_KEY', token);
+  if (!properties.getProperty('AGENT_TASK_MEMORY_URL')) properties.setProperty('AGENT_TASK_MEMORY_URL', url);
+  if (!properties.getProperty('AGENT_TASK_MEMORY_USER_ID')) properties.setProperty('AGENT_TASK_MEMORY_USER_ID', userId);
+  return { webhookUrl: url, authToken: token, userId: userId };
+}
+
+function buildAgentTaskRelayRequest(message, messageId, executionKey, parameters) {
+  requireAgentTaskRelayCapability(parameters);
+  var request = { version: 1, requestId: executionKey, method: 'POST', url: '', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: '' };
+  var provider = isMulticaAgentTaskRow(message) ? 'multica' : 'legacy_memory';
+  if (provider === 'multica') {
+    var evaluation = evaluateMulticaClaim(message);
+    if (!evaluation.deliverable) throw new Error('relay_multica_binding_unavailable');
+    var claim = buildMulticaAgentTaskClaim(message, messageId, executionKey, evaluation);
+    request.url = claim.multicaWebhookScheme + '://' + claim.multicaWebhookHost + '/' + claim.multicaWebhookPath;
+    request.headers['Idempotency-Key'] = claim.multicaIdempotencyKey;
+    request.body = JSON.stringify({ source: 'scheduled_messages', provider: 'multica', messageId: messageId,
+      bindingId: claim.multicaBindingId, scheduledFor: claim.multicaScheduledFor, revision: claim.multicaRevision,
+      executionKey: executionKey, effectiveTask: claim.multicaEffectiveTask });
+  } else {
+    var config = getAgentTaskRelayMemoryConfig();
+    var payload = buildAgentTaskApiPayload(message, messageId, executionKey, config);
+    if (!payload.success) throw new Error('relay_memory_configuration_required');
+    request.url = payload.endpointInfo.url;
+    request.headers.Authorization = /^Bearer\s+/i.test(config.authToken) ? config.authToken : 'Bearer ' + config.authToken;
+    request.headers['X-User-Id'] = config.userId;
+    request.headers['X-Request-ID'] = executionKey;
+    request.body = payload.body;
+  }
+  if (!/^https?:\/\/[^\s@\\?#]+\/[^\s\\#]*$/.test(request.url)) throw new Error('relay_url_rejected');
+  var json = JSON.stringify(request);
+  if (json.length > 100000) throw new Error('relay_request_too_large');
+  return { success: true, agentProvider: provider, relayRequestJson: json };
+}
+
+function rememberAgentTaskRelayClaim(messageId, executionKey, provider) {
+  return withExecutionMarkLock(function() {
+    var store = readExecutionStore();
+    var entry = store.entries.filter(function(item) { return item.record.executionKey === executionKey; })[0];
+    if (!entry || entry.record.messageId !== String(messageId) || entry.record.state !== 'CLAIMED') throw new Error('relay_claim_missing');
+    // Store no URL, header, PAT or payload in the ledger. Provider is frozen for this occurrence.
+    entry.record.agentTaskRelay = { version: 1, provider: provider };
+    commitExecutionBatch(store, [executionRecordRequest(store, entry.row, entry.record)], 'relay_claim');
+  });
+}
+
+function parseAgentTaskRelayReceipt(provider, parameters) {
+  var code = Number(parameters.statusCode || 0);
+  var text = String(parameters.responseBody || '');
+  var body;
+  if (parameters.transportOk !== true && String(parameters.transportOk) !== 'true') {
+    if (String(parameters.errorCode || '') === 'validation_rejected') return { outcome: 'failed', error: 'relay_request_rejected' };
+    return { outcome: 'unknown', error: 'relay_transport_unconfirmed' };
+  }
+  if (code >= 400 && code < 500 && code !== 408) return { outcome: 'failed', error: 'relay_http_' + code };
+  if (!(code >= 200 && code < 300) || text.length > 2048) return { outcome: 'unknown', error: 'relay_http_unconfirmed' };
+  try { body = JSON.parse(text); } catch (error) { return { outcome: 'unknown', error: 'relay_invalid_response' }; }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { outcome: 'unknown', error: 'relay_invalid_response' };
+  if (provider === 'multica') {
+    var state = String(body.status || '');
+    var runId = String(body.run_id || '');
+    var issueId = String(body.issue_id || '');
+    if ((state === 'accepted' || state === 'duplicate') && /^[A-Za-z0-9_-]{1,128}$/.test(runId)
+      && (!issueId || /^[A-Za-z0-9_-]{1,128}$/.test(issueId))) {
+      return { outcome: 'accepted', delivery: { dispatchState: state, runId: runId, issueId: issueId } };
+    }
+    if (state === 'skipped' || state === 'ignored') return { outcome: 'failed', error: 'relay_multica_rejected' };
+    return { outcome: 'unknown', error: 'relay_multica_unconfirmed' };
+  }
+  if (provider === 'legacy_memory' && body.accepted === true && typeof body.actionId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(body.actionId)) return { outcome: 'accepted' };
+  if (provider === 'legacy_memory' && body.accepted === false) return { outcome: 'failed', error: 'relay_memory_rejected' };
+  return { outcome: 'unknown', error: 'relay_memory_unconfirmed' };
+}
+
+function confirmAgentTaskRelay(parameters) {
+  try {
+    requireAgentTaskRelayCapability(parameters);
+    var messageId = String(parameters.messageId || '');
+    var executionKey = normalizeExecutionKey(parameters.executionKey);
+    if (!messageId || !executionKey || String(parameters.requestId || '') !== executionKey) throw new Error('relay_receipt_mismatch');
+    return withExecutionMarkLock(function() {
+      var store = readExecutionStore();
+      var entry = store.entries.filter(function(item) { return item.record.executionKey === executionKey; })[0];
+      if (!entry || entry.record.messageId !== messageId || !entry.record.agentTaskRelay) throw new Error('relay_claim_missing');
+      var receipt = parseAgentTaskRelayReceipt(entry.record.agentTaskRelay.provider, parameters);
+      // Ambiguous delivery does not become FAILED or permit replay. Existing reconciliation quarantines it as UNKNOWN.
+      if (receipt.outcome === 'unknown') return { success: false, unconfirmed: true, code: receipt.error, executionKey: executionKey };
+      if (receipt.delivery) applyMulticaDeliveryNote(receipt.delivery, true);
+      try {
+        return confirmSheetExecution(messageId, parseInt(parameters.rowIndex, 10) || 0, receipt.outcome === 'accepted',
+          receipt.outcome === 'failed' ? 'trigger_delivery_failed: ' + receipt.error : '', null, executionKey, true);
+      } finally { MULTICA_DELIVERY_NOTE = null; }
+    });
+  } catch (error) {
+    // Error codes are ours; never echo a downstream body, key or URL into callbacks/logs.
+    return { success: false, code: 'relay_confirmation_rejected' };
+  }
+}
+
 function applyMulticaDeliveryNote(delivery, success) {
   MULTICA_DELIVERY_NOTE = null;
   if (!delivery) return;
@@ -492,6 +606,7 @@ function redactLoggedRequest(value) {
     var copy = JSON.parse(JSON.stringify(value || {}));
     if (copy.capability) copy.capability = '[redacted]';
     if (copy.schedulerCapability) copy.schedulerCapability = '[redacted]';
+    ['request_json', 'relayRequestJson', 'headers', 'Authorization', 'responseBody', 'body'].forEach(function(key) { if (copy[key]) copy[key] = '[redacted]'; });
     return JSON.stringify(copy);
   } catch (error) {
     return '[unlogged]';
@@ -2409,7 +2524,8 @@ function doGet(e) {
       releaseInfo: releaseInfo || {},
       currentTime: currentTimeStr || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'),
       autoMarkOnFetch: getAutoMarkOnFetchMode(e.parameter || {}),
-      schedulerCapability: getRequestParameterValue(e.parameter.capability)
+      schedulerCapability: getRequestParameterValue(e.parameter.capability),
+      agentTaskRelay: getRequestParameterValue(e.parameter.agentTaskRelay)
     };
     
     const result = getMessageCurrentTimeWithReleaseInfo(postData);
@@ -2437,6 +2553,10 @@ function doGet(e) {
   }
 
   // 确认下游已收到触发（与领取 claimed 分离，避免 302/超时假成功）
+  if (action === 'confirmAgentTaskRelay') {
+    return ContentService.createTextOutput(JSON.stringify(confirmAgentTaskRelay(e.parameter || {}))).setMimeType(ContentService.MimeType.JSON);
+  }
+
   if (action === 'confirmBotMessageTriggered') {
     const messageId = e.parameter.messageId || '';
     const rowIndex = parseInt(e.parameter.rowIndex) || 0;
@@ -2553,6 +2673,10 @@ function doPost(e) {
       ).setMimeType(ContentService.MimeType.JSON);
     }
 
+    if (action === 'confirmAgentTaskRelay') {
+      return ContentService.createTextOutput(JSON.stringify(confirmAgentTaskRelay(mergeRequestParameters(queryParameters, postData)))).setMimeType(ContentService.MimeType.JSON);
+    }
+
     if (action === 'confirmBotMessageTriggered') {
       const parameters = mergeRequestParameters(queryParameters, postData);
       const messageId = getRequestParameterValue(parameters.messageId);
@@ -2614,6 +2738,7 @@ function doPost(e) {
             currentTime: requestData.currentTime || '',
             capability: requestData.capability || requestData.schedulerCapability || '',
             schedulerCapability: requestData.schedulerCapability || requestData.capability || '',
+            agentTaskRelay: requestData.agentTaskRelay,
             autoMarkOnFetch: requestData.autoMarkOnFetch
           };
         }
@@ -3016,6 +3141,10 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         AI_Endpoint: rowData.AI_Endpoint || '',
         AI_Headers: rowData.AI_Headers || '',
         AI_Body: aiBody,
+        Agent_Provider: rowData.Agent_Provider || '',
+        Agent_Binding_ID: rowData.Agent_Binding_ID || '',
+        Agent_Multica_Api_Origin: rowData.Agent_Multica_Api_Origin || '',
+        Agent_Content_Revision: rowData.Agent_Content_Revision || '',
         Agent_Task_ID: rowData.Agent_Task_ID || '',
         Agent_Mode: rowData.Agent_Mode || 'read',
         Agent_Executor: rowData.Agent_Executor || '',
@@ -3579,7 +3708,7 @@ function buildAgentTaskNotifyTarget(message) {
   return null;
 }
 
-function buildAgentTaskApiPayload(message, messageId, executionKey) {
+function buildAgentTaskApiPayload(message, messageId, executionKey, webhookOverride) {
   if (isMulticaAgentTaskRow(message)) {
     var evaluation = evaluateMulticaClaim(message);
     if (!evaluation.deliverable) {
@@ -3587,9 +3716,9 @@ function buildAgentTaskApiPayload(message, messageId, executionKey) {
     }
     return buildMulticaAgentTaskClaim(message, messageId, executionKey, evaluation);
   }
-  const webhookConfig = getAgentTaskWebhookConfigFromSheet();
+  const webhookConfig = webhookOverride || getAgentTaskWebhookConfigFromSheet();
   const endpointRaw = normalizeAgentTaskEndpointUrl(
-    message.AI_Endpoint || (webhookConfig && webhookConfig.webhookUrl)
+    (webhookOverride && webhookOverride.webhookUrl) || message.AI_Endpoint || (webhookConfig && webhookConfig.webhookUrl)
   );
 
   if (!endpointRaw) {
@@ -3790,7 +3919,13 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     let executionKey = buildMessageExecutionKey(message, messageId, now);
     let agentTaskApiPayload = null;
     if (message.Push_Method === 'AgentTask') {
-      agentTaskApiPayload = buildAgentTaskApiPayload(message, messageId, executionKey);
+      try {
+        agentTaskApiPayload = String(postData.agentTaskRelay || '') === '1'
+          ? buildAgentTaskRelayRequest(message, messageId, executionKey, postData)
+          : buildAgentTaskApiPayload(message, messageId, executionKey);
+      } catch (relayError) {
+        agentTaskApiPayload = { success: false, error: 'agent_task_relay_configuration_or_authorization_failed' };
+      }
       if (!agentTaskApiPayload.success) {
         Logger.log(`AgentTask 配置异常，未领取: ${messageId} - ${agentTaskApiPayload.error}`);
         return {
@@ -3834,6 +3969,12 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
     }
 
     if (message.Push_Method === 'AgentTask' && agentTaskApiPayload && agentTaskApiPayload.success) {
+      if (agentTaskApiPayload.relayRequestJson) {
+        rememberAgentTaskRelayClaim(messageId, executionKey, agentTaskApiPayload.agentProvider);
+        return { executed: true, pushMethod: 'AgentTask', targetType: 'api', agentProvider: agentTaskApiPayload.agentProvider,
+          relayRequestJson: agentTaskApiPayload.relayRequestJson, messageId: messageId, rowIndex: message.rowIndex, executionKey: executionKey,
+          topic: message.Topic || '', requiresExecutionCallback: true, timestamp: new Date().toISOString() };
+      }
       if (agentTaskApiPayload.agentProvider === 'multica') {
         Logger.log('处理 Multica AgentTask 消息: ' + messageId);
         return {
@@ -5191,7 +5332,7 @@ function claimSheetExecution(messageId, rowIndex, candidate, executionKey) {
   return { success: true, claimed: true, duplicate: false, stage: 'claimed', messageId: messageId, rowIndex: resolved.row, executionKey: key, logMessage: updates.Exec_Log };
 }
 
-function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced, executionKey) {
+function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced, executionKey, relayAuthorized) {
   const key = normalizeExecutionKey(executionKey);
   if (!key) throw new Error('execution_key_required');
   const store = readExecutionStore();
@@ -5206,6 +5347,7 @@ function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced,
   }
   if (!entry) throw new Error('late_unknown');
   const record = entry.record;
+  if (record.agentTaskRelay && relayAuthorized !== true) throw new Error('relay_callback_required');
   if (record.messageId !== String(messageId)) throw new Error('execution_message_mismatch');
   if (record.resolution && record.resolution.kind === 'owner_skipped') throw new Error('execution_owner_skipped');
   const state = success ? 'CONFIRMED' : 'FAILED';

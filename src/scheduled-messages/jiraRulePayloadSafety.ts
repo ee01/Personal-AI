@@ -45,7 +45,7 @@ function redactValue(value: unknown, sensitiveContext = false): unknown {
   const result: Record<string, unknown> = {};
 
   Object.entries(value).forEach(([key, nestedValue]) => {
-    if (typeof nestedValue === 'string' && key === 'customBody') {
+    if (typeof nestedValue === 'string' && (key === 'customBody' || key === 'url')) {
       result[key] = redactJiraRuleTextForLog(nestedValue);
       return;
     }

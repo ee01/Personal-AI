@@ -4,7 +4,8 @@
 
 | 文件 | 用途 | 调用方 | Env / Key |
 |---|---|---|---|
-| `agent-task-jumpboard.yml` | Jira → Dify → `memory-service /api/v1/agent-tasks/execute` | Executor Rule `pushMethod=AgentTask` | `AGENT_TASK_DIFY_API_*`；Dify 内还要填全权 `MEMORY_SERVICE_API_KEY` |
+| `http-relay.yml` | Jira → 通用 GET/POST HTTP Relay → Memory 或 Multica | Executor Rule ≥ 1.9.0 的统一 AgentTask 分支 | `AGENT_TASK_DIFY_API_*` 指向这个新 Workflow；下游地址/认证由受保护的 Apps Script 领取返回 |
+| `agent-task-jumpboard.yml`（旧版兼容） | Jira → Dify → `memory-service /api/v1/agent-tasks/execute` | Executor Rule `pushMethod=AgentTask` | `AGENT_TASK_DIFY_API_*`；Dify 内还要填全权 `MEMORY_SERVICE_API_KEY` |
 | `botman-jumpboard.yml` | Jira → Dify → botman `/user/message`、`/team/message` | Executor Rule Bot 私发 / 群发 | `BOTMAN_DIFY_API_*`；Dify 内还要填 `BOT_TOKEN` / `BOT_ID` |
 | `ringcentral_dify_workflow_split_credentials.yml` | Jira → Dify → RingCentral Team Messaging（拆分 clientId/secret/jwt） | Executor Rule AsMe `targetType=ringcentral_sender` | `RINGCENTRAL_SENDER_DIFY_API_*` |
 | `AI report.yml` | AI Report 枢纽（advanced-chat）；定时消息 AI Report 模板默认打这个 Dify app | Messages 行 `AI_Endpoint` / Jira API 分支 | 行级 Endpoint + Headers 里的 Bearer app key |
@@ -19,7 +20,40 @@
 - AgentTask 跳板连的是 memory-service **全权 `API_KEY`**（所有用户共用，请求里带 `X-User-Id`），不是扩展本机 `pak.…`，也不是 `BOOTSTRAP_API_KEY`。缺这把钥匙时下游返回 `401 authentication_required`。Botman / RingCentral 跳板不调 memory-service，不需要这把 key。
 - **网络**：AgentTask 跳板下游 URL 写在 Dify 环境变量 `MEMORY_SERVICE_AGENT_TASK_URL`（YAML 默认 `http://10.32.56.212:3210/api/v1/agent-tasks/execute`），**不进** Jira rule / 扩展 `.env`。Jira rule 只打 `AGENT_TASK_DIFY_*`；Chrome AR 仍用 `MEMORY_SERVICE_BASE_URL`。
 
-## 发布与接线
+## 通用 HTTP Relay：发布与迁移
+
+新链路：`Apps Script 生成请求 → Jira 同一 AgentTask 分支 → Dify HTTP Relay → Memory / Multica → Apps Script 确认`。Relay 不用 LLM、不解释任务、不判断业务接受状态、不调度、不保存下游 Key。
+
+按顺序完成：
+
+1. 导入 `http-relay.yml` 为 **Personal AI HTTP Relay**。核对环境变量 `ALLOWED_ROUTES_JSON` 后 Publish。每条规则指定完整 `origin`、精确 `path` 或以 `/` 结束的 `pathPrefix`、`methods`、`allowedHeaders`；不允许将 Memory 的 Authorization 携带到 Multica。默认允许 Memory NodePort 的 execute POST，以及 task.xmnup.com HTTP/HTTPS、api.multica.ai HTTPS 的 Autopilot Webhook POST。新增 GET API 只需加一条不带下游认证头的匹配规则；GET 不接受 body。
+2. 在当前 Apps Script 项目设置 → **脚本属性**配置：
+   - `AGENT_TASK_MEMORY_URL`：Dify 可达的完整 Memory execute URL，例如 `http://10.32.56.212:3210/api/v1/agent-tasks/execute`。
+   - `AGENT_TASK_MEMORY_API_KEY`：该 Memory Service 的服务端 `API_KEY`，不要未经权限验证就换成个人 `pak.…` 或 bootstrap key。
+   - `AGENT_TASK_MEMORY_USER_ID`：该调度表所属用户 ID，作为 `X-User-Id`。
+   - 仅用 Multica 的表不需要这三个属性。Memory 首次经过有效 capability 的领取时，可从已有 Config 的 `agent_task_webhook_url/token/user_id` 导入；显式脚本属性始终优先，行级 AI_Endpoint/AI_Headers 不能改写认证目标。为兼容旧规则，导入不自动删除 Config 旧值；确认不再回滚后由表格所有者清理旧 Key 副本。
+3. 把新 Workflow 的 API Base/Key 写入扩展现有的 `AGENT_TASK_DIFY_API_BASE_URL` / `AGENT_TASK_DIFY_API_KEY`，重新构建并加载扩展（12.1.15）。变量名称不变，但 Key 必须属于 **新 Relay**，不能继续使用旧 AgentTask Jumpboard 的 app key。
+4. 先升级 Apps Script 到 **3.3.0**，再升级/重建 Executor Rule 到 **1.9.0**。规则创建/升级会读取或创建 Config 的 `multica_scheduler_capability` 并注入 Jira；已有有效值沿用，不因换设备直接轮换。旧规则仍可用原路径；新脚本只有 `agentTaskRelay=1` 且 capability 匹配时才返回新请求封装。
+5. 用测试表、测试 Autopilot 和受控 Memory 任务核对成功、401/403、业务拒绝、超时及重复回执。代码测试不代表已在目标 Dify 导入或生产 Jira 完成投递。
+
+### 请求与回执
+
+Jira POST `/workflows/run`：`inputs.request_json` 是一个 JSON **字符串**，包含 `{version:1, requestId, url, method, headers, body}`，其中 body 也是字符串，保留引号、换行和 Unicode。`response_mode=blocking`；不再发送旧的 payload_json。Memory 是 POST execute + Authorization / X-User-Id / X-Request-ID；Multica 是 POST Webhook + Idempotency-Key，不使用 PAT。
+
+Relay 输出 `requestId、transportOk、statusCode、responseBody、errorCode`，全部是字符串。`transportOk` 仅表示取得 HTTP 响应，HTTP 200 或 Workflow SUCCESS 不代表任务接受。responseBody 是脱敏后的 JSON，最大 2048 个 ASCII 字符（Unicode 使用 JSON 转义）；超限/非 JSON 返回未确认，不截断后伪装成功。网络错误可能使 Workflow 失败或没有 outputs，Jira 的确认因缺少 requestId 被拒绝，账本仍保持未确认。HTTP 节点不设置会覆盖真实 4xx 输出的 default-value 错误策略。
+
+Jira 使用 GET `confirmAgentTaskRelay` 回传有界回执，避免 Apps Script ContentService POST 的 Google 302 问题；新确认端点同时支持 POST。确认需要 capability、messageId、executionKey、requestId。provider 在领取时写入执行账本，确认不信任调用方传入的 provider，也不依赖后来被编辑的 Messages 行。旧 mark/confirm 端点不能绕过这一校验确认 Relay 领取。
+
+Apps Script 判定：Memory 要求 2xx、`accepted=true` 和 actionId；Multica 要求 2xx、`status=accepted/duplicate` 和 run_id。4xx（408 除外）、显式拒绝或转发校验失败记 Failed；网络/5xx/超时/无法解析/缺少 run_id/超大回执保持未确认，后续沿用账本 UNKNOWN 隔离，不自动重发。确认事务和重复去重沿用原账本，重复回执只记一次。
+
+### 部署边界
+
+- YAML 使用静态 GET/POST HTTP 节点，前置校验通过才可发请求，禁用节点自动重试，TLS 校验开启。目标服务必须按原幂等键去重，未知结果不允许重新生成幂等键补发。
+- 目标白名单校验作用于首次请求。部分 Dify 版本的 HTTP 节点会自动跟随重定向；本 YAML 不假称可用一个未受支持的参数关闭它。生产环境必须用 Dify 出站代理/网络策略约束所有跳转可达的目标，认证服务不能重定向到其他源；同样需要核实 Dify SSRF 代理对内网 Memory/自托管域名的放行。没有取得目标部署的配置证明或实测时，不把此项算已验证。
+- 下游 Key/Webhook 会经过 Apps Script 领取响应、Jira 和 Dify 普通输入/节点日志。它们不是 Dify secret 环境变量，不能假定自动遮罩。输出脱敏不能清除 Dify 已记录的输入；限制这些运行记录的访问及留存。公开版本/health 接口不读取脚本属性；应用自己的日志不打印请求封装。
+- `http-relay/validate.py`、`http-relay/response.py` 是 Code 节点源码；改动后运行 `node tools/build-http-relay-workflow.mjs` 重建 YAML，再运行 `npm run verify:agent-task-relay`。确定性测试涵盖协议与账本，无 LLM 体验评测需求。
+
+## 旧版发布与接线（回滚参考）
 
 1. 在 Dify 导入对应 YAML 并 **Publish**。
 2. 把 Workflow / App 的 API Base（通常 `https://dify.int.rclabenv.com/v1`）和 API Key 写入扩展 `.env`：
@@ -29,3 +63,5 @@
 3. 在定时消息管理页升级 Jira Executor Rule（模板版本 ≥ **1.6.0**），密钥会在创建/升级时注入 Rule。
 
 产品说明见 [docs/features/scheduled_messages_manager.md](../../../docs/features/scheduled_messages_manager.md)。
+
+实现依据：[Dify HTTP 节点文档](https://docs.dify.ai/en/cloud/use-dify/nodes/http-request)、[HTTP Executor 源码（1.6.0：动态 headers、跟随跳转）](https://github.com/langgenius/dify/blob/1.6.0/api/core/workflow/nodes/http_request/executor.py)、[HTTP 节点源码（1.6.0：关闭重试时保留下游非 2xx 响应）](https://github.com/langgenius/dify/blob/1.6.0/api/core/workflow/nodes/http_request/node.py)。目标部署版本仍需导入及网络验收。
