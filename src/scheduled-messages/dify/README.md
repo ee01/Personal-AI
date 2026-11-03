@@ -36,6 +36,14 @@
 4. 先升级 Apps Script 到 **3.3.0**，再升级/重建 Executor Rule 到 **1.9.0**。规则创建/升级会读取或创建 Config 的 `multica_scheduler_capability` 并注入 Jira；已有有效值沿用，不因换设备直接轮换。旧规则仍可用原路径；新脚本只有 `agentTaskRelay=1` 且 capability 匹配时才返回新请求封装。
 5. 用测试表、测试 Autopilot 和受控 Memory 任务核对成功、401/403、业务拒绝、超时及重复回执。代码测试不代表已在目标 Dify 导入或生产 Jira 完成投递。
 
+### 新安装与自动配置
+
+- 构建机将 Relay API Base/Key 写入 Git 忽略的 `.env`；开发环境 `.env.development` 中的非空值优先，因此切换应用时应同时更新两处。Key 随构建成为扩展默认值；从源码在其他机器构建仍需配置环境文件。不要把真实 Key 写入 `.env.example` 或提交到仓库。
+- 已安装扩展的 Options 本地覆盖值优先于构建默认值，换 Key 后需更新旧覆盖值，并升级/重建 Jira Executor Rule，已有规则不会因环境文件变化自动换 Key。
+- 扩展 ≥ 12.1.16 一键初始化新表时，根据当前用户身份和 Memory 配置自动写入 Config 的 `agent_task_webhook_url/token/user_id`。缺少用户身份时不猜测归属，保存首个 Memory AgentTask 时会再次尝试补齐；服务 Key 仍须有效配置。Apps Script 在首次通过 capability 校验的 Memory 领取时将这些值导入脚本属性，不需要逐个手填。仅用 Multica 的表无需配置 Memory 属性。
+- 新表创建/升级 Jira Rule 时会自动建立调度 capability。Google 首次授权仍须表格所有者完成。
+- Dify 只需导入 `http-relay.yml`；目录里的两个 `.py` 是已内嵌到 YAML 的 Code 节点维护源码，不需要另外上传、导入或部署。
+
 ### 请求与回执
 
 Jira POST `/workflows/run`：`inputs.request_json` 是一个 JSON **字符串**，包含 `{version:1, requestId, url, method, headers, body}`，其中 body 也是字符串，保留引号、换行和 Unicode。`response_mode=blocking`；不再发送旧的 payload_json。Memory 是 POST execute + Authorization / X-User-Id / X-Request-ID；Multica 是 POST Webhook + Idempotency-Key，不使用 PAT。

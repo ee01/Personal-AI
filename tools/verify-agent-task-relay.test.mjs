@@ -29,6 +29,41 @@ const receipt = (body, status = 202, r = request()) => python('post_receipt', {
   request_id: r.requestId, request_json: JSON.stringify(r), status_code: status, body: JSON.stringify(body),
 });
 
+test('new-sheet initialization seeds the current user Memory connection without inventing an identity', async () => {
+  const load = (file, require) => {
+    const exports = {};
+    vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText, { exports, require, console });
+    return exports;
+  };
+  const resolver = load('src/scheduled-messages/agentTaskWebhookConfig.ts', () => { throw new Error('unexpected dependency'); });
+  for (const userinfo of [{ username: 'alice' }, { email: 'bob@example.test' }, undefined]) {
+    let saved;
+    const deps = {
+      './AppScriptUpdater': { AppScriptUpdater: { getLatestVersionInfo: async () => ({ version: '3.3.0' }) } },
+      './upgradeContracts': {},
+      '../utils': { getEnvConfig: async () => ({ MEMORY_SERVICE_BASE_URL: 'https://memory.example.test', MEMORY_SERVICE_API_KEY: 'fixture_service_key' }), getUserInfo: async () => userinfo },
+      './agentTaskWebhookConfig': resolver,
+      './scheduleDateTime': { formatLocalScheduleDate: () => '2099-01-01', formatLocalScheduleTime: () => '00:00:00' },
+      './ConfigSyncService': { ConfigSyncService: class { async syncConfig(config) { saved = config; } } },
+    };
+    const { SheetInitializer } = load('src/scheduled-messages/SheetInitializer.ts', name => {
+      assert.ok(name in deps, name);
+      return deps[name];
+    });
+    await new SheetInitializer('fixture_oauth').saveConfig('fixture_sheet', 'fixture_script', 'https://script.example.test/exec', { minuteTriggerId: 'fixture_trigger' });
+    assert.equal(saved.sheetId, 'fixture_sheet');
+    if (!userinfo) {
+      assert.equal(saved.agentTaskWebhook, undefined);
+    } else {
+      assert.equal(saved.agentTaskWebhook.webhookUrl, 'https://memory.example.test/api/v1/agent-tasks/execute');
+      assert.equal(saved.agentTaskWebhook.authToken, 'fixture_service_key');
+      assert.equal(saved.agentTaskWebhook.userId, userinfo.username || 'bob');
+    }
+  }
+});
+
 function ready(provider = 'multica') {
   const h = executionHarness({ configRows: [['Key', 'Value'], ['multica_scheduler_capability', capability]], properties: {
     AGENT_TASK_MEMORY_URL: 'http://10.32.56.212:3210/api/v1/agent-tasks/execute',

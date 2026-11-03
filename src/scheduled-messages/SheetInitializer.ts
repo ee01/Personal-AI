@@ -6,6 +6,8 @@
 import { InitializationResult, SheetConfig } from './types';
 import { AppScriptUpdater } from './AppScriptUpdater';
 import { findVersionedWebAppDeployment } from './upgradeContracts';
+import { getEnvConfig, getUserInfo } from '../utils';
+import { resolveAgentTaskWebhookConfig } from './agentTaskWebhookConfig';
 import {
   formatLocalScheduleDate,
   formatLocalScheduleTime,
@@ -1115,6 +1117,20 @@ function minuteTrigger() {
 
     if (this.deploymentId) {
       config.deploymentId = this.deploymentId;
+    }
+
+    // Seed this user's Memory connection on new sheets, before any task exists.
+    // Apps Script imports it into script properties on the first protected claim.
+    const envConfig = await getEnvConfig();
+    const userInfo = await getUserInfo().catch(() => null);
+    const resolvedWebhook = resolveAgentTaskWebhookConfig({
+      memoryServiceBaseUrl: envConfig.MEMORY_SERVICE_BASE_URL,
+      memoryServiceApiKey: envConfig.MEMORY_SERVICE_API_KEY,
+      userIdCandidates: [userInfo?.username, userInfo?.email],
+      requireUserId: true,
+    });
+    if (resolvedWebhook.webhook) {
+      config.agentTaskWebhook = resolvedWebhook.webhook;
     }
 
     // 使用 ConfigSyncService 同步配置到 Sheet 和 Chrome Storage
