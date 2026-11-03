@@ -306,7 +306,7 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.4.0';
+  var APP_SCRIPT_VERSION = '3.5.0';
   var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
   ```
 
@@ -764,18 +764,22 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 
 ##### Multica 路径（新任务）
 
+扩展 12.1.18 / Apps Script 3.5.0 / Messages schema 2.15 起，当前绑定直接属于 Messages 行，不保留更换绑定的历史表。升级先迁移行引用的旧绑定并回读验证，再确认线上脚本支持行内绑定后删除 `_AgentBindings`；迁移缺失、重复或回读不一致时保留旧表供修复。`Agent_Binding_ID` 继续作为幂等标识，不是历史表外键。复制表时 `Agent_Multica_Spreadsheet_ID` 不匹配会阻止领取，普通领取会清除该行 Webhook 并标成 needs_reconnect。Webhook 本身是触发凭据；能读取 Messages 的共享者也能读取它，隐藏列不是访问控制。规则升级会将 getExecutorRule 返回的副本重新写回配置，避免线上规则已升级而 Config 版本仍停在旧值。
+
+可用 capability 保护的 `inspectMulticaAgentTask`（传 messageId）诊断绑定、所属表及 Active 状态。此接口只返回状态，不返回 Webhook/capability，不领取、不写执行账本、不触发任务，也不会清除复制表的 Webhook。
+
 - 新建「帮我做」默认 `Agent_Provider=multica`。旧行保持 `legacy_memory` 或空值，仍走上面的 memory-service / Dify 路径，不会自动迁移。
-- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。「记住这台设备」默认勾选，验证后 PAT 存入本机 `chrome.storage.local`；取消勾选改用 `chrome.storage.session`，关闭浏览器后清除。PAT、webhook URL 不进 Messages、不进日志、不进页面可复制内容。
+- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。「记住这台设备」默认勾选，验证后 PAT 存入本机 `chrome.storage.local`；取消勾选改用 `chrome.storage.session`，关闭浏览器后清除。PAT 不进 Sheet；Webhook 在 Messages 行内保存，但不进日志或扩展页面可复制内容。
 - 编辑「帮我做」时默认折叠整个执行配置（包含 Multica / Memory 选择、连接、Autopilot / Webhook 绑定及 Memory 执行边界/通知）。展开后可以修改，Autopilot 提供外链，Webhook 只显示是否已绑定，不显示密钥。打开编辑页不会创建远端对象。
 - 再次打开或从 Memory 切到 Multica 时自动复用本机已验证 PAT，并重新读取 workspace、Agent、project 列表；页面不回填 PAT 明文。可以留空 PAT「重新检查连接」，更换服务地址必须重新填写 PAT。新建任务复用上次选择的 workspace、Agent、project；偏好按 API 地址和用户 ID 隔离，本机保存，即使取消任务草稿也保留最后选择。编辑已有任务优先使用该行原有 workspace / Agent / project，不覆盖为其他任务的默认值。无权访问或失效选项不会被静默替代。
 - 修改任务正文、Agent 或 project 时更新原 Autopilot；只改时间、主题且绑定完整时可沿用原绑定，不要求重新填写 PAT。更换 workspace / 账号 / API 地址须选择「保存时新建 Autopilot 和 Webhook」。新建替代绑定或改回 Memory 时，先暂停 Sheet 计划、停用旧 Webhook，再保存新配置；失败保持暂停且显示失败原因，旧 Autopilot 不删除，已有执行不被取消；更换绑定需要本机 PAT 仍能访问旧绑定，不能用另一个账号的 PAT 停用原账号的 Webhook。替代创建重试使用同一新绑定 ID，避免重复创建。
 - 连接表单里的 API 地址和网页地址默认都是 `http://task.xmnup.com`，并直接展开。已保存的连接仍用当时验证过的地址。自托管地址支持 HTTP 和 HTTPS，均由扩展 Service Worker 直接请求（保留原生 fetch 的全局调用上下文），不打开源站标签页，不自动切换协议，不跟随重定向。HTTP 会在界面标明 PAT 明文发送。排查请求请打开扩展 Service Worker 的 Network。
-- 到期执行不读取本机 PAT。创建时 PAT 换取 webhook，完整地址保存在隐藏表 `_AgentBindings`；Jira 通过 Apps Script 领取协议、host、含随机密钥的 path，再 POST 触发 Autopilot，Multica 按已配置的 Agent 执行。Webhook 本身是触发凭据，隐藏表不是权限隔离，能读表或领取结果的人应视为能访问该凭据。
+- 到期执行不读取本机 PAT。创建时 PAT 换取 webhook，完整地址保存在 Messages 的 `Agent_Multica_Webhook_URL`；Jira 通过 Apps Script 领取协议、host、含随机密钥的 path，再 POST 触发 Autopilot，Multica 按已配置的 Agent 执行。Webhook 本身是触发凭据，隐藏表不是权限隔离，能读表或领取结果的人应视为能访问该凭据。
 - Jira Executor Rule ≥ 1.9.0 不再直接向 Multica POST，而是把 Apps Script 的统一请求封装送给 Dify HTTP Relay；保留 Idempotency-Key。Dify 返回有界传输回执，Jira 通过带 capability 的 GET 调用 `confirmAgentTaskRelay`，Apps Script 要求 2xx 和 `accepted/duplicate + run_id` 才回写「已送达」。`skipped/ignored` 记拒绝；网络、5xx、缺 ID 或无法解析保持未确认，不自动重发。时间源仍是 Jira，不创建 Multica cron。
 - Executor Rule 1.8.2 修复 AgentTask 嵌套条件结构：Legacy 下游 POST 后的接受/拒绝回调使用独立 `jira.condition.container.block`；Multica 的协议选择与回执判断分别包在容器中，先投递再确认。`skipped` / `ignored` 使用 ANY，避免互斥状态被错误要求同时成立。确认仅表示调度请求被执行服务接受，不等于业务结果或群消息已送达。
 - 保存不会立即执行。Jira 规则还没写上调度校验值时，行保持暂停，回执是「Multica 已创建，计划尚未启用」。成功回执是「已安排，时间由 Jira 触发；执行与结果在 Multica」。
 - 断开连接只删除本机 PAT，不停止已经接好的 Webhook 和周期任务。复制表格时 Multica 行会被暂停，绑定表不跟着复制；spreadsheet id 对不上时脚本清掉 webhook。
-- Messages 2.14 只增加公开列：`Agent_Provider`、`Agent_Binding_ID`、`Agent_Multica_Workspace_ID`、`Agent_Multica_Workspace_Slug`、`Agent_Multica_Agent_ID`、`Agent_Multica_Project_ID`、`Agent_Multica_Autopilot_ID`、`Agent_Multica_Trigger_ID`、`Agent_Multica_Web_Origin`、`Agent_Multica_Api_Origin`、`Agent_Multica_User_ID`、`Agent_Provision_State`、`Agent_Content_Revision`。Webhook URL 在隐藏表 `_AgentBindings`。
+- Messages 2.14 只增加公开列：`Agent_Provider`、`Agent_Binding_ID`、`Agent_Multica_Workspace_ID`、`Agent_Multica_Workspace_Slug`、`Agent_Multica_Agent_ID`、`Agent_Multica_Project_ID`、`Agent_Multica_Autopilot_ID`、`Agent_Multica_Trigger_ID`、`Agent_Multica_Web_Origin`、`Agent_Multica_Api_Origin`、`Agent_Multica_User_ID`、`Agent_Provision_State`、`Agent_Content_Revision`。另有 `Agent_Multica_Webhook_URL`、`Agent_Multica_Spreadsheet_ID` 两列，保存当前 Webhook 和绑定所属表。
 - 统一 Relay 的本地测试覆盖真实脚本领取/账本、Workflow Code 节点及受控 HTTP GET/POST；线上 Dify 导入/网络策略、真实 Jira 出站、用户 PAT 和 Apps Script 部署仍需发布后验证。先 Publish 新 Relay 并更新扩展 app key，再升级脚本和 Executor Rule。普通 Dify 输入日志可能保留 Key/Webhook，输出脱敏不等于输入自动遮罩。
 
 #### 7. AR 绑定来源

@@ -115,6 +115,8 @@ export interface ScheduledMessage {
   Agent_Multica_User_ID?: string;
   Agent_Provision_State?: string;
   Agent_Content_Revision?: string;
+  Agent_Multica_Webhook_URL?: string;
+  Agent_Multica_Spreadsheet_ID?: string;
   Status: MessageStatus;
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
@@ -187,6 +189,8 @@ export interface CreateMessageFormData {
   Agent_Multica_User_ID?: string;
   Agent_Provision_State?: string;
   Agent_Content_Revision?: string;
+  Agent_Multica_Webhook_URL?: string;
+  Agent_Multica_Spreadsheet_ID?: string;
   /** 仅提交时使用，不写入 Sheet。 */
   Multica_Connection_Ready?: boolean;
   /** 仅提交时使用，不写入 Sheet。 */

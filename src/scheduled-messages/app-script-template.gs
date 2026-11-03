@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.4.0';
+var APP_SCRIPT_VERSION = '3.5.0';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
@@ -352,34 +352,29 @@ function loadMulticaClaimContext(postData) {
   return { capability: provided, expectedCapability: expected, spreadsheetId: spreadsheetId };
 }
 
-function readMulticaBindingById(bindingId) {
-  var wanted = String(bindingId || '').trim();
-  if (!wanted) return null;
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('_AgentBindings');
-  if (!sheet) return null;
-  var values = sheet.getDataRange().getDisplayValues();
-  if (!values || values.length < 2) return null;
-  var headers = values[0];
-  var idCol = headers.indexOf('bindingUuid');
-  if (idCol < 0) return null;
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][idCol] || '').trim() !== wanted) continue;
-    var record = { _rowIndex: i + 1 };
-    for (var c = 0; c < headers.length; c++) record[headers[c]] = values[i][c];
-    return record;
-  }
-  return null;
+function readMulticaBindingFromRow(rowData) {
+  if (!rowData.Agent_Binding_ID) return null;
+  return { bindingUuid: rowData.Agent_Binding_ID, messageId: rowData.ID,
+    webhookUrl: rowData.Agent_Multica_Webhook_URL || '', spreadsheetId: rowData.Agent_Multica_Spreadsheet_ID || '',
+    apiOrigin: rowData.Agent_Multica_Api_Origin || '', provisionState: rowData.Agent_Provision_State || '',
+    contentRevision: rowData.Agent_Content_Revision || '', _rowIndex: rowData.rowIndex || 0 };
 }
 
 function clearMulticaBindingWebhook(record) {
-  if (!record || !record._rowIndex) return;
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('_AgentBindings');
-  if (!sheet) return;
-  var headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getDisplayValues()[0];
-  var webhookCol = headers.indexOf('webhookUrl') + 1;
-  var stateCol = headers.indexOf('provisionState') + 1;
-  if (webhookCol > 0) sheet.getRange(record._rowIndex, webhookCol).setValue('');
-  if (stateCol > 0) sheet.getRange(record._rowIndex, stateCol).setValue('needs_reconnect');
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+  if (!sheet || !record) return;
+  var rows = sheet.getDataRange().getDisplayValues();
+  var headers = rows[0] || [];
+  var idCol = headers.indexOf('ID');
+  var bindingCol = headers.indexOf('Agent_Binding_ID');
+  var webhookCol = headers.indexOf('Agent_Multica_Webhook_URL');
+  var stateCol = headers.indexOf('Agent_Provision_State');
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i][idCol] !== record.messageId || rows[i][bindingCol] !== record.bindingUuid) continue;
+    if (webhookCol >= 0) sheet.getRange(i + 1, webhookCol + 1).setValue('');
+    if (stateCol >= 0) sheet.getRange(i + 1, stateCol + 1).setValue('needs_reconnect');
+    return;
+  }
 }
 
 function splitMulticaWebhookUrl(webhookUrl, apiOrigin) {
@@ -424,17 +419,17 @@ function sanitizeMulticaId(value) {
   return String(value || '').replace(/[^A-Za-z0-9_-]/g, '').substring(0, 80);
 }
 
-function evaluateMulticaClaim(rowData) {
+function evaluateMulticaClaim(rowData, readOnly) {
   var context = MULTICA_CLAIM_CONTEXT || { capability: '', expectedCapability: '', spreadsheetId: '' };
   if (!multicaCapabilityMatches(context.capability, context.expectedCapability)) {
     return { deliverable: false, reason: 'capability' };
   }
   var bindingId = String(rowData.Agent_Binding_ID || '').trim();
-  var record = readMulticaBindingById(bindingId);
+  var record = readMulticaBindingFromRow(rowData);
   if (!record) return { deliverable: false, reason: 'binding' };
   var spreadsheetId = String(record.spreadsheetId || '').trim();
   if (!spreadsheetId || spreadsheetId !== String(context.spreadsheetId || '')) {
-    if (record.webhookUrl) clearMulticaBindingWebhook(record);
+    if (record.webhookUrl && readOnly !== true) clearMulticaBindingWebhook(record);
     return { deliverable: false, reason: 'spreadsheet' };
   }
   if (String(record.provisionState || '') === 'needs_reconnect') {
@@ -2413,8 +2408,33 @@ function handleCacheReleaseInfoRequest(parameters) {
   }
 }
 
+// Capability-protected read-only probe: no claim, ledger write or downstream call.
+function inspectMulticaAgentTask(parameters) {
+  var previous = MULTICA_CLAIM_CONTEXT;
+  try {
+    MULTICA_CLAIM_CONTEXT = requireAgentTaskRelayCapability(parameters);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Messages');
+    var rows = sheet.getDataRange().getDisplayValues();
+    var headers = rows[0] || [];
+    for (var i = 1; i < rows.length; i++) {
+      var row = parseRow(rows[i], headers);
+      if (String(row.ID) !== String(parameters.messageId || '')) continue;
+      if (!isMulticaAgentTaskRow(row)) return { success: false, reason: 'not_multica' };
+      var evaluation = evaluateMulticaClaim(row, true);
+      return { success: true, readOnly: true, scriptVersion: APP_SCRIPT_VERSION, messageId: row.ID,
+        deliverable: evaluation.deliverable, reason: evaluation.reason || 'ready', active: row.Status === 'Active',
+        scheduleDate: row.Schedule_Date || '', scheduleTime: row.Schedule_Time || '',
+        provider: 'multica', hasWebhook: !!row.Agent_Multica_Webhook_URL,
+        spreadsheetMatches: String(row.Agent_Multica_Spreadsheet_ID || '') === MULTICA_CLAIM_CONTEXT.spreadsheetId };
+    }
+    return { success: false, reason: 'message_not_found' };
+  } catch (error) { return { success: false, reason: 'authorization_or_configuration' }; }
+  finally { MULTICA_CLAIM_CONTEXT = previous; }
+}
+
 function doGet(e) {
   const action = e.parameter.action;
+  if (action === 'inspectMulticaAgentTask') return ContentService.createTextOutput(JSON.stringify(inspectMulticaAgentTask(e.parameter))).setMimeType(ContentService.MimeType.JSON);
   Logger.log(`action: ${action}`);
   
   // 授权成功页面
@@ -3157,6 +3177,9 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
         Agent_Provider: rowData.Agent_Provider || '',
         Agent_Binding_ID: rowData.Agent_Binding_ID || '',
         Agent_Multica_Api_Origin: rowData.Agent_Multica_Api_Origin || '',
+        Agent_Multica_Webhook_URL: rowData.Agent_Multica_Webhook_URL || '',
+        Agent_Multica_Spreadsheet_ID: rowData.Agent_Multica_Spreadsheet_ID || '',
+        Agent_Provision_State: rowData.Agent_Provision_State || '',
         Agent_Content_Revision: rowData.Agent_Content_Revision || '',
         Agent_Task_ID: rowData.Agent_Task_ID || '',
         Agent_Mode: rowData.Agent_Mode || 'read',

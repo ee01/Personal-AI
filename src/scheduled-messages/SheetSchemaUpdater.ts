@@ -12,6 +12,7 @@ import {
   normalizeSheetConfig,
   withAgentTaskWebhook,
 } from './botAutomationConfig';
+import { migrateMulticaBindingsToMessages } from './multica/multicaBindingSheet';
 import { resolveAgentTaskWebhookConfig } from './agentTaskWebhookConfig';
 import { getEnvConfig, getUserInfo } from '../utils';
 
@@ -94,10 +95,11 @@ export class SheetSchemaUpdater {
       );
       
       if (missingColumns.length === 0 && obsoleteColumns.length === 0 && missingLogColumns.length === 0) {
+        const migration = await migrateMulticaBindingsToMessages({ token: this.token, spreadsheetId: this.config.sheetId, webAppUrl: this.config.webAppUrl });
         console.log('✅ Sheet 表结构已是最新');
         return {
           success: true,
-          updated: agentTaskWebhookConfigUpdated,
+          updated: agentTaskWebhookConfigUpdated || migration.migrated > 0 || migration.deleted,
           addedColumns: [],
           updatedConfig: this.config,
         };
@@ -117,6 +119,8 @@ export class SheetSchemaUpdater {
         await this.addMissingLogColumns(currentLogHeaders, missingLogColumns);
       }
       
+      await migrateMulticaBindingsToMessages({ token: this.token, spreadsheetId: this.config.sheetId, webAppUrl: this.config.webAppUrl });
+
       // 4. 更新配置中的 sheet_version
       await this.updateSchemaVersion();
       

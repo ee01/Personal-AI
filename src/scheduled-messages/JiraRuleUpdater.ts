@@ -452,6 +452,9 @@ export class JiraRuleUpdater {
     targetRule.ruleLastUpdated = new Date().toISOString();
     targetRule.ruleName = ruleName;
 
+    // getExecutorRule returns a clone; put the updated rule back before normalizing.
+    this.config.botAutomation = { ...this.config.botAutomation,
+      [kind === 'timelineSync' ? 'timelineSyncRule' : 'executorRule']: targetRule };
     this.config = normalizeSheetConfig(this.config);
 
     const shouldSaveConfigToStorage = options.saveConfigToStorage ?? true;

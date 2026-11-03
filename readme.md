@@ -120,7 +120,7 @@ npm --prefix desktop-app run macos:signing-info
 
 ### Agent Task：Jira 直连或 Dify 网络中转
 
-定时 Agent Task 默认可由 Jira Rule 直接 POST 到 Memory Service 或 Multica Webhook。使用扩展 ≥ 12.1.17、Apps Script ≥ 3.4.0、Executor Rule ≥ 1.10.0：**有效配置中的 `AGENT_TASK_DIFY_API_KEY` 为空时直连，非空时走 Dify HTTP Relay**。这项配置只控制 AgentTask，其他推送的 Dify 配置独立。
+定时 Agent Task 默认可由 Jira Rule 直接 POST 到 Memory Service 或 Multica Webhook。使用扩展 ≥ 12.1.18、Apps Script ≥ 3.5.0、Executor Rule ≥ 1.10.0：**有效配置中的 `AGENT_TASK_DIFY_API_KEY` 为空时直连，非空时走 Dify HTTP Relay**。这项配置只控制 AgentTask，其他推送的 Dify 配置独立。
 
 如果 Jira 的网络无法访问目标服务，需要自行部署一个 Jira 和目标服务均可访问的 Dify App 做网络中转：导入 [http-relay.yml](src/scheduled-messages/dify/http-relay.yml)，核对目标白名单与出站网络策略并 Publish，再在构建机配置：
 
@@ -131,7 +131,7 @@ AGENT_TASK_DIFY_API_KEY=<your-published-relay-app-key>
 
 真实 Key 只写入 Git 忽略的 `.env` / `.env.development`，不要提交；它会随扩展安装包分发。开发构建中 `.env.development` 非空值覆盖 `.env`，已安装扩展的 Options 本地配置优先。要关闭中转，须确保这些来源的有效 Key 均已清空，并重新构建/加载、创建或升级 Jira Rule；已有 Rule 不会因环境文件变化自动切换。直连要求 Jira 能访问目标网络，投递失败不会自动换路重试。
 
-Memory 连接从各用户 Sheet Config / Apps Script 属性读取；Multica 到期调用 Webhook，不用 PAT。Dify 只需导入 YAML，两个 Python 文件已内嵌其中。完整初始化、属性及验证步骤见 [Dify 配置说明](src/scheduled-messages/dify/README.md)。
+Memory 连接从各用户 Sheet Config / Apps Script 属性读取；Multica 到期调用 Messages 行内的 Webhook，不用 PAT。旧表先同步迁移绑定到 Messages，再部署 3.5.0 并再次同步，回读验证后自动删除旧 `_AgentBindings`。Dify 只需导入 YAML，两个 Python 文件已内嵌其中。完整初始化、属性及验证步骤见 [Dify 配置说明](src/scheduled-messages/dify/README.md)。
 
 Memory Service 和 Roadmap Service 跑在同一台 Mac mini（`rcadmin@10.32.56.212`）上，但是两个仓库、两个目录、两个容器。公网分别是 `http://memory.xmnup.com`（3210）和 `http://roadmap.xmnup.com`（3220）。
 

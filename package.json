@@ -76,6 +76,7 @@
     "verify:scheduled-messages-upgrade:e2e": "node tools/verify-scheduled-messages-upgrade-e2e.mjs",
     "verify:execution-mark-store": "node --test tools/verify-execution-mark-store.test.mjs",
     "verify:agent-task-relay": "node --test tools/verify-agent-task-relay.test.mjs",
+    "verify:multica-row-binding": "node --test tools/verify-multica-row-binding.test.mjs",
     "verify:appscript-auto-update": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-appscript-auto-update.ts",
     "verify:appscript-auto-update:e2e": "node tools/verify-appscript-auto-update-e2e.mjs",
     "verify:digest-queue-service": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-digest-queue-service.ts",

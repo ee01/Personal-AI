@@ -98,7 +98,8 @@ test('real rule creation and upgrade payload builders both switch transport with
     './difyJumpboardConfig': transportConfig(),
     '../utils': { getEnvConfig: async () => env },
     './agentTaskRelayConfig': { ensureAgentTaskRelayCapability: async () => capability },
-    './botAutomationConfig': { normalizeSheetConfig: config => config },
+    './botAutomationConfig': { normalizeSheetConfig: config => config,
+      getExecutorRule: config => JSON.parse(JSON.stringify(config.botAutomation?.executorRule || null)) },
     './timelineProjects': { buildTimelineSyncComponentsFragment: () => '[]' },
   };
   const load = name => {
@@ -112,6 +113,9 @@ test('real rule creation and upgrade payload builders both switch transport with
   deps['./JiraAutomationService'] = load('JiraAutomationService');
   const { JiraAutomationService } = deps['./JiraAutomationService'];
   const { JiraRuleUpdater } = load('JiraRuleUpdater');
+  const updater = new JiraRuleUpdater({ sheetId: 'fixture_sheet', botAutomation: { executorRule: { ruleId: '2709', ruleVersion: '1.4.3' } } });
+  await updater.updateRuleConfigVersion('executor', '1.10.0', '[Fixture] Tasks v1.10.0', { saveConfigToStorage: false });
+  assert.equal(updater.config.botAutomation.executorRule.ruleVersion, '1.10.0', 'metadata must persist even when getExecutorRule returns a clone');
   for (const key of ['', 'fixture_relay_key']) {
     env = { AGENT_TASK_DIFY_API_KEY: key, BOTMAN_DIFY_API_KEY: 'fixture_botman', BOT_API_BASE_URL: 'https://bot.example.test', BOT_TOKEN: 'fixture_bot', BOT_ID: 'fixture_id' };
     const config = { sheetId: 'fixture_sheet', webAppUrl: 'https://script.example.test/exec', projectKey: 'TEST' };
@@ -326,11 +330,11 @@ test('real polling returns one protected envelope, persists its provider and old
     } });
     h.initialize(); h.activate(); h.setCell('Push_Method', 'AgentTask');
     if (provider === 'multica') {
-      h.headers.push('Agent_Provider', 'Agent_Binding_ID');
-      h.table('Messages').rows[0].push('Agent_Provider', 'Agent_Binding_ID');
-      h.setCell('Agent_Provider', 'multica'); h.setCell('Agent_Binding_ID', 'fixture_binding');
-      h.context.readMulticaBindingById = () => ({ bindingUuid: 'fixture_binding', spreadsheetId: 'test-book',
-        apiOrigin: 'http://task.xmnup.com', webhookUrl: 'http://task.xmnup.com/api/webhooks/autopilots/secret_hook', provisionState: 'ready' });
+      const cols = ['Agent_Provider', 'Agent_Binding_ID', 'Agent_Multica_Api_Origin', 'Agent_Multica_Webhook_URL', 'Agent_Multica_Spreadsheet_ID', 'Agent_Provision_State'];
+      h.headers.push(...cols); h.table('Messages').rows[0].push(...cols);
+      for (const [key, value] of Object.entries({ Agent_Provider: 'multica', Agent_Binding_ID: 'fixture_binding',
+        Agent_Multica_Api_Origin: 'http://task.xmnup.com', Agent_Multica_Webhook_URL: 'http://task.xmnup.com/api/webhooks/autopilots/secret_hook',
+        Agent_Multica_Spreadsheet_ID: 'test-book', Agent_Provision_State: 'ready' })) h.setCell(key, value);
     }
     const poll = params => h.context.getMessageCurrentTimeWithReleaseInfo({ currentTime: '2026-10-23 09:00', autoMarkOnFetch: 'api', agentTaskRelay: '1', ...params });
     const denied = poll({ capability: '' });

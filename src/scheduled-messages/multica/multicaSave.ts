@@ -150,6 +150,8 @@ export async function saveMulticaScheduledAgentTask(input: {
       Agent_Multica_Trigger_ID: '',
       Agent_Provision_State: 'draft',
       Agent_Content_Revision: '',
+      Agent_Multica_Webhook_URL: '',
+      Agent_Multica_Spreadsheet_ID: '',
     } : {}),
     Agent_Multica_Api_Origin: apiOrigin,
     Agent_Multica_Web_Origin: webOrigin,

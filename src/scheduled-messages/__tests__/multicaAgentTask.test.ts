@@ -430,24 +430,24 @@ test('Jira not ready leaves the row paused and schedule-only does not create aga
   assert.equal(later.calls.webhook, 0);
 });
 
-test('Apps Script refuses a copied spreadsheet and does not put the full webhook in one field', () => {
+test('Apps Script reads row-owned webhook, refuses a copied spreadsheet and returns split delivery fields', () => {
   const appScript = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../app-script-template.gs'), 'utf8');
   const cells = { webhook: WEBHOOK, state: 'ready' };
   const sheet = {
     getDataRange() {
       return { getDisplayValues: () => [[
-        'bindingUuid', 'webhookUrl', 'spreadsheetId', 'provisionState', 'apiOrigin', 'contentRevision',
+        'ID', 'Agent_Binding_ID', 'Agent_Multica_Webhook_URL', 'Agent_Multica_Spreadsheet_ID', 'Agent_Provision_State', 'Agent_Multica_Api_Origin', 'Agent_Content_Revision',
       ], [
-        BINDING, cells.webhook, 'sheet-a', cells.state, API, 'rev-1',
+        'msg-1', BINDING, cells.webhook, 'sheet-a', cells.state, API, 'rev-1',
       ]] };
     },
     getLastColumn: () => 6,
     getRange(_row: number, col: number) {
       return {
-        getDisplayValues: () => [['bindingUuid', 'webhookUrl', 'spreadsheetId', 'provisionState', 'apiOrigin', 'contentRevision']],
+        getDisplayValues: () => [['ID', 'Agent_Binding_ID', 'Agent_Multica_Webhook_URL', 'Agent_Multica_Spreadsheet_ID', 'Agent_Provision_State', 'Agent_Multica_Api_Origin', 'Agent_Content_Revision']],
         setValue(value: string) {
-          if (col === 2) cells.webhook = value;
-          if (col === 4) cells.state = value;
+          if (col === 3) cells.webhook = value;
+          if (col === 5) cells.state = value;
         },
       };
     },
@@ -466,7 +466,7 @@ test('Apps Script refuses a copied spreadsheet and does not put the full webhook
   vm.createContext(context);
   vm.runInContext(`${appScript}
     MULTICA_CLAIM_CONTEXT = { capability: '${'a'.repeat(64)}', expectedCapability: '${'a'.repeat(64)}', spreadsheetId: 'sheet-b' };
-    result = evaluateMulticaClaim({ Push_Method: 'AgentTask', Agent_Provider: 'multica', Agent_Binding_ID: '${BINDING}' });
+    result = evaluateMulticaClaim({ Push_Method: 'AgentTask', Agent_Provider: 'multica', ID: 'msg-1', Agent_Binding_ID: '${BINDING}', Agent_Multica_Webhook_URL: '${WEBHOOK}', Agent_Multica_Spreadsheet_ID: 'sheet-a', Agent_Multica_Api_Origin: '${API}' });
   `, context);
   const evaluation = context.result as { deliverable: boolean; reason: string };
   assert.equal(evaluation.deliverable, false);
@@ -481,7 +481,7 @@ test('Apps Script refuses a copied spreadsheet and does not put the full webhook
   cells.state = 'ready';
   vm.runInContext(`
     MULTICA_CLAIM_CONTEXT = { capability: '${'ab'.repeat(32)}', expectedCapability: '${'ab'.repeat(32)}', spreadsheetId: 'sheet-a' };
-    var row = { Push_Method: 'AgentTask', Agent_Provider: 'multica', Agent_Binding_ID: '${BINDING}', Content: '整理', Schedule_Date: '2026-10-30', Schedule_Time: '09:00' };
+    var row = { Push_Method: 'AgentTask', Agent_Provider: 'multica', Agent_Binding_ID: '${BINDING}', ID: 'msg-1', Agent_Multica_Webhook_URL: '${WEBHOOK}', Agent_Multica_Spreadsheet_ID: 'sheet-a', Agent_Multica_Api_Origin: '${API}', Content: '整理', Schedule_Date: '2026-10-30', Schedule_Time: '09:00' };
     result = buildMulticaAgentTaskClaim(row, 'msg-1', 'exec-1', evaluateMulticaClaim(row));
   `, context);
   const claim = context.result as Record<string, string>;

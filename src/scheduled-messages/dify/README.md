@@ -34,8 +34,8 @@ Jira 网络直达目标时不需要为 AgentTask 部署 Dify。网络隔离需�
    - `AGENT_TASK_MEMORY_API_KEY`：该 Memory Service 的服务端 `API_KEY`，不要未经权限验证就换成个人 `pak.…` 或 bootstrap key。
    - `AGENT_TASK_MEMORY_USER_ID`：该调度表所属用户 ID，作为 `X-User-Id`。
    - 仅用 Multica 的表不需要这三个属性。Memory 首次经过有效 capability 的领取时，可从已有 Config 的 `agent_task_webhook_url/token/user_id` 导入；显式脚本属性始终优先，行级 AI_Endpoint/AI_Headers 不能改写认证目标。为兼容旧规则，导入不自动删除 Config 旧值；确认不再回滚后由表格所有者清理旧 Key 副本。
-3. 需要中转时，把新 Workflow 的 API Base/Key 写入扩展现有的 `AGENT_TASK_DIFY_API_BASE_URL` / `AGENT_TASK_DIFY_API_KEY`，重新构建并加载扩展（12.1.17）。Key 必须属于 **新 Relay**，不能继续使用旧 AgentTask Jumpboard 的 app key；直连则保持有效 Key 为空。
-4. 先升级 Apps Script 到 **3.4.0**，再升级/重建 Executor Rule 到 **1.10.0**。规则创建/升级会读取或创建 Config 的 `multica_scheduler_capability` 并注入 Jira；已有有效值沿用，不因换设备直接轮换。两种模式都使用 `agentTaskRelay=1` 领取受保护的请求。已有规则不会自动响应本机 Key 的变化，必须重新生成规则。
+3. 需要中转时，把新 Workflow 的 API Base/Key 写入扩展现有的 `AGENT_TASK_DIFY_API_BASE_URL` / `AGENT_TASK_DIFY_API_KEY`，重新构建并加载扩展（12.1.18）。Key 必须属于 **新 Relay**，不能继续使用旧 AgentTask Jumpboard 的 app key；直连则保持有效 Key 为空。
+4. 先升级 Apps Script 到 **3.5.0**，再升级/重建 Executor Rule 到 **1.10.0**。规则创建/升级会读取或创建 Config 的 `multica_scheduler_capability` 并注入 Jira；已有有效值沿用，不因换设备直接轮换。两种模式都使用 `agentTaskRelay=1` 领取受保护的请求。已有规则不会自动响应本机 Key 的变化，必须重新生成规则。
 5. 用测试表、测试 Autopilot 和受控 Memory 任务核对成功、401/403、业务拒绝、超时及重复回执。代码测试不代表已在目标 Dify 导入或生产 Jira 完成投递。
 
 ### 新安装与自动配置
@@ -75,3 +75,7 @@ Apps Script 判定：Memory 要求 2xx、`accepted=true` 和 actionId；Multica 
 产品说明见 [docs/features/scheduled_messages_manager.md](../../../docs/features/scheduled_messages_manager.md)。
 
 实现依据：[Dify HTTP 节点文档](https://docs.dify.ai/en/cloud/use-dify/nodes/http-request)、[HTTP Executor 源码（1.6.0：动态 headers、跟随跳转）](https://github.com/langgenius/dify/blob/1.6.0/api/core/workflow/nodes/http_request/executor.py)、[HTTP 节点源码（1.6.0：关闭重试时保留下游非 2xx 响应）](https://github.com/langgenius/dify/blob/1.6.0/api/core/workflow/nodes/http_request/node.py)。目标部署版本仍需导入及网络验收。
+
+### 行内 Multica 绑定迁移
+
+扩展 12.1.18 / schema 2.15 将正在引用的旧绑定迁至 Messages 的 `Agent_Multica_Webhook_URL` / `Agent_Multica_Spreadsheet_ID`，回读一致且线上脚本 ≥ 3.5.0 后删除 `_AgentBindings`。当前任务行保存唯一有效 Webhook，不再保留替换历史。先完成表结构/绑定复制，再部署新脚本并再次同步完成删除；回读失败不会删除旧表。共享 Messages 等于共享 Webhook 触发凭据，PAT 仍只在本机。使用 `inspectMulticaAgentTask`（capability + messageId）可只读检查，不要用实际领取接口调试会写外部数据的任务。
