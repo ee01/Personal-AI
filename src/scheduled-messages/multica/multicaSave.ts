@@ -36,16 +36,16 @@ function sendMultica(type: string, data?: Record<string, unknown>): Promise<any>
   return sendMulticaExtensionMessage(type, data);
 }
 
-export function createChromeMulticaRemote(): MulticaProvisionRemote {
+export function createChromeMulticaRemote(scope: { apiOrigin?: string; userId?: string; workspaceId?: string } = {}): MulticaProvisionRemote {
   return {
-    listAutopilots: async () => (await sendMultica('MULTICA_LIST_AUTOPILOTS')).autopilots || [],
-    getAutopilot: async (id) => (await sendMultica('MULTICA_GET_AUTOPILOT', { autopilotId: id })).autopilot,
-    createAutopilot: async (input) => (await sendMultica('MULTICA_CREATE_AUTOPILOT', input)).autopilot,
+    listAutopilots: async () => (await sendMultica('MULTICA_LIST_AUTOPILOTS', scope)).autopilots || [],
+    getAutopilot: async (id) => (await sendMultica('MULTICA_GET_AUTOPILOT', { ...scope, autopilotId: id })).autopilot,
+    createAutopilot: async (input) => (await sendMultica('MULTICA_CREATE_AUTOPILOT', { ...scope, ...input })).autopilot,
     patchAutopilot: async (input) => {
-      await sendMultica('MULTICA_PATCH_AUTOPILOT', input);
+      await sendMultica('MULTICA_PATCH_AUTOPILOT', { ...scope, ...input });
     },
     createWebhook: async (input) => {
-      const response = await sendMultica('MULTICA_CREATE_WEBHOOK', input);
+      const response = await sendMultica('MULTICA_CREATE_WEBHOOK', { ...scope, ...input });
       const trigger = response.trigger || {};
       return {
         id: trigger.id || response.id || '',
@@ -54,7 +54,7 @@ export function createChromeMulticaRemote(): MulticaProvisionRemote {
       };
     },
     patchTrigger: async (input) => {
-      await sendMultica('MULTICA_PATCH_TRIGGER', input);
+      await sendMultica('MULTICA_PATCH_TRIGGER', { ...scope, ...input });
     },
   };
 }
@@ -69,6 +69,27 @@ export async function setMulticaTriggerEnabled(
   enabled: boolean,
 ): Promise<void> {
   await sendMultica('MULTICA_PATCH_TRIGGER', { autopilotId, triggerId, enabled });
+}
+
+export async function retireMulticaScheduledBinding(
+  service: ScheduledMessageService,
+  editing: ScheduledMessage,
+  remote?: MulticaProvisionRemote,
+): Promise<void> {
+  // Pause the Sheet before touching remote state. Failure leaves the old plan paused and recoverable.
+  await service.updateMessage(editing.ID, { Status: 'Paused', Exec_Log: '正在更换执行配置，计划已暂停' });
+  if (editing.Agent_Multica_Autopilot_ID && editing.Agent_Multica_Trigger_ID) {
+    const scoped = remote || createChromeMulticaRemote({
+      apiOrigin: editing.Agent_Multica_Api_Origin,
+      userId: editing.Agent_Multica_User_ID,
+      workspaceId: editing.Agent_Multica_Workspace_ID,
+    });
+    await scoped.patchTrigger({
+      autopilotId: editing.Agent_Multica_Autopilot_ID,
+      triggerId: editing.Agent_Multica_Trigger_ID,
+      enabled: false,
+    });
+  }
 }
 
 async function readProgress(local: KeyValueStorage, bindingUuid: string): Promise<ProvisionProgress | null> {
@@ -109,16 +130,27 @@ export async function saveMulticaScheduledAgentTask(input: {
   const workspaceId = input.form.Agent_Multica_Workspace_ID || editing?.Agent_Multica_Workspace_ID || '';
   const workspaceSlug = input.form.Agent_Multica_Workspace_Slug || editing?.Agent_Multica_Workspace_Slug || '';
   const agentId = input.form.Agent_Multica_Agent_ID || editing?.Agent_Multica_Agent_ID || '';
-  const projectId = input.form.Agent_Multica_Project_ID || editing?.Agent_Multica_Project_ID || '';
+  const projectId = input.form.Agent_Multica_Project_ID ?? editing?.Agent_Multica_Project_ID ?? '';
   const userId = input.form.Agent_Multica_User_ID || editing?.Agent_Multica_User_ID || '';
-  const bindingUuid = (editing?.Agent_Binding_ID || input.form.Agent_Binding_ID || crypto.randomUUID()).trim();
+  const bindingUuid = (input.form.Agent_Binding_ID || editing?.Agent_Binding_ID || crypto.randomUUID()).trim();
+  const replacing = editing?.Agent_Provider === 'multica' && bindingUuid !== editing.Agent_Binding_ID;
+  if (editing?.Agent_Provider === 'multica' && !replacing
+    && (apiOrigin !== editing.Agent_Multica_Api_Origin || workspaceId !== editing.Agent_Multica_Workspace_ID || userId !== editing.Agent_Multica_User_ID)) {
+    throw new Error('更换服务、账号或 workspace 时，请选择新建 Autopilot，避免修改其他 workspace 的绑定。');
+  }
   const task = (input.form.Content || '').trim();
-  const contentRevision = await buildContentRevision(task, agentId);
+  const contentRevision = await buildContentRevision(task, agentId, projectId);
 
   const formForSheet: CreateMessageFormData = {
     ...input.form,
     Agent_Provider: 'multica',
     Agent_Binding_ID: bindingUuid,
+    ...(replacing ? {
+      Agent_Multica_Autopilot_ID: '',
+      Agent_Multica_Trigger_ID: '',
+      Agent_Provision_State: 'draft',
+      Agent_Content_Revision: '',
+    } : {}),
     Agent_Multica_Api_Origin: apiOrigin,
     Agent_Multica_Web_Origin: webOrigin,
     Agent_Multica_Workspace_ID: workspaceId,
@@ -135,6 +167,8 @@ export async function saveMulticaScheduledAgentTask(input: {
     Multica_Block_Reason: undefined,
   };
 
+  if (replacing && editing) await retireMulticaScheduledBinding(input.service, editing, input.remote);
+
   const message = editing
     ? await input.service.updateMessage(editing.ID, {
       ...formForSheet,
@@ -145,7 +179,7 @@ export async function saveMulticaScheduledAgentTask(input: {
       execLog: 'Multica 创建中，计划尚未启用',
     });
 
-  if (!(await readProgress(local, bindingUuid)) && editing?.Agent_Multica_Autopilot_ID) {
+  if (!(await readProgress(local, bindingUuid)) && !replacing && editing?.Agent_Provider === 'multica' && editing.Agent_Multica_Autopilot_ID) {
     await writeProgress(local, {
       bindingUuid,
       messageId: message.ID,
@@ -191,7 +225,7 @@ export async function saveMulticaScheduledAgentTask(input: {
     jiraReady,
     scheduleOnly,
   }, {
-    remote: input.remote || createChromeMulticaRemote(),
+    remote: input.remote || createChromeMulticaRemote({ apiOrigin, userId, workspaceId }),
     loadProgress: (id) => readProgress(local, id),
     saveProgress: (progress) => writeProgress(local, progress),
     updateSheet: (messageId, fields) => input.service.updateMessage(messageId, fields).then(() => undefined),

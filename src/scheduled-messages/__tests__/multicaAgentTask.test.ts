@@ -4,6 +4,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import ts from 'typescript';
+import * as contractModule from '../multica/multicaContract.js';
+import * as connectionModule from '../multica/multicaConnection.js';
+import * as provisionModule from '../multica/multicaProvision.js';
 import { MulticaApiError, MulticaClient } from '../multica/multicaClient.js';
 import {
   handleMulticaExtensionMessage,
@@ -106,7 +110,20 @@ test('schedule-only edits keep an already ready Multica task on its saved agent'
     Agent_Multica_Agent_ID: 'ag_12345678',
     Agent_Multica_Workspace_ID: 'ws_12345678',
     Content: 'same',
-  }, { Content: 'same', Agent_Multica_Agent_ID: '', Agent_Multica_Workspace_ID: '' }), true);
+  }, { Content: 'same' }), true);
+});
+
+test('project, binding and connection changes require a managed save', () => {
+  const editing = {
+    Agent_Provider: 'multica', Agent_Provision_State: 'ready', Agent_Binding_ID: BINDING,
+    Agent_Multica_Autopilot_ID: 'ap_12345678', Agent_Multica_Trigger_ID: 'tg_12345678',
+    Agent_Multica_Project_ID: 'project_old', Agent_Multica_Workspace_ID: 'ws_12345678', Content: 'same',
+  };
+  for (const change of [
+    { Agent_Multica_Project_ID: '' }, { Agent_Multica_Project_ID: 'project_new' },
+    { Agent_Binding_ID: 'replacement' }, { Agent_Multica_Workspace_ID: '' },
+    { Agent_Multica_Api_Origin: 'http://other.test' },
+  ]) assert.equal(multicaScheduleOnlyEdit(editing, { Content: 'same', ...change }), false);
 });
 
 test('default transport preserves the global fetch receiver for HTTP and HTTPS', async () => {
@@ -481,4 +498,134 @@ test('Apps Script refuses a copied spreadsheet and does not put the full webhook
   const note = context.result as { logMessage: string };
   assert.match(note.logMessage, /拒绝触发/);
   assert.equal(note.logMessage.includes('evil'), false);
+});
+
+
+test('saved PAT restores workspace resources and remembers account-scoped defaults without exposing PAT', async () => {
+  const session = memoryStore();
+  const local = memoryStore();
+  const sender = { id: 'ext', url: 'chrome-extension://ext/scheduled-messages.html' };
+  const called: string[] = [];
+  const deps = {
+    extensionId: 'ext', session, local,
+    clientFactory: (connection: StoredMulticaConnection) => ({
+      getMe: async () => ({ id: 'user_fixture', label: 'Fixture' }),
+      listWorkspaces: async () => [{ id: 'ws_fixture', slug: 'fixture', name: 'Fixture' }],
+      listAgents: async () => { called.push(connection.workspaceId); return [{ id: 'agent_fixture', name: 'Agent' }]; },
+      listProjects: async () => [{ id: 'project_fixture', name: 'Project' }],
+      listRuntimes: async () => [],
+    }) as never,
+  };
+  const send = (type: string, data?: Record<string, unknown>) => handleMulticaExtensionMessage({ type, data }, sender, deps);
+  assert.equal((await send('MULTICA_VERIFY', { apiOrigin: API, webOrigin: 'https://multica.ai', pat: 'private_fixture', remember: true })).success, true);
+  assert.equal((await send('MULTICA_SELECT_WORKSPACE', { workspaceId: 'ws_fixture', workspaceSlug: 'fixture' })).success, true);
+  assert.equal((await send('MULTICA_SAVE_DEFAULTS', { agentId: 'agent_fixture', projectId: 'project_fixture' })).success, true);
+  const restored = await send('MULTICA_RESTORE');
+  assert.equal(restored.success, true);
+  assert.equal(restored.connection?.workspaceId, 'ws_fixture');
+  assert.equal(restored.defaults?.projectId, 'project_fixture');
+  assert.equal(restored.agents?.[0].id, 'agent_fixture');
+  assert.equal(JSON.stringify(restored).includes('private_fixture'), false);
+  assert.ok(called.every(id => id === 'ws_fixture'));
+  assert.equal((await send('MULTICA_RESTORE', { apiOrigin: 'http://other.test' })).code, 'connection_mismatch');
+  assert.equal((await send('MULTICA_RESTORE', { userId: 'other_user' })).code, 'connection_mismatch');
+  assert.equal((await send('MULTICA_RESTORE', { workspaceId: 'other_ws' })).success, false);
+  assert.equal((await send('MULTICA_SAVE_DEFAULTS', { projectId: 'not_in_workspace' })).success, false);
+  // Empty PAT can revalidate the same saved service, but never a new service.
+  assert.equal((await send('MULTICA_VERIFY', { apiOrigin: API, webOrigin: 'https://multica.ai', pat: '', remember: true })).success, true);
+  assert.equal((await send('MULTICA_VERIFY', { apiOrigin: 'https://other.test', webOrigin: 'https://other.test', pat: '' })).success, false);
+});
+
+
+function loadSaveModule() {
+  // Isolate the Jira JSON-template dependency; use the real save/provision code.
+  const source = readFileSync(new URL('../multica/multicaSave.ts', import.meta.url), 'utf8');
+  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const module = { exports: {} as Record<string, any> };
+  const dependencies: Record<string, unknown> = {
+    '../JiraRuleUpdater.js': { JiraRuleUpdater: { getLatestVersion: () => 'fixture' } },
+    './multicaContract.js': contractModule,
+    './multicaConnection.js': connectionModule,
+    './multicaProvision.js': provisionModule,
+  };
+  const run = vm.runInNewContext(`(function(require,module,exports){${code}\n})`, { crypto, console });
+  run((name: string) => {
+    assert.ok(name in dependencies, `unexpected dependency ${name}`);
+    return dependencies[name];
+  }, module, module.exports);
+  return module.exports;
+}
+
+test('replacement pauses and disables the old trigger before creating a fresh binding; retries reuse it', async () => {
+  const { saveMulticaScheduledAgentTask } = loadSaveModule();
+  const harness = provisionHarness();
+  const events: string[] = [];
+  const editing = {
+    ID: 'msg-1', Agent_Provider: 'multica', Agent_Provision_State: 'ready', Agent_Binding_ID: BINDING,
+    Agent_Multica_Autopilot_ID: 'ap_oldfixture', Agent_Multica_Trigger_ID: 'tg_oldfixture',
+    Agent_Multica_Api_Origin: API, Agent_Multica_Web_Origin: 'https://multica.ai',
+    Agent_Multica_Workspace_ID: 'ws_12345678', Agent_Multica_Workspace_Slug: 'personal',
+    Agent_Multica_User_ID: 'user_12345678', Agent_Multica_Agent_ID: 'ag_12345678', Content: 'old',
+  };
+  let current = { ...editing };
+  const service = {
+    updateMessage: async (_id: string, fields: any) => { events.push(fields.Exec_Log || 'update'); current = { ...current, ...fields }; return current; },
+    upsertConfigValue: async () => undefined,
+    upsertMulticaBinding: async (record: any) => harness.bindings.push(record),
+  };
+  const patch = harness.deps.remote.patchTrigger;
+  harness.deps.remote.patchTrigger = async input => { events.push(`trigger:${input.autopilotId}:${input.enabled}`); await patch(input); };
+  const form = {
+    ...editing, Content: 'new task', Agent_Binding_ID: '22222222-2222-4222-8222-222222222222',
+    Multica_Connection_Ready: true, Agent_Multica_Project_ID: '',
+  };
+  const input = { service, editing, form, spreadsheetId: 'sheet-1', local: memoryStore(), remote: harness.deps.remote, updateJiraRule: async () => true };
+  await saveMulticaScheduledAgentTask(input);
+  assert.match(events[0], /计划已暂停/);
+  assert.equal(events[1], 'trigger:ap_oldfixture:false');
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.bindings[0].bindingUuid, form.Agent_Binding_ID);
+  assert.notEqual(current.Agent_Multica_Autopilot_ID, editing.Agent_Multica_Autopilot_ID);
+  await saveMulticaScheduledAgentTask(input);
+  assert.equal(harness.calls.create, 1, 'retry must reuse the replacement progress');
+});
+
+test('failed trigger retirement leaves Sheet paused and prevents any new provisioning', async () => {
+  const { retireMulticaScheduledBinding } = loadSaveModule();
+  const events: string[] = [];
+  await assert.rejects(retireMulticaScheduledBinding({
+    updateMessage: async (_id: string, fields: any) => events.push(fields.Status),
+  }, { ID: 'msg-1', Agent_Multica_Autopilot_ID: 'ap_oldfixture', Agent_Multica_Trigger_ID: 'tg_oldfixture' }, {
+    patchTrigger: async () => { events.push('disable'); throw new Error('offline'); },
+  }), /offline/);
+  assert.deepEqual(events, ['Paused', 'disable']);
+});
+
+
+test('uncertain replacement clears old public IDs and retains its new binding for recovery', async () => {
+  const { saveMulticaScheduledAgentTask } = loadSaveModule();
+  const harness = provisionHarness({ failCreate: new MulticaApiError('timeout', 0, 'network') });
+  const editing = {
+    ID: 'msg-1', Agent_Provider: 'multica', Agent_Provision_State: 'ready', Agent_Binding_ID: BINDING,
+    Agent_Multica_Autopilot_ID: 'ap_oldfixture', Agent_Multica_Trigger_ID: 'tg_oldfixture',
+    Agent_Multica_Api_Origin: API, Agent_Multica_Web_Origin: 'https://multica.ai',
+    Agent_Multica_Workspace_ID: 'ws_12345678', Agent_Multica_Workspace_Slug: 'personal',
+    Agent_Multica_User_ID: 'user_12345678', Agent_Multica_Agent_ID: 'ag_12345678', Content: 'old',
+  };
+  let current: any = editing;
+  const input = {
+    service: {
+      updateMessage: async (_id: string, fields: any) => { current = { ...current, ...fields }; return current; },
+      upsertConfigValue: async () => undefined,
+    }, editing,
+    form: { ...editing, Agent_Binding_ID: '22222222-2222-4222-8222-222222222222', Multica_Connection_Ready: true },
+    spreadsheetId: 'sheet-1', local: memoryStore(), remote: harness.deps.remote,
+  };
+  await assert.rejects(saveMulticaScheduledAgentTask(input), /timeout/);
+  assert.equal(current.Status, 'Paused');
+  assert.equal(current.Agent_Multica_Autopilot_ID, '');
+  assert.equal(current.Agent_Multica_Trigger_ID, '');
+  assert.equal(current.Agent_Binding_ID, input.form.Agent_Binding_ID);
+  await assert.rejects(saveMulticaScheduledAgentTask({ ...input, editing: current }), /还未确认/);
+  assert.equal(harness.calls.create, 1);
 });

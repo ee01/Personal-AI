@@ -4,6 +4,7 @@ import {
   DEFAULT_MULTICA_API_ORIGIN,
   DEFAULT_MULTICA_WEB_ORIGIN,
 } from './multicaContract.js';
+import type { ScheduledMessage } from '../types';
 import { sendMulticaExtensionMessage } from './multicaConnection.js';
 
 export interface MulticaDraft {
@@ -29,38 +30,45 @@ function sendMultica(type: string, data?: Record<string, unknown>): Promise<any>
 
 export function MulticaAgentTaskPanel(props: {
   disabled?: boolean;
+  initial?: ScheduledMessage | null;
   onChange: (draft: MulticaDraft) => void;
 }): JSX.Element {
+  const initial = props.initial?.Agent_Provider === 'multica' ? props.initial : null;
   const [advanced, setAdvanced] = useState(true);
-  const [apiOrigin, setApiOrigin] = useState(DEFAULT_MULTICA_API_ORIGIN);
-  const [webOrigin, setWebOrigin] = useState(DEFAULT_MULTICA_WEB_ORIGIN);
+  const [apiOrigin, setApiOrigin] = useState(initial?.Agent_Multica_Api_Origin || DEFAULT_MULTICA_API_ORIGIN);
+  const [webOrigin, setWebOrigin] = useState(initial?.Agent_Multica_Web_Origin || DEFAULT_MULTICA_WEB_ORIGIN);
   const [pat, setPat] = useState('');
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [accountLabel, setAccountLabel] = useState('');
-  const [userId, setUserId] = useState('');
+  const [userId, setUserId] = useState(initial?.Agent_Multica_User_ID || '');
   const [connected, setConnected] = useState(false);
+  const [hasStoredPat, setHasStoredPat] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceChoice[]>([]);
-  const [workspaceId, setWorkspaceId] = useState('');
+  const [workspaceId, setWorkspaceId] = useState(initial?.Agent_Multica_Workspace_ID || '');
   const [agents, setAgents] = useState<AgentChoice[]>([]);
   const [projects, setProjects] = useState<ProjectChoice[]>([]);
-  const [agentId, setAgentId] = useState('');
-  const [projectId, setProjectId] = useState('');
+  const [agentId, setAgentId] = useState(initial?.Agent_Multica_Agent_ID || '');
+  const [projectId, setProjectId] = useState(initial?.Agent_Multica_Project_ID || '');
   const [status, setStatus] = useState('粘贴你自己的 PAT 后验证连接。扩展不会使用这台电脑上别人的 Multica 登录。');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const [hydrated, setHydrated] = useState(false);
 
   const insecure = /^http:\/\//i.test(apiOrigin.trim()) || /^http:\/\//i.test(webOrigin.trim());
   const workspace = workspaces.find((item) => item.id === workspaceId);
   const agent = agents.find((item) => item.id === agentId);
-  const ready = connected && Boolean(workspaceId && agentId);
-  const blockReason = !connected
-    ? '请先验证 Multica 连接'
-    : !workspaceId
-      ? '请选择 workspace'
-      : !agentId
-        ? '请选择已有 Agent'
-        : '';
+  const ready = connected && !busy && workspaces.some(item => item.id === workspaceId)
+    && agents.some(item => item.id === agentId)
+    && (!projectId || projects.some(item => item.id === projectId));
+  const blockReason = busy ? '正在恢复 Multica 连接，请稍候'
+    : !connected ? '请先验证 Multica 连接'
+    : !workspaces.some(item => item.id === workspaceId) ? '请选择 workspace'
+    : !agents.some(item => item.id === agentId) ? '请选择可访问的已有 Agent'
+    : projectId && !projects.some(item => item.id === projectId) ? '原 project 已不可用，请重新选择或取消 project'
+    : '';
+
 
   useEffect(() => {
+    if (!hydrated) return;
     props.onChange({
       ready,
       blockReason,
@@ -69,42 +77,90 @@ export function MulticaAgentTaskPanel(props: {
       userId,
       accountLabel,
       workspaceId,
-      workspaceSlug: workspace?.slug || '',
+      workspaceSlug: workspace?.slug || initial?.Agent_Multica_Workspace_Slug || '',
       agentId,
       projectId,
     });
-  }, [ready, blockReason, apiOrigin, webOrigin, userId, accountLabel, workspaceId, workspace?.slug, agentId, projectId]);
+  }, [hydrated, ready, blockReason, apiOrigin, webOrigin, userId, accountLabel, workspaceId, workspace?.slug, agentId, projectId]);
+
+  const applyRestored = (response: any) => {
+    const connection = response.connection;
+    setConnected(true);
+    setHasStoredPat(true);
+    setApiOrigin(connection.apiOrigin);
+    setWebOrigin(connection.webOrigin);
+    setAccountLabel(connection.accountLabel || '');
+    setUserId(connection.userId || '');
+    setRemember(connection.remember === true);
+    setWorkspaces(response.workspaces || []);
+    setWorkspaceId(connection.workspaceId || '');
+    setAgents(response.agents || []);
+    setProjects(response.projects || []);
+    const defaults = response.defaults?.workspaceId === connection.workspaceId ? response.defaults : undefined;
+    const desiredAgent = initial?.Agent_Multica_Agent_ID ?? defaults?.agentId ?? '';
+    const desiredProject = initial?.Agent_Multica_Project_ID ?? defaults?.projectId ?? '';
+    setAgentId(initial || (response.agents || []).some((item: AgentChoice) => item.id === desiredAgent) ? desiredAgent : '');
+    setProjectId(initial || (response.projects || []).some((item: ProjectChoice) => item.id === desiredProject) ? desiredProject : '');
+    setStatus(`已复用 ${connection.accountLabel || connection.userId} 的本机 PAT，无需重新填写。`);
+  };
+
+  const restore = async (useInitial = true) => {
+    const response = await sendMultica('MULTICA_RESTORE', useInitial && initial ? {
+      apiOrigin: initial.Agent_Multica_Api_Origin,
+      userId: initial.Agent_Multica_User_ID,
+      workspaceId: initial.Agent_Multica_Workspace_ID,
+    } : undefined);
+    applyRestored(response);
+  };
 
   useEffect(() => {
-    void sendMultica('MULTICA_STATUS').then((response) => {
-      const connection = response.connection;
-      if (!connection?.connected) return;
-      setConnected(true);
-      setApiOrigin(connection.apiOrigin || DEFAULT_MULTICA_API_ORIGIN);
-      setWebOrigin(connection.webOrigin || DEFAULT_MULTICA_WEB_ORIGIN);
-      setAccountLabel(connection.accountLabel || '');
-      setUserId(connection.userId || '');
-      setRemember(connection.remember === true);
-      setWorkspaceId(connection.workspaceId || '');
-      setStatus(`已连接 ${connection.accountLabel || connection.userId}。PAT 只留在扩展后台。`);
-    }).catch(() => undefined);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await sendMultica('MULTICA_STATUS');
+        if (cancelled || !response.connection?.connected) return;
+        setHasStoredPat(true);
+        setRemember(response.connection.remember === true);
+        if (!initial) {
+          setApiOrigin(response.connection.apiOrigin);
+          setWebOrigin(response.connection.webOrigin);
+        }
+        // Keep the task's values when restoring fails; never silently rebind an edited task.
+        if (initial) {
+          setApiOrigin(initial.Agent_Multica_Api_Origin || response.connection.apiOrigin);
+          setWebOrigin(initial.Agent_Multica_Web_Origin || response.connection.webOrigin);
+          setWorkspaceId(initial.Agent_Multica_Workspace_ID || '');
+          setAgentId(initial.Agent_Multica_Agent_ID || '');
+          setProjectId(initial.Agent_Multica_Project_ID || '');
+          setUserId(initial.Agent_Multica_User_ID || '');
+        }
+        await restore();
+      } catch (error) {
+        if (!cancelled) setStatus(error instanceof Error ? error.message : '恢复连接失败，请重试。');
+      } finally {
+        if (!cancelled) { setBusy(false); setHydrated(true); }
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
+
+  const saveDefaults = async (nextAgent: string, nextProject: string, nextWorkspace = workspaceId) => {
+    try {
+      await sendMultica('MULTICA_SAVE_DEFAULTS', {
+        workspaceId: nextWorkspace, agentId: nextAgent, projectId: nextProject,
+      });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '保存默认选择失败');
+    }
+  };
 
   const verify = async () => {
     setBusy(true);
     try {
-      const response = await sendMultica('MULTICA_VERIFY', { apiOrigin, webOrigin, pat, remember });
+      await sendMultica('MULTICA_VERIFY', { apiOrigin, webOrigin, pat, remember });
       setPat('');
-      setConnected(true);
-      if (response.connection?.apiOrigin) setApiOrigin(response.connection.apiOrigin);
-      if (response.connection?.webOrigin) setWebOrigin(response.connection.webOrigin);
-      setAccountLabel(response.connection?.accountLabel || '');
-      setUserId(response.connection?.userId || '');
-      setWorkspaces(response.workspaces || []);
-      setWorkspaceId('');
-      setAgents([]);
-      setAgentId('');
-      setStatus(response.message || `已验证 ${response.connection?.accountLabel || '账号'}。请选择 workspace。`);
+      setHasStoredPat(true);
+      await restore();
     } catch (error) {
       setConnected(false);
       setStatus(error instanceof Error ? error.message : '验证失败');
@@ -117,12 +173,15 @@ export function MulticaAgentTaskPanel(props: {
     const selected = workspaces.find((item) => item.id === nextId);
     setWorkspaceId(nextId);
     setAgentId('');
+    setProjectId('');
     setAgents([]);
+    setProjects([]);
     if (!selected) return;
     setBusy(true);
     try {
       await sendMultica('MULTICA_SELECT_WORKSPACE', { workspaceId: selected.id, workspaceSlug: selected.slug });
-      const resources = await sendMultica('MULTICA_LIST_RESOURCES');
+      const resources = await sendMultica('MULTICA_LIST_RESOURCES', { workspaceId: nextId });
+      await saveDefaults('', '', nextId);
       setAgents(resources.agents || []);
       setProjects(resources.projects || []);
       const offline = (resources.runtimes || []).filter((item: { status?: string }) => /offline|unavailable/i.test(item.status || ''));
@@ -139,6 +198,7 @@ export function MulticaAgentTaskPanel(props: {
   const disconnect = async () => {
     const response = await sendMultica('MULTICA_DISCONNECT');
     setConnected(false);
+    setHasStoredPat(false);
     setUserId('');
     setAccountLabel('');
     setWorkspaces([]);
@@ -159,8 +219,8 @@ export function MulticaAgentTaskPanel(props: {
       </button>
       {advanced && (
         <div style={{ display: 'grid', gap: '8px', marginTop: '8px' }}>
-          <label>API 地址<input style={inputStyle} value={apiOrigin} onChange={(event) => setApiOrigin(event.target.value)} /></label>
-          <label>网页地址<input style={inputStyle} value={webOrigin} onChange={(event) => setWebOrigin(event.target.value)} /></label>
+          <label>API 地址<input style={inputStyle} value={apiOrigin} onChange={(event) => { setApiOrigin(event.target.value); setConnected(false); }} /></label>
+          <label>网页地址<input style={inputStyle} value={webOrigin} onChange={(event) => { setWebOrigin(event.target.value); setConnected(false); }} /></label>
         </div>
       )}
       {insecure && (
@@ -170,7 +230,7 @@ export function MulticaAgentTaskPanel(props: {
       )}
       <label style={{ display: 'block', marginTop: '10px' }}>
         Personal Access Token
-        <input style={inputStyle} type="password" autoComplete="off" value={pat} onChange={(event) => setPat(event.target.value)} />
+        <input style={inputStyle} type="password" autoComplete="off" value={pat} placeholder={hasStoredPat ? '已保存 PAT，留空复用；填写新值可更换' : '粘贴你的 PAT'} onChange={(event) => setPat(event.target.value)} />
       </label>
       <label style={{ display: 'flex', gap: '8px', margin: '8px 0' }}>
         <input
@@ -184,33 +244,35 @@ export function MulticaAgentTaskPanel(props: {
         记住此设备。关闭浏览器后仍保留 PAT。这不是加密保险箱，只放在本机扩展存储里。
       </label>
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        <button type="button" disabled={props.disabled || busy || !pat.trim()} onClick={() => { void verify(); }}>验证连接</button>
-        <button type="button" disabled={props.disabled || !connected} onClick={() => { void disconnect(); }}>断开连接</button>
+        <button type="button" disabled={props.disabled || busy || (!hasStoredPat && !pat.trim())} onClick={() => { void verify(); }}>{hasStoredPat && !pat.trim() ? '重新检查连接' : '验证连接'}</button>
+        <button type="button" disabled={props.disabled || !hasStoredPat} onClick={() => { void disconnect(); }}>断开连接</button>
       </div>
       <p role="status" style={hintStyle}>{status}</p>
       {workspaces.length > 0 && (
         <label style={{ display: 'block' }}>
           Workspace
-          <select style={inputStyle} value={workspaceId} onChange={(event) => { void chooseWorkspace(event.target.value); }}>
+          <select style={inputStyle} disabled={busy || props.disabled} value={workspaceId} onChange={(event) => { void chooseWorkspace(event.target.value); }}>
             <option value="">选择 workspace</option>
             {workspaces.map((item) => <option key={item.id} value={item.id}>{item.name || item.slug}</option>)}
           </select>
         </label>
       )}
-      {agents.length > 0 && (
+      {(agents.length > 0 || agentId) && (
         <label style={{ display: 'block', marginTop: '8px' }}>
           Agent
-          <select style={inputStyle} value={agentId} onChange={(event) => setAgentId(event.target.value)}>
+          <select style={inputStyle} disabled={busy || props.disabled} value={agentId} onChange={(event) => { setAgentId(event.target.value); void saveDefaults(event.target.value, projectId); }}>
             <option value="">选择 Agent</option>
+            {agentId && !agents.some(item => item.id === agentId) && <option value={agentId}>原 Agent（当前不可用）</option>}
             {agents.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.runtimeLabel}</option>)}
           </select>
         </label>
       )}
-      {projects.length > 0 && (
+      {(projects.length > 0 || projectId) && (
         <label style={{ display: 'block', marginTop: '8px' }}>
           Project（可选）
-          <select style={inputStyle} value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+          <select style={inputStyle} disabled={busy || props.disabled} value={projectId} onChange={(event) => { setProjectId(event.target.value); void saveDefaults(agentId, event.target.value); }}>
             <option value="">不指定 project</option>
+            {projectId && !projects.some(item => item.id === projectId) && <option value={projectId}>原 project（当前不可用）</option>}
             {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
@@ -218,7 +280,7 @@ export function MulticaAgentTaskPanel(props: {
       <p style={hintStyle}>
         {ready
           ? `可创建任务。账号 ${accountLabel || userId}，Agent ${agent?.name || agentId}。`
-          : '通过校验后才会允许保存。首次获取 PAT、安装 runtime 和工具登录仍需要打开 Multica。'}
+          : `${blockReason}。首次获取 PAT、安装 runtime 和工具登录仍需要打开 Multica。`}
         断开连接只删除本机 PAT，不会停止已经创建的周期或 Webhook。
       </p>
     </section>

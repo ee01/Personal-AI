@@ -15,6 +15,7 @@ import {
   archiveMulticaAutopilot,
   multicaScheduleOnlyEdit,
   saveMulticaScheduledAgentTask,
+  retireMulticaScheduledBinding,
   setMulticaTriggerEnabled,
 } from './multica/multicaSave.js';
 import {
@@ -3553,6 +3554,15 @@ const ScheduledMessagesManager: React.FC = () => {
         setConfigSyncNotice(saved.receipt);
         return;
       }
+      if (editingMessage?.Agent_Provider === 'multica') {
+        await retireMulticaScheduledBinding(service, editingMessage);
+        // Clear the public binding fields so a Memory row cannot retain a live Multica route.
+        for (const key of Object.keys(editingMessage)) {
+          if (key.startsWith('Agent_Multica_') || ['Agent_Binding_ID', 'Agent_Provision_State', 'Agent_Content_Revision'].includes(key)) {
+            (formData as unknown as Record<string, unknown>)[key] = '';
+          }
+        }
+      }
       const agentTaskWebhookDetail = formData.Push_Method === 'AgentTask'
         ? (await ensureAgentTaskWebhookConfigForSave()).detail
         : '';
@@ -3571,7 +3581,12 @@ const ScheduledMessagesManager: React.FC = () => {
 
       if (editingMessage) {
         // 编辑模式：更新消息
-        const savedMessage = await service.updateMessage(editingMessage.ID, formData);
+        const savedMessage = await service.updateMessage(editingMessage.ID, {
+          ...formData,
+          ...(editingMessage.Agent_Provider === 'multica'
+            ? { Status: editingMessage.Status, Exec_Log: '执行配置已更换，旧 Multica Webhook 已停用' }
+            : {}),
+        });
         void registerSheetMessageInLedgerSafe(savedMessage);
         let outreachSyncError: Error | null = null;
         
@@ -6806,6 +6821,15 @@ const AddMessageDialog: React.FC<{
   const isAgentTaskMode = isAgentTaskPushMethod(formData.Push_Method);
   const usesMulticaAgent = isAgentTaskMode && formData.Agent_Provider === 'multica';
   const [multicaDraft, setMulticaDraft] = useState<MulticaDraft | null>(null);
+  const [replacementBindingId, setReplacementBindingId] = useState('');
+  const [newMulticaBindingId] = useState(() => crypto.randomUUID());
+  const existingMulticaViewUrl = useMemo(() => {
+    try {
+      return editingMessage?.Agent_Multica_Autopilot_ID
+        ? buildAutopilotViewUrl(editingMessage.Agent_Multica_Web_Origin || '', editingMessage.Agent_Multica_Workspace_Slug || '', editingMessage.Agent_Multica_Autopilot_ID)
+        : '';
+    } catch { return ''; }
+  }, [editingMessage]);
   const agentTaskLikelyWrites = /(?:\b(?:create|update|edit|delete|set|sync|assign|move|close|reopen|send|post|publish|merge|deploy)\b|创建|修改|更新|删除|设置|同步|写入|指派|移动|关闭|重开|发送|发布|合并|部署)/i.test(formData.Content || '');
   const resolvedAgentExecutorId = resolveAgentTaskExecutorSelection({
     savedId: formData.Agent_Executor,
@@ -7683,8 +7707,12 @@ ${content}
       if (usesMulticaAgent) {
         const scheduleOnly = multicaScheduleOnlyEdit(editingMessage, {
           Content: formData.Content,
-          Agent_Multica_Agent_ID: multicaDraft?.agentId || editingMessage?.Agent_Multica_Agent_ID,
-          Agent_Multica_Workspace_ID: multicaDraft?.workspaceId || editingMessage?.Agent_Multica_Workspace_ID,
+          Agent_Binding_ID: replacementBindingId || editingMessage?.Agent_Binding_ID,
+          Agent_Multica_Agent_ID: multicaDraft?.agentId ?? editingMessage?.Agent_Multica_Agent_ID,
+          Agent_Multica_Workspace_ID: multicaDraft?.workspaceId ?? editingMessage?.Agent_Multica_Workspace_ID,
+          Agent_Multica_Project_ID: multicaDraft?.projectId ?? editingMessage?.Agent_Multica_Project_ID,
+          Agent_Multica_User_ID: multicaDraft?.userId ?? editingMessage?.Agent_Multica_User_ID,
+          Agent_Multica_Api_Origin: multicaDraft?.apiOrigin ?? editingMessage?.Agent_Multica_Api_Origin,
         });
         if (!scheduleOnly && !multicaDraft?.ready) {
           alert(multicaDraft?.blockReason || '请先验证 Multica 连接并选择 Agent');
@@ -7974,16 +8002,16 @@ ${content}
       finalFormData.Agent_Executor = '';
       finalFormData.Agent_Notify_Template = '';
       finalFormData.Agent_Notify_Success_Receipt = 'N';
-      finalFormData.Agent_Multica_Api_Origin = multicaDraft?.apiOrigin || editingMessage?.Agent_Multica_Api_Origin || '';
-      finalFormData.Agent_Multica_Web_Origin = multicaDraft?.webOrigin || editingMessage?.Agent_Multica_Web_Origin || '';
-      finalFormData.Agent_Multica_User_ID = multicaDraft?.userId || editingMessage?.Agent_Multica_User_ID || '';
-      finalFormData.Agent_Multica_Workspace_ID = multicaDraft?.workspaceId || editingMessage?.Agent_Multica_Workspace_ID || '';
-      finalFormData.Agent_Multica_Workspace_Slug = multicaDraft?.workspaceSlug || editingMessage?.Agent_Multica_Workspace_Slug || '';
-      finalFormData.Agent_Multica_Agent_ID = multicaDraft?.agentId || editingMessage?.Agent_Multica_Agent_ID || '';
-      finalFormData.Agent_Multica_Project_ID = multicaDraft?.projectId || editingMessage?.Agent_Multica_Project_ID || '';
-      finalFormData.Agent_Binding_ID = editingMessage?.Agent_Binding_ID || finalFormData.Agent_Binding_ID;
+      finalFormData.Agent_Multica_Api_Origin = multicaDraft?.apiOrigin ?? editingMessage?.Agent_Multica_Api_Origin ?? '';
+      finalFormData.Agent_Multica_Web_Origin = multicaDraft?.webOrigin ?? editingMessage?.Agent_Multica_Web_Origin ?? '';
+      finalFormData.Agent_Multica_User_ID = multicaDraft?.userId ?? editingMessage?.Agent_Multica_User_ID ?? '';
+      finalFormData.Agent_Multica_Workspace_ID = multicaDraft?.workspaceId ?? editingMessage?.Agent_Multica_Workspace_ID ?? '';
+      finalFormData.Agent_Multica_Workspace_Slug = multicaDraft?.workspaceSlug ?? editingMessage?.Agent_Multica_Workspace_Slug ?? '';
+      finalFormData.Agent_Multica_Agent_ID = multicaDraft?.agentId ?? editingMessage?.Agent_Multica_Agent_ID ?? '';
+      finalFormData.Agent_Multica_Project_ID = multicaDraft?.projectId ?? editingMessage?.Agent_Multica_Project_ID ?? '';
+      finalFormData.Agent_Binding_ID = replacementBindingId || (editingMessage?.Agent_Provider === 'multica' ? editingMessage.Agent_Binding_ID : newMulticaBindingId);
       finalFormData.Multica_Connection_Ready = Boolean(multicaDraft?.ready);
-      finalFormData.Multica_Block_Reason = multicaDraft?.blockReason || '';
+      finalFormData.Multica_Block_Reason = multicaDraft?.blockReason ?? '';
     }
     
     onSubmit(finalFormData);
@@ -8853,6 +8881,20 @@ ${content}
                 </small>
               </div>
 
+              <details open={!editingMessage} data-testid="agent-execution-config">
+                <summary style={{ cursor: 'pointer', fontWeight: 600, marginBottom: '12px' }}>
+                  执行配置 · {usesMulticaAgent ? 'Multica' : 'Memory 执行器'}（展开修改）
+                </summary>
+                {editingMessage?.Agent_Provider === 'multica' && (
+                  <div style={{ ...dialogStyles.hint, marginBottom: '12px' }}>
+                    <div>当前 workspace：{editingMessage.Agent_Multica_Workspace_Slug || editingMessage.Agent_Multica_Workspace_ID}</div>
+                    <div>Autopilot：{editingMessage.Agent_Multica_Autopilot_ID || '尚未创建'}</div>
+                    {existingMulticaViewUrl && (
+                      <a href={existingMulticaViewUrl} target="_blank" rel="noreferrer">在 Multica 查看 Autopilot</a>
+                    )}
+                    <div>Webhook：{editingMessage.Agent_Multica_Trigger_ID ? '已绑定（密钥不在此显示）' : '尚未绑定'}</div>
+                  </div>
+                )}
               <div style={dialogStyles.formGroup}>
                 <label style={dialogStyles.label}>执行方式</label>
                 <div style={dialogStyles.buttonGroup}>
@@ -8868,7 +8910,7 @@ ${content}
                     type="button"
                     style={getButtonStyle(formData.Agent_Provider !== 'multica')}
                     onClick={() => handleChange('Agent_Provider', 'legacy_memory')}
-                    disabled={isSubmitting || Boolean(editingMessage && editingMessage.Agent_Provider === 'multica')}
+                    disabled={isSubmitting}
                   >
                     现有 Memory 执行器
                   </button>
@@ -8880,7 +8922,16 @@ ${content}
                 </small>
               </div>
               {usesMulticaAgent && (
-                <MulticaAgentTaskPanel disabled={isSubmitting} onChange={setMulticaDraft} />
+                <>
+                  {editingMessage?.Agent_Provider === 'multica' && (
+                    <label style={{ display: 'block', marginBottom: '12px' }}>
+                      <input type="checkbox" checked={Boolean(replacementBindingId)} disabled={isSubmitting}
+                        onChange={(event) => { setMulticaDraft(null); setReplacementBindingId(event.target.checked ? crypto.randomUUID() : ''); }} />
+                      保存时新建 Autopilot 和 Webhook（先暂停计划并停用旧触发器）
+                    </label>
+                  )}
+                  <MulticaAgentTaskPanel key={replacementBindingId || 'existing'} initial={replacementBindingId ? null : editingMessage} disabled={isSubmitting} onChange={setMulticaDraft} />
+                </>
               )}
               {!usesMulticaAgent && (
               <>
@@ -9175,6 +9226,7 @@ ${content}
               </div>
               </>
               )}
+              </details>
             </div>
           )}
 

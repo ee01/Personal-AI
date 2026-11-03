@@ -137,12 +137,12 @@ export class MulticaClient {
     agentId: string;
     projectId?: string;
   }): Promise<MulticaAutopilot> {
-    const body: Record<string, string> = {
+    const body: Record<string, string | null> = {
       description: input.description,
       assignee_type: 'agent',
       assignee_id: input.agentId,
     };
-    if (input.projectId) body.project_id = input.projectId;
+    body.project_id = input.projectId || null;
     return this.request(`/api/autopilots/${assertId(id)}`, true, { method: 'PATCH', body }).then(readAutopilot);
   }
 

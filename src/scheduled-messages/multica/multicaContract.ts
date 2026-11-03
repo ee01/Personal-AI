@@ -78,31 +78,29 @@ export function isMulticaAgentProvider(value: unknown): boolean {
   return String(value || '').trim() === MULTICA_PROVIDER;
 }
 
-export function multicaScheduleOnlyEdit(
-  editing: {
-    Agent_Provider?: string;
-    Agent_Provision_State?: string;
-    Agent_Binding_ID?: string;
-    Agent_Multica_Autopilot_ID?: string;
-    Agent_Multica_Trigger_ID?: string;
-    Agent_Multica_Agent_ID?: string;
-    Agent_Multica_Workspace_ID?: string;
-    Content?: string;
-  } | null,
-  form: {
-    Content?: string;
-    Agent_Multica_Agent_ID?: string;
-    Agent_Multica_Workspace_ID?: string;
-  },
-): boolean {
+type MulticaEditFields = {
+  Content?: string;
+  Agent_Provider?: string;
+  Agent_Provision_State?: string;
+  Agent_Binding_ID?: string;
+  Agent_Multica_Autopilot_ID?: string;
+  Agent_Multica_Trigger_ID?: string;
+  Agent_Multica_Agent_ID?: string;
+  Agent_Multica_Workspace_ID?: string;
+  Agent_Multica_Project_ID?: string;
+  Agent_Multica_User_ID?: string;
+  Agent_Multica_Api_Origin?: string;
+  Agent_Multica_Web_Origin?: string;
+};
+
+export function multicaScheduleOnlyEdit(editing: MulticaEditFields | null, form: MulticaEditFields): boolean {
   if (!editing || !isMulticaAgentProvider(editing.Agent_Provider)) return false;
   if (editing.Agent_Provision_State !== 'ready') return false;
   if (!editing.Agent_Binding_ID || !editing.Agent_Multica_Autopilot_ID || !editing.Agent_Multica_Trigger_ID) return false;
   if ((form.Content || '').trim() !== (editing.Content || '').trim()) return false;
-  const agentId = form.Agent_Multica_Agent_ID || editing.Agent_Multica_Agent_ID || '';
-  const workspaceId = form.Agent_Multica_Workspace_ID || editing.Agent_Multica_Workspace_ID || '';
-  return agentId === (editing.Agent_Multica_Agent_ID || '')
-    && workspaceId === (editing.Agent_Multica_Workspace_ID || '');
+  const fields = ['Agent_Binding_ID', 'Agent_Multica_Agent_ID', 'Agent_Multica_Workspace_ID',
+    'Agent_Multica_Project_ID', 'Agent_Multica_User_ID', 'Agent_Multica_Api_Origin', 'Agent_Multica_Web_Origin'] as const;
+  return fields.every(key => (form[key] ?? editing[key] ?? '') === (editing[key] ?? ''));
 }
 
 export function assertHttpsOrigin(value: string, label = '地址'): string {
@@ -150,8 +148,8 @@ export async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export async function buildContentRevision(task: string, agentId: string): Promise<string> {
-  return sha256Hex(`${agentId}\n${task.trim()}`);
+export async function buildContentRevision(task: string, agentId: string, projectId = ''): Promise<string> {
+  return sha256Hex(`${agentId}\n${projectId}\n${task.trim()}`);
 }
 
 export async function buildMulticaIdempotencyKey(bindingUuid: string, executionKey: string): Promise<string> {

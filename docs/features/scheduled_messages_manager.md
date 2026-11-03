@@ -763,7 +763,10 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 ##### Multica 路径（新任务）
 
 - 新建「帮我做」默认 `Agent_Provider=multica`。旧行保持 `legacy_memory` 或空值，仍走上面的 memory-service / Dify 路径，不会自动迁移。
-- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。PAT 只留在扩展 session；勾选「记住这台设备」才进本机 local storage。PAT、webhook URL 不进 Messages、不进日志、不进页面可复制内容。
+- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。「记住这台设备」默认勾选，验证后 PAT 存入本机 `chrome.storage.local`；取消勾选改用 `chrome.storage.session`，关闭浏览器后清除。PAT、webhook URL 不进 Messages、不进日志、不进页面可复制内容。
+- 编辑「帮我做」时默认折叠整个执行配置（包含 Multica / Memory 选择、连接、Autopilot / Webhook 绑定及 Memory 执行边界/通知）。展开后可以修改，Autopilot 提供外链，Webhook 只显示是否已绑定，不显示密钥。打开编辑页不会创建远端对象。
+- 再次打开或从 Memory 切到 Multica 时自动复用本机已验证 PAT，并重新读取 workspace、Agent、project 列表；页面不回填 PAT 明文。可以留空 PAT「重新检查连接」，更换服务地址必须重新填写 PAT。新建任务复用上次选择的 workspace、Agent、project；偏好按 API 地址和用户 ID 隔离，本机保存，即使取消任务草稿也保留最后选择。编辑已有任务优先使用该行原有 workspace / Agent / project，不覆盖为其他任务的默认值。无权访问或失效选项不会被静默替代。
+- 修改任务正文、Agent 或 project 时更新原 Autopilot；只改时间、主题且绑定完整时可沿用原绑定，不要求重新填写 PAT。更换 workspace / 账号 / API 地址须选择「保存时新建 Autopilot 和 Webhook」。新建替代绑定或改回 Memory 时，先暂停 Sheet 计划、停用旧 Webhook，再保存新配置；失败保持暂停且显示失败原因，旧 Autopilot 不删除，已有执行不被取消；更换绑定需要本机 PAT 仍能访问旧绑定，不能用另一个账号的 PAT 停用原账号的 Webhook。替代创建重试使用同一新绑定 ID，避免重复创建。
 - 连接表单里的 API 地址和网页地址默认都是 `http://task.xmnup.com`，并直接展开。已保存的连接仍用当时验证过的地址。自托管地址支持 HTTP 和 HTTPS，均由扩展 Service Worker 直接请求（保留原生 fetch 的全局调用上下文），不打开源站标签页，不自动切换协议，不跟随重定向。HTTP 会在界面标明 PAT 明文发送。排查请求请打开扩展 Service Worker 的 Network。
 - 到期执行不读取本机 PAT。创建时 PAT 换取 webhook，完整地址保存在隐藏表 `_AgentBindings`；Jira 通过 Apps Script 领取协议、host、含随机密钥的 path，再 POST 触发 Autopilot，Multica 按已配置的 Agent 执行。Webhook 本身是触发凭据，隐藏表不是权限隔离，能读表或领取结果的人应视为能访问该凭据。
 - Jira Executor Rule ≥ 1.8.1 在 `agentProvider=multica` 时按领取结果里的协议 POST `http://{host}/{path}` 或 `https://{host}/{path}`，带 `Idempotency-Key`。`accepted` 或带 `run_id` 的 `duplicate` 才回写「已送达」；`skipped` / `ignored` 记失败；超时或无法解析不假装成功。时间源仍是 Jira，不创建 Multica cron。

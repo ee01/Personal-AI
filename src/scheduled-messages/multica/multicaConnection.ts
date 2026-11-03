@@ -7,6 +7,15 @@ import {
   assertHttpsOrigin,
 } from './multicaContract.js';
 
+export const MULTICA_DEFAULTS_KEY = 'multicaTaskDefaults';
+
+export interface MulticaTaskDefaults {
+  workspaceId: string;
+  workspaceSlug: string;
+  agentId: string;
+  projectId: string;
+}
+
 export const MULTICA_SESSION_KEY = 'multicaConnectionSession';
 export const MULTICA_LOCAL_KEY = 'multicaConnectionRemembered';
 export const MULTICA_CAPABILITY_KEY = 'multicaSchedulerCapability';
@@ -153,6 +162,7 @@ export interface MulticaHandlerResult {
   autopilot?: { id: string; description?: string; triggers?: unknown[] };
   autopilots?: Array<{ id: string; description: string; title: string }>;
   trigger?: { id: string; webhookUrl: string; webhookPath: string };
+  defaults?: MulticaTaskDefaults;
   remotePlansStopped?: boolean;
   message?: string;
 }
@@ -222,18 +232,22 @@ export async function handleMulticaExtensionMessage(
       };
     }
     if (type === 'MULTICA_VERIFY') {
-      const pat = normalizeMulticaPat(String(data.pat || ''));
       const apiOrigin = assertHttpsOrigin(String(data.apiOrigin || DEFAULT_MULTICA_API_ORIGIN), 'API 地址');
       const webOrigin = assertHttpsOrigin(String(data.webOrigin || DEFAULT_MULTICA_WEB_ORIGIN), '网页地址');
+      const previous = await loadStoredConnection(deps.session, deps.local);
+      const reusable = previous?.apiOrigin === apiOrigin && previous?.webOrigin === webOrigin;
+      const pat = normalizeMulticaPat(String(data.pat || (reusable ? previous?.pat : '') || ''));
       const probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, data.remember === true, deps);
+      const keepWorkspace = previous?.apiOrigin === apiOrigin && previous?.userId === probed.account.id
+        && probed.workspaces.some(item => item.id === previous.workspaceId);
       const connection: StoredMulticaConnection = {
         apiOrigin,
         webOrigin,
         pat,
         userId: probed.account.id,
         accountLabel: probed.account.label,
-        workspaceId: '',
-        workspaceSlug: '',
+        workspaceId: keepWorkspace ? previous!.workspaceId : '',
+        workspaceSlug: keepWorkspace ? previous!.workspaceSlug : '',
         allowedWorkspaceIds: probed.workspaces.map((item) => item.id),
         remember: data.remember === true,
       };
@@ -267,12 +281,57 @@ export async function handleMulticaExtensionMessage(
       await saveStoredConnection(deps.session, deps.local, next);
       return { success: true, connection: toPublicConnection(next) };
     }
-    if (!stored.workspaceId) {
-      return { success: false, error: '请先选择 workspace', code: 'missing_workspace' };
+    const defaultKey = `${stored.apiOrigin}|${stored.userId}`;
+    const getDefaults = async (): Promise<MulticaTaskDefaults | undefined> => {
+      const values = await deps.local.get([MULTICA_DEFAULTS_KEY]);
+      return (values[MULTICA_DEFAULTS_KEY] as Record<string, MulticaTaskDefaults> | undefined)?.[defaultKey];
+    };
+    const clientFor = (connection: StoredMulticaConnection) => deps.clientFactory
+      ? deps.clientFactory(connection)
+      : multicaClient({ apiOrigin: connection.apiOrigin, pat: connection.pat, workspaceId: connection.workspaceId });
+    // Never send a stored PAT to a task's different server or account.
+    if ((data.apiOrigin && data.apiOrigin !== stored.apiOrigin)
+      || (data.userId && data.userId !== stored.userId)) {
+      return { success: false, error: '当前连接与这条任务的 Multica 账号或服务地址不同，请连接原账号，或选择新建 Autopilot。', code: 'connection_mismatch' };
     }
-    const client = deps.clientFactory
-      ? deps.clientFactory(stored)
-      : multicaClient({ apiOrigin: stored.apiOrigin, pat: stored.pat, workspaceId: stored.workspaceId });
+    if (type === 'MULTICA_RESTORE') {
+      const workspaces = await clientFor(stored).listWorkspaces();
+      const defaults = await getDefaults();
+      const requestedId = String(data.workspaceId || defaults?.workspaceId || stored.workspaceId || '');
+      const selected = workspaces.find(item => item.id === requestedId);
+      if (data.workspaceId && !selected) throw new Error('当前 PAT 无法访问这条任务的 workspace，请重新连接原账号。');
+      const next = {
+        ...stored, workspaceId: selected?.id || '', workspaceSlug: selected?.slug || '',
+        allowedWorkspaceIds: workspaces.map(item => item.id),
+      };
+      await saveStoredConnection(deps.session, deps.local, next);
+      const scoped = clientFor(next);
+      const [agents, projects, runtimes] = selected
+        ? await Promise.all([scoped.listAgents(), scoped.listProjects(), scoped.listRuntimes()])
+        : [[], [], []];
+      return { success: true, connection: toPublicConnection(next), workspaces, agents, projects, runtimes, defaults };
+    }
+    const workspaceId = String(data.workspaceId || stored.workspaceId || '');
+    if (!workspaceId) return { success: false, error: '请先选择 workspace', code: 'missing_workspace' };
+    if (!stored.allowedWorkspaceIds.includes(workspaceId)) {
+      return { success: false, error: '当前 PAT 无法访问这个 workspace', code: 'workspace_rejected' };
+    }
+    const scoped = { ...stored, workspaceId };
+    const client = clientFor(scoped);
+    if (type === 'MULTICA_SAVE_DEFAULTS') {
+      const [agents, projects] = await Promise.all([client.listAgents(), client.listProjects()]);
+      const agentId = String(data.agentId || '');
+      const projectId = String(data.projectId || '');
+      if ((agentId && !agents.some(item => item.id === agentId))
+        || (projectId && !projects.some(item => item.id === projectId))) {
+        throw new Error('Agent 或 project 不属于当前 workspace');
+      }
+      const defaults = { workspaceId, workspaceSlug: stored.workspaceSlug, agentId, projectId };
+      const values = await deps.local.get([MULTICA_DEFAULTS_KEY]);
+      const map = values[MULTICA_DEFAULTS_KEY] as Record<string, MulticaTaskDefaults> || {};
+      await deps.local.set({ [MULTICA_DEFAULTS_KEY]: { ...map, [defaultKey]: defaults } });
+      return { success: true, defaults };
+    }
     if (type === 'MULTICA_LIST_RESOURCES') {
       const [agents, projects, runtimes] = await Promise.all([
         client.listAgents(),
