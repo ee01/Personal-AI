@@ -45,7 +45,6 @@ import {
 import {
   applyParentQuarters,
   chunk,
-  parentKeysNeedingQuarter,
 } from './roadmapImportQuarter';
 import { buildChildTaskSearchJql } from './roadmapChildTaskJql';
 import { handleLLMRequest } from './llm';
@@ -75,7 +74,48 @@ type ImportItemPayload = {
   targetEnd?: string;
   /** Jira Custom Labels (`customfield_33875`) mirrored from the issue. */
   customLabels?: Array<{ labelKey: string; valueKey: string }>;
+  /** Jira `Committed` field of this Epic ('Yes'/'No'); absent when unknown. */
+  committed?: string;
 };
+
+/** Parent INIT details loaded along the import (its own Jira fields). */
+type InitDetailPayload = {
+  key: string;
+  title?: string;
+  quarter?: string;
+  committed?: string;
+};
+
+/**
+ * Resolve the Jira custom field id behind the name "Committed" once per page
+ * load. Roadmap mirrors this field onto Epics / dependency targets; when the
+ * field does not exist on this Jira we get null and simply skip it instead of
+ * failing the whole request.
+ */
+let committedFieldIdCache: string | null | undefined;
+async function resolveCommittedFieldId(baseUrl: string): Promise<string | null> {
+  if (committedFieldIdCache !== undefined) return committedFieldIdCache;
+  try {
+    const response = await jiraFetchViaBackground(`${baseUrl}/rest/api/2/field`, {
+      method: 'GET',
+      requestLabel: 'roadmap committed field lookup',
+    });
+    if (!response.ok) {
+      // Transient / auth failure: do not cache, retry on the next action.
+      return null;
+    }
+    const fields = await response.json();
+    const hit = (Array.isArray(fields) ? fields : []).find(
+      (f: any) =>
+        String(f?.name || '').trim().toLowerCase() === 'committed' &&
+        typeof f?.id === 'string',
+    );
+    committedFieldIdCache = hit ? hit.id : null;
+  } catch {
+    return null;
+  }
+  return committedFieldIdCache;
+}
 
 /**
  * Parse the raw Custom Labels field ("LBL-288:LBL-291\nLBL-288:LBL-297") into
@@ -443,6 +483,7 @@ function estimateWeeks(fields: Record<string, unknown>): number | undefined {
 
 function mapIssueToImportItem(
   issue: any,
+  committedField: string | null,
 ): { item: ImportItemPayload; parentKey: string | null } | null {
   const key = String(issue?.key || '').trim();
   if (!key) return null;
@@ -451,6 +492,9 @@ function mapIssueToImportItem(
     toIsoDate(fields[JIRA_FIELD_TARGET_END]) ||
     toIsoDate(fields[JIRA_FIELD_END_DATE]);
   const parentLink = fields[JIRA_FIELD_PARENT_LINK];
+  const committed = committedField
+    ? optionValue(fields[committedField])
+    : undefined;
   return {
     item: {
       key,
@@ -461,6 +505,7 @@ function mapIssueToImportItem(
       targetStart: toIsoDate(fields[JIRA_FIELD_TARGET_START]),
       targetEnd,
       customLabels: parseCustomLabelsField(fields[JIRA_FIELD_CUSTOM_LABELS]),
+      ...(committed ? { committed: String(committed) } : {}),
     },
     parentKey: typeof parentLink === 'string' && parentLink.trim()
       ? parentLink.trim()
@@ -469,14 +514,20 @@ function mapIssueToImportItem(
 }
 
 /**
- * Read `Target Delivery Quarter` off the parent Initiatives. See
- * `roadmapImportQuarter.ts` for why the children need this at all.
+ * Read the parent Initiatives' own fields: `Target Delivery Quarter` (see
+ * `roadmapImportQuarter.ts` for why the children need it), plus the INIT's
+ * own title and `Committed` field for the Roadmap INIT view (E-171). Details
+ * that Jira did not return stay absent — Roadmap shows "详情未加载" rather
+ * than fabricating anything.
  */
-async function fetchParentQuarters(
+async function fetchParentDetails(
   parentKeys: string[],
   baseUrl: string,
-): Promise<Map<string, string>> {
-  const byKey = new Map<string, string>();
+  committedField: string | null,
+): Promise<Map<string, { quarter?: string; title: string | null; committed?: string }>> {
+  const byKey = new Map<string, { quarter?: string; title: string | null; committed?: string }>();
+  const fields = [JIRA_FIELD_QUARTER, 'summary'];
+  if (committedField) fields.push(committedField);
   for (const batch of chunk(parentKeys)) {
     const jql = `key in (${batch.join(', ')})`;
     const response = await jiraFetchViaBackground(`${baseUrl}/rest/api/2/search`, {
@@ -485,14 +536,14 @@ async function fetchParentQuarters(
         jql,
         startAt: 0,
         maxResults: batch.length,
-        fields: [JIRA_FIELD_QUARTER],
+        fields,
       },
-      requestLabel: 'roadmap import parent quarter',
+      requestLabel: 'roadmap import parent details',
     });
     if (!response.ok) {
-      // A missing parent quarter only costs grouping, so never fail the import.
+      // Missing parent details only cost grouping / labels, so never fail the import.
       console.warn(
-        '[pai-roadmap] parent quarter lookup failed',
+        '[pai-roadmap] parent details lookup failed',
         response.status,
         jql,
       );
@@ -501,12 +552,17 @@ async function fetchParentQuarters(
     const data = await response.json();
     for (const issue of Array.isArray(data.issues) ? data.issues : []) {
       const key = String(issue?.key || '').trim();
-      const quarter = optionValue(
-        (issue?.fields as Record<string, unknown> | undefined)?.[
-          JIRA_FIELD_QUARTER
-        ],
-      );
-      if (key && quarter) byKey.set(key, quarter);
+      if (!key) continue;
+      const f = (issue?.fields || {}) as Record<string, unknown>;
+      const quarter = optionValue(f[JIRA_FIELD_QUARTER]);
+      const committed = committedField
+        ? optionValue(f[committedField])
+        : undefined;
+      byKey.set(key, {
+        ...(quarter ? { quarter: String(quarter) } : {}),
+        title: f.summary ? String(f.summary) : null,
+        ...(committed ? { committed: String(committed) } : {}),
+      });
     }
   }
   return byKey;
@@ -703,6 +759,8 @@ type JiraRefreshIssue = {
   originalEstimateDays: number | null;
   /** Jira Custom Labels (`customfield_33875`) mirrored from the issue. */
   customLabels: Array<{ labelKey: string; valueKey: string }>;
+  /** Jira `Committed` field of the issue ('Yes'/'No'); null = unset / unknown. */
+  committed: string | null;
   fetchedAt: number;
 };
 
@@ -726,8 +784,12 @@ function mapIssueToRefreshPayload(
   issue: any,
   lookupKey: string,
   fetchedAt: number,
+  committedField: string | null,
 ): JiraRefreshIssue {
   const f = issue?.fields || {};
+  const committed = committedField
+    ? optionValue(f[committedField])
+    : undefined;
   return {
     // Roadmap rows are keyed by the jira_key we asked for (e.g. MILO-29), even when
     // Jira search returns the issue under a moved canonical key (e.g. RCV-154327).
@@ -740,6 +802,7 @@ function mapIssueToRefreshPayload(
     status: jiraStatusName(f.status),
     originalEstimateDays: originalEstimateToManDays(f),
     customLabels: parseCustomLabelsField(f[JIRA_FIELD_CUSTOM_LABELS]),
+    committed: committed ? String(committed) : null,
     fetchedAt,
   };
 }
@@ -773,6 +836,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     });
   }
   const baseUrl = await getJiraBaseUrl();
+  const committedField = await resolveCommittedFieldId(baseUrl);
   const fields = [
     'summary',
     'description',
@@ -783,6 +847,7 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     'timeoriginalestimate',
     JIRA_FIELD_CUSTOM_LABELS,
   ];
+  if (committedField) fields.push(committedField);
   const fetchedAt = Date.now();
   const out: JiraRefreshIssue[] = [];
   for (let i = 0; i < unique.length; i += 25) {
@@ -818,12 +883,12 @@ async function handleRefreshJiraIssues(keys: string[]): Promise<JiraRefreshIssue
     for (const requestedKey of batch) {
       const direct = pageByKey.get(requestedKey);
       if (direct) {
-        out.push(mapIssueToRefreshPayload(direct, requestedKey, fetchedAt));
+        out.push(mapIssueToRefreshPayload(direct, requestedKey, fetchedAt, committedField));
         continue;
       }
       const solo = await fetchIssueForRefresh(baseUrl, requestedKey, fields);
       if (solo) {
-        out.push(mapIssueToRefreshPayload(solo, requestedKey, fetchedAt));
+        out.push(mapIssueToRefreshPayload(solo, requestedKey, fetchedAt, committedField));
       }
     }
   }
@@ -963,9 +1028,10 @@ async function handleUpdateAssignee(
 async function handleImportJql(
   jql: string,
   quarters: string[],
-): Promise<ImportItemPayload[]> {
+): Promise<{ items: ImportItemPayload[]; inits: InitDetailPayload[] }> {
   const baseUrl = await getJiraBaseUrl();
   const effectiveJql = applyQuartersToJql(String(jql || ''), quarters || []);
+  const committedField = await resolveCommittedFieldId(baseUrl);
   const fields = [
     'summary',
     'issuetype',
@@ -978,6 +1044,7 @@ async function handleImportJql(
     JIRA_FIELD_DEV_ESTIMATE,
     JIRA_FIELD_CUSTOM_LABELS,
   ];
+  if (committedField) fields.push(committedField);
 
   const items: ImportItemPayload[] = [];
   const parentKeyByItem = new Map<string, string>();
@@ -1010,7 +1077,7 @@ async function handleImportJql(
     total = Number(data.total || 0);
     const page = Array.isArray(data.issues) ? data.issues : [];
     for (const issue of page) {
-      const mapped = mapIssueToImportItem(issue);
+      const mapped = mapIssueToImportItem(issue, committedField);
       if (!mapped) continue;
       items.push(mapped.item);
       if (mapped.parentKey) parentKeyByItem.set(mapped.item.key, mapped.parentKey);
@@ -1020,20 +1087,35 @@ async function handleImportJql(
     if (startAt > 2000) break; // hard safety cap
   }
 
-  const parentKeys = parentKeysNeedingQuarter(items, parentKeyByItem);
+  // Load the parents' own fields for every parent we saw (not just the ones
+  // missing a quarter): the INIT view needs titles and the INIT's own
+  // `Committed`, and the quarter backfill needs the rest.
+  const parentKeys = [...new Set([...parentKeyByItem.values()])];
   let backfilled = 0;
+  const inits: InitDetailPayload[] = [];
   if (parentKeys.length) {
-    const quarterByParent = await fetchParentQuarters(parentKeys, baseUrl);
+    const detailsByParent = await fetchParentDetails(parentKeys, baseUrl, committedField);
+    const quarterByParent = new Map<string, string>();
+    for (const [key, detail] of detailsByParent) {
+      if (detail.quarter) quarterByParent.set(key, detail.quarter);
+      inits.push({
+        key,
+        ...(detail.title ? { title: detail.title } : {}),
+        ...(detail.quarter ? { quarter: detail.quarter } : {}),
+        ...(detail.committed ? { committed: detail.committed } : {}),
+      });
+    }
     backfilled = applyParentQuarters(items, parentKeyByItem, quarterByParent);
   }
 
   console.info('[pai-roadmap] import jql', {
     quarters,
     total: items.length,
+    inits: inits.length,
     quarterFromParent: backfilled,
     jql: effectiveJql,
   });
-  return items;
+  return { items, inits };
 }
 
 type CreateJiraParentInput = {
@@ -2477,7 +2559,7 @@ function injectBridge(): void {
         '*',
       );
       try {
-        const items = await handleImportJql(
+        const { items, inits } = await handleImportJql(
           String(data.jql || ''),
           Array.isArray(data.quarters) ? data.quarters.map(String) : [],
         );
@@ -2487,6 +2569,7 @@ function injectBridge(): void {
             requestId: data.requestId,
             ok: true,
             items,
+            inits,
           },
           '*',
         );
