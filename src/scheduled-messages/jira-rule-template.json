@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "version": "1.9.0",
+    "version": "1.10.0",
     "lastUpdated": "2026-11-03",
     "description": "Personal AI Scheduled Messages Bot Executor Rule Template",
     "notes": [
@@ -12,7 +12,7 @@
       "API forwarding keeps literal http/https prefixes in Jira Rule URLs because Jira Automation rejects URL fields that are only smart-value variables.",
       "Bot private/group webhooks go through Dify botman jumpboard (BOTMAN_DIFY_*) because Jira cannot reach botman.int.rclabenv.com.",
       "Bot private inputs.email is webhookResponse.body.botmanEmail. Apps Script builds that from Glip_User_Name as userId@ringcentral.com. userName is also passed as personName for compatibility with an older Apps Script response. Do not send initiator.emailAddress or @reply.ringcentral.glip.com as the Botman recipient.",
-      "AgentTask uses one generic Dify HTTP Relay for Memory and Multica. Apps Script returns relayRequestJson only to a capability-authorized relay claim.",
+      "AgentTask uses a generic Dify HTTP Relay when its effective app key is configured. The rule generator builds direct provider-bound HTTP/HTTPS branches otherwise; both paths require a capability-authorized claim.",
       "Relay callbacks use confirmAgentTaskRelay with bounded responseBody and requestId. Apps Script validates capability and the persisted executionKey/provider; transport success alone never means business acceptance."
     ]
   },

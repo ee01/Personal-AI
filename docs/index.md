@@ -134,7 +134,7 @@
 | 定时消息一键初始化 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet、Apps Script、触发器；当前用户 Memory 连接 Config 自动补齐，受保护领取导入脚本属性；创建 / 授权 / 恢复按钮标明阶段边界 |
 | 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称；Done 单次改成仍有下次执行的循环会自动恢复 Active |
 | Glip 快速定时与未来消息 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 输入框闹钟创建 `ComposeScheduled` AsMe；列表底部虚线未来消息是本地 pending 快照，不是已发送消息 |
-| 多执行引擎 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | AsMe / Bot / AI Report / JiraAutomation / Outreach / AgentTask；Dify 跳板导出见 [src/scheduled-messages/dify](../src/scheduled-messages/dify/README.md) |
+| 多执行引擎 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | AsMe / Bot / AI Report / JiraAutomation / Outreach / AgentTask；AgentTask 按有效 Relay Key 选择 Jira 直连或自建 Dify 网络中转；[配置说明](../src/scheduled-messages/dify/README.md) |
 | 定时消息列表筛选 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Active / Done / Snooze 等 |
 | 队列健康提示 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 队列风险、诊断线索、改期写入中回执和恢复入口 |
 | 执行匹配与补偿窗口 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 当前分钟、过去 30 分钟、08:00 后队列；活补偿行显示未发送回执 |

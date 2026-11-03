@@ -29,6 +29,108 @@ const receipt = (body, status = 202, r = request()) => python('post_receipt', {
   request_id: r.requestId, request_json: JSON.stringify(r), status_code: status, body: JSON.stringify(body),
 });
 
+function transportConfig() {
+  const exports = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/scheduled-messages/difyJumpboardConfig.ts', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports });
+  return exports;
+}
+
+test('missing/blank AgentTask key builds direct provider-bound HTTP/HTTPS rules; configured key keeps Relay', () => {
+  const { replaceScheduledMessagesDifyJumpboardPlaceholders: build } = transportConfig();
+  const template = fs.readFileSync('src/scheduled-messages/jira-rule-template.json', 'utf8')
+    .replaceAll('{{WEB_APP_URL}}', 'https://script.example.test/exec')
+    .replaceAll('{{MULTICA_SCHEDULER_CAPABILITY}}', capability);
+  const collect = (node, list = []) => {
+    if (node.type === 'jira.condition.if.block' && node.conditions?.some(c => c.value?.second === 'AgentTask' && c.value?.operator === 'EQUALS')) list.push(node);
+    for (const child of node.components || node.children || []) collect(child, list);
+    return list;
+  };
+  for (const key of [undefined, '', '   ', 'fixture_relay_key']) {
+    const result = build(template, { AGENT_TASK_DIFY_API_KEY: key, BOTMAN_DIFY_API_KEY: 'fixture_botman_key' });
+    const branches = collect(JSON.parse(result));
+    assert.equal(branches.length, key?.trim() ? 1 : 4);
+    if (key?.trim()) {
+      assert.equal(branches[0].children[0].value.url.endsWith('/workflows/run'), true);
+    } else {
+      for (const branch of branches) {
+        const action = branch.children[0].value;
+        assert.match(action.url, /^https?:\/\//);
+        assert.equal(action.method, 'POST');
+        assert.equal(action.customBody, '{{webhookResponse.body.agentTaskRequest.body}}');
+        const provider = branch.conditions.find(c => c.value.first.includes('agentProvider')).value.second;
+        const names = action.headers.map(h => h.name);
+        assert.equal(names.includes('Authorization'), provider === 'legacy_memory');
+        assert.equal(names.includes('Idempotency-Key'), provider === 'multica');
+        assert.equal(branch.children[1].type, 'jira.create.variable');
+        assert.match(branch.children[2].value.url, /directReceipt=1/);
+        assert.match(branch.children[2].value.url, /https:\/\/script.example.test\/exec/);
+        assert.doesNotMatch(JSON.stringify(branch), /AGENT_TASK_DIFY|WEB_APP_URL|MULTICA_SCHEDULER_CAPABILITY|responseBody=/);
+      }
+    }
+    assert.match(result, /fixture_botman_key/, 'AgentTask mode must not remove the separate Botman relay');
+  }
+  assert.doesNotThrow(() => transportConfig().assertScheduledMessagesDifyJumpboardsConfigured({ BOTMAN_DIFY_API_KEY: 'fixture_botman' }));
+});
+
+test('direct receipts share capability, business acceptance, duplicate and unknown-result guards', () => {
+  for (const provider of ['multica', 'legacy_memory']) {
+    const { h, confirm } = ready(provider);
+    const direct = { directReceipt: '1', accepted: 'true', actionId: 'action_fixture', dispatchStatus: 'accepted', runId: 'run_fixture' };
+    assert.equal(confirm({ ...direct, capability: 'wrong' }).success, false);
+    assert.equal(confirm({ ...direct, requestId: 'wrong' }).success, false);
+    assert.equal(confirm({ ...direct, statusCode: '503' }).unconfirmed, true);
+    assert.equal(confirm({ ...direct, accepted: '', dispatchStatus: '', responseBody: '{"accepted":true,"actionId":"forged"}' }).unconfirmed, true);
+    assert.equal(confirm({ ...direct, actionId: 'a'.repeat(129), runId: 'r'.repeat(129) }).unconfirmed, true);
+    assert.equal(confirm(direct).success, true);
+    assert.equal(confirm(direct).duplicate, true);
+    assert.equal(h.cell('Exec_Count'), '1');
+    const rejected = ready(provider);
+    assert.equal(rejected.confirm({ ...direct, accepted: 'false', dispatchStatus: 'ignored' }).success, true);
+    assert.equal(rejected.h.records()[0].state, 'FAILED');
+  }
+});
+
+test('real rule creation and upgrade payload builders both switch transport without unresolved setup placeholders', async () => {
+  let env;
+  const deps = {
+    './difyJumpboardConfig': transportConfig(),
+    '../utils': { getEnvConfig: async () => env },
+    './agentTaskRelayConfig': { ensureAgentTaskRelayCapability: async () => capability },
+    './botAutomationConfig': { normalizeSheetConfig: config => config },
+    './timelineProjects': { buildTimelineSyncComponentsFragment: () => '[]' },
+  };
+  const load = name => {
+    const exports = {};
+    vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/scheduled-messages/' + name + '.ts', 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText, { exports, console, chrome: { storage: { local: { get: async () => ({ userinfo: { fullName: 'Fixture' } }) } } },
+      require: path => path.endsWith('.json') ? { default: JSON.parse(fs.readFileSync('src/scheduled-messages/' + path, 'utf8')) } : (deps[path] || {}) });
+    return exports;
+  };
+  deps['./JiraAutomationService'] = load('JiraAutomationService');
+  const { JiraAutomationService } = deps['./JiraAutomationService'];
+  const { JiraRuleUpdater } = load('JiraRuleUpdater');
+  for (const key of ['', 'fixture_relay_key']) {
+    env = { AGENT_TASK_DIFY_API_KEY: key, BOTMAN_DIFY_API_KEY: 'fixture_botman', BOT_API_BASE_URL: 'https://bot.example.test', BOT_TOKEN: 'fixture_bot', BOT_ID: 'fixture_id' };
+    const config = { sheetId: 'fixture_sheet', webAppUrl: 'https://script.example.test/exec', projectKey: 'TEST' };
+    const created = new JiraAutomationService().buildRulePayloadString('executor', {
+      projectId: '100', userKey: 'fixture', ruleNameBase: '[Fixture] Tasks', webAppUrl: config.webAppUrl,
+      userEmail: 'fixture@example.test', envConfig: env, schedulerCapability: capability,
+    }, config);
+    const upgraded = JSON.stringify(await new JiraRuleUpdater(config).prepareRulePayload('executor', {
+      name: '[Fixture] Tasks', projects: [{ projectId: 100 }], authorAccountId: 'fixture',
+    }, config));
+    for (const result of [created, upgraded]) {
+      assert.doesNotMatch(result, /WEB_APP_URL|MULTICA_SCHEDULER_CAPABILITY|AGENT_TASK_DIFY_API/);
+      assert.equal(result.includes('directReceipt=1'), !key);
+      assert.equal(result.includes('Bearer fixture_relay_key'), !!key);
+      assert.match(result, /confirmAgentTaskRelay/);
+    }
+  }
+});
+
 test('new-sheet initialization seeds the current user Memory connection without inventing an identity', async () => {
   const load = (file, require) => {
     const exports = {};
@@ -182,6 +284,10 @@ test('Memory envelope uses Script Properties and ignores row URL/header attempts
   assert.equal(envelope.headers['X-User-Id'], 'fixture_user');
   assert.equal(JSON.parse(envelope.body).task, message.Content);
   assert.equal(envelope.requestId, 'ek_fixture');
+  const invalid = executionHarness({ configRows: [['Key', 'Value'], ['multica_scheduler_capability', capability]], properties: {
+    AGENT_TASK_MEMORY_URL: envelope.url, AGENT_TASK_MEMORY_USER_ID: 'fixture_user', AGENT_TASK_MEMORY_API_KEY: 'invalid\r\nHeader: injected',
+  } });
+  assert.throws(() => invalid.context.buildAgentTaskRelayRequest(message, 'M1', 'ek_fixture', { capability }), /header_rejected/);
 });
 
 test('GET/POST workflow fixtures forward exact payload and idempotency through a real local HTTP server', async () => {
@@ -236,6 +342,10 @@ test('real polling returns one protected envelope, persists its provider and old
     const envelope = JSON.parse(first.relayRequestJson);
     assert.equal(envelope.requestId, first.executionKey);
     assert.equal(envelope.method, 'POST');
+    assert.equal(first.agentTaskRequest.scheme + '://' + first.agentTaskRequest.hostAndPath, envelope.url);
+    assert.equal(first.agentTaskRequest.body, envelope.body);
+    assert.equal(first.agentTaskRequest.requestId, first.executionKey);
+    assert.equal(first.agentTaskRequest.authorization, provider === 'legacy_memory' ? 'Bearer memory_secret' : '');
     assert.equal(h.records()[0].agentTaskRelay.provider, provider);
     assert.equal(h.cell('Exec_Count'), '0');
     assert.equal(h.confirm(first.executionKey).success, false, 'old mark endpoint cannot settle a relay occurrence');

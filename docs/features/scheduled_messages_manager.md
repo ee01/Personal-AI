@@ -306,7 +306,7 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.3.0';
+  var APP_SCRIPT_VERSION = '3.4.0';
   var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
   ```
 
@@ -717,6 +717,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - Jira Executor Rule 仍每分钟运行，但先通过 AppScript 读取 Sheet 并筛选 due 行。没有到期 AgentTask 时不会访问 memory-service；命中到期行时才返回 AgentTask webhook payload。
 - Executor Rule ≥ 1.9.0 的 Memory / Multica AgentTask 共用 Dify HTTP Relay 分支。Apps Script ≥ 3.3.0 校验调度 capability 后生成 URL、POST、headers、body；Memory 的服务端 Key/目标优先读取脚本属性 `AGENT_TASK_MEMORY_API_KEY / URL / USER_ID`，旧 Config 可在受保护领取时导入。Dify 只做目标/头白名单校验和 GET/POST 转发，Apps Script 按本次领取时冻结的 provider 判断接受/拒绝，并以 executionKey 原子去重确认。完整导入、属性、环境变量及升级顺序见 [Dify 配置说明](../../src/scheduled-messages/dify/README.md)。Chrome AR 即时刷新仍直连 Memory。旧的 agent-task-jumpboard.yml 保留作旧规则兼容，不是新规则的目标应用。
 - 扩展 12.1.16 起，新表初始化会从当前用户身份及 Memory 配置补齐执行连接 Config；首次受保护的 Memory 领取再导入 Apps Script 属性。缺少身份时延后到保存 Memory 任务补齐。Relay Key 从构建机忽略提交的环境文件进入安装包默认值；旧 Options 覆盖及已生成 Jira Rule 需要单独更新，不随环境文件自动替换。
+- 扩展 12.1.17 / Apps Script 3.4.0 / Executor Rule 1.10.0 起，中转可选：创建或升级规则时，有效 `AGENT_TASK_DIFY_API_KEY` 非空走 Dify，空值走 Jira 直接 POST 目标；两种模式使用同一受保护领取、冻结 provider、幂等键和业务接受判断。网络需桥接的自部署用户自行导入并发布 Relay App；直连依赖 Jira 到目标的网络可达性，失败不自动换路重发。旧规则须升级才应用切换。
 - Executor Rule ≥ 1.6.1 在领取成功（`executed=true`）后、进入各发送分支前，会用 Log action 把本次 `messageId` / `topic` / `pushMethod` / `targetType` / `executionKey` / `rowIndex` 写入 Jira Automation audit log，方便对照 Apps Script 偶发超时或 404 时实际领到的任务。
 - AppScript ≥ 2.12.1 的 webhook payload 以 `Content` 为 `task`（缺列时兜底旧 `Agent_Task_Prompt`），并附带选中的 `executor`（空则省略，由 memory-service 用 Agent Task 默认）、`successReceipt`（读 `Agent_Notify_Success_Receipt`，空/`Y` 默认开）、`notifyVia`（读 `Agent_Notify_Via`，空/`bot` 默认 Bot，`asme` 表示成功结果以本人身份发送）。`notifyVia=asme` 时会附带 Sheet `ringcentral_sender_*` 凭据（与顶部 AsMe 发消息 tab 同一套 token），以及仅在 Glip 目标非空时构造的 `notifyTarget`。
 - AppScript 在返回 AgentTask webhook 前检查 `Config!agent_task_webhook_url` 或行级 `AI_Endpoint`。缺失时不会领取该任务，也不会写 `Last_Exec`，避免配置错误导致任务静默跳过。

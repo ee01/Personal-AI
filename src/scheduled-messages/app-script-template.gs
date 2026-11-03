@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.3.0';
+var APP_SCRIPT_VERSION = '3.4.0';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
@@ -506,9 +506,15 @@ function buildAgentTaskRelayRequest(message, messageId, executionKey, parameters
     request.body = payload.body;
   }
   if (!/^https?:\/\/[^\s@\\?#]+\/[^\s\\#]*$/.test(request.url)) throw new Error('relay_url_rejected');
+  Object.keys(request.headers).forEach(function(name) {
+    if (/[\r\n]/.test(String(request.headers[name]))) throw new Error('agent_task_header_rejected');
+  });
   var json = JSON.stringify(request);
   if (json.length > 100000) throw new Error('relay_request_too_large');
-  return { success: true, agentProvider: provider, relayRequestJson: json };
+  return { success: true, agentProvider: provider, relayRequestJson: json,
+    agentTaskRequest: { scheme: request.url.split('://')[0], hostAndPath: request.url.split('://').slice(1).join('://'),
+      body: request.body, authorization: request.headers.Authorization || '', userId: request.headers['X-User-Id'] || '',
+      requestId: request.requestId, idempotencyKey: request.headers['Idempotency-Key'] || '' } };
 }
 
 function rememberAgentTaskRelayClaim(messageId, executionKey, provider) {
@@ -525,6 +531,13 @@ function rememberAgentTaskRelayClaim(messageId, executionKey, provider) {
 function parseAgentTaskRelayReceipt(provider, parameters) {
   var code = Number(parameters.statusCode || 0);
   var text = String(parameters.responseBody || '');
+  if (String(parameters.directReceipt || '') === '1') {
+    // Return only business acceptance fields, never a full downstream body/secret.
+    text = JSON.stringify({ accepted: String(parameters.accepted) === 'true' ? true
+      : (String(parameters.accepted) === 'false' ? false : null),
+      actionId: String(parameters.actionId || ''), status: String(parameters.dispatchStatus || ''),
+      run_id: String(parameters.runId || ''), issue_id: String(parameters.issueId || '') });
+  }
   var body;
   if (parameters.transportOk !== true && String(parameters.transportOk) !== 'true') {
     if (String(parameters.errorCode || '') === 'validation_rejected') return { outcome: 'failed', error: 'relay_request_rejected' };
@@ -606,7 +619,7 @@ function redactLoggedRequest(value) {
     var copy = JSON.parse(JSON.stringify(value || {}));
     if (copy.capability) copy.capability = '[redacted]';
     if (copy.schedulerCapability) copy.schedulerCapability = '[redacted]';
-    ['request_json', 'relayRequestJson', 'headers', 'Authorization', 'responseBody', 'body'].forEach(function(key) { if (copy[key]) copy[key] = '[redacted]'; });
+    ['request_json', 'relayRequestJson', 'agentTaskRequest', 'headers', 'Authorization', 'responseBody', 'body'].forEach(function(key) { if (copy[key]) copy[key] = '[redacted]'; });
     return JSON.stringify(copy);
   } catch (error) {
     return '[unlogged]';
@@ -3972,7 +3985,8 @@ function getMessageCurrentTimeWithReleaseInfo(postData) {
       if (agentTaskApiPayload.relayRequestJson) {
         rememberAgentTaskRelayClaim(messageId, executionKey, agentTaskApiPayload.agentProvider);
         return { executed: true, pushMethod: 'AgentTask', targetType: 'api', agentProvider: agentTaskApiPayload.agentProvider,
-          relayRequestJson: agentTaskApiPayload.relayRequestJson, messageId: messageId, rowIndex: message.rowIndex, executionKey: executionKey,
+          relayRequestJson: agentTaskApiPayload.relayRequestJson, agentTaskRequest: agentTaskApiPayload.agentTaskRequest,
+          messageId: messageId, rowIndex: message.rowIndex, executionKey: executionKey,
           topic: message.Topic || '', requiresExecutionCallback: true, timestamp: new Date().toISOString() };
       }
       if (agentTaskApiPayload.agentProvider === 'multica') {

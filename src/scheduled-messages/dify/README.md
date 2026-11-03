@@ -4,7 +4,7 @@
 
 | 文件 | 用途 | 调用方 | Env / Key |
 |---|---|---|---|
-| `http-relay.yml` | Jira → 通用 GET/POST HTTP Relay → Memory 或 Multica | Executor Rule ≥ 1.9.0 的统一 AgentTask 分支 | `AGENT_TASK_DIFY_API_*` 指向这个新 Workflow；下游地址/认证由受保护的 Apps Script 领取返回 |
+| `http-relay.yml` | 可选：Jira → 通用 GET/POST HTTP Relay → Memory 或 Multica | Executor Rule ≥ 1.10.0 配有 AgentTask Relay Key 时（1.9.0 始终中转） | `AGENT_TASK_DIFY_API_*` 指向自建并发布的 Workflow；下游地址/认证由受保护的 Apps Script 领取返回 |
 | `agent-task-jumpboard.yml`（旧版兼容） | Jira → Dify → `memory-service /api/v1/agent-tasks/execute` | Executor Rule `pushMethod=AgentTask` | `AGENT_TASK_DIFY_API_*`；Dify 内还要填全权 `MEMORY_SERVICE_API_KEY` |
 | `botman-jumpboard.yml` | Jira → Dify → botman `/user/message`、`/team/message` | Executor Rule Bot 私发 / 群发 | `BOTMAN_DIFY_API_*`；Dify 内还要填 `BOT_TOKEN` / `BOT_ID` |
 | `ringcentral_dify_workflow_split_credentials.yml` | Jira → Dify → RingCentral Team Messaging（拆分 clientId/secret/jwt） | Executor Rule AsMe `targetType=ringcentral_sender` | `RINGCENTRAL_SENDER_DIFY_API_*` |
@@ -22,7 +22,9 @@
 
 ## 通用 HTTP Relay：发布与迁移
 
-新链路：`Apps Script 生成请求 → Jira 同一 AgentTask 分支 → Dify HTTP Relay → Memory / Multica → Apps Script 确认`。Relay 不用 LLM、不解释任务、不判断业务接受状态、不调度、不保存下游 Key。
+扩展 ≥ 12.1.17、Apps Script ≥ 3.4.0、Executor Rule ≥ 1.10.0 支持可选网络中转：创建/升级规则时，有效 `AGENT_TASK_DIFY_API_KEY` 非空走 `Apps Script 生成请求 → Jira → Dify HTTP Relay → Memory / Multica → Apps Script 确认`；空值（含纯空格）走 `Apps Script 生成请求 → Jira 直接 POST Memory / Multica → Apps Script 确认`。Relay 不用 LLM、不解释任务、不判断业务接受状态、不调度、不保存下游 Key。
+
+Jira 网络直达目标时不需要为 AgentTask 部署 Dify。网络隔离需要桥接时，自部署用户须自建 Dify App，按下列步骤导入并发布。直连按 provider 和 HTTP/HTTPS 生成固定协议 URL 分支，不把 Memory Key 发给 Multica；两种模式共用 capability、冻结 provider、幂等键及接受状态校验。直连回执只回传 accepted/actionId/status/run_id/issue_id，字段有界；网络错误、5xx、缺失 ID 等仍保持未确认。Jira 若在非 2xx 时中止规则，没有确认的领取同样按 UNKNOWN 隔离。不会在失败后切换路径补发。
 
 按顺序完成：
 
@@ -32,8 +34,8 @@
    - `AGENT_TASK_MEMORY_API_KEY`：该 Memory Service 的服务端 `API_KEY`，不要未经权限验证就换成个人 `pak.…` 或 bootstrap key。
    - `AGENT_TASK_MEMORY_USER_ID`：该调度表所属用户 ID，作为 `X-User-Id`。
    - 仅用 Multica 的表不需要这三个属性。Memory 首次经过有效 capability 的领取时，可从已有 Config 的 `agent_task_webhook_url/token/user_id` 导入；显式脚本属性始终优先，行级 AI_Endpoint/AI_Headers 不能改写认证目标。为兼容旧规则，导入不自动删除 Config 旧值；确认不再回滚后由表格所有者清理旧 Key 副本。
-3. 把新 Workflow 的 API Base/Key 写入扩展现有的 `AGENT_TASK_DIFY_API_BASE_URL` / `AGENT_TASK_DIFY_API_KEY`，重新构建并加载扩展（12.1.15）。变量名称不变，但 Key 必须属于 **新 Relay**，不能继续使用旧 AgentTask Jumpboard 的 app key。
-4. 先升级 Apps Script 到 **3.3.0**，再升级/重建 Executor Rule 到 **1.9.0**。规则创建/升级会读取或创建 Config 的 `multica_scheduler_capability` 并注入 Jira；已有有效值沿用，不因换设备直接轮换。旧规则仍可用原路径；新脚本只有 `agentTaskRelay=1` 且 capability 匹配时才返回新请求封装。
+3. 需要中转时，把新 Workflow 的 API Base/Key 写入扩展现有的 `AGENT_TASK_DIFY_API_BASE_URL` / `AGENT_TASK_DIFY_API_KEY`，重新构建并加载扩展（12.1.17）。Key 必须属于 **新 Relay**，不能继续使用旧 AgentTask Jumpboard 的 app key；直连则保持有效 Key 为空。
+4. 先升级 Apps Script 到 **3.4.0**，再升级/重建 Executor Rule 到 **1.10.0**。规则创建/升级会读取或创建 Config 的 `multica_scheduler_capability` 并注入 Jira；已有有效值沿用，不因换设备直接轮换。两种模式都使用 `agentTaskRelay=1` 领取受保护的请求。已有规则不会自动响应本机 Key 的变化，必须重新生成规则。
 5. 用测试表、测试 Autopilot 和受控 Memory 任务核对成功、401/403、业务拒绝、超时及重复回执。代码测试不代表已在目标 Dify 导入或生产 Jira 完成投递。
 
 ### 新安装与自动配置
