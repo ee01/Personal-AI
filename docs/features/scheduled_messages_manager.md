@@ -830,7 +830,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 
 ### Logs 表字段
 
-领取/确认两段式消息（AgentTask、API/AI、带 AI_Endpoint 的 JiraAutomation）在 Logs 里拥有完整生命周期轨迹：领取时写入一条 `Status=Claimed` 审计行（与账本提交原子落盘），最终确认写入 `Success/Failed`，领取超时未确认隔离时写入 `Expired`（Error 为 `claim_timeout_quarantined`）。普通 Bot/AsMe 消息领取周期极短，仍只在最终确认时记一条。日志写入尽力而为：Logs 表头缺失/Schema 异常时跳过日志行，不会阻断领取或隔离。
+领取/确认两段式消息（AgentTask、API/AI、带 AI_Endpoint 的 JiraAutomation）在 Logs 里采用「一次执行一行」：领取时写入一条 `Status=Claimed` 审计行（与账本提交原子落盘），之后的生命周期事件都**原位更新同一行**——最终确认改写为 `Success/Failed`（含 Exec_Count 与发送元数据）、领取超时改写为 `Expired`、用户关闭历史轮次改写为 `Skipped`。查询按 Message_ID+Claimed 在最近 200 行内定位；找不到 Claimed 行（3.2.2 之前的领取、或已被新日志挤出窗口）时退回插入一条结果行，不丢结果。普通 Bot/AsMe 消息领取周期极短，仍只在最终确认时记一条。日志写入尽力而为：Logs 表头缺失/Schema 异常时跳过日志行，不会阻断领取或隔离。
 
 | 字段          | 类型     | 说明                                        |
 | ------------- | -------- | ------------------------------------------- |

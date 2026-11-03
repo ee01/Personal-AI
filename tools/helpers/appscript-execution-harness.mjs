@@ -26,11 +26,23 @@ export function executionHarness(options = {}) {
   const sheet = (id) => ({
     getSheetId: () => id,
     getMaxRows: () => tables.find(t => t.id === id).maxRows,
+    getLastRow: () => Math.max(tables.find(t => t.id === id).rows.length, 1),
+    getLastColumn: () => Math.max(1, ...tables.find(t => t.id === id).rows.map(row => row.length)),
     insertRowAfter(row) { const t = tables.find(t => t.id === id); t.rows.splice(row, 0, []); t.maxRows++; },
     getDataRange: () => ({ getDisplayValues: () => structuredClone(tables.find(t => t.id === id).rows) }),
-    getRange: (row, col) => ({
+    getRange: (row, col, numRows, numCols) => ({
       setValue(value) { this.setValues([[value]]); },
       getDisplayValue() { const t = tables.find(t => t.id === id); return String((t.rows[row - 1] || [])[col - 1] ?? ''); },
+      getDisplayValues() {
+        const t = tables.find(t => t.id === id);
+        const out = [];
+        for (let i = 0; i < (numRows || 1); i++) {
+          const cells = [];
+          for (let j = 0; j < (numCols || 1); j++) cells.push(String((t.rows[row - 1 + i] || [])[col - 1 + j] ?? ''));
+          out.push(cells);
+        }
+        return out;
+      },
       setValues(values) {
         const t = tables.find(t => t.id === id);
         values.forEach((r, i) => r.forEach((v, j) => { t.rows[row - 1 + i] ||= []; t.rows[row - 1 + i][col - 1 + j] = String(v); if (options.onDirectWrite) options.onDirectWrite(id, row + i, col + j, v); }));

@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.2.3';
+var APP_SCRIPT_VERSION = '3.2.4';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-10-31';
@@ -1215,6 +1215,17 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   const logTopic = (replacedContent && replacedContent.topic) ? replacedContent.topic : (rowData.Topic || '');
   const logContent = (replacedContent && replacedContent.content) ? replacedContent.content : (rowData.Content || '');
   
+  // One log row per execution: a claim-confirm message already wrote its Claimed
+  // row at claim time; the confirm updates that row's status instead of adding
+  // a second entry. Anything else (Bot/AsMe, pre-3.2.2 claims, a claimed row that
+  // scrolled out of the recent window) keeps the insert so no outcome is lost.
+  if (requests) {
+    const claimedLogRow = findClaimedLogRow(rowData.ID);
+    if (claimedLogRow) {
+      updateClaimedLogRow(claimedLogRow, success ? 'Success' : 'Failed', errorMsg || '', execCount, replacedContent || null, requests);
+      return;
+    }
+  }
   insertPushLog(
     rowData.ID,
     logTopic,
@@ -1229,6 +1240,62 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
     requests,
     logHeaders
   );
+}
+
+/**
+ * Locate the single lifecycle log row (Status=Claimed) a claim-confirm message
+ * wrote for this message. Bounded to the newest 200 rows: claim rows insert at
+ * the top and resolve within hours, so an unfound row means "none exists".
+ * Built-in reads only — never a UrlFetch call.
+ */
+function findClaimedLogRow(messageId) {
+  if (!messageId) return null;
+  try {
+    const logsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Logs');
+    if (!logsSheet) return null;
+    const header = logsSheet.getRange(1, 1, 1, Math.max(logsSheet.getLastColumn(), PUSH_LOG_SCHEMA_COLUMNS.length)).getDisplayValues()[0];
+    const statusCol = getColumnIndex(header, 'Status');
+    const idCol = getColumnIndex(header, 'Message_ID');
+    if (statusCol <= 0 || idCol <= 0) return null;
+    const window = Math.min(logsSheet.getLastRow(), 201);
+    if (window < 2) return null;
+    const ids = logsSheet.getRange(2, idCol, window - 1, 1).getDisplayValues();
+    const statuses = logsSheet.getRange(2, statusCol, window - 1, 1).getDisplayValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0] || '').trim() === String(messageId).trim() && String(statuses[i][0] || '').trim() === 'Claimed') {
+        return { logsSheet: logsSheet, row: i + 2, headers: header };
+      }
+    }
+  } catch (error) {
+    Logger.log('查找领取日志行失败: ' + error);
+  }
+  return null;
+}
+
+/** Update the claim-time log row to its final lifecycle status. */
+function updateClaimedLogRow(claimed, status, error, execCount, sendResultMeta, requests) {
+  const sentChatId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentChatId) : '';
+  const sentPostId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentPostId) : '';
+  const sentAt = sendResultMeta && getRequestParameterValue(sendResultMeta.sentAt)
+    ? getRequestParameterValue(sendResultMeta.sentAt)
+    : (status === 'Success' && (sentChatId || sentPostId) ? new Date().toISOString() : '');
+  const fields = [
+    ['Status', status],
+    ['Error', error || ''],
+    ['Exec_Count', isFinite(execCount) ? execCount : ''],
+    ['Sent_Chat_ID', sentChatId || ''],
+    ['Sent_Post_ID', sentPostId || ''],
+    ['Sent_At', sentAt || ''],
+  ];
+  fields.forEach(function(field) {
+    const column = getColumnIndex(claimed.headers, field[0]);
+    if (column <= 0) return;
+    if (requests) {
+      requests.push(executionCells(claimed.logsSheet.getSheetId(), claimed.row, column, [[field[1]]]));
+    } else {
+      claimed.logsSheet.getRange(claimed.row, column).setValue(field[1]);
+    }
+  });
 }
 
 /**
@@ -3137,15 +3204,21 @@ function expireStaleClaimAsDeliveryFailed(rowData, rowIndex) {
         sheet.getRange(rowIndex, logColumn).setValue(TRIGGER_DELIVERY_FAILED_LOG + '：' + quarantineReason);
       }
     }
-    // Close the trail in Logs so an expired claim is distinguishable from one
-    // that never happened. Best effort — logging never blocks the quarantine.
+    // Close the trail on the claim-time log row (one row per execution); only
+    // insert when no Claimed row exists (e.g. pre-3.2.2 claims). Best effort.
     if (requests.length || !entries.length) {
       try {
-        insertPushLog(String(rowData.ID || ''), rowData.Topic || '', '领取超时未确认，已隔离待人工核对',
-          rowData.Push_Method || '', '', false, 'claim_timeout_quarantined',
-          parseInt(rowData.Exec_Count, 10) || 0, '', null,
-          requests.length ? requests : null,
-          requests.length ? store.logRows[0] : undefined, 'Expired');
+        const claimedRow = findClaimedLogRow(String(rowData.ID || ''));
+        if (claimedRow) {
+          updateClaimedLogRow(claimedRow, 'Expired', 'claim_timeout_quarantined',
+            parseInt(rowData.Exec_Count, 10) || 0, null, requests.length ? requests : null);
+        } else {
+          insertPushLog(String(rowData.ID || ''), rowData.Topic || '', '领取超时未确认，已隔离待人工核对',
+            rowData.Push_Method || '', '', false, 'claim_timeout_quarantined',
+            parseInt(rowData.Exec_Count, 10) || 0, '', null,
+            requests.length ? requests : null,
+            requests.length ? store.logRows[0] : undefined, 'Expired');
+        }
       } catch (logError) {
         Logger.log('跳过隔离日志: ' + logError);
       }
@@ -5205,9 +5278,15 @@ function maintenanceSkipHistoricalExecutions(options) {
         const logCol = getColumnIndex(resolved.headers, 'Exec_Log');
         if (logCol > 0) proxy.getRange(resolved.row, logCol).setValue('⏭ 历史轮次已跳过，不补发；后续按计划执行');
       }
-      insertPushLog(record.messageId, resolved.message.Topic || '', '用户关闭历史轮次，不补发；未断言历史外部投递结果',
-        resolved.message.Push_Method || '', '', false, 'owner_skipped_no_backfill',
-        parseInt(resolved.message.Exec_Count, 10) || 0, record.executionKey, null, requests, store.logRows[0], 'Skipped');
+      const claimedRow = findClaimedLogRow(record.messageId);
+      if (claimedRow) {
+        updateClaimedLogRow(claimedRow, 'Skipped', 'owner_skipped_no_backfill',
+          parseInt(resolved.message.Exec_Count, 10) || 0, null, requests);
+      } else {
+        insertPushLog(record.messageId, resolved.message.Topic || '', '用户关闭历史轮次，不补发；未断言历史外部投递结果',
+          resolved.message.Push_Method || '', '', false, 'owner_skipped_no_backfill',
+          parseInt(resolved.message.Exec_Count, 10) || 0, record.executionKey, null, requests, store.logRows[0], 'Skipped');
+      }
       requests.push(executionRecordRequest(store, item.entry.row, record));
       closed.push(record.executionKey);
     });

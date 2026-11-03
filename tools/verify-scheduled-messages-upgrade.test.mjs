@@ -97,18 +97,19 @@ test('health is read-only and does not manufacture a first-poll or delivery rece
   assert.equal(h.context.getRuntimeHealth().firstPollAt, h.context.getRuntimeHealth().firstPollAt);
 });
 
-test('claims leave a Claimed audit row and confirms close the trail', () => {
+test('one log row per execution: the claim row evolves to Success', () => {
   const h = candidate(); h.setup('prepare'); h.setup('activate');
   h.claim('k1');
   let rows = h.table('Logs').rows;
-  assert.equal(rows.length, 2, 'header plus the claim audit row');
+  assert.equal(rows.length, 2, 'header plus the single claim row');
   assert.equal(rows[1][6], 'Claimed');
   assert.equal(rows[1][1], 'M1');
   h.confirm('k1');
   rows = h.table('Logs').rows;
-  assert.equal(rows.length, 3, 'confirm adds the final outcome row on top');
+  assert.equal(rows.length, 2, 'confirm updates the same row, no second entry');
   assert.equal(rows[1][6], 'Success');
-  assert.equal(rows[2][6], 'Claimed');
+  assert.equal(rows[1][1], 'M1');
+  assert.equal(rows[1][8], '1', 'Exec_Count is updated in place');
 });
 
 test('retirement wrapper removes only known send handlers and writes a public receipt without sending', async () => {
