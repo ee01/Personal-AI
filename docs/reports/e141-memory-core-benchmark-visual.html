@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E-141 五方案记忆内核 · 对比验证报告</title>
+<style>
+/* ---------- Design tokens ---------- */
+:root{
+  --bg:#0a0c0f; --surface:#101318; --surface-2:#151920; --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.13);
+  --text:#e9ebee; --muted:#a0a8b3; --faint:#6f7883;
+  --accent:#4fd1c5;
+  --pass:#46c28e; --fail:#f06a5d; --hold:#d9b25c;
+  --sA:#b8c0cc; --sB:#f2c14e; --sC:#4fd1c5; --sD:#e879a6; --sE:#7aa2ff;
+  --r:6px; --ease:cubic-bezier(.2,.8,.2,1); --t:220ms;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
+  /* type scale */
+  --f-xl:40px; --f-l:22px; --f-m:15px; --f-s:13px; --f-xs:11.5px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--f-m)/1.6 var(--sans);-webkit-font-smoothing:antialiased;
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:64px 64px;background-position:-1px -1px;background-attachment:fixed}
+body::before{content:"";position:fixed;inset:0;background:radial-gradient(1200px 600px at 70% -10%,rgba(79,209,197,.06),transparent 60%),linear-gradient(180deg,rgba(10,12,15,.55),var(--bg) 40%);pointer-events:none;z-index:-1}
+a{color:var(--accent)}
+.num,td.n,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* ---------- Top bar: scheme focus ---------- */
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;padding:12px 32px;background:rgba(10,12,15,.82);backdrop-filter:blur(12px) saturate(140%);border-bottom:1px solid var(--line)}
+.brand{font-size:var(--f-s);color:var(--muted);white-space:nowrap}
+.brand b{color:var(--text);font-weight:600}
+.focus{display:flex;gap:4px;margin-left:auto;align-items:center}
+.focus span{font-size:var(--f-xs);color:var(--faint);margin-right:8px}
+.chip{appearance:none;border:1px solid var(--line-2);background:transparent;color:var(--muted);font:600 var(--f-s)/1 var(--mono);height:32px;min-width:32px;padding:0 10px;border-radius:var(--r);cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all var(--t) var(--ease)}
+.chip i{width:8px;height:8px;border-radius:50%;background:var(--c,var(--muted))}
+.chip:hover{color:var(--text);border-color:rgba(255,255,255,.25)}
+.chip[aria-pressed="true"]{color:var(--bg);background:var(--c,var(--text));border-color:transparent}
+.chip[aria-pressed="true"] i{background:var(--bg)}
+
+/* linked highlight */
+[data-s]{transition:opacity var(--t) var(--ease)}
+body[data-focus] [data-s]{opacity:.16}
+body[data-focus="A"] [data-s~="A"],body[data-focus="B"] [data-s~="B"],body[data-focus="C"] [data-s~="C"],body[data-focus="D"] [data-s~="D"],body[data-focus="E"] [data-s~="E"]{opacity:1}
+
+/* ---------- Layout ---------- */
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+section{padding:64px 0;border-top:1px solid var(--line)}
+section:first-of-type{border-top:0}
+.kicker{font:600 var(--f-xs)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);display:flex;gap:12px;align-items:center}
+.kicker b{color:var(--accent);font-weight:600}
+h1{font-size:var(--f-xl);line-height:1.15;font-weight:650;letter-spacing:-.02em;margin:16px 0 8px}
+h2{font-size:var(--f-l);line-height:1.3;font-weight:620;letter-spacing:-.01em;margin:8px 0 8px}
+h3{font-size:var(--f-m);font-weight:600;margin:0 0 8px}
+p{margin:0 0 16px;color:var(--muted)}
+.lead{font-size:17px;color:var(--text);max-width:760px}
+.src{font:var(--f-xs)/1.5 var(--mono);color:var(--faint);margin:8px 0 32px;display:flex;flex-wrap:wrap;gap:4px 16px}
+.src span::before{content:"↳ ";color:var(--line-2)}
+.note{font-size:var(--f-s);color:var(--faint);margin-top:16px;max-width:860px}
+.est{display:inline-block;font:600 10.5px/1 var(--sans);color:var(--hold);border:1px dashed rgba(217,178,92,.6);border-radius:3px;padding:3px 4px;margin-left:4px;vertical-align:2px;white-space:nowrap}
+.tag{display:inline-block;font:500 var(--f-xs)/1 var(--sans);color:var(--muted);border:1px solid var(--line-2);border-radius:3px;padding:4px 6px;white-space:nowrap}
+.tag.fail{color:var(--fail);border-color:rgba(240,106,93,.35)}
+.tag.pass{color:var(--pass);border-color:rgba(70,194,142,.35)}
+.tag.hold{color:var(--hold);border-color:rgba(217,178,92,.4)}
+.panel{background:linear-gradient(180deg,var(--surface),rgba(16,19,24,.7));border:1px solid var(--line);border-radius:var(--r);padding:24px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.sdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:8px;vertical-align:1px}
+
+/* ---------- Hero ---------- */
+.hero{padding:56px 0 48px}
+.verdict{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:32px 0 24px}
+.lane{background:var(--surface);padding:16px 16px 16px;display:flex;flex-direction:column;gap:8px;position:relative}
+.lane::before{content:"";position:absolute;left:0;top:0;right:0;height:2px;background:var(--c)}
+.lane .who{display:flex;align-items:baseline;gap:8px}
+.lane .who b{font:700 18px/1 var(--mono);color:var(--c)}
+.lane .who span{font-size:var(--f-xs);color:var(--faint)}
+.lane .role{font-size:var(--f-m);font-weight:600;color:var(--text);line-height:1.35}
+.lane .why{font-size:var(--f-s);color:var(--muted);line-height:1.5}
+.lane .kpi{margin-top:auto;padding-top:8px;border-top:1px solid var(--line);display:flex;justify-content:space-between;font-size:var(--f-xs);color:var(--faint)}
+.lane .kpi b{font:600 var(--f-s) var(--mono);color:var(--text)}
+.strip{display:flex;flex-wrap:wrap;gap:8px 32px;padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.stat{display:flex;flex-direction:column;gap:4px}
+.stat b{font:600 20px/1.1 var(--mono)}
+.stat span{font-size:var(--f-xs);color:var(--faint)}
+.stat.off b{color:var(--faint)}
+.conf{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:16px;font-size:var(--f-s);color:var(--muted)}
+.conf .bar{display:inline-flex;gap:2px;margin-left:8px;vertical-align:1px}
+.conf .bar i{width:14px;height:6px;border-radius:1px;background:var(--line-2)}
+.conf .bar i.on{background:var(--text)}
+
+/* ---------- Pair card (B signal vs silence) ---------- */
+.pair{display:grid;grid-template-columns:1fr auto 1fr;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden;margin-bottom:32px}
+.pair>div{padding:24px;background:var(--surface)}
+.pair .vs{background:var(--bg);display:flex;align-items:center;justify-content:center;padding:0 16px;font:600 var(--f-xs)/1 var(--mono);color:var(--faint);writing-mode:vertical-rl;letter-spacing:.2em}
+.pair .big{font:650 44px/1 var(--mono);letter-spacing:-.03em;margin:8px 0}
+.pair .big small{font-size:var(--f-m);color:var(--muted);font-weight:500;margin-left:8px}
+.pips{display:flex;gap:8px;margin:16px 0 8px}
+.pip{width:20px;height:20px;border-radius:50%;border:1.5px dashed var(--fail);position:relative}
+.pip.tp{background:var(--pass);border:0}
+.caveats{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+
+/* ---------- Tables ---------- */
+table{width:100%;border-collapse:collapse;font-size:var(--f-s)}
+th{font:600 var(--f-xs)/1.3 var(--sans);color:var(--faint);text-align:left;padding:8px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--line);color:var(--text);vertical-align:top}
+td.n,th.n{text-align:right}
+td.muted{color:var(--muted)}
+tr:hover td{background:rgba(255,255,255,.02)}
+.tbl{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* gate matrix */
+.cell{display:inline-flex;align-items:center;justify-content:center;width:28px;height:24px;border-radius:4px;font:600 12px/1 var(--mono)}
+.cell.p{color:var(--pass);background:rgba(70,194,142,.1)}
+.cell.f{color:var(--fail);background:rgba(240,106,93,.1)}
+.cell.h{color:var(--hold);background:rgba(217,178,92,.1)}
+.cell.x{color:var(--faint);background:rgba(255,255,255,.04)}
+.gm td{text-align:center}
+.gm td:first-child{text-align:left;color:var(--muted)}
+.gm tr.grp td{padding-top:20px;color:var(--faint);font:600 var(--f-xs)/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;border-bottom:0;text-align:left}
+.gm .val{display:block;font:500 10.5px/1.2 var(--mono);color:var(--faint);margin-top:4px}
+
+/* action pips */
+.amx{display:grid;grid-template-columns:40px 1fr 1fr;gap:12px 24px;align-items:center}
+.amx .h{font:600 var(--f-xs)/1 var(--sans);color:var(--faint)}
+.row-pips{display:flex;gap:3px;flex-wrap:wrap;align-items:center}
+.row-pips .sep{width:8px}
+.ap{width:14px;height:14px;border-radius:3px}
+.ap.TN{background:rgba(255,255,255,.12)}
+.ap.FP{background:transparent;border:1.5px solid var(--hold)}
+.ap.FN{background:transparent;border:1.5px dashed var(--fail)}
+.ap.TP{background:var(--pass)}
+.row-pips em{font:normal 500 var(--f-xs)/1 var(--mono);color:var(--muted);margin-left:12px;white-space:nowrap}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:var(--f-xs);color:var(--muted);margin:16px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+
+/* segmented */
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:var(--r);padding:2px;gap:2px}
+.seg button{appearance:none;border:0;background:transparent;color:var(--muted);font:500 var(--f-s)/1 var(--sans);padding:8px 12px;border-radius:4px;cursor:pointer;transition:all var(--t) var(--ease)}
+.seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--line-2)}
+.seg button:hover{color:var(--text)}
+.hd{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+
+/* svg */
+svg{display:block;width:100%;height:auto;overflow:visible}
+svg text{font-family:var(--mono);font-size:11px;fill:var(--faint)}
+svg .lbl{font-family:var(--sans);fill:var(--muted);font-size:12px}
+svg .axis{stroke:var(--line-2);stroke-width:1}
+svg .grid{stroke:var(--line);stroke-width:1}
+svg .thr{stroke:var(--fail);stroke-dasharray:3 4;stroke-width:1}
+svg .thr-t{fill:var(--fail)}
+svg .zero{stroke:rgba(255,255,255,.35);stroke-width:1}
+.tip{position:fixed;pointer-events:none;z-index:50;background:#1a1e25;border:1px solid var(--line-2);border-radius:4px;padding:8px 10px;font:500 var(--f-xs)/1.5 var(--mono);color:var(--text);opacity:0;transform:translateY(4px);transition:opacity 120ms var(--ease),transform 120ms var(--ease);max-width:280px}
+.tip.on{opacity:1;transform:none}
+
+/* empty state for ablation */
+.empty{display:grid;grid-template-columns:auto 1fr;gap:32px;align-items:center}
+.cells18{display:grid;grid-template-columns:repeat(6,22px);gap:4px}
+.cells18 i{width:22px;height:22px;border-radius:3px;border:1px dashed var(--line-2);background:repeating-linear-gradient(45deg,transparent 0 4px,rgba(255,255,255,.03) 4px 8px)}
+
+/* steps */
+ol.steps{list-style:none;padding:0;margin:0;counter-reset:s;display:grid;gap:16px}
+ol.steps li{counter-increment:s;display:grid;grid-template-columns:32px 1fr;gap:12px;color:var(--muted);font-size:var(--f-s)}
+ol.steps li::before{content:counter(s,decimal-leading-zero);font:600 var(--f-s)/1.6 var(--mono);color:var(--accent)}
+ol.steps b{color:var(--text);font-weight:600}
+
+.prereq{display:none;margin-top:16px}
+.prereq.on{display:block;animation:rise 280ms var(--ease)}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+.sources{display:grid;grid-template-columns:48px 1fr;gap:8px 16px;font-size:var(--f-s);color:var(--muted)}
+.sources b{font:600 var(--f-s) var(--mono);color:var(--text)}
+.sources code,code{font:var(--f-xs) var(--mono);color:var(--text);background:rgba(255,255,255,.05);padding:2px 4px;border-radius:3px;word-break:break-all}
+pre{font:var(--f-xs)/1.7 var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;overflow-x:auto;color:var(--text)}
+footer{padding:48px 0 80px;color:var(--faint);font-size:var(--f-xs);border-top:1px solid var(--line)}
+
+/* toc */
+.toc{display:flex;gap:4px 16px;flex-wrap:wrap;margin-top:24px;font-size:var(--f-s)}
+.toc a{color:var(--muted);text-decoration:none;padding:4px 0;border-bottom:1px solid transparent;transition:all var(--t) var(--ease)}
+.toc a:hover{color:var(--text);border-color:var(--line-2)}
+.toc a span{font-family:var(--mono);color:var(--faint);margin-right:6px}
+
+@media (max-width:960px){
+  .verdict{grid-template-columns:1fr 1fr}
+  .verdict .lane:first-child{grid-column:1/-1}
+  .grid2{grid-template-columns:1fr}
+  .pair{grid-template-columns:1fr}
+  .pair .vs{writing-mode:horizontal-tb;padding:8px}
+}
+@media (max-width:640px){
+  :root{--f-xl:30px;--f-l:19px}
+  .wrap{padding:0 16px}
+  .topbar{padding:8px 16px;flex-wrap:wrap}
+  .focus{margin-left:0}
+  .focus span{display:none}
+  .verdict{grid-template-columns:1fr}
+  section{padding:48px 0}
+  .amx{grid-template-columns:32px 1fr}
+  .amx .h:nth-child(3),.amx .disc{grid-column:2}
+  .empty{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+@media print{.topbar{position:static}body{background:#fff}}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><b>E-141</b> 五方案记忆内核 · 对比验证</div>
+  <div class="focus" role="group" aria-label="聚焦方案（全页联动高亮）">
+    <span>聚焦</span>
+    <button class="chip" data-f="" aria-pressed="true">全部</button>
+    <button class="chip" data-f="A" style="--c:var(--sA)" aria-pressed="false"><i></i>A</button>
+    <button class="chip" data-f="B" style="--c:var(--sB)" aria-pressed="false"><i></i>B</button>
+    <button class="chip" data-f="C" style="--c:var(--sC)" aria-pressed="false"><i></i>C</button>
+    <button class="chip" data-f="D" style="--c:var(--sD)" aria-pressed="false"><i></i>D</button>
+    <button class="chip" data-f="E" style="--c:var(--sE)" aria-pressed="false"><i></i>E</button>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ================= 0. Decision ================= -->
+<section class="hero" id="decision">
+  <div class="kicker"><b>决策</b><span>Stage 6 · 开发集筛选报告，不是验收集迁移结论</span><span>数据 2026-11-03</span></div>
+  <h1>暂不更换基座</h1>
+  <p class="lead">五个方案在两个核心场景上都没到 80 分门槛（每个场景单独计）。B 的分数提升最大，但「在旁提醒」的 7 个正例全部沉默。分数信号还不能代表有效提醒。</p>
+
+  <div class="verdict" id="lanes"></div>
+
+  <div class="strip" role="list">
+    <div class="stat off" role="listitem"><b class="num">52 点</b><span>验收集 · 未运行</span></div>
+    <div class="stat off" role="listitem"><b class="num">30 格</b><span>重复建库 · 跳过</span></div>
+    <div class="stat off" role="listitem"><b class="num">18 格</b><span>消融 · 跳过</span></div>
+    <div class="stat" role="listitem"><b class="num">56 点 × 5</b><span>开发集 · 7 故事线 · 单次建库</span></div>
+    <div class="stat" role="listitem"><b class="num">$69.97</b><span>账本总支出（含失败格）</span></div>
+    <div class="stat" role="listitem"><b class="num">$0</b><span>本轮报告新增 LLM 费</span></div>
+  </div>
+  <div class="conf" aria-label="结论置信度">
+    <span>「不迁移」<span class="bar" aria-label="高"><i class="on"></i><i class="on"></i><i class="on"></i></span> 高</span>
+    <span>「C 更值得下一轮投入」<span class="bar" aria-label="中"><i class="on"></i><i class="on"></i><i></i></span> 中</span>
+    <span>「B 超时根因是跨服务争用」<span class="bar" aria-label="中低"><i class="on"></i><i></i><i></i></span> 中低 · 待请求来源证据</span>
+  </div>
+  <nav class="toc" aria-label="目录">
+    <a href="#signal"><span>01</span>分数 × 动作</a>
+    <a href="#quality"><span>02</span>绝对质量</a>
+    <a href="#gates"><span>03</span>硬门矩阵</a>
+    <a href="#latency"><span>04</span>延迟分布</a>
+    <a href="#window"><span>05</span>窗口与回放</a>
+    <a href="#cost"><span>06</span>成本</a>
+    <a href="#ablation"><span>07</span>消融</a>
+    <a href="#migrate"><span>08</span>迁移依据</a>
+    <a href="#sources"><span>09</span>来源</a>
+  </nav>
+  <p class="src"><span>docs/reports/e141-memory-core-benchmark.md 决策摘要、§9</span><span>e141-memory-core-benchmark-summary.md</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 1. Signal vs action ================= -->
+<section id="signal">
+  <div class="kicker"><b>01</b>分数信号 × 动作现实</div>
+  <h2>B 的分数提升最大，但「在旁提醒」一次都没触发</h2>
+  <p>差值按故事线配对，看的是候选减 A。这里的 composite 分会给「正例沉默」也算 L 分，所以分数和动作要放在一起读。</p>
+
+  <div class="pair" data-s="B">
+    <div>
+      <div class="kicker">B 相对 A · 两核心场景合并</div>
+      <div class="big num" style="color:var(--sB)">+12.95<small>95% CI [5.18, 20.45]</small></div>
+      <p style="margin:0">核心均分 A 37.59 → B 50.54。故事线配对 bootstrap，20,000 次，种子 141156，28 对。</p>
+    </div>
+    <div class="vs" aria-hidden="true">并排读</div>
+    <div>
+      <div class="kicker">B · 看消息时在旁提醒 · 正例</div>
+      <div class="big num" style="color:var(--fail)">0 / 7<small>正例触发</small></div>
+      <div class="pips" aria-label="7 个正例全部沉默">
+        <span class="pip" title="FN"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span>
+      </div>
+      <p style="margin:0">TN/FP/FN/TP = 7/0/7/0。证据 R@5 为 33.3%。</p>
+    </div>
+  </div>
+  <div class="caveats" style="margin:-16px 0 32px">
+    <span class="tag hold">单次建库</span><span class="tag hold">无建库方差</span><span class="tag hold">无消融 · 不能归因到新架构</span><span class="tag">固定本次建库的条件区间</span><span class="tag">未做多重比较校正</span>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="hd"><h3>相对 A 的差值与 95% CI</h3><span class="tag">虚线 = 迁移规则下界 −2</span></div>
+      <div id="forest"></div>
+      <p class="note">CI 下界在 −2 以下的格子会被标红。C / D / E 在「主动发现」上的下界都低于 −2。</p>
+    </div>
+    <div class="panel">
+      <div class="hd"><h3>动作混淆 · 每个方块 = 1 个探针</h3></div>
+      <div class="amx" id="amx"></div>
+      <div class="legend">
+        <span><i class="ap TP"></i>TP 应触发且触发</span><span><i class="ap FN"></i>FN 漏触发</span><span><i class="ap FP"></i>FP 误触发</span><span><i class="ap TN"></i>TN 应沉默且沉默</span>
+      </div>
+      <p class="note">门槛：在旁要求 P≥90%、R≥80%、证据 R@5≥85%；发现要求 P≥90%、R≥70%、重复≤5%。五方案都没过。各家「发现」的动作 precision 都是 50%。</p>
+    </div>
+  </div>
+  <p class="src"><span>报告 §2 方法 · §3 两表</span><span>复算 analysis.py → ci.*, first.*.scenes</span><span>first-build/*/build-1/*/report.rescored.json（35 份）</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 2. Absolute quality ================= -->
+<section id="quality">
+  <div class="kicker"><b>02</b>绝对质量</div>
+  <h2>没有一个方案到 80 分</h2>
+  <p>雷达图画了四个场景的均分。会议、主动问人这两个场景只打标签做诊断，不算进首轮验收。</p>
+  <div class="grid2">
+    <div class="panel"><div id="radar"></div></div>
+    <div class="panel">
+      <h3>核心场景均分（在旁 + 发现）</h3>
+      <div id="corebars"></div>
+      <p class="note">composite 是 revision 2 沿用的原始分，没有重新做语义判分。事实匹配用的是 substring，负例带了引用也可能拿到证据分，所以这个分数不等于经过人工验证的语义质量。</p>
+    </div>
+  </div>
+  <p class="src"><span>报告 §3</span><span>复算 analysis.py → first.*.scenes.*.mean</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 3. Gates ================= -->
+<section id="gates">
+  <div class="kicker"><b>03</b>硬门结果矩阵</div>
+  <h2>合成硬门全部通过，场景门全部不通过</h2>
+  <p>六个硬门只证明了合成用例和 adapter 边界，不能证明所有原生后台存储都满足生产安全要求。负例误触发算在动作质量里，不算运行安全硬门。</p>
+  <div class="grid2">
+    <div class="panel tbl">
+      <table class="gm" id="gm"></table>
+    </div>
+    <div>
+      <div class="panel" data-s="A" style="border-color:rgba(217,178,92,.35)">
+        <div class="kicker" style="color:var(--hold)">待 E 裁夺</div>
+        <h3 style="margin-top:8px">A · 同名不同主体的身份边界 fixture</h3>
+        <p>两个负例里出现了「同名、但已验证主体不同」的情况，A 仍然给出了输出。A 在额外的 24h 稀疏窗里又出现了同样两例：<b style="color:var(--text)">共出现四次，但只涉及两个独立 fixture</b>，不应算成四起独立事故。它不属于 runtime-stop，但也不能因此忽略。</p>
+        <table>
+          <tr><th>fixture</th><th>类型</th></tr>
+          <tr><td class="mono">e147-s01-message_sidecar-neg</td><td class="muted">identity_boundary_disclosure_fixture</td></tr>
+          <tr><td class="mono">e147-s05-message_sidecar-neg</td><td class="muted">identity_boundary_disclosure_fixture</td></tr>
+        </table>
+      </div>
+      <p class="note">B–E 在 revision 2 下的安全标记为 0。五个方案的 runtime safety-stop、unknown、evaluation-invalid 都是 0。样本有限，零发现不代表安全概率为零。</p>
+    </div>
+  </div>
+  <p class="src"><span>报告 §3、§4</span><span>e163-resume-2026-10-31/gates/gate-results.json（生成 2026-10-31 00:58:27 UTC）</span><span>复算 analysis.py → first.*.safety / identity / runtime_safety</span></p>
+</section>
+
+<!-- ================= 4. Latency ================= -->
+<section id="latency">
+  <div class="kicker"><b>04</b>延迟分布</div>
+  <div class="hd">
+    <h2>只有 A 的召回 p95 在 250ms 以内</h2>
+    <div class="seg" role="group" aria-label="测量步骤">
+      <button data-m="r" aria-pressed="true">recall</button>
+      <button data-m="d" aria-pressed="false">decide</button>
+    </div>
+  </div>
+  <p>每个点是一个探针（每方案 56 个），横轴是对数刻度。竖线依次是 p50 / p95 / p99（nearest-rank）。recall 和 decide 是两个不同的测量步骤，不能把两个 p95 相加当作端到端 p95。</p>
+  <div class="panel"><div id="lat"></div></div>
+  <p class="note">以下项目都没有验证：UI 可见 500ms、冷热启动、并发 1 与 5、整理并发、1 万 / 10 万检索单元、新鲜度。这张图不能证明 iOS 上的体验。</p>
+  <p class="src"><span>报告 §4</span><span>复算 analysis.py → first.*.recall_ms / decide_ms</span><span>散点：同源 35 份 report.rescored.json 的 outcomes[].{recall,decide}.latency_ms</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 5. Window ================= -->
+<section id="window">
+  <div class="kicker"><b>05</b>窗口对照与七日回放</div>
+  <h2>8h 与 full 对照：C 没有退化，B / D / E 有退化，A 没有数据</h2>
+  <p>paired-control 的所有格子都开了 ingest_isolation（输入截断到 8KiB，并关掉 daily log 等支路），所以它的结果不能和 first-build 直接相减。</p>
+  <div class="grid2">
+    <div class="panel">
+      <h3>full → 8h 核心分数下降</h3>
+      <div id="ctl"></div>
+      <p class="note">judge 模型为 <code>openai/gpt-4.1</code>（运行中途更换，有记录），只审有差异的样本对：B/C/D/E 分别审了 6/11/8/11 对。C 通过的是探索性规则，不能当作统计等价的证明。</p>
+    </div>
+    <div class="panel">
+      <h3>统一 3 个密集窗 · 核心分数</h3>
+      <div id="exp"></div>
+      <p class="note">扩大窗口后没有任何候选到 80 分。各阶段都是单次结果，不足以据此选出 72h 的赢家。</p>
+    </div>
+  </div>
+
+  <div class="panel tbl" style="margin-top:24px">
+    <h3>mini-7d · 200 事件 / 7 天 / 40 探针的连续回放（独立分布，不并入 56 点 CI）</h3>
+    <table>
+      <thead><tr><th>方案</th><th class="n">live 墙钟秒</th><th class="n">cache 墙钟秒</th><th class="n">live 四场景均分</th><th class="n">live 报告 proxy 费用</th><th>备注</th></tr></thead>
+      <tbody id="mini"></tbody>
+    </table>
+    <p class="note">cache 复用的是已建好的状态，没有重新推理，所以不能说「几秒就完成七天整理」。E 的 cache 仍有代理计费（报告截点 $0.00043，账本末态 $0.00271）。</p>
+  </div>
+
+  <div class="grid2" style="margin-top:24px" data-s="B">
+    <div class="panel">
+      <div class="kicker" style="color:var(--sB)">B 缺失原因</div>
+      <h3 style="margin-top:8px">原文 200 条已全部入库，卡在第七天整理</h3>
+      <p>入库耗时没有随累计事件数增长，瓶颈在整理等待。目前的怀疑方向是<b style="color:var(--text)">待验证的跨服务调用归属 / 排队争用</b>：无归属请求会借用当前 active run 记账，预算保护调用又是串行排队的。现在还没有逐请求的客户端证据。</p>
+      <div id="bdays"></div>
+      <p class="note">190 条已整理，10 条未整理。原文 durable 写入按事件序号每 50 条分一组，平均耗时 0.561 / 1.854 / 0.758 / 1.038 ms，没有单调增长。</p>
+    </div>
+    <div class="panel tbl">
+      <h3>B mini run 代理账本</h3>
+      <table>
+        <thead><tr><th>label</th><th class="n">调用</th><th class="n">input tokens</th><th class="n">四等份 input 均值</th><th class="n">费用</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">consolidate_extract</td><td class="n">191</td><td class="n">24,618</td><td class="n">148/116/128/124</td><td class="n">$0.187296</td></tr>
+          <tr><td class="mono">consolidate_card_main</td><td class="n">39</td><td class="n">7,415</td><td class="n">220/200/203/140</td><td class="n">$0.052984</td></tr>
+          <tr><td class="mono">chat</td><td class="n">1354</td><td class="n">19,428,159</td><td class="n">13,872/14,731/14,111/14,679</td><td class="n">$2.815002</td></tr>
+        </tbody>
+      </table>
+      <div id="chatshare" style="margin-top:16px"></div>
+      <p class="note">B 源码里显式的 LLM 出口只有前两种 label，ingest 本身不调用 LLM。通用 chat 没有记录 event ID，所以画不出「每多一个事件 prompt 就变长」的曲线，也不能断定这 1354 次调用都来自 D。</p>
+    </div>
+  </div>
+  <p class="src"><span>报告 §5、§6</span><span>复算 analysis.py → controls / expanded / mini</span><span>B-e155-8h-mini-B.sqlite（只读）· proxy-ledger/*.jsonl</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 6. Cost ================= -->
+<section id="cost">
+  <div class="kicker"><b>06</b>成本</div>
+  <h2>账本共支出 $69.97，按方案分摊不能直接当作全成本证据</h2>
+  <p>这个总额包含失败尝试、smoke、修复和旧尝试。通用 chat 调用可能按当时活动的窗口被记到别的方案上，所以下面的分摊都按原归属呈现。</p>
+  <div class="panel">
+    <div id="stack"></div>
+    <p class="note">五个方案加起来约 $69.955409，unknown 为 $0.012506，所以舍入后不刚好等于 $69.97。unknown 单独列出，不摊给任何方案。</p>
+  </div>
+
+  <div class="grid2" style="margin-top:24px">
+    <div class="panel">
+      <h3>每方案 $50 上限 · 已花费（按原归属）</h3>
+      <div id="budget"></div>
+      <p class="note">余量 = $50 − 原归属已花费。它不是重新授权的额度，也不含硬件、电费、人力和本地 embedding 成本。</p>
+    </div>
+    <div class="panel">
+      <h3>失败格与 fallback</h3>
+      <table>
+        <tr><td>B mini-7d 失败 run</td><td class="n">$3.05528</td><td class="muted">原账可核对，归属待审</td></tr>
+        <tr><td>A 失败花费</td><td class="n">≈$6.8<span class="est">估算</span></td><td class="muted">交接估计；generic chat 无法精确还原失败阶段</td></tr>
+        <tr><td>B 失败花费</td><td class="n">≈$3<span class="est">估算</span></td><td class="muted">交接估计</td></tr>
+        <tr><td>unknown</td><td class="n">$0.012506</td><td class="muted">不分摊</td></tr>
+      </table>
+      <p style="margin-top:16px;font-size:var(--f-s)"><b style="color:var(--text)">fallback：</b>A 有 16 条 <code>deepseek/deepseek-v4-pro-0813</code> 账本记录（4 条早期 smoke，12 条未完成的 paired-control 尝试），都不在已完成的 A first-build 质量样本里。另有 <b style="color:var(--text)">43 条同模型记录归在 D 的 first-build w1/w2/w3/w6</b>。这 59 条的 generation_id 都是 null，tokens=0，cost=$0，只能说明有 fallback 记录或尝试，不能说明推理成功，也不知道影响了哪条答案。benchmark 已禁止自动 fallback。</p>
+    </div>
+  </div>
+
+  <div class="panel tbl" style="margin-top:24px">
+    <h3>first-build 负载摊销 · 35 个完成 run 的 ledger 末态（原归属）</h3>
+    <table>
+      <thead><tr><th>方案</th><th class="n">归属支出</th><th class="n">每千入库事件摊销上界¹</th><th class="n">每百查询全流程摊销¹</th><th class="n">可识别整理费/次²</th><th class="n">每次有效提醒³</th></tr></thead>
+      <tbody id="amort"></tbody>
+    </table>
+    <p class="note">每个方案的原生窗口入库计数合计 612（窗口重叠部分重复计数），整理 10 次，查询 56 次。¹ 公式：支出 ÷ 612 × 1000，支出 ÷ 56 × 100。² 只是命名整理调用的下界。³ 有效提醒的定义是：核心场景正例里 F/E/D/N/L 全为 1，且没有安全违规。各家都是 0 次，所以单次成本无法定义（不写 $0）。<b style="color:var(--text)">这些数字不能用来证明迁移后成本下降 30%。</b></p>
+  </div>
+  <p class="src"><span>报告 §7（含第 161 行 fallback 核验）</span><span>summary.json · proxy-ledger/*.jsonl</span><span>复算 analysis.py → first.*.proxy_total / cost / effective_reminders</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 7. Ablation ================= -->
+<section id="ablation">
+  <div class="kicker"><b>07</b>消融对比</div>
+  <h2>本轮没有跑消融，收益没法归因</h2>
+  <div class="panel empty">
+    <div class="cells18" aria-label="18 格全部跳过"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div>
+      <p style="color:var(--text);margin-bottom:8px">计划中的三组消融共 18 格：只用原文混合检索、关闭后台整理、关闭关联预计算。全部以 <code>8h_policy_failed_controls_reserve_for_expansion_and_replay</code> 为由跳过。</p>
+      <p>所以没有任何质量或速度收益可以归因到抽取、整理或预计算。8h/full、24h/72h、cache/live 的对比也不能拿来充当消融。</p>
+      <p style="margin:0">补跑粗估：A ≈ $15.33，B ≈ $1.74，合计 ≈ $17.07，敏感区间 <b class="num" style="color:var(--text)">$17–34</b><span class="est">估算</span>。这个区间不是置信区间，也不是报价。A 现账只剩 $12.43，18 格不能默认都能跑完。</p>
+    </div>
+  </div>
+  <p class="src"><span>报告 §8</span><span>matrix-status.json 2026-11-03 02:19:18 UTC：104 completed / 0 failed（收口态）/ 58 skipped</span></p>
+</section>
+
+<!-- ================= 8. Migration ================= -->
+<section id="migrate">
+  <div class="kicker"><b>08</b>迁移依据判定</div>
+  <h2>没有一个方案满足完整的迁移规则</h2>
+  <p>规则要求：硬门全过；<b style="color:var(--text)">每个</b>核心场景相对 A 的差值 CI 下界 ≥ −2；质量至少 +5 分或全成本降低 30%；同时满足绝对质量门、动作门和延迟门。点击方案行可以查看它进入 52 点验收集前还缺什么。</p>
+  <div class="panel tbl">
+    <table class="gm" id="rule"></table>
+  </div>
+  <div class="panel prereq" id="prereq" aria-live="polite"></div>
+
+  <h3 style="margin-top:48px">建议的下一步（是建议，不是已执行的承诺）</h3>
+  <ol class="steps">
+    <li><div><b>先修评测可解释性，不增加 LLM 费。</b>记录客户端、run、阶段、event 水位和 generation ID；禁止没有归属的后台请求借用 active run；审核 scorer 的沉默奖励和语义支持。</div></li>
+    <li><div><b>开发集上对 A / C 各做两次独立重复建库</b>，并补齐 A/C 的公平窗口对照。B 只在隔离客户端、有限工作量下查原因。两次 A/C 重复约 $13.54<span class="est">估算</span>，52 点单次约 $6.29<span class="est">估算</span>，合计 $19.83<span class="est">估算</span>。其中 A 约 $19.31，已超出 A 剩余的 $12.43，需要缩小范围或由 E 追加预算。</div></li>
+    <li><div><b>核心门通过、成本归属可审、配置冻结后</b>，再一次性跑还没碰过的 52 点验收集。</div></li>
+    <li><div><b>停止条件：</b>发生一次真实越权、未来证据或删除泄漏就停；费用接近原 $50 上限就停；开发修复后核心场景仍是零召回，就终止该候选。</div></li>
+  </ol>
+  <p class="src"><span>报告 §9</span><span>迁移规则：docs/features/memory_core_v4_spec.md §7/§11/§12 · E-141 初始决策线程</span><span>采集 2026-11-03</span></p>
+</section>
+
+<!-- ================= 9. Sources ================= -->
+<section id="sources">
+  <div class="kicker"><b>09</b>来源与复算</div>
+  <h2>页面上的每个数字都能用复算脚本重现</h2>
+  <p>唯一数据源是 E-156 的交付（本地提交 <code>e6c61ffd</code>）。没有取 E-141 / E-155 评论里的收割快照。原始结果含 T3 原文，只在本地保留，本页只展示聚合值和耗时。</p>
+  <div class="sources">
+    <b>R</b><span><code>docs/reports/e141-memory-core-benchmark.md</code> 完整报告 · <code>…-summary.md</code> 一屏摘要 · <code>…-analysis.py</code> 复算脚本 → <code>.multica/e156-stats.json</code></span>
+    <b>S1</b><span>E-141 初始决策线程（2026-10-30）：选型、架构、迁移规则，生产盘点，E 的授权回复</span>
+    <b>S2</b><span><code>experiments/memory-benchmark/reports/run-2026-10-31-8h-v1/</code> summary、matrix-status、paired-control review</span>
+    <b>S3</b><span>同目录各 cell 的 report / report.rescored / execution；mini 的 <code>*-run-*.json</code></span>
+    <b>S4</b><span><code>memory-service/evals/personal-memory-dataset/</code> 冻结 manifest 与开发 golden v1.1</span>
+    <b>S5</b><span><code>experiments/memory-benchmark/src/scoring/{rescore-v2,scorer}.ts</code>、<code>src/report/bootstrap.ts</code></span>
+    <b>S6</b><span><code>reports/e163-resume-2026-10-31/gates/gate-results.json</code></span>
+    <b>S7</b><span><code>docs/features/memory_core_v4_spec.md</code> §7、§11、§12</span>
+    <b>S8</b><span>B mini 只读 SQLite、<code>adapters/new-core/runtime.ts</code>、<code>src/cost/{proxy-attribution,openrouter-proxy}.ts</code></span>
+    <b>S9</b><span><code>experiments/memory-benchmark/.local/proxy-ledger/*.jsonl</code></span>
+  </div>
+  <pre># 仓库根目录，需本地原始产物齐备；不联网
+python3 docs/reports/e141-memory-core-benchmark-analysis.py</pre>
+</section>
+</main>
+
+<footer class="wrap">E-157 · 对比验证报告可视化页 · 数据时间 2026-11-03 · 标有「估算」的是外推或交接估计，其余数字都来自本地原始产物的复算</footer>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+/* ===== Data — 全部取自 e141-memory-core-benchmark.md / e156-stats.json ===== */
+const S = ['A','B','C','D','E'];
+const COLOR = {A:'var(--sA)',B:'var(--sB)',C:'var(--sC)',D:'var(--sD)',E:'var(--sE)'};
+const NAME = {A:'现有实现',B:'新自建',C:'Mem0 OSS',D:'Supermemory Local',E:'Letta'};
+const D = {
+  lanes:{
+    A:{role:'保留基线',why:'不能当成已达标产品；身份边界 fixture 待 E 裁夺'},
+    B:{role:'先排清整理超时与调用归属',why:'有分数信号，但「在旁」零召回，七日整理没跑完'},
+    C:{role:'低成本补跑候选',why:'8h 对照稳定，原账成本低；「在旁」同样全部漏报'},
+    D:{role:'暂留诊断',why:'8h 下遗漏旧证据，误报多，尾延迟高'},
+    E:{role:'暂留诊断',why:'mini 信号不能代替开发集；有窗口依赖'}
+  },
+  scene:{ // 均分：在旁 / 发现 / 会议(诊断) / 主动问人(诊断)
+    A:[40.18,35.00,58.75,40.36],B:[52.14,48.93,57.86,46.43],C:[55.00,35.36,57.86,38.57],D:[52.14,34.11,57.86,39.46],E:[52.14,32.32,57.86,38.57]},
+  core:{A:37.59,B:50.54,C:45.18,D:43.13,E:42.23},
+  ci:{ // [delta, lo, hi]
+    B:{core:[12.95,5.18,20.45],side:[11.96,-1.79,25.00],disc:[13.93,6.07,21.79]},
+    C:{core:[7.59,-0.18,15.89],side:[14.82,0.36,27.14],disc:[0.36,-4.46,8.21]},
+    D:{core:[5.54,-1.25,12.50],side:[11.96,-1.79,25.00],disc:[-0.89,-3.57,1.79]},
+    E:{core:[4.64,-2.23,11.61],side:[11.96,-1.79,25.00],disc:[-2.68,-5.36,0.89]}},
+  cm:{ // TN FP FN TP; P, R, R@5
+    A:{side:[3,4,3,4],sp:'50% / 57.1%',r5:'23.8%',disc:[1,6,1,6],dp:'50% / 85.7%'},
+    B:{side:[7,0,7,0],sp:'— / 0%',r5:'33.3%',disc:[5,2,5,2],dp:'50% / 28.6%'},
+    C:{side:[7,0,7,0],sp:'— / 0%',r5:'9.5%',disc:[2,5,2,5],dp:'50% / 71.4%'},
+    D:{side:[7,0,7,0],sp:'— / 0%',r5:'38.1%',disc:[1,6,1,6],dp:'50% / 85.7%'},
+    E:{side:[7,0,7,0],sp:'— / 0%',r5:'4.8%',disc:[1,6,1,6],dp:'50% / 85.7%'}},
+  pct:{ // recall p50/p95/p99, decide p50/p95/p99 (ms, nearest-rank)
+    A:{r:[158,199,210],d:[186,337,358]},B:{r:[184,1854,1892],d:[250,349,369]},C:{r:[184,395,415],d:[256,346,355]},
+    D:{r:[181,1931,1957],d:[346,596,647]},E:{r:[183,1875,1957],d:[259,306,314]}},
+  lat: {"A": {"r": [133, 116, 116, 116, 166, 186, 194, 174, 139, 144, 144, 129, 152, 191, 206, 176, 135, 128, 143, 149, 185, 184, 210, 197, 143, 161, 158, 136, 175, 188, 197, 179, 144, 137, 128, 156, 162, 185, 197, 166, 143, 145, 152, 136, 169, 178, 188, 186, 141, 155, 139, 152, 185, 177, 199, 177], "d": [283, 146, 178, 146, 200, 224, 240, 236, 290, 178, 184, 142, 195, 221, 223, 232, 347, 231, 268, 250, 320, 337, 358, 329, 273, 165, 159, 158, 173, 200, 202, 199, 268, 153, 138, 142, 166, 186, 187, 186, 232, 119, 160, 159, 174, 184, 186, 178, 288, 155, 155, 146, 184, 182, 202, 194]}, "B": {"r": [1892, 246, 146, 158, 176, 181, 198, 188, 1854, 263, 151, 134, 181, 192, 207, 190, 1877, 263, 150, 150, 177, 194, 197, 203, 1789, 310, 149, 161, 180, 178, 184, 181, 413, 274, 136, 150, 175, 182, 195, 184, 336, 208, 137, 144, 165, 176, 194, 166, 362, 272, 153, 139, 165, 192, 188, 192], "d": [0, 0, 226, 230, 272, 295, 344, 314, 0, 0, 231, 217, 286, 310, 349, 318, 1, 0, 260, 247, 281, 342, 369, 369, 0, 0, 250, 237, 262, 295, 324, 308, 1, 0, 207, 235, 261, 285, 307, 277, 0, 0, 201, 224, 248, 288, 312, 296, 1, 0, 229, 237, 283, 291, 308, 289]}, "C": {"r": [395, 260, 138, 154, 184, 188, 204, 194, 374, 244, 162, 150, 172, 180, 184, 196, 396, 265, 138, 131, 177, 190, 195, 186, 349, 276, 153, 147, 170, 180, 205, 181, 415, 305, 141, 139, 149, 155, 159, 176, 349, 241, 153, 154, 165, 189, 194, 185, 353, 276, 137, 155, 179, 186, 189, 191], "d": [1, 0, 236, 255, 324, 332, 346, 322, 1, 0, 254, 261, 326, 318, 341, 322, 0, 0, 249, 240, 286, 317, 332, 355, 0, 0, 239, 235, 293, 322, 348, 321, 0, 0, 207, 224, 247, 267, 290, 276, 0, 0, 223, 256, 281, 311, 344, 310, 0, 0, 253, 235, 299, 320, 321, 314]}, "D": {"r": [1957, 318, 171, 163, 166, 203, 202, 186, 1949, 380, 141, 140, 180, 180, 186, 187, 1931, 384, 165, 164, 186, 189, 218, 214, 1882, 444, 159, 151, 166, 189, 199, 186, 446, 445, 144, 151, 183, 172, 152, 180, 427, 311, 148, 148, 167, 181, 189, 174, 448, 431, 157, 143, 167, 179, 180, 153], "d": [2, 0, 346, 325, 477, 548, 596, 546, 1, 0, 330, 330, 442, 532, 585, 510, 2, 0, 311, 338, 472, 531, 647, 606, 3, 0, 320, 329, 459, 502, 569, 530, 1, 0, 342, 330, 474, 535, 558, 555, 0, 0, 276, 327, 445, 502, 582, 512, 1, 0, 326, 325, 448, 520, 550, 478]}, "E": {"r": [1875, 266, 147, 137, 153, 162, 184, 173, 1934, 292, 150, 150, 186, 197, 187, 182, 1957, 297, 162, 150, 183, 179, 194, 197, 1816, 286, 162, 143, 165, 181, 191, 178, 432, 276, 150, 152, 151, 196, 201, 195, 311, 227, 146, 147, 150, 179, 183, 174, 477, 297, 160, 168, 199, 206, 194, 202], "d": [0, 0, 251, 241, 255, 244, 259, 266, 1, 0, 279, 251, 273, 297, 314, 279, 1, 0, 278, 256, 288, 283, 305, 292, 7, 0, 255, 262, 282, 306, 301, 297, 0, 0, 245, 268, 280, 265, 295, 291, 0, 0, 231, 224, 243, 250, 271, 258, 0, 0, 271, 271, 290, 308, 303, 296]}},
+  ctl:{A:null,B:[1.67,1,1],C:[-1.04,0,0],D:[5.42,1,1],E:[10.00,2,2]}, // 下降, 新增核心错误, judge 实质退化
+  exp:{A:[45.00,45.00,47.08],B:[48.96,45.42,45.42],C:[45.83,46.88,45.83],D:[43.33,43.54,47.08],E:[43.33,45.21,47.92]},
+  mini:{A:['5117.99','1.23','48.19','$1.03019',''],B:['超过 4 小时未完成','未跑','缺失','$3.05528（失败账本）','待验证的跨服务调用归属 / 排队争用；不补零混入均值'],
+        C:['3384.09','7.45','46.75','$0.58086',''],D:['269.21','12.36','46.63','$0.08030','唯一低于 300 秒演示目标；不抵消质量失败'],E:['380.43','4.24','59.50','$0.07622','cache 仍有代理计费']},
+  bdays:[1013,1158,106,29,2545,4026,null],
+  spend:{A:37.572491,B:16.301691,C:3.936119,D:10.757724,E:1.387383,unknown:0.012506},
+  amort:{A:['$6.59219','$10.77155','$11.77176','不可拆分'],B:['$0.71987','$1.17626','$1.28549','$0.07199'],C:['$0.17728','$0.28967','$0.31657','≥$0.01773'],D:['$4.41811','$7.21913','$7.88948','≥$0.02935'],E:['$0.23008','$0.37596','$0.41087','≥$0.02137']},
+  prereq:{
+    A:'E 裁决身份 fixture；修复后冻结，补足公平对照与费用归属',
+    B:'排清 chat 来源 / 队列争用，跑完七日，修在旁漏报并测水位、时延',
+    C:'修在旁零召回；补独立重建、语义盲审及成本标签，重新过场景门',
+    D:'修 8h 旧证据遗漏、误报和高尾延迟；证实确有相对价值后再花费',
+    E:'mini 信号不能替代开发全体；修窗口依赖、误报及原生证据召回'}
+};
+
+/* ===== helpers ===== */
+const $ = s => document.querySelector(s);
+const NS='http://www.w3.org/2000/svg';
+const tip=$('#tip');
+function showTip(e,html){tip.innerHTML=html;tip.classList.add('on');moveTip(e)}
+function moveTip(e){const x=Math.min(e.clientX+14,innerWidth-300);tip.style.left=x+'px';tip.style.top=(e.clientY+14)+'px'}
+function hideTip(){tip.classList.remove('on')}
+function bindTip(el,html){el.addEventListener('mouseenter',e=>showTip(e,html));el.addEventListener('mousemove',moveTip);el.addEventListener('mouseleave',hideTip)}
+const f2=v=>(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(2);
+
+/* ===== Hero lanes ===== */
+$('#lanes').innerHTML=S.map(s=>`<div class="lane" data-s="${s}" style="--c:${COLOR[s]}">
+  <div class="who"><b>${s}</b><span>${NAME[s]}</span></div>
+  <div class="role">${D.lanes[s].role}</div><div class="why">${D.lanes[s].why}</div>
+  <div class="kpi"><span>核心均分</span><b>${D.core[s].toFixed(2)}</b></div></div>`).join('');
+
+/* ===== Forest plot ===== */
+(function(){
+  const rows=[];['B','C','D','E'].forEach(s=>[['core','核心合并'],['side','在旁提醒'],['disc','主动发现']].forEach(([k,l])=>rows.push({s,k,l,v:D.ci[s][k]})));
+  const W=520,lx=120,rx=500,rh=22,gap=12,top=24,H=top+rows.length*rh+3*gap+24;
+  const x=v=>lx+(v+10)/(30+10)*(rx-lx);
+  let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="各方案相对 A 差值与置信区间">`;
+  [-10,0,10,20,30].forEach(t=>g+=`<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top-8}" y2="${H-20}"/><text x="${x(t)}" y="${H-4}" text-anchor="middle">${t>0?'+'+t:t}</text>`);
+  g+=`<line class="zero" x1="${x(0)}" x2="${x(0)}" y1="${top-8}" y2="${H-20}"/><line class="thr" x1="${x(-2)}" x2="${x(-2)}" y1="${top-8}" y2="${H-20}"/><text class="thr-t" x="${x(-2)-4}" y="${top-12}" text-anchor="end">−2</text>`;
+  let y=top;
+  rows.forEach((r,i)=>{ if(i&&i%3===0)y+=gap; const [d,lo,hi]=r.v,bad=r.k!=='core'&&lo<-2;
+    g+=`<g data-s="${r.s}" class="fr" data-t="${r.s} · ${r.l}|${f2(d)} [${lo.toFixed(2)}, ${hi.toFixed(2)}]${bad?'|CI 下界 < −2':''}">
+    <rect x="0" y="${y}" width="${W}" height="${rh}" fill="transparent"/>
+    ${r.k==='core'?`<text class="lbl" x="0" y="${y+15}" style="fill:${COLOR[r.s]};font-weight:600;font-family:var(--mono)">${r.s}</text>`:''}
+    <text class="lbl" x="${lx-10}" y="${y+15}" text-anchor="end" ${r.k==='core'?'style="fill:var(--text)"':''}>${r.l}</text>
+    <line x1="${x(lo)}" x2="${x(hi)}" y1="${y+11}" y2="${y+11}" stroke="${bad?'var(--fail)':COLOR[r.s]}" stroke-width="${r.k==='core'?2.5:1.5}" stroke-linecap="round"/>
+    <circle cx="${x(d)}" cy="${y+11}" r="${r.k==='core'?5:3.5}" fill="${r.k==='core'?COLOR[r.s]:'var(--bg)'}" stroke="${COLOR[r.s]}" stroke-width="1.5"/></g>`;
+    y+=rh;});
+  $('#forest').innerHTML=g+'</svg>';
+  document.querySelectorAll('#forest .fr').forEach(el=>bindTip(el,el.dataset.t.split('|').join('<br>')));
+})();
+
+/* ===== Action matrix pips ===== */
+(function(){
+  const p=a=>{ // 正例在前：TP FN | FP TN
+    return Array(a[3]).fill('<i class="ap TP"></i>').join('')+Array(a[2]).fill('<i class="ap FN"></i>').join('')+'<span class="sep"></span>'+Array(a[1]).fill('<i class="ap FP"></i>').join('')+Array(a[0]).fill('<i class="ap TN"></i>').join('')};
+  let h='<span></span><span class="h">在旁提醒 · 7 正 | 7 负</span><span class="h">主动发现 · 7 正 | 7 负</span>';
+  S.forEach(s=>{const c=D.cm[s];h+=`<b class="mono" data-s="${s}" style="color:${COLOR[s]}">${s}</b>
+    <div class="row-pips" data-s="${s}" aria-label="${s} 在旁 TN/FP/FN/TP ${c.side.join('/')}">${p(c.side)}<em>P/R ${c.sp} · R@5 ${c.r5}</em></div>
+    <div class="row-pips disc" data-s="${s}" aria-label="${s} 发现 TN/FP/FN/TP ${c.disc.join('/')}">${p(c.disc)}<em>P/R ${c.dp}</em></div>`});
+  $('#amx').innerHTML=h;
+})();
+
+/* ===== Radar ===== */
+(function(){
+  const ax=['在旁提醒','主动发现','会议纪要 · 诊断','主动问人 · 诊断'],W=420,cx=210,cy=190,R=140,max=100;
+  const pt=(i,v)=>{const a=-Math.PI/2+i*2*Math.PI/ax.length;return[cx+Math.cos(a)*R*v/max,cy+Math.sin(a)*R*v/max]};
+  let g=`<svg viewBox="0 0 ${W} 390" role="img" aria-label="四场景均分雷达图，80 分门槛环">`;
+  [20,40,60,100].forEach(r=>g+=`<polygon class="grid" fill="none" points="${ax.map((_,i)=>pt(i,r).join(',')).join(' ')}"/>`);
+  g+=`<polygon fill="rgba(240,106,93,.04)" stroke="var(--fail)" stroke-dasharray="3 4" points="${ax.map((_,i)=>pt(i,80).join(',')).join(' ')}"/>`;
+  g+=`<text class="thr-t" x="${pt(0,80)[0]+6}" y="${pt(0,80)[1]+4}">80 门槛</text>`;
+  ax.forEach((a,i)=>{const [x,y]=pt(i,100),[x2,y2]=pt(i,118);g+=`<line class="grid" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/><text class="lbl" x="${x2}" y="${y2+4}" text-anchor="${Math.abs(x2-cx)<4?'middle':x2>cx?'start':'end'}" ${i>1?'style="fill:var(--faint)"':''}>${a}</text>`});
+  S.forEach(s=>{g+=`<polygon data-s="${s}" fill="${COLOR[s]}" fill-opacity=".06" stroke="${COLOR[s]}" stroke-width="1.5" points="${D.scene[s].map((v,i)=>pt(i,v).join(',')).join(' ')}"/>`;
+    D.scene[s].forEach((v,i)=>{const [x,y]=pt(i,v);g+=`<circle data-s="${s}" class="rd" data-t="${s} · ${ax[i]}|${v.toFixed(2)}" cx="${x}" cy="${y}" r="3.5" fill="${COLOR[s]}"/>`})});
+  $('#radar').innerHTML=g+'</svg>';
+  document.querySelectorAll('#radar .rd').forEach(el=>bindTip(el,el.dataset.t.replace('|','<br>')));
+})();
+
+/* ===== Core bars ===== */
+(function(){
+  const W=520,lx=36,rx=500,rh=36,H=S.length*rh+28,x=v=>lx+v/100*(rx-lx);
+  let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="核心场景均分条形图">`;
+  [0,20,40,60,80,100].forEach(t=>g+=`<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H-20}"/><text x="${x(t)}" y="${H-4}" text-anchor="middle">${t}</text>`);
+  S.forEach((s,i)=>{const y=i*rh+6,v=D.core[s];g+=`<g data-s="${s}"><text x="0" y="${y+15}" style="fill:${COLOR[s]};font-weight:600">${s}</text>
+    <rect x="${lx}" y="${y+4}" width="${x(v)-lx}" height="14" rx="2" fill="${COLOR[s]}" fill-opacity="${s==='A'?.5:.85}"/>
+    <text x="${x(v)+8}" y="${y+15}" style="fill:var(--text)">${v.toFixed(2)}</text>
+    <text x="${x(80)-6}" y="${y+15}" text-anchor="end" style="fill:var(--fail)">−${(80-v).toFixed(1)}</text></g>`});
+  g+=`<line class="thr" x1="${x(80)}" x2="${x(80)}" y1="0" y2="${H-20}"/>`;
+  $('#corebars').innerHTML=g+'</svg>';
+})();
+
+/* ===== Gate matrix ===== */
+(function(){
+  const P='<span class="cell p" aria-label="通过">✓</span>',F='<span class="cell f" aria-label="不通过">✗</span>',Hh='<span class="cell h" aria-label="待裁夺">!</span>';
+  const hdr=`<tr><th></th>${S.map(s=>`<th style="text-align:center;color:${COLOR[s]};font-family:var(--mono)" data-s="${s}">${s}</th>`).join('')}</tr>`;
+  const row=(l,cells)=>`<tr><td>${l}</td>${cells.map((c,i)=>`<td data-s="${S[i]}">${c}</td>`).join('')}</tr>`;
+  let h=hdr+'<tr class="grp"><td colspan="6">合成硬门 · gate-results.json</td></tr>';
+  ['来源导出','幂等','修改 / 删除 / 撤权传播','权限隔离','可观测整理','未来证据'].forEach(g=>h+=row(g,S.map(()=>P)));
+  h+='<tr class="grp"><td colspan="6">场景门 · first-build</td></tr>';
+  h+=row('在旁提醒 P≥90 R≥80 R@5≥85',S.map(s=>F+`<span class="val">R ${D.cm[s].sp.split('/ ')[1]}</span>`));
+  h+=row('主动发现 P≥90 R≥70',S.map(s=>F+`<span class="val">P 50%</span>`));
+  h+=row('核心场景 ≥80 分',S.map(s=>F+`<span class="val">${D.core[s].toFixed(1)}</span>`));
+  h+=row('召回 p95 ≤250ms',S.map(s=>(D.pct[s].r[1]<=250?P:F)+`<span class="val">${D.pct[s].r[1]}</span>`));
+  h+='<tr class="grp"><td colspan="6">安全 · revision 2</td></tr>';
+  h+=row('runtime safety-stop / unknown / invalid',S.map(()=>P+'<span class="val">0</span>'));
+  h+=row('安全标记（身份边界 fixture）',S.map(s=>s==='A'?Hh+'<span class="val">2 例</span>':P+'<span class="val">0</span>'));
+  $('#gm').innerHTML=h;
+})();
+
+/* ===== Latency strip plot ===== */
+let latMode='r';
+function drawLat(){
+  const W=1180,lx=40,rx=930,rh=56,top=28,H=top+S.length*rh+24;
+  const lo=Math.log10(80),hi=Math.log10(3000),x=v=>lx+(Math.log10(Math.max(v,80))-lo)/(hi-lo)*(rx-lx);
+  let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${latMode==='r'?'recall':'decide'} 延迟分布散点">`;
+  [100,200,300,500,1000,2000].forEach(t=>g+=`<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top-8}" y2="${H-20}"/><text x="${x(t)}" y="${H-4}" text-anchor="middle">${t}ms</text>`);
+  if(latMode==='r'){[[250,'召回目标 250'],[500,'500']].forEach(([t,l])=>g+=`<line class="thr" x1="${x(t)}" x2="${x(t)}" y1="${top-8}" y2="${H-20}"/><text class="thr-t" x="${x(t)+4}" y="${top-12}">${l}</text>`)}
+  S.forEach((s,i)=>{const y=top+i*rh+rh/2-8,arr=D.lat[s][latMode],p=D.pct[s][latMode];
+    g+=`<g data-s="${s}"><text x="0" y="${y+4}" style="fill:${COLOR[s]};font-weight:600;font-size:13px">${s}</text>`;
+    arr.forEach((v,j)=>{const jy=y+((j*37)%17-8)*1.1;g+=`<circle cx="${x(v)}" cy="${jy}" r="2.6" fill="${COLOR[s]}" fill-opacity=".55"/>`});
+    p.forEach((v,k)=>{g+=`<line class="pq" data-t="${s} · p${['50','95','99'][k]}|${v} ms" x1="${x(v)}" x2="${x(v)}" y1="${y-14}" y2="${y+14}" stroke="${k?'var(--text)':COLOR[s]}" stroke-width="${k?1.5:2.5}" stroke-opacity="${k===2?.5:1}"/>`});
+    g+=`<text x="${rx+28}" y="${y+4}">p50 ${p[0]} · p95 <tspan style="fill:${p[1]>250&&latMode==='r'?'var(--fail)':'var(--text)'}">${p[1]}</tspan> · p99 ${p[2]}</text></g>`});
+  $('#lat').innerHTML=g+'</svg>';
+  document.querySelectorAll('#lat .pq').forEach(el=>{el.style.cursor='default';bindTip(el,el.dataset.t.replace('|','<br>'))});
+}
+drawLat();
+document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{latMode=b.dataset.m;document.querySelectorAll('.seg button').forEach(o=>o.setAttribute('aria-pressed',o===b));drawLat()}));
+
+/* ===== Paired-control decline ===== */
+(function(){
+  const W=520,lx=36,rx=500,rh=40,H=S.length*rh+28,x=v=>lx+(v+4)/24*(rx-lx);
+  let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="full 到 8h 核心分数下降">`;
+  [-4,0,5,10,15].forEach(t=>g+=`<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H-20}"/><text x="${x(t)}" y="${H-4}" text-anchor="middle">${t}</text>`);
+  g+=`<line class="zero" x1="${x(0)}" x2="${x(0)}" y1="0" y2="${H-20}"/>`;
+  S.forEach((s,i)=>{const y=i*rh+6,c=D.ctl[s];g+=`<g data-s="${s}"><text x="0" y="${y+15}" style="fill:${COLOR[s]};font-weight:600">${s}</text>`;
+    if(!c){g+=`<rect x="${x(-4)}" y="${y+2}" width="${rx-x(-4)}" height="18" fill="none" stroke="var(--line-2)" stroke-dasharray="3 3" rx="2"/><text x="${(x(-4)+rx)/2}" y="${y+15}" text-anchor="middle">未测 · 六格未跑 · 无等价证据</text></g>`;return}
+    const [d,err,jd]=c,x0=x(Math.min(0,d)),w=Math.abs(x(d)-x(0)),bad=jd>0;
+    g+=`<rect x="${x0}" y="${y+4}" width="${Math.max(w,2)}" height="14" rx="2" fill="${bad?'var(--fail)':'var(--pass)'}" fill-opacity=".75"/>
+      <text x="${d>=0?x(d)+8:x(0)+8}" y="${y+15}" style="fill:var(--text)">${d>0?'↓':'↑'} ${Math.abs(d).toFixed(2)} · 新增错误 ${err} · judge 退化 ${jd}</text></g>`});
+  $('#ctl').innerHTML=g+'</svg>';
+})();
+
+/* ===== Expanded windows small line ===== */
+(function(){
+  const W=520,H=240,lx=40,rx=440,ty=16,by=200,ys=v=>by-(v-42)/(50-42)*(by-ty),xs=i=>lx+i*(rx-lx)/2;
+  let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="首建8h、扩24h、扩72h 核心分数">`;
+  [42,44,46,48,50].forEach(t=>g+=`<line class="grid" x1="${lx}" x2="${rx}" y1="${ys(t)}" y2="${ys(t)}"/><text x="${lx-8}" y="${ys(t)+4}" text-anchor="end">${t}</text>`);
+  ['首建 8h','扩 24h','扩 72h'].forEach((l,i)=>g+=`<text class="lbl" x="${xs(i)}" y="${H-12}" text-anchor="middle">${l}</text>`);
+  g+=`<text class="thr-t" x="${rx}" y="${ty-4}" text-anchor="end">80 门槛 ↑ 远在图外</text>`;
+  S.forEach(s=>{const v=D.exp[s];g+=`<g data-s="${s}"><polyline fill="none" stroke="${COLOR[s]}" stroke-width="1.5" points="${v.map((y,i)=>xs(i)+','+ys(y)).join(' ')}"/>
+    ${v.map((y,i)=>`<circle class="ex" data-t="${s} · ${['首建8h','扩24h','扩72h'][i]}|${y.toFixed(2)}" cx="${xs(i)}" cy="${ys(y)}" r="3.5" fill="${COLOR[s]}"/>`).join('')}
+</g>`});
+  // 末端标签防重叠：按值排序后保证最小 14px 间距
+  let last=-1e9;S.map(s=>({s,y:ys(D.exp[s][2])})).sort((a,b)=>a.y-b.y).forEach(o=>{o.y=Math.max(o.y,last+14);last=o.y;
+    g+=`<text data-s="${o.s}" x="${rx+10}" y="${o.y+4}" style="fill:${COLOR[o.s]}">${o.s} ${D.exp[o.s][2].toFixed(2)}</text>`});
+  $('#exp').innerHTML=g+'</svg>';
+  document.querySelectorAll('#exp .ex').forEach(el=>bindTip(el,el.dataset.t.replace('|','<br>')));
+})();
+
+/* ===== mini table ===== */
+$('#mini').innerHTML=S.map(s=>{const m=D.mini[s],miss=s==='B';return `<tr data-s="${s}"><td><span class="sdot" style="--c:${COLOR[s]}"></span>${s}</td>
+  <td class="n" ${miss?'style="color:var(--fail)"':''}>${m[0]}</td><td class="n ${miss?'muted':''}">${m[1]}</td><td class="n ${miss?'muted':''}">${m[2]}</td><td class="n">${m[3]}</td><td class="muted">${m[4]}</td></tr>`}).join('');
+
+/* ===== B consolidation days ===== */
+(function(){
+  const W=520,H=150,lx=8,bw=56,gap=16,by=110,max=4200,h=v=>v/max*(by-16);
+  let g=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="B 七日整理每日墙钟秒">`;
+  D.bdays.forEach((v,i)=>{const x=lx+i*(bw+gap);
+    if(v==null){g+=`<rect x="${x}" y="${by-40}" width="${bw}" height="40" fill="none" stroke="var(--fail)" stroke-dasharray="3 3" rx="2"/><text x="${x+bw/2}" y="${by-16}" text-anchor="middle" style="fill:var(--fail)">仅 start</text>`}
+    else g+=`<rect x="${x}" y="${by-h(v)}" width="${bw}" height="${Math.max(h(v),1)}" rx="2" fill="var(--sB)" fill-opacity=".7"/><text x="${x+bw/2}" y="${by-h(v)-6}" text-anchor="middle" style="fill:var(--text)">${v}s</text>`;
+    g+=`<text x="${x+bw/2}" y="${by+18}" text-anchor="middle">D${i+1}</text>`});
+  $('#bdays').innerHTML=g+'</svg>';
+})();
+$('#chatshare').innerHTML=`<div style="display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--line)">
+  <span style="width:92.1%;background:var(--fail);opacity:.7"></span><span style="flex:1;background:var(--sB)"></span></div>
+  <div style="display:flex;justify-content:space-between;font-size:var(--f-xs);color:var(--muted);margin-top:8px"><span>通用 chat <b class="num" style="color:var(--text)">92.1%</b>（来源未可靠归属）</span><span>显式整理调用 7.9%</span></div>`;
+
+/* ===== Cost stacked bar ===== */
+(function(){
+  const tot=69.967915,keys=[...S,'unknown'];
+  let h=`<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:16px"><b class="num" style="font-size:32px">$69.97</b><span style="color:var(--faint);font-size:var(--f-s)">summary.json · 含失败 / smoke / 修复 / 旧尝试（含旧全量 A run-2026-10-31）</span></div>
+  <div style="display:flex;height:28px;border-radius:4px;overflow:hidden;gap:1px">`;
+  keys.forEach(k=>{const v=D.spend[k],w=v/tot*100;h+=`<span ${k!=='unknown'?`data-s="${k}"`:''} class="sg" data-t="${k} · $${v.toFixed(6)}|${w.toFixed(1)}%" style="width:${Math.max(w,.3)}%;background:${COLOR[k]||'var(--faint)'};opacity:.85"></span>`});
+  h+='</div><div class="legend">'+keys.map(k=>`<span ${k!=='unknown'?`data-s="${k}"`:''}><i class="sdot" style="--c:${COLOR[k]||'var(--faint)'};margin:0"></i>${k} <b class="num" style="color:var(--text)">$${k==='unknown'?D.spend[k].toFixed(6):D.spend[k].toFixed(2)}</b></span>`).join('')+'</div>';
+  $('#stack').innerHTML=h;
+  document.querySelectorAll('#stack .sg').forEach(el=>bindTip(el,el.dataset.t.replace('|','<br>')));
+})();
+
+/* ===== Budget ===== */
+$('#budget').innerHTML=S.map(s=>{const v=D.spend[s],w=v/50*100;return `<div data-s="${s}" style="display:grid;grid-template-columns:24px 1fr 112px;gap:12px;align-items:center;margin:12px 0">
+  <b class="mono" style="color:${COLOR[s]}">${s}</b>
+  <div style="height:8px;background:var(--line);border-radius:2px;position:relative" role="meter" aria-valuemin="0" aria-valuemax="50" aria-valuenow="${v.toFixed(2)}" aria-label="${s} 已花费"><span style="position:absolute;inset:0 auto 0 0;width:${w}%;background:${w>70?'var(--hold)':COLOR[s]};border-radius:2px"></span></div>
+  <span class="num" style="font-size:var(--f-s);text-align:right">$${v.toFixed(2)} <span style="color:var(--faint)">/ 余 $${(50-v).toFixed(2)}</span></span></div>`}).join('');
+
+/* ===== Amortization ===== */
+$('#amort').innerHTML=S.map(s=>`<tr data-s="${s}"><td><span class="sdot" style="--c:${COLOR[s]}"></span>${s}</td>${D.amort[s].map(v=>`<td class="n">${v}</td>`).join('')}<td class="n muted">未定义（0 次）</td></tr>`).join('');
+
+/* ===== Migration rule matrix ===== */
+(function(){
+  const P='<span class="cell p">✓</span>',F='<span class="cell f">✗</span>',X='<span class="cell x">—</span>',Q='<span class="cell h">?</span>';
+  const R={
+    A:[P,X,X,F,F,P,'基线'],
+    B:[P,P+'<span class="val">−1.79 / 6.07</span>',P+'<span class="val">+12.95</span>',F,F,F+'<span class="val">1854</span>','不满足'],
+    C:[P,F+'<span class="val">0.36 / −4.46</span>',P+'<span class="val">+7.59</span>',F,F,F+'<span class="val">395</span>','不满足'],
+    D:[P,F+'<span class="val">−1.79 / −3.57</span>',P+'<span class="val">+5.54</span>',F,F,F+'<span class="val">1931</span>','不满足'],
+    E:[P,F+'<span class="val">−1.79 / −5.36</span>',Q+'<span class="val">+4.64 · 成本不可识别</span>',F,F,F+'<span class="val">1875</span>','不满足']};
+  let h=`<tr><th>方案</th><th style="text-align:center">硬门全过</th><th style="text-align:center">每核心场景 CI 下界 ≥ −2<br><span style="font-weight:400">在旁 / 发现</span></th><th style="text-align:center">质量 ≥ +5 或成本 −30%</th><th style="text-align:center">绝对质量 ≥80</th><th style="text-align:center">动作门</th><th style="text-align:center">召回 p95 ≤250</th><th style="text-align:center">判定</th></tr>`;
+  S.forEach(s=>{h+=`<tr data-s="${s}" tabindex="0" role="button" aria-label="查看 ${s} 进入验收集前提" data-k="${s}" style="cursor:pointer"><td style="text-align:left"><span class="sdot" style="--c:${COLOR[s]}"></span><b class="mono">${s}</b> <span style="color:var(--faint)">${NAME[s]}</span></td>${R[s].slice(0,6).map(c=>`<td>${c}</td>`).join('')}<td><span class="tag ${s==='A'?'':'fail'}">${R[s][6]}</span></td></tr>`});
+  $('#rule').innerHTML=h;
+  const show=s=>{const b=$('#prereq');b.innerHTML=`<div class="kicker" style="color:${COLOR[s]}">${s} · ${D.lanes[s].role}</div><h3 style="margin-top:8px">进入 52 点验收集的前提</h3><p style="margin:0;color:var(--text)">${D.prereq[s]}</p>${s==='B'?'<p class="note">此外，B 还有单次建库、无方差、七日整理未完成三项问题。在旁 CI 下界 −1.79 虽然满足 ≥ −2，但「在旁」零召回。</p>':''}${s==='E'?'<p class="note">E 的 +4.64 低于 +5；全成本下降 30% 在当前账本下无法识别，所以标「?」，不算通过。</p>':''}`;b.classList.add('on')};
+  document.querySelectorAll('#rule tr[data-k]').forEach(tr=>{tr.addEventListener('click',()=>show(tr.dataset.k));tr.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();show(tr.dataset.k)}})});
+  show('B');
+})();
+
+/* ===== Focus chips (linked highlight) ===== */
+const chips=document.querySelectorAll('.chip');
+function setFocus(f){f?document.body.dataset.focus=f:delete document.body.dataset.focus;chips.forEach(c=>c.setAttribute('aria-pressed',c.dataset.f===f))}
+chips.forEach(c=>c.addEventListener('click',()=>setFocus(document.body.dataset.focus===c.dataset.f?'':c.dataset.f)));
+addEventListener('keydown',e=>{if(e.target.closest('input,textarea'))return;const k=e.key.toUpperCase();if(S.includes(k)&&!e.metaKey&&!e.ctrlKey)setFocus(document.body.dataset.focus===k?'':k);if(e.key==='Escape')setFocus('')});
+</script>
+</body>
+</html>
