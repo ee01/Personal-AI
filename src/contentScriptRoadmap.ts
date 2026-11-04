@@ -76,6 +76,8 @@ type ImportItemPayload = {
   customLabels?: Array<{ labelKey: string; valueKey: string }>;
   /** Jira `Committed` field of this Epic ('Yes'/'No'); absent when unknown. */
   committed?: string;
+  /** Parent Link issue key (INIT); E-171 sync refreshes the item's parent. */
+  parentLink?: string;
 };
 
 /** Parent INIT details loaded along the import (its own Jira fields). */
@@ -492,6 +494,10 @@ function mapIssueToImportItem(
     toIsoDate(fields[JIRA_FIELD_TARGET_END]) ||
     toIsoDate(fields[JIRA_FIELD_END_DATE]);
   const parentLink = fields[JIRA_FIELD_PARENT_LINK];
+  const parentKey =
+    typeof parentLink === 'string' && parentLink.trim()
+      ? parentLink.trim()
+      : null;
   const committed = committedField
     ? optionValue(fields[committedField])
     : undefined;
@@ -506,10 +512,10 @@ function mapIssueToImportItem(
       targetEnd,
       customLabels: parseCustomLabelsField(fields[JIRA_FIELD_CUSTOM_LABELS]),
       ...(committed ? { committed: String(committed) } : {}),
+      // E-171 Jira 同步：Parent Link 随同步刷新（INIT 分组 / INIT 详情的来源）
+      ...(parentKey ? { parentLink: parentKey } : {}),
     },
-    parentKey: typeof parentLink === 'string' && parentLink.trim()
-      ? parentLink.trim()
-      : null,
+    parentKey,
   };
 }
 
