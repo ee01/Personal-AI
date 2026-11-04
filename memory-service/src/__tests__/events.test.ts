@@ -87,6 +87,30 @@ describe('events stream user isolation', () => {
     expect(resolved.error).toContain('Invalid userId query parameter format');
   });
 
+  it('blocks a token-bound user from switching streams via query userId', () => {
+    const resolved = resolveEventStreamUserId({
+      requestUserId: 'alice.user',
+      queryUserId: 'bob.user',
+      authenticatedUserId: 'alice.user',
+    });
+
+    expect(resolved.userId).toBeUndefined();
+    expect(resolved.code).toBe('user_id_mismatch');
+    expect(resolved.error).toContain('bound to a different user');
+  });
+
+  it('lets a token-bound user echo their own userId in the query', () => {
+    const resolved = resolveEventStreamUserId({
+      requestUserId: 'alice.user',
+      queryUserId: 'alice.user',
+      authenticatedUserId: 'alice.user',
+    });
+
+    expect(resolved.userId).toBe('alice.user');
+    expect(resolved.identitySource).toBe('query');
+    expect(resolved.error).toBeUndefined();
+  });
+
   it('rejects unsafe userId query parameters before opening the route stream', async () => {
     const res = await app.inject({
       method: 'GET',

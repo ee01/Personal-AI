@@ -98,6 +98,7 @@ export interface EventStreamUserResolution {
   storageKey?: string;
   eventFilter?: 'matching_user_or_global';
   error?: string;
+  code?: 'user_id_mismatch';
 }
 
 function buildEventStreamUserResolution(
@@ -118,6 +119,12 @@ export function resolveEventStreamUserId(options: {
   requestUserId?: string;
   requestFallbackToDefault?: boolean;
   queryUserId?: string | string[];
+  /**
+   * Token-bound identity (pak user key / worker key). When set, a query
+   * userId may only echo this user — never switch the stream to another
+   * user's events.
+   */
+  authenticatedUserId?: string;
 }): EventStreamUserResolution {
   const queryUserId = options.queryUserId;
 
@@ -134,6 +141,17 @@ export function resolveEventStreamUserId(options: {
       return {
         error:
           `Invalid userId query parameter format. ${USER_ID_FORMAT_DESCRIPTION}`,
+      };
+    }
+
+    if (
+      options.authenticatedUserId &&
+      normalized !== options.authenticatedUserId
+    ) {
+      return {
+        error:
+          'This credential is bound to a different user than the userId query parameter. Drop the parameter or use that user\'s key.',
+        code: 'user_id_mismatch',
       };
     }
 
@@ -214,15 +232,26 @@ export async function eventsRoutes(
         rawHeaderUserId == null ||
         (typeof rawHeaderUserId === 'string' &&
           rawHeaderUserId.trim() === '');
+      // Token-bound credentials (pak user key / worker key) are pinned to the
+      // authenticated user; their query userId may only echo it, never switch
+      // to another user's event stream. First-party service-key and local-dev
+      // anonymous callers keep the EventSource query-parameter compatibility.
+      const tokenBound =
+        request.authMode === 'user_key' || request.authMode === 'worker_key';
       const resolvedUserId = resolveEventStreamUserId({
         requestUserId: request.userId,
         requestFallbackToDefault:
           request.userId === 'default' && headerMissingOrBlank,
         queryUserId: request.query.userId,
+        authenticatedUserId: tokenBound ? request.userId : undefined,
       });
 
       if (resolvedUserId.error) {
-        return reply.code(400).send({ error: resolvedUserId.error });
+        const status = resolvedUserId.code === 'user_id_mismatch' ? 403 : 400;
+        return reply.code(status).send({
+          error: resolvedUserId.code ?? resolvedUserId.error,
+          message: resolvedUserId.error,
+        });
       }
 
       const sseUserId = resolvedUserId.userId ?? 'default';
