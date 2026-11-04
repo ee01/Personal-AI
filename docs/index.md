@@ -1,6 +1,6 @@
 # Feature Index
 
-*最后更新: 2026-11-02*
+*最后更新: 2026-11-04*
 
 这份索引只负责导航和规划，覆盖 `docs/features/` 的主功能与专题文档，以及 `docs/` 下的平台总览。各功能的真实行为仍以对应功能文档为准。
 
@@ -53,6 +53,7 @@
 
 | 小功能点 | 所属能力 | 所在文档 | 说明 |
 |---|---|---|---|
+| 定时任务跨日领取与当天改期重推 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 历史未确认轮次不阻塞次日；改到今天未来时间生成新计划版本，保留原回执 |
 | 记忆基础架构 | Memory Service 全平台 | [memory_foundation.md](./features/memory_foundation.md) | v1/v2/v3 真值与血缘；睡眠期 A–E、kind 保护、alias 两车道；主动有界两跳/重排与被动真值过滤；梦境页回执/撤销、长期偏好确认、人工 blind 样本导出；shadow/live 资格与生产读取/夜间执行统计 |
 | 记忆主张归属 | Ask / Memory Lens / Compose Assist / User Profile / Meeting Pilot | [memory_claim_attribution.md](./features/memory_claim_attribution.md) | raw-first 句内 owner/stance/verification 门禁；普通 Glip 零新增操作，混合证据只在既有消费详情显示 compact receipt，纠错不改原文或外部系统；来源闭集与后台会话晋升门控 |
 | InteractionScene 场景快照 | Memory Lens / Compose Assist | [memory_system.md](./memory_system.md) | 前端确定性场景信号供给 `/context-recall` 与 `/composer/assist`；语义决策仍在 Memory Service |

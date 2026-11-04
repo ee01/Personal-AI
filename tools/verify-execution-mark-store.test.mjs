@@ -245,3 +245,69 @@ test('explicit prepared-operation recovery uses REST even while SpreadsheetApp m
   assert.equal(result.mode, 'paused'); assert.equal(h.context.readExecutionStore().control.pending, null);
   assert.equal(h.records().length, 0);
 });
+
+
+test('prior-day CLAIMED and UNKNOWN cannot block the next daily occurrence', () => {
+  for (const expire of [false, true]) {
+    const h = ready(); h.claim('yesterday'); h.advance(24 * hour);
+    if (expire) h.context.expireStaleClaimAsDeliveryFailed({ ID: 'M1' }, 2);
+    const message = h.context.parseRow(h.table('Messages').rows[1], h.headers);
+    assert.equal(h.context.isClaimPendingBlockingReclaim(message, '2026-10-24', new h.context.Date(), 2), false);
+    const next = h.claim('today');
+    assert.equal(next.success, true); assert.equal(next.duplicate, false);
+    assert.equal(h.claim('today-retry').duplicate, true);
+    assert.equal(h.records().length, 2);
+    assert.equal(h.records()[0].state, expire ? 'UNKNOWN' : 'CLAIMED');
+    const lastExec = h.cell('Last_Exec'); const log = h.cell('Exec_Log');
+    assert.equal(h.confirm('yesterday').success, true);
+    assert.equal(h.cell('Last_Exec'), lastExec); assert.equal(h.cell('Exec_Log'), log);
+  }
+});
+
+test('a late prior-day callback before today is claimed does not suppress today', () => {
+  const h = ready(); h.claim('yesterday'); h.advance(24 * hour);
+  const lastExec = h.cell('Last_Exec');
+  assert.equal(h.confirm('yesterday').success, true);
+  assert.equal(h.cell('Last_Exec'), lastExec);
+  assert.equal(h.claim('today').duplicate, false);
+});
+
+test('explicit same-day revisions rearm successes and unresolved claims while old keys stay deduplicated', () => {
+  for (const confirmed of [false, true]) {
+    const h = ready(); h.claim('old'); if (confirmed) h.confirm('old');
+    h.setCell('Status', 'Active');
+    h.setCell('Schedule_Time', '10:00'); h.setCell('Schedule_Revision', 'revision-1');
+    h.setCell('Last_Exec', ''); h.setCell('Exec_Log', '待执行（已重新安排）');
+    if (!confirmed) {
+      assert.equal(h.confirm('old').success, true);
+      assert.equal(h.cell('Last_Exec'), ''); assert.equal(h.cell('Status'), 'Active');
+    }
+    assert.equal(h.claim('new').duplicate, false);
+    assert.equal(h.claim('retry').duplicate, true);
+    assert.equal(h.claim('old').duplicate, true);
+    // Returning to an earlier wall-clock time remains a distinct round.
+    h.setCell('Schedule_Time', '09:00'); h.setCell('Schedule_Revision', 'revision-2');
+    h.setCell('Last_Exec', ''); h.setCell('Exec_Log', '待执行');
+    assert.equal(h.claim('returned').duplicate, false);
+    const a = h.context.buildMessageExecutionKey({ rowIndex: 2, Schedule_Revision: 'a' }, 'M1', new h.context.Date());
+    const b = h.context.buildMessageExecutionKey({ rowIndex: 2, Schedule_Revision: 'b' }, 'M1', new h.context.Date());
+    assert.notEqual(a, b);
+  }
+});
+
+test('the scheduler selects a recurring task after yesterday’s unconfirmed delivery', () => {
+  const h = ready({ now: '2026-11-03T09:00:00Z' });
+  h.table('Messages').rows[0].push('Repeat_Every', 'Repeat_Unit');
+  const row = h.table('Messages').rows[1];
+  while (row.length < h.headers.length) row.push('');
+  row.push('1', 'Day');
+  h.setCell('Push_Method', 'Bot');
+  h.setCell('Schedule_Time', `${String(new h.context.Date().getHours()).padStart(2, '0')}:00`);
+  assert.equal(h.claim('yesterday').success, true);
+  h.advance(24 * hour);
+  const candidate = h.context.findMatchingMessage(h.table('Messages').rows, h.table('Messages').rows[0], new h.context.Date(), null,
+    'CURRENT_MINUTE', '2026-11-04', new h.context.Date().getHours(), false);
+  assert.equal(candidate?.ID, 'M1');
+  const key = h.context.buildMessageExecutionKey(candidate, 'M1', new h.context.Date());
+  assert.equal(h.context.claimMessagePending('M1', 2, candidate, key).duplicate, false);
+});

@@ -244,7 +244,7 @@
 - 同一个 Spreadsheet 的 `_ExecutionMarks`：两列 `Execution_Key` / `Record_JSON`。JSON 保存 schemaVersion、writerEpoch、完整 key、messageId、rowHint、occurrenceId、state、deliveryPolicy、claimAt、deadlineAt、completedAt、updatedAt、retainUntil、accountingVersion；迁移记录另外保存每个来源属性的 SHA-256。没有正文、收件人、API 密钥或凭证。
 - `_ExecutionMarkControl`：`Control_JSON` 表头及单个控制记录，含 mode、epoch、迁移 manifest/cursor、pending operation、lastOperation、清理时间。启动和维护均不写 Script Properties；Properties 即使满额仍可复制与切换。没有 CacheService 依赖。
 - 状态为 `CLAIMED → CONFIRMED / FAILED`；超过 2 小时仅转 `UNKNOWN`，不推断外部失败、不累计失败次数。UNKNOWN 可在原 48 小时回调窗口内确认，超窗返回 `late_unknown`，继续保留待对账。已知终态重复确认无新增次数；相反结果返回 `execution_outcome_conflict`。
-- 当前调度器同日去重，occurrence 由消息 ID、脚本时区执行日和计划字段组成；行号/领取分钟不参与 occurrence。所有更早未决记录都阻止新领取，计划修改也不会隐式重放。旧数据标为 legacy，不猜测历史 occurrence。发送策略后续若支持多实例/更频繁计划，必须同步升级 occurrence 契约。
+- 当前调度器同日去重，occurrence 由消息 ID、脚本时区执行日和计划字段组成；行号/领取分钟不参与 occurrence。3.6.0 起仅同日同计划轮次阻止新领取；昨日未决不阻塞今天。管理页将日期/时间改为今天未来时刻时生成 `Schedule_Revision`，显式开启新轮次，历史回执保留。旧数据标为 legacy，仅当日未决保守阻塞，没有计划版本时不猜测历史 occurrence。发送策略后续若支持多实例/更频繁计划，必须同步升级 occurrence 契约。
 - 3.2.3 提供明确“不补发”的历史关闭维护操作 `maintenanceSkipHistoricalExecutions`：必须逐个指定 execution key、脚本时区截止日期，并确认 `noReplay` 和原执行已结束；只允许关闭截止日前且已过领取期限的 CLAIMED/UNKNOWN。同一锁和原子批次保存 `resolution.kind=owner_skipped`、Logs 的 `Skipped` 行和行内跳过提示。为兼容旧账本读取器，底层使用 FAILED 终态，但保留原状态并明确历史外部结果未核实；不宣称未送达、不发送、不增加次数、不改 Last_Exec、Next_Exec 或用户计划。关闭后拒绝晚到回调覆盖决定；重复关闭不重复记账。具备已有管理能力密钥的所有者可通过 `freshSetup` POST 的 `skipHistorical` 操作调用，密钥只放请求体；普通匿名请求不可调用。此操作不会恢复已暂停的任务，也不会自动清理其他未决项。
 - 领取锁内按 ID 唯一定位（rowHint 仅提示）、检查 Active、比对候选原始快照、核对当日成功和遗留 pending。终态确认首次增加 Exec_Count（包含真实失败尝试），重复不变。较新账本实例存在时，历史确认只增加次数并记历史 Logs，不覆盖当前展示。
 - 领取、确认、迁移、清理和维护共用 ScriptLock。对手动编辑、独立脚本项目与外部 Sheets 写入无隔离保证；必须收拢为单一写入项目。
@@ -306,8 +306,8 @@ Google 原子批次契约与 token/scope 参考：[Sheets batchUpdate](https://d
 - 当前模板版本来自 [app-script-template.gs](/Users/Esone/git/personal-ai/src/scheduled-messages/app-script-template.gs)：
 
   ```javascript
-  var APP_SCRIPT_VERSION = '3.5.0';
-  var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
+  var APP_SCRIPT_VERSION = '3.6.0';
+  var APP_SCRIPT_LAST_UPDATED = '2026-11-04';
   ```
 
 - 后台静默检查只复用已缓存授权，不在页面加载时弹出授权窗口；它只读取线上版本，不会在打开管理页时回写 Config 或触发 Sheet 写保护。用户手动点击“检查脚本”或“升级调度系统”时才触发交互式授权，并保留必要的 Sheet-first 元数据同步；列表状态栏“维护”分组里的“检查脚本”就是同一检查的手动重试入口，hover / 读屏里会先说明页面打开时已自动静默检查一次。
@@ -682,7 +682,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 - Timeline 缓存状态在创建/编辑相关消息时展示；用户从 Jira 手动同步或修复规则后回到扩展，会自动刷新状态并在诊断中区分“缓存不可用”和“缓存仍可用但最近同步失败”。状态面板可直接运行 Apps Script dry-run 测试，也保留复制 curl 的手工排障路径。
 - 302 重定向兼容说明：Google Apps Script `ContentService` 会把文本响应重定向到 `script.googleusercontent.com` 的一次性 URL，Jira Automation Send web request 对第三方 POST 重定向仍有兼容风险（AUTO-2123）。
 - 因此 Jira Rule 里所有指向 AppScript `WEB_APP_URL` 的调用都保持为 GET；`markBotMessageExecuted` / `confirmBotMessageTriggered` 使用 `messageId` / `rowIndex` / `executionKey` 的短 URL 写回，避免 Jira 在 POST 302 上停住导致消息重复推送。
-- Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。3.0.0 起所有通道未确认均不自动重领；claimed TTL（2h）后仅转 UNKNOWN、不记失败，保留迟到确认与人工对账。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
+- Executor Rule 的 `getBotMessageCurrentTime&autoMarkOnFetch=api` 会让 AgentTask / AI Report / 自定义 API Endpoint **领取时只写 claimed**（`⏳ 已领取待确认` + `Last_Exec`），不增加 `Exec_Count`、不写 Logs 成功、不标 `Done`。下游调用成功后由 `confirmBotMessageTriggered` 写最终 ✅。这样即使 Google Web App 302→echo 404 / 超时导致 Jira 拿不到 payload，Sheet 也不会留下假成功锁死当天。3.0.0 起所有通道未确认的原轮次均不自动重领；3.6.0 起次日正常轮次独立领取，管理页明确改期可建立新轮次；claimed TTL（2h）后仅转 UNKNOWN、不记失败，保留迟到确认与人工对账。可用 `scanUnconfirmedClaims` 对账。普通 Bot / RingCentral sender 仍按发送结果回调写入。
 - Apps Script ≥ 2.13.3 不再根据 Config 中的 Executor 版本把 API 领取直接标成成功：Config 可能仍是旧版本，即使实际 Jira Rule 已升级。旧 Executor 也需要升级到支持 confirm 的版本；领取本身不是交付证据。
 - Executor Rule ≥ 1.7.4 在 `executed=true` 判断前记录拉取响应的 HTTP status、executed、message 和 error（不记录完整响应或凭据）。Audit 的 `SUCCESS / Successfully published webhook` 只证明请求动作完成；没有 `Claimed scheduled message` 时，应先看拉取结果，不能推断下游已调用。Messages 读取全表显示值，不受隐藏行或 Sheet 视图筛选影响；状态、推送方式、执行日期、当天成功/失败/待确认状态和时间窗口决定是否返回，`Next_Exec` 不是领取筛选输入。
 - Executor Rule ≥ 1.7.0 在 AgentTask 与 4 条 AI/API 转发分支后追加 `confirmBotMessageTriggered`；≥ 1.7.1 进一步区分 Dify workflow 成功与下游业务接受：只有 `data.outputs.accepted=true` 才确认成功，`accepted=false` 或缺失时把 `error/statusCode/queueStatus` 作为 `trigger_delivery_failed` 回写 Sheet。≥ 1.7.3 的 Bot 私发把 `inputs.email` 设为 Apps Script 返回的 `botmanEmail`，并兼容旧 Apps Script 的 `userName`，不再使用 `initiator.emailAddress`。≥ 1.6.1 的领取 audit Log 仍保留。
@@ -1157,3 +1157,12 @@ A:
 - [Adaptive notification scheduling study](https://www.sciencedirect.com/science/article/abs/pii/S1574119217304388)：真实生产环境中延迟到更合适时机发送通知能改善响应体验
 - [Supporting End-User Debugging of Trigger-Action Rules](https://giove.isti.cnr.it/AssetsSitoLab/publications/ijhcs-rev-final-very-last-24%20september-very-final.pdf)：触发-动作自动化需要把失败原因、位置和下一步恢复动作放到用户能看到的诊断路径里
 - [TAPInspector](https://arxiv.org/abs/2102.01468)：触发-动作系统的并发、延迟和迟到属性会带来安全/活性问题，调度 UI 应把这些风险前置成可理解的状态
+
+
+### 每日轮次隔离与当天改期重推（扩展 12.1.19 / Apps Script 3.6.0）
+
+每天的定期任务属于独立轮次。昨日的 `CLAIMED` / `UNKNOWN` 保留原回执供核对，不再阻止今日正常执行；同日同计划的重复领取仍被去重。这不会补发昨日任务，也不把未确认标成成功。
+
+在管理页把执行日期或时间改为**今天且晚于当前时间**，保存时自动清空 `Last_Exec`、将 `Exec_Log` 置为待执行，并生成新的 `Schedule_Revision`（Messages schema 2.16）；手填时间和「1 分钟后」行为一致。只修改正文、保持原时间、改到过去或其他日期，不触发这项当天重推。改回此前用过的时间也属于新轮次；次数上限、结束日期、启停状态等正常门槛仍然有效，不重置执行次数。
+
+账本按执行日及计划版本隔离，不删除历史锁、不补发旧轮次。原轮次已在执行时，改期不会取消其外部动作；晚到回执只结算原轮次，不覆盖新计划的时间、状态或日志。升级扩展、表结构和 Apps Script 后生效。验证覆盖跨日未确认、同日重排、重复领取、晚到回调和原子计数；无需真实触发业务任务。

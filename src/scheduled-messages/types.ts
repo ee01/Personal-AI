@@ -118,6 +118,7 @@ export interface ScheduledMessage {
   Agent_Multica_Webhook_URL?: string;
   Agent_Multica_Spreadsheet_ID?: string;
   Status: MessageStatus;
+  Schedule_Revision?: string; // Explicit rescheduling round; historical receipts remain intact.
   Last_Exec?: string;     // YYYY-MM-DD HH:mm
   Next_Exec?: string;     // YYYY-MM-DD HH:mm
   Exec_Count?: number;
@@ -199,7 +200,8 @@ export interface CreateMessageFormData {
   Category?: string;  // 逗号分隔的标签，如 "工作,提醒,日常"
   // Jira Automation 链接
   Automation_Link?: string;  // Jira Automation Rule 链接
-  /** 编辑时回填，仅"1 分钟后"快捷改期会清空它，用于绕过"今日已执行"跳过逻辑 */
+  /** 编辑时回填，改到今天未来时间会清空它，用于绕过"今日已执行"跳过逻辑 */
+  Schedule_Revision?: string; // Explicit rescheduling round; historical receipts remain intact.
   Last_Exec?: string;
 }
 

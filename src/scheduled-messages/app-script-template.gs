@@ -26,10 +26,10 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.5.1';
+var APP_SCRIPT_VERSION = '3.6.0';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
-var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
+var APP_SCRIPT_LAST_UPDATED = '2026-11-04';
 var TIMELINE_CACHE_KEY_PREFIX = 'TIMELINE_CACHE_';
 var TIMELINE_SYNC_ATTEMPT_KEY_PREFIX = 'TIMELINE_SYNC_ATTEMPT_';
 var LEGACY_RELEASE_INFO_CACHE_KEY = 'RELEASE_INFO_CACHE';
@@ -2130,7 +2130,7 @@ function buildMessageExecutionKey(message, messageId, now) {
     message.rowIndex,
     message.matchMode || '',
     minuteKey
-  ].join(':');
+  ].concat(message.Schedule_Revision ? [message.Schedule_Revision] : []).join(':');
 
   return normalizeExecutionKey(raw);
 }
@@ -3065,7 +3065,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       continue;
     }
 
-    // 所有执行器未确认领取均阻止自动重领，避免外部效果重复。
+    // 原执行日内未确认领取阻止自动重领。
     if (isClaimPendingBlockingReclaim(rowData, matchDate, now, i + 1)) {
       continue;
     }
@@ -3170,6 +3170,7 @@ function findMatchingMessage(data, headers, now, releaseInfo, matchMode, current
       // 返回完整的消息对象
       return {
         ID: rowData.ID,
+        Schedule_Revision: rowData.Schedule_Revision || '',
         Topic: topic,
         Content: content,
         Glip_User_Name: rowData.Glip_User_Name || '',
@@ -3305,7 +3306,7 @@ function isPushedSuccessfullyToday(rowData, currentDate) {
 
 /**
  * claimed 是否应阻止自动重领。
- * - 所有执行器：未决领取跨日期阻止重领；2h 后记 UNKNOWN，不当真实失败。
+ * - 未决领取只阻止原执行日；旧领取保留供回执核对。
  */
 function isClaimPendingBlockingReclaim(rowData, currentDate, now, rowIndex) {
   const lastExec = rowData.Last_Exec;
@@ -3314,7 +3315,8 @@ function isClaimPendingBlockingReclaim(rowData, currentDate, now, rowIndex) {
     return false;
   }
 
-  // Unresolved delivery blocks automatic re-claim across dates and executors.
+  // A prior day is a different occurrence, not a retry of the old delivery.
+  if (String(lastExec).slice(0, 10) !== currentDate) return false;
 
   const lastExecTime = parseSheetDateTime(lastExec);
   if (lastExecTime && (now.getTime() - lastExecTime.getTime()) > CLAIM_PENDING_MAX_AGE_MS) {
@@ -5307,10 +5309,11 @@ function executionMessageFingerprint(message) {
 }
 
 function executionOccurrence(message, now) {
-  // Current scheduler permits one execution per local day. Revision includes schedule
-  // inputs; unresolved earlier revisions are separately blocked at claim time.
+  // One delivery per local day and explicit schedule revision. Preserve the
+  // legacy shape when no revision exists, so upgrading cannot replay a round.
   const columns = ['Schedule_Date', 'Schedule_Time', 'Repeat_Every', 'Repeat_Unit', 'Repeat_Days',
     'Timeline_Project', 'Timeline_Milestone', 'Timeline_Offset', 'Push_Method'];
+  if (message.Schedule_Revision) columns.push('Schedule_Revision');
   return JSON.stringify([String(message.ID), Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
     columns.map(function(c) { return String(message[c] || ''); })]);
 }
@@ -5332,14 +5335,18 @@ function claimSheetExecution(messageId, rowIndex, candidate, executionKey) {
   const occurrence = executionOccurrence(message, now);
   const existing = store.entries.filter(function(e) {
     return e.record.executionKey === key || (e.record.messageId === String(messageId) &&
-      (e.record.occurrenceId === occurrence || e.record.state === 'CLAIMED' || e.record.state === 'UNKNOWN'));
+      (e.record.occurrenceId === occurrence ||
+       ((!e.record.occurrenceId || e.record.occurrenceId === 'legacy') && !message.Schedule_Revision &&
+        (e.record.state === 'CLAIMED' || e.record.state === 'UNKNOWN') &&
+        Utilities.formatDate(new Date(e.record.claimAt), Session.getScriptTimeZone(), 'yyyy-MM-dd') === Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd'))));
   })[0];
   if (existing) {
     if (existing.record.messageId !== String(messageId)) throw new Error('execution_message_mismatch');
     return { success: true, claimed: true, duplicate: true, stage: 'claimed', executionKey: existing.record.executionKey, rowIndex: resolved.row, messageId: messageId };
   }
   // Includes historical split writes with no surviving mark. Never replay implicitly.
-  if (isClaimPendingLog(message.Exec_Log || '')) throw new Error('legacy_unknown_claim');
+  if (isClaimPendingLog(message.Exec_Log || '') &&
+      (!message.Last_Exec || String(message.Last_Exec).slice(0, 10) === Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd'))) throw new Error('legacy_unknown_claim');
   if (isPushedSuccessfullyToday(message, Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd'))) throw new Error('message_already_executed');
   const record = {
     schemaVersion: 1, writerEpoch: store.control.epoch, executionKey: key, messageId: String(messageId), rowHint: resolved.row,
@@ -5404,7 +5411,10 @@ function confirmSheetExecution(messageId, rowIndex, success, errorMsg, replaced,
   if (now.getTime() > Date.parse(record.retainUntil)) throw new Error('late_unknown');
   const resolved = executionMessage(store, messageId, rowIndex);
   const newerDisplay = parseSheetDateTime(resolved.message.Last_Exec);
-  const newer = (newerDisplay && newerDisplay.getTime() > Date.parse(record.claimAt || record.updatedAt)) || store.entries.some(function(e) { return e.record.messageId === String(messageId) && e.record.executionKey !== key &&
+  const revised = (resolved.message.Schedule_Revision || String(record.occurrenceId || '').charAt(0) === '[') &&
+    record.occurrenceId !== executionOccurrence(resolved.message, new Date(record.claimAt));
+  const historicalDay = Utilities.formatDate(new Date(record.claimAt), Session.getScriptTimeZone(), 'yyyy-MM-dd') !== Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const newer = historicalDay || revised || (newerDisplay && newerDisplay.getTime() > Date.parse(record.claimAt || record.updatedAt)) || store.entries.some(function(e) { return e.record.messageId === String(messageId) && e.record.executionKey !== key &&
     Date.parse(e.record.claimAt || e.record.updatedAt) > Date.parse(record.claimAt || record.updatedAt); });
   const requests = [];
   updateExecutionLog(resolved.sheet, resolved.row, resolved.message, success, resolved.headers, errorMsg, replaced, key, requests, newer, store.logRows[0]);

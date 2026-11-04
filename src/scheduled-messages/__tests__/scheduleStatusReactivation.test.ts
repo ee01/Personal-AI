@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   applyDoneScheduleReactivation,
+  shouldRearmFutureSchedule,
   shouldReactivateDoneMessageAfterScheduleChange,
 } from '../scheduleStatusReactivation.js';
 import type { ScheduledMessage } from '../types';
@@ -189,4 +190,18 @@ test('detects implicit default time changes that move a Done message into the fu
     ),
     true,
   );
+});
+
+
+test('any explicit time edit to today’s future rearms; past, other dates and content-only edits do not', () => {
+  const now = new Date(2026, 4, 18, 10, 0);
+  const previous = createDoneOneTimeMessage({ Status: 'Active' });
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Time: '10:15' }, now), true);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Time: '23:59' }, now), true);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Time: '09:30' }, now), false);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Time: '10:00' }, now), false);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Date: '2026-05-19' }, now), false);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Time: '' }, now), false);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Schedule_Time: 'invalid' }, now), false);
+  assert.equal(shouldRearmFutureSchedule(previous, { ...previous, Content: 'edited' }, now), false);
 });

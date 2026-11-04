@@ -60,6 +60,7 @@ import {
 } from './scheduleNextExecution';
 import {
   applyDoneScheduleReactivation,
+  shouldRearmFutureSchedule,
   shouldReactivateDoneMessageAfterScheduleChange,
 } from './scheduleStatusReactivation';
 import { getScheduledMessageStatusToggleAction } from './scheduledMessageStatusActions';
@@ -371,6 +372,14 @@ export class ScheduledMessageService {
       console.log(`✅ 消息 ${id} 已从 Done 自动恢复为 Active，等待新的未来执行时间`);
     }
     
+    const liveHeaders = await this.getHeaders({ forceRefresh: true });
+    if (shouldRearmFutureSchedule(previousMessage, updatedMessage)) {
+      if (!liveHeaders.includes('Schedule_Revision')) throw new Error('请先升级表结构，再保存新的执行时间');
+      updatedMessage.Schedule_Revision = crypto.randomUUID();
+      updatedMessage.Last_Exec = '';
+      updatedMessage.Exec_Log = '待执行（已重新安排）';
+    }
+
     // 重新计算下次执行时间
     if (
       updates.Schedule_Date !== undefined ||
@@ -389,7 +398,6 @@ export class ScheduledMessageService {
     }
     
     // 更新到 Sheet（行号 = 索引 + 2，因为有表头且从1开始）
-    const liveHeaders = await this.getHeaders({ forceRefresh: true });
     const row = await this.messageToRow(updatedMessage, liveHeaders);
     await this.updateRow(index + 2, row, liveHeaders);
     

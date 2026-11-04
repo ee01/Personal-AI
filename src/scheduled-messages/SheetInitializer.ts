@@ -45,10 +45,11 @@ type InitializationSetupMetadata = Pick<
  * - v2.12: 新增 Agent_Mode（只读/外部写入边界；旧任务默认 read）
  * - v2.13: 新增 Agent_Notify_When_Empty（0 匹配是否仍推结果通知；空/N=不推）
  * - v2.14: 新增 Multica 公开列（不含 webhook）。旧行 Agent_Provider 为空，仍走 legacy_memory。
+ * - v2.16: Schedule_Revision 隔离当天明确改期的执行轮次。
  * - v2.15: 当前 Multica Webhook 及所属 spreadsheet 改存 Messages 行，迁移后删除旧绑定表。
  */
 export const MESSAGES_SCHEMA = {
-  version: '2.15',
+  version: '2.16',
   columns: [
     'ID',
     'Topic',
@@ -101,6 +102,7 @@ export const MESSAGES_SCHEMA = {
     'Agent_Multica_Webhook_URL',
     'Agent_Multica_Spreadsheet_ID',
     'Status',
+    'Schedule_Revision',
     'Last_Exec',
     'Next_Exec',
     'Exec_Count',

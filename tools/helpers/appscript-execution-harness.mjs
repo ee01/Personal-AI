@@ -12,7 +12,7 @@ export function executionHarness(options = {}) {
   Clock.parse = Date.parse;
   Clock.UTC = Date.UTC;
   Clock.prototype = Date.prototype;
-  const headers = ['ID', 'Status', 'Topic', 'Content', 'Push_Method', 'Schedule_Date', 'Schedule_Time', 'Last_Exec', 'Exec_Count', 'Next_Exec', 'Exec_Log', 'Agent_Last_Run_At', 'Agent_Last_Status', 'Agent_Last_Error'];
+  const headers = ['ID', 'Status', 'Topic', 'Content', 'Push_Method', 'Schedule_Date', 'Schedule_Time', 'Last_Exec', 'Exec_Count', 'Next_Exec', 'Exec_Log', 'Agent_Last_Run_At', 'Agent_Last_Status', 'Agent_Last_Error', 'Schedule_Revision'];
   let tables = [
     { id: 1, name: 'Messages', rows: [headers, ['M1', 'Active', 'Hello', 'Body', 'AI', '2026-10-23', '09:00', '', '0', '', '', '', '', '']], maxRows: 1000 },
     { id: 2, name: 'Logs', rows: [], maxRows: 1000 },

@@ -8094,8 +8094,7 @@ ${content}
 
   const applyQuickOneMinuteReschedule = () => {
     applyScheduleDateTime(new Date(Date.now() + 60 * 1000));
-    // 无论是否为循环任务，都清空 Last_Exec，避免"今日已执行"跳过逻辑挡住这次改期后的重推送
-    handleChange('Last_Exec', '');
+    // The service rearms every explicit edit to today’s future, including this shortcut.
   };
 
   const getNextWholeHour = (): Date => {

@@ -1,6 +1,7 @@
 import type { ScheduledMessage } from './types';
 import {
   hasLocalScheduleTime,
+  formatLocalScheduleDate,
   normalizeLocalScheduleTime,
   parseLocalScheduleDate,
   parseLocalScheduleTime,
@@ -110,6 +111,22 @@ function hasScheduleChanged(
       normalizeComparableValue(previousMessage[field]) !==
       normalizeComparableValue(updatedMessage[field]),
   );
+}
+
+/** A deliberate date/time edit to today's future starts a new delivery round. */
+export function shouldRearmFutureSchedule(
+  previous: ScheduledMessage,
+  updated: ScheduledMessage,
+  now = new Date(),
+): boolean {
+  if (previous.Schedule_Date === updated.Schedule_Date && previous.Schedule_Time === updated.Schedule_Time) return false;
+  if (updated.Schedule_Date !== formatLocalScheduleDate(now) || !hasLocalScheduleTime(updated.Schedule_Time)) return false;
+  try {
+    const date = parseLocalScheduleDate(updated.Schedule_Date);
+    const { hours, minutes } = parseLocalScheduleTime(updated.Schedule_Time!);
+    date.setHours(hours, minutes, 0, 0);
+    return date.getTime() > now.getTime();
+  } catch { return false; }
 }
 
 function previewMessageForReactivation(
