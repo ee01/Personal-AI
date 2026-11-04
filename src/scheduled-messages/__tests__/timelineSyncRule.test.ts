@@ -1592,7 +1592,7 @@ test('Executor rule logs claimed task details after executed=true', () => {
     readFileSync(resolve(scheduledMessagesDir, 'jira-rule-template.json'), 'utf8'),
   );
 
-  assert.equal(template._metadata.version, '1.10.0');
+  assert.equal(template._metadata.version, '1.10.1');
 
   const components = Array.isArray(template.components) ? template.components : [];
   const executedGateIndex = components.findIndex((node: any) =>
@@ -1662,7 +1662,10 @@ test('Executor rule marks sent messages through GET Apps Script callbacks with s
     assert.match(url, /messageId=\{\{messageId\.urlEncode\}\}/);
     assert.match(url, /rowIndex=\{\{rowIndex\}\}/);
     assert.match(url, /executionKey=\{\{executionKey\.urlEncode\}\}/);
-    assert.doesNotMatch(url, /webhookResponse\.body\.rowIndex|webhookResponse\.body\.executionKey|topic=|content=/);
+    assert.doesNotMatch(url, /webhookResponse\.body\.rowIndex|webhookResponse\.body\.executionKey/);
+    // topic/content ride the saved replaced* variables when present, never raw refs
+    if (url.includes('topic=')) assert.match(url, /topic=\{\{replacedTopic\.urlEncode\}\}/);
+    if (url.includes('content=')) assert.match(url, /content=\{\{replacedContent\.urlEncode\}\}/);
     assert.equal(webhook.value.customBody, undefined);
   }
   assert.equal(webhooks.filter(webhook => String(webhook.value.url).includes('success=true')).length, 4);
@@ -1981,7 +1984,7 @@ test('Jira rule payload redaction hides RingCentral sender credentials', () => {
 test('Apps Script mark-executed path does not double-decode already decoded parameters', () => {
   const appScript = readFileSync(resolve(scheduledMessagesDir, 'app-script-template.gs'), 'utf8');
 
-  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.5\.0';/);
+  assert.match(appScript, /var APP_SCRIPT_VERSION = '3\.5\.1';/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(e\.parameter\.topic\);/);
   assert.match(appScript, /const replacedContent = getRequestParameterValue\(e\.parameter\.content\);/);
   assert.match(appScript, /const replacedTopic = getRequestParameterValue\(parameters\.topic\);/);

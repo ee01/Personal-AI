@@ -26,7 +26,7 @@
  */
 
 // App Script 版本号（用于检测更新）
-var APP_SCRIPT_VERSION = '3.5.0';
+var APP_SCRIPT_VERSION = '3.5.1';
 // Set only by the authenticated creator of a fresh candidate project. Never returned by probes.
 var FRESH_SETUP_TOKEN = '';
 var APP_SCRIPT_LAST_UPDATED = '2026-11-03';
@@ -1345,7 +1345,7 @@ function updateExecutionLog(sheet, rowIndex, rowData, success, headers, errorMsg
   if (requests) {
     const claimedLogRow = findClaimedLogRow(rowData.ID);
     if (claimedLogRow) {
-      updateClaimedLogRow(claimedLogRow, success ? 'Success' : 'Failed', errorMsg || '', execCount, replacedContent || null, requests);
+      updateClaimedLogRow(claimedLogRow, success ? 'Success' : 'Failed', errorMsg || '', execCount, replacedContent || null, requests, logTopic, logContent);
       return;
     }
   }
@@ -1396,7 +1396,7 @@ function findClaimedLogRow(messageId) {
 }
 
 /** Update the claim-time log row to its final lifecycle status. */
-function updateClaimedLogRow(claimed, status, error, execCount, sendResultMeta, requests) {
+function updateClaimedLogRow(claimed, status, error, execCount, sendResultMeta, requests, topic, content) {
   const sentChatId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentChatId) : '';
   const sentPostId = sendResultMeta ? getRequestParameterValue(sendResultMeta.sentPostId) : '';
   const sentAt = sendResultMeta && getRequestParameterValue(sendResultMeta.sentAt)
@@ -1406,11 +1406,16 @@ function updateClaimedLogRow(claimed, status, error, execCount, sendResultMeta, 
     ['Status', status],
     ['Error', error || ''],
     ['Exec_Count', isFinite(execCount) ? execCount : ''],
+    // The final pushed text overwrites the planned content in place when the
+    // confirm callback carries it; an empty value keeps what the claim wrote.
+    ['Topic', topic || ''],
+    ['Content', content || ''],
     ['Sent_Chat_ID', sentChatId || ''],
     ['Sent_Post_ID', sentPostId || ''],
     ['Sent_At', sentAt || ''],
   ];
   fields.forEach(function(field) {
+    if (field[0] !== 'Status' && field[0] !== 'Error' && (field[1] === '' || field[1] == null)) return;
     const column = getColumnIndex(claimed.headers, field[0]);
     if (column <= 0) return;
     if (requests) {
@@ -5359,7 +5364,10 @@ function claimSheetExecution(messageId, rowIndex, candidate, executionKey) {
   // schema problem must never block claiming.
   if (isClaimConfirmMessage(message)) {
     try {
-      insertPushLog(messageId, message.Topic || '', '已领取，等待下游确认', message.Push_Method || '',
+      // The claim row carries the planned content — lifecycle markers belong in
+      // Status. The executor-side final text (when obtainable) overwrites it
+      // in place at confirm time.
+      insertPushLog(messageId, message.Topic || '', message.Content || '', message.Push_Method || '',
         '', false, '', parseInt(message.Exec_Count, 10) || 0, key, null, requests, store.logRows[0], 'Claimed');
     } catch (logError) {
       Logger.log('跳过领取日志: ' + logError);

@@ -104,11 +104,13 @@ test('one log row per execution: the claim row evolves to Success', () => {
   assert.equal(rows.length, 2, 'header plus the single claim row');
   assert.equal(rows[1][6], 'Claimed');
   assert.equal(rows[1][1], 'M1');
+  assert.equal(rows[1][3], 'Body', 'claim row carries the planned content, not a lifecycle marker');
   h.confirm('k1');
   rows = h.table('Logs').rows;
   assert.equal(rows.length, 2, 'confirm updates the same row, no second entry');
   assert.equal(rows[1][6], 'Success');
   assert.equal(rows[1][1], 'M1');
+  assert.equal(rows[1][3], 'Body', 'Content stays the pushed text');
   assert.equal(rows[1][8], '1', 'Exec_Count is updated in place');
 });
 
