@@ -942,14 +942,20 @@ export class JiraAutomationService {
       console.log(`✅ 获取到新的 securetoken: ${webhookToken.substring(0, 8)}...`);
       
       // 构建新的规则数据，使用新的 token
+      // searchOrProvide 必须显式设置（为 null 会被 A4J 后端 NPE 拒绝）。
+      // 默认 'none' = "No issues from the webhook"：转换后的 webhook 只作为外部调度入口，
+      // 触发方不会在 POST body 里携带 issues；若导入的规则本身声明了 provided/search，则保留原值。
+      const importedTriggerValue = ruleData.trigger.value || {};
       finalRuleData = {
         ...ruleData,
         trigger: {
           ...ruleData.trigger,
           id: '__NEW__TRIGGER',
           value: {
+            ...importedTriggerValue,
             webhookToken: webhookToken,
-            searchOrProvide: 'provided'
+            searchOrProvide: importedTriggerValue.searchOrProvide || 'none',
+            jql: importedTriggerValue.jql ?? null
           }
         }
       };
@@ -1001,14 +1007,18 @@ export class JiraAutomationService {
     // 第二步：使用 token 更新 rule 的 trigger 为 incoming webhook
     console.log('📝 步骤2: 更新 rule trigger 为 incoming webhook...');
     
-    // 创建 incoming webhook trigger，必须包含 webhookToken 和 searchOrProvide
+    // 创建 incoming webhook trigger，必须包含 webhookToken 和 searchOrProvide（为 null 会被 A4J 后端 NPE 拒绝）
+    // searchOrProvide: 'none' = "No issues from the webhook"：这个 webhook 只作为外部调度触发入口，
+    // 调用方（调度器/executor rule）不会在 POST body 里提供 issues，规则动作也不依赖 issue 上下文。
+    // jql: null 与 A4J 导出的 none 规则结构一致。
     const webhookTrigger = {
       id: '__NEW__TRIGGER',
       component: 'TRIGGER',
       type: 'jira.incoming.webhook',
       value: {
         webhookToken: webhookToken,
-        searchOrProvide: 'provided'  // 必须设置，否则会报 null 错误
+        searchOrProvide: 'none',
+        jql: null
       }
     };
     
