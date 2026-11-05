@@ -197,13 +197,14 @@ test('extension status never returns PAT and rejects untrusted pages or foreign 
   assert.equal(fresh.connected, false);
   assert.equal(fresh.apiOrigin, 'http://task.xmnup.com');
   assert.equal(fresh.webOrigin, 'http://task.xmnup.com');
+  const omittedLocal = memoryStore();
   const omitted = await handleMulticaExtensionMessage({
     type: 'MULTICA_VERIFY',
     data: { pat: 'pat_secret_value' },
   }, sender, {
     extensionId: 'ext',
     session: memoryStore(),
-    local: memoryStore(),
+    local: omittedLocal,
     clientFactory: (connection) => {
       assert.equal(connection.apiOrigin, 'http://task.xmnup.com');
       assert.equal(connection.webOrigin, 'http://task.xmnup.com');
@@ -216,12 +217,17 @@ test('extension status never returns PAT and rejects untrusted pages or foreign 
   assert.equal(omitted.success, true);
   assert.equal(omitted.connection?.apiOrigin, 'http://task.xmnup.com');
   assert.equal(omitted.connection?.webOrigin, 'http://task.xmnup.com');
+  assert.equal(omitted.connection?.remember, true);
+  assert.equal((omittedLocal.dump.multicaConnectionRemembered as StoredMulticaConnection).remember, true);
   await session.set({ multicaConnectionSession: stored });
   const status = await handleMulticaExtensionMessage({ type: 'MULTICA_STATUS' }, sender, {
     extensionId: 'ext', session, local,
   });
   assert.equal(JSON.stringify(status).includes('pat_secret_value'), false);
   assert.equal(status.connection?.connected, true);
+  assert.equal(status.connection?.remember, true);
+  assert.equal(session.dump.multicaConnectionSession, undefined);
+  assert.equal((local.dump.multicaConnectionRemembered as StoredMulticaConnection).remember, true);
   const rejected = await handleMulticaExtensionMessage({ type: 'MULTICA_STATUS' }, {
     id: 'ext', url: 'chrome-extension://ext/content.js',
   }, { extensionId: 'ext', session, local });
@@ -534,6 +540,12 @@ test('saved PAT restores workspace resources and remembers account-scoped defaul
   // Empty PAT can revalidate the same saved service, but never a new service.
   assert.equal((await send('MULTICA_VERIFY', { apiOrigin: API, webOrigin: 'https://multica.ai', pat: '', remember: true })).success, true);
   assert.equal((await send('MULTICA_VERIFY', { apiOrigin: 'https://other.test', webOrigin: 'https://other.test', pat: '' })).success, false);
+  assert.equal((await send('MULTICA_SAVE_DEFAULTS', {
+    workspaceId: 'ws_fixture', agentId: 'agent_fixture', projectId: '', trusted: true,
+  })).success, true);
+  assert.equal((await send('MULTICA_SET_REMEMBER', { remember: false })).connection?.remember, false);
+  assert.equal((await send('MULTICA_STATUS')).connection?.remember, false);
+  assert.equal((await send('MULTICA_SET_REMEMBER', { remember: true })).connection?.remember, true);
 });
 
 

@@ -769,7 +769,7 @@ Dify 应用导出与接线说明集中在 [src/scheduled-messages/dify/](../../s
 可用 capability 保护的 `inspectMulticaAgentTask`（传 messageId）诊断绑定、所属表及 Active 状态。此接口只返回状态，不返回 Webhook/capability，不领取、不写执行账本、不触发任务，也不会清除复制表的 Webhook。
 
 - 新建「帮我做」默认 `Agent_Provider=multica`。旧行保持 `legacy_memory` 或空值，仍走上面的 memory-service / Dify 路径，不会自动迁移。
-- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。「记住这台设备」默认勾选，验证后 PAT 存入本机 `chrome.storage.local`；取消勾选改用 `chrome.storage.session`，关闭浏览器后清除。PAT 不进 Sheet；Webhook 在 Messages 行内保存，但不进日志或扩展页面可复制内容。
+- 扩展用当前用户自己的 PAT 调 Multica HTTP API，创建一个只有 webhook trigger 的 Autopilot（`execution_mode=create_issue`）。「记住此设备」默认勾选，验证后 PAT 存入本机 `chrome.storage.local`；取消勾选改用 `chrome.storage.session`，关闭浏览器后清除。旧的仅 session PAT 会在下次打开时迁到本机存储。上次选择的 Workspace、Agent、Project 缓存在同一本机扩展存储里，新建任务时自动填入。PAT 不进 Sheet；Webhook 在 Messages 行内保存，但不进日志或扩展页面可复制内容。
 - 编辑「帮我做」时默认折叠整个执行配置（包含 Multica / Memory 选择、连接、Autopilot / Webhook 绑定及 Memory 执行边界/通知）。展开后可以修改，Autopilot 提供外链，Webhook 只显示是否已绑定，不显示密钥。打开编辑页不会创建远端对象。
 - 再次打开或从 Memory 切到 Multica 时自动复用本机已验证 PAT，并重新读取 workspace、Agent、project 列表；页面不回填 PAT 明文。可以留空 PAT「重新检查连接」，更换服务地址必须重新填写 PAT。新建任务复用上次选择的 workspace、Agent、project；偏好按 API 地址和用户 ID 隔离，本机保存，即使取消任务草稿也保留最后选择。编辑已有任务优先使用该行原有 workspace / Agent / project，不覆盖为其他任务的默认值。无权访问或失效选项不会被静默替代。
 - 修改任务正文、Agent 或 project 时更新原 Autopilot；只改时间、主题且绑定完整时可沿用原绑定，不要求重新填写 PAT。更换 workspace / 账号 / API 地址须选择「保存时新建 Autopilot 和 Webhook」。新建替代绑定或改回 Memory 时，先暂停 Sheet 计划、停用旧 Webhook，再保存新配置；失败保持暂停且显示失败原因，旧 Autopilot 不删除，已有执行不被取消；更换绑定需要本机 PAT 仍能访问旧绑定，不能用另一个账号的 PAT 停用原账号的 Webhook。替代创建重试使用同一新绑定 ID，避免重复创建。

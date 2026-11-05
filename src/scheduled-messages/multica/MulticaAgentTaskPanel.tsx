@@ -91,7 +91,7 @@ export function MulticaAgentTaskPanel(props: {
     setWebOrigin(connection.webOrigin);
     setAccountLabel(connection.accountLabel || '');
     setUserId(connection.userId || '');
-    setRemember(connection.remember === true);
+    setRemember(connection.remember !== false);
     setWorkspaces(response.workspaces || []);
     setWorkspaceId(connection.workspaceId || '');
     setAgents(response.agents || []);
@@ -120,7 +120,7 @@ export function MulticaAgentTaskPanel(props: {
         const response = await sendMultica('MULTICA_STATUS');
         if (cancelled || !response.connection?.connected) return;
         setHasStoredPat(true);
-        setRemember(response.connection.remember === true);
+        setRemember(response.connection.remember !== false);
         if (!initial) {
           setApiOrigin(response.connection.apiOrigin);
           setWebOrigin(response.connection.webOrigin);
@@ -147,7 +147,7 @@ export function MulticaAgentTaskPanel(props: {
   const saveDefaults = async (nextAgent: string, nextProject: string, nextWorkspace = workspaceId) => {
     try {
       await sendMultica('MULTICA_SAVE_DEFAULTS', {
-        workspaceId: nextWorkspace, agentId: nextAgent, projectId: nextProject,
+        workspaceId: nextWorkspace, agentId: nextAgent, projectId: nextProject, trusted: true,
       });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '保存默认选择失败');

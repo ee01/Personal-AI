@@ -10,6 +10,7 @@ import {
 import {
   MULTICA_CAPABILITY_KEY,
   MULTICA_RULE_STAMP_KEY,
+  persistMulticaTaskDefaults,
   ensureSchedulerCapability,
   sendMulticaExtensionMessage,
   type KeyValueStorage,
@@ -208,6 +209,13 @@ export async function saveMulticaScheduledAgentTask(input: {
     }
     if (jiraReady) await local.set({ [MULTICA_RULE_STAMP_KEY]: stamp });
   }
+
+  await persistMulticaTaskDefaults(local, apiOrigin, userId, {
+    workspaceId,
+    workspaceSlug,
+    agentId,
+    projectId,
+  });
 
   const result = await provisionMulticaScheduledTask({
     bindingUuid,

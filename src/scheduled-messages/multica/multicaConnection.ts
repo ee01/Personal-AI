@@ -8,6 +8,7 @@ import {
 } from './multicaContract.js';
 
 export const MULTICA_DEFAULTS_KEY = 'multicaTaskDefaults';
+export const MULTICA_REMEMBER_OPT_OUT_KEY = 'multicaRememberOptOut';
 
 export interface MulticaTaskDefaults {
   workspaceId: string;
@@ -60,7 +61,7 @@ export function toPublicConnection(stored: StoredMulticaConnection | null): Publ
       accountLabel: '',
       workspaceId: '',
       workspaceSlug: '',
-      remember: false,
+      remember: true,
     };
   }
   return {
@@ -90,15 +91,38 @@ export function isTrustedMulticaSender(
   }
 }
 
+export function shouldRememberDevice(value: unknown): boolean {
+  return value !== false;
+}
+
+export async function persistMulticaTaskDefaults(
+  local: KeyValueStorage,
+  apiOrigin: string,
+  userId: string,
+  defaults: MulticaTaskDefaults,
+): Promise<void> {
+  if (!apiOrigin || !userId || !defaults.workspaceId) return;
+  const values = await local.get([MULTICA_DEFAULTS_KEY]);
+  const map = (values[MULTICA_DEFAULTS_KEY] as Record<string, MulticaTaskDefaults> | undefined) || {};
+  await local.set({
+    [MULTICA_DEFAULTS_KEY]: { ...map, [`${apiOrigin}|${userId}`]: defaults },
+  });
+}
+
 export async function loadStoredConnection(
   session: KeyValueStorage,
   local: KeyValueStorage,
 ): Promise<StoredMulticaConnection | null> {
+  const localValue = await local.get([MULTICA_LOCAL_KEY, MULTICA_REMEMBER_OPT_OUT_KEY]);
+  const fromLocal = readStored(localValue[MULTICA_LOCAL_KEY]);
+  if (fromLocal) return fromLocal;
   const sessionValue = await session.get([MULTICA_SESSION_KEY]);
   const fromSession = readStored(sessionValue[MULTICA_SESSION_KEY]);
-  if (fromSession) return fromSession;
-  const localValue = await local.get([MULTICA_LOCAL_KEY]);
-  return readStored(localValue[MULTICA_LOCAL_KEY]);
+  if (!fromSession) return null;
+  if (localValue[MULTICA_REMEMBER_OPT_OUT_KEY] === true) return fromSession;
+  const upgraded = { ...fromSession, remember: true };
+  await saveStoredConnection(session, local, upgraded);
+  return upgraded;
 }
 
 export async function saveStoredConnection(
@@ -109,10 +133,12 @@ export async function saveStoredConnection(
   if (connection.remember) {
     await local.set({ [MULTICA_LOCAL_KEY]: connection });
     await session.remove([MULTICA_SESSION_KEY]);
+    await local.remove([MULTICA_REMEMBER_OPT_OUT_KEY]);
     return;
   }
   await session.set({ [MULTICA_SESSION_KEY]: connection });
   await local.remove([MULTICA_LOCAL_KEY]);
+  await local.set({ [MULTICA_REMEMBER_OPT_OUT_KEY]: true });
 }
 
 export async function clearStoredConnection(session: KeyValueStorage, local: KeyValueStorage): Promise<void> {
@@ -237,7 +263,8 @@ export async function handleMulticaExtensionMessage(
       const previous = await loadStoredConnection(deps.session, deps.local);
       const reusable = previous?.apiOrigin === apiOrigin && previous?.webOrigin === webOrigin;
       const pat = normalizeMulticaPat(String(data.pat || (reusable ? previous?.pat : '') || ''));
-      const probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, data.remember === true, deps);
+      const remember = shouldRememberDevice(data.remember);
+      const probed = await probeMulticaAccount(apiOrigin, webOrigin, pat, remember, deps);
       const keepWorkspace = previous?.apiOrigin === apiOrigin && previous?.userId === probed.account.id
         && probed.workspaces.some(item => item.id === previous.workspaceId);
       const connection: StoredMulticaConnection = {
@@ -249,7 +276,7 @@ export async function handleMulticaExtensionMessage(
         workspaceId: keepWorkspace ? previous!.workspaceId : '',
         workspaceSlug: keepWorkspace ? previous!.workspaceSlug : '',
         allowedWorkspaceIds: probed.workspaces.map((item) => item.id),
-        remember: data.remember === true,
+        remember,
       };
       await saveStoredConnection(deps.session, deps.local, connection);
       return {
@@ -264,7 +291,7 @@ export async function handleMulticaExtensionMessage(
     const stored = await loadStoredConnection(deps.session, deps.local);
     if (!stored) return { success: false, error: '尚未验证 Multica 连接', code: 'not_connected' };
     if (type === 'MULTICA_SET_REMEMBER') {
-      const next = { ...stored, remember: data.remember === true };
+      const next = { ...stored, remember: shouldRememberDevice(data.remember) };
       await saveStoredConnection(deps.session, deps.local, next);
       return { success: true, connection: toPublicConnection(next) };
     }
@@ -319,17 +346,17 @@ export async function handleMulticaExtensionMessage(
     const scoped = { ...stored, workspaceId };
     const client = clientFor(scoped);
     if (type === 'MULTICA_SAVE_DEFAULTS') {
-      const [agents, projects] = await Promise.all([client.listAgents(), client.listProjects()]);
       const agentId = String(data.agentId || '');
       const projectId = String(data.projectId || '');
-      if ((agentId && !agents.some(item => item.id === agentId))
-        || (projectId && !projects.some(item => item.id === projectId))) {
-        throw new Error('Agent 或 project 不属于当前 workspace');
+      if (data.trusted !== true) {
+        const [agents, projects] = await Promise.all([client.listAgents(), client.listProjects()]);
+        if ((agentId && !agents.some(item => item.id === agentId))
+          || (projectId && !projects.some(item => item.id === projectId))) {
+          throw new Error('Agent 或 project 不属于当前 workspace');
+        }
       }
       const defaults = { workspaceId, workspaceSlug: stored.workspaceSlug, agentId, projectId };
-      const values = await deps.local.get([MULTICA_DEFAULTS_KEY]);
-      const map = values[MULTICA_DEFAULTS_KEY] as Record<string, MulticaTaskDefaults> || {};
-      await deps.local.set({ [MULTICA_DEFAULTS_KEY]: { ...map, [defaultKey]: defaults } });
+      await persistMulticaTaskDefaults(deps.local, stored.apiOrigin, stored.userId, defaults);
       return { success: true, defaults };
     }
     if (type === 'MULTICA_LIST_RESOURCES') {
