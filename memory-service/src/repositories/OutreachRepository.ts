@@ -286,6 +286,7 @@ export interface OutreachSessionListFilters {
   statuses?: OutreachSessionStatus[];
   originKind?: string;
   templateId?: string;
+  occurrenceKey?: string;
   threadId?: string;
   actionId?: string;
   limit?: number;
@@ -753,6 +754,10 @@ export class OutreachRepository {
       conditions.push('template_id = ?');
       params.push(filters.templateId);
     }
+    if (filters.occurrenceKey) {
+      conditions.push('occurrence_key = ?');
+      params.push(filters.occurrenceKey);
+    }
     if (filters.threadId) {
       conditions.push('thread_id = ?');
       params.push(filters.threadId);
@@ -768,7 +773,7 @@ export class OutreachRepository {
         `SELECT *
          FROM outreach_sessions
          ${whereClause}
-         ORDER BY updated_at DESC, created_at DESC
+         ORDER BY updated_at DESC, created_at DESC, id DESC
          LIMIT ? OFFSET ?`,
       )
       .all(...params, limit, offset) as OutreachSessionRow[];
@@ -951,6 +956,14 @@ export class OutreachRepository {
       )
       .all(sessionId, Math.max(1, Math.min(limit, 1000))) as OutreachEventRow[];
     return rows.map((row) => this.rowToEvent(row));
+  }
+
+  listEventsPage(sessionId: string, limit = 200, offset = 0) {
+    const total = (this.db.prepare('SELECT COUNT(*) AS count FROM outreach_events WHERE session_id = ?')
+      .get(sessionId) as CountRow).count;
+    const rows = this.db.prepare(`SELECT * FROM outreach_events WHERE session_id = ?
+      ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?`).all(sessionId, limit, offset) as OutreachEventRow[];
+    return { items: rows.map(row => this.rowToEvent(row)), total, limit, offset, hasMore: offset + rows.length < total };
   }
 
   getSummary(): OutreachSummary {

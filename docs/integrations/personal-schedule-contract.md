@@ -30,6 +30,10 @@ No messages use the old page's `personal-schedule` window channel: its handler r
 
 ## Memory contract delivered
 
+### Outreach chain read projection (2026-11-07)
+
+Use existing `GET /api/v1/outreach/sessions?templateId=...&includeHistory=1`, optionally pin `occurrenceKey` and paginate `eventLimit/eventOffset`. It reads persisted sessions/events without dispatch, hydration or LLM. Adds `events`, `history` pagination and `businessRef` per session; default list unchanged. Full field mapping, auth/empty/failure contracts, real local HTTP evidence, remaining action mismatch and Schedule proxy handoff: `schedule-outreach-chain.md`. No second scheduler/chain manager is introduced.
+
 `POST /api/v1/outreach/templates/:id/trigger-occurrence`
 
 ```json

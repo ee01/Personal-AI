@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { OutreachEngine } from '../core/OutreachEngine.js';
+import { OutreachRepository } from '../repositories/OutreachRepository.js';
 import type {
   OutreachApprovalPolicy,
   OutreachSessionStatus,
@@ -306,6 +307,10 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       statuses?: string;
       originKind?: string;
       templateId?: string;
+      occurrenceKey?: string;
+      includeHistory?: string;
+      eventLimit?: string;
+      eventOffset?: string;
       threadId?: string;
       actionId?: string;
       limit?: string;
@@ -314,28 +319,74 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   }>('/outreach/sessions', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
     const engine = new OutreachEngine(db, userDataManager, request.userId);
-    const result = engine.listSessions({
-      status: request.query.status,
-      statuses: parseStatuses(request.query.statuses),
-      originKind: request.query.originKind,
-      templateId: request.query.templateId,
-      threadId: request.query.threadId,
-      actionId: request.query.actionId,
-      limit: parseInt(request.query.limit ?? '20', 10) || 20,
-      offset: parseInt(request.query.offset ?? '0', 10) || 0,
-    });
-    const items = await Promise.all(
-      result.items.map(async (session) => {
-        const detail = await engine.getSessionDetail(session.id);
-        return detail
-          ? { ...detail.session, evidence: detail.evidence }
-          : session;
-      }),
-    );
-    return reply.status(200).send({
-      ...result,
-      items,
-    });
+    const q = request.query;
+    for (const key of ['templateId', 'occurrenceKey', 'includeHistory', 'eventLimit', 'eventOffset', 'limit', 'offset'] as const) {
+      if (q[key] !== undefined && typeof q[key] !== 'string') return reply.code(400).send({ error: 'invalid_chain_query' });
+    }
+    if (q.includeHistory !== undefined && !['1', 'true', '0', 'false'].includes(q.includeHistory)) {
+      return reply.code(400).send({ error: 'invalid_chain_query' });
+    }
+    const includeHistory = q.includeHistory === '1' || q.includeHistory === 'true';
+    if (includeHistory) reply.header('Cache-Control', 'private, no-store');
+    if ((q.occurrenceKey !== undefined || includeHistory) && (!q.templateId?.trim() || q.templateId.length > 512) ||
+      q.occurrenceKey !== undefined && (!q.occurrenceKey.trim() || q.occurrenceKey.length > 512)) {
+      return reply.code(400).send({ error: 'templateId_required_or_invalid_occurrence' });
+    }
+    const pageNumber = (value: string | undefined, fallback: number, min: number, max: number) => {
+      if (value === undefined) return fallback;
+      return /^(0|[1-9]\d*)$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) >= min && Number(value) <= max
+        ? Number(value) : null;
+    };
+    const eventLimit = pageNumber(q.eventLimit, 100, 1, 200);
+    const eventOffset = pageNumber(q.eventOffset, 0, 0, 1000000);
+    const limit = includeHistory ? pageNumber(q.limit, 20, 1, 50) : parseInt(q.limit ?? '20', 10) || 20;
+    const offset = includeHistory ? pageNumber(q.offset, 0, 0, 1000000) : parseInt(q.offset ?? '0', 10) || 0;
+    if (eventLimit === null || eventOffset === null || limit === null || offset === null) {
+      return reply.code(400).send({ error: 'invalid_chain_pagination' });
+    }
+    try {
+      const result = engine.listSessions({
+        status: request.query.status,
+        statuses: parseStatuses(request.query.statuses),
+        originKind: request.query.originKind,
+        templateId: request.query.templateId,
+        occurrenceKey: request.query.occurrenceKey,
+        threadId: request.query.threadId,
+        actionId: request.query.actionId,
+        limit,
+        offset,
+      });
+      if (includeHistory) {
+        // Pure projection: no sender hydration, LLM, dispatch or state mutation.
+        const repo = new OutreachRepository(db);
+        const items = result.items.map(session => {
+          const page = repo.listEventsPage(session.id, eventLimit, eventOffset);
+          return { ...session, events: page.items,
+            history: { total: page.total, limit: page.limit, offset: page.offset, hasMore: page.hasMore },
+            businessRef: { kind: 'outreach_session', id: session.id,
+              detailPath: `/api/v1/outreach/sessions/${encodeURIComponent(session.id)}` } };
+        });
+        return reply.code(200).send({ ...result, items, schemaVersion: 1, historyIncluded: true,
+          timeUnit: 'unix_seconds', emptyReason: result.total === 0 ? 'no_sessions' : null,
+          hasMore: result.offset + items.length < result.total });
+      }
+      const items = await Promise.all(
+        result.items.map(async (session) => {
+          const detail = await engine.getSessionDetail(session.id);
+          return detail
+            ? { ...detail.session, evidence: detail.evidence }
+            : session;
+        }),
+      );
+      return reply.status(200).send({
+        ...result,
+        items,
+      });
+    } catch (error) {
+      if (!includeHistory) throw error;
+      request.log.error({ err: error }, 'Outreach chain read failed');
+      return reply.code(503).send({ error: 'outreach_chain_unavailable', retryable: true });
+    }
   });
 
   app.post<{
