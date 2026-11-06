@@ -38,6 +38,7 @@ module.exports = (env) => {
       contentScriptWebIntelligence: './src/contentScriptWebIntelligence.ts',
       contentScriptRPA: './src/contentScriptRPA.ts',
       contentScriptRoadmap: './src/contentScriptRoadmap.ts',
+      contentScriptSchedule: './src/contentScriptSchedule.ts',
       contentScriptRingCentralVideoHome:
         './src/contentScriptRingCentralVideoHome.ts',
       contentScriptRingCentralMeeting:
@@ -136,11 +137,9 @@ module.exports = (env) => {
           {
             from: 'docs/demo/roadmap-demo.html',
             to: 'help-demos/roadmap-demo.html',
+            noErrorOnMissing: true,
           },
-          {
-            from: 'src/scheduled-messages/app-script-template.gs',
-            to: 'app-script-template.gs',
-          },
+
         ],
       }),
       new webpack.ProvidePlugin({

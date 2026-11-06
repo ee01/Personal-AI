@@ -1,3 +1,4 @@
+import { publishableResult } from './publishableResult.js';
 /**
  * Parse Personal AI agent result envelopes from model output.
  * Accepts a JSON envelope, JSON inside markdown fences, or a conservative
@@ -292,7 +293,7 @@ function resolveEnvelopeParts(
     summary,
     outcome,
     artifacts,
-    payload,
+    payload: { ...payload, ...publishableResult(parsed) },
   };
 }
 

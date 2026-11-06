@@ -1,3 +1,4 @@
+import { ScheduleServiceSettings } from './components/ScheduleServiceSettings';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import { useState, useEffect, useRef } from 'react';
@@ -4649,6 +4650,7 @@ const Options = () => {
         <LlmConfigGuidance config={config} />
       </div>
 
+      <ScheduleServiceSettings />
       <div className="form-section" id="roadmap-config">
         <h2>{t('options.sections.roadmap')}</h2>
         <div className="form-group">

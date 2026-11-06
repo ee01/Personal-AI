@@ -266,37 +266,7 @@ const manifest = JSON.parse(readFileSync('src/manifest.json', 'utf8'));
 assert.deepEqual(
   manifest.oauth2.scopes,
   [...GOOGLE_AUTH_SCOPE_SETS.FULL],
-  'Manifest and One Click full scope contract must stay aligned',
-);
-
-const oneClickSource = readFileSync(
-  'src/scheduled-messages/components/OneClickSetup.tsx',
-  'utf8',
-);
-assert.match(
-  oneClickSource,
-  /caller: 'OneClickSetup\.getAuthToken',[\s\S]{0,220}scopes: GOOGLE_AUTH_SCOPE_SETS\.FULL,[\s\S]{0,80}promptForAccount: true/,
-  'One Click Setup must keep the complete scope request',
-);
-
-const managerSource = readFileSync(
-  'src/scheduled-messages/ScheduledMessagesManager.tsx',
-  'utf8',
-);
-assert.match(
-  managerSource,
-  /caller: 'ScheduledMessagesManager\.init',[\s\S]{0,120}scopes: GOOGLE_AUTH_SCOPE_SETS\.SHEETS/,
-  'Scheduled Messages initialization must request only Sheets',
-);
-assert.match(
-  managerSource,
-  /本次不会请求 Google Slides 权限/,
-  'Scheduled Messages recovery UI must state its no-Slides boundary',
-);
-assert.match(
-  managerSource,
-  /caller: 'ScheduledMessagesManager\.handleReauth',[\s\S]{0,160}promptForAccount: true/,
-  'Explicit Scheduled Messages recovery must allow choosing another Google account',
+  'Manifest Google scope contract must stay aligned',
 );
 
 const backgroundSource = readFileSync('src/background.ts', 'utf8');
@@ -304,21 +274,6 @@ assert.match(
   backgroundSource,
   /caller: 'background\.analyzeSlides',[\s\S]{0,100}scopes: GOOGLE_AUTH_SCOPE_SETS\.SLIDES/,
   'Background Slides analysis must request only Slides',
-);
-
-const serviceSource = readFileSync(
-  'src/scheduled-messages/ScheduledMessageService.ts',
-  'utf8',
-);
-assert.match(
-  serviceSource,
-  /caller: 'ScheduledMessageService\.refreshToken',[\s\S]{0,140}scopes: GOOGLE_AUTH_SCOPE_SETS\.SHEETS/,
-  'Scheduled Messages refresh must retain its Sheets scope',
-);
-assert.match(
-  serviceSource,
-  /ACCESS_TOKEN_SCOPE_INSUFFICIENT[\s\S]{0,260}Google Sheets 授权不完整/,
-  'Sheets API scope failures must be distinguished from ordinary access errors',
 );
 
 console.log('✅ Google auth scope verifier passed');

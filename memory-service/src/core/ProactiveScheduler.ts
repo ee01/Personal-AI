@@ -85,15 +85,15 @@ export class ProactiveScheduler {
     const config = getConfig();
     const startedLoops: string[] = [];
 
-    // Outreach scheduling is independent of the full proactive scheduler.
-    // Per-user enablement is enforced inside OutreachEngine.runSchedulerCycle().
-    if (process.env.OUTREACH_SCHEDULER_ENABLED !== 'false') {
+    // Conversation progression only: initial scheduled asks arrive from Schedule.
+    // Reply polling, approval and follow-up remain owned by Memory.
+    if (process.env.OUTREACH_SESSION_LOOP_ENABLED !== 'false') {
       this.outreachIntervalId = setInterval(() => {
         this.safeRun('outreach', () => this.runOutreachCycle());
       }, config.outreachIntervalMs);
       startedLoops.push(`outreach every ${config.outreachIntervalMs}ms`);
     } else {
-      console.log('[ProactiveScheduler] Outreach scheduler disabled');
+      console.log('[ProactiveScheduler] Outreach session loop disabled');
     }
 
     // Task Center drains on its own short cadence, and deliberately sits before

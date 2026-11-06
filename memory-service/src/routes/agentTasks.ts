@@ -1,3 +1,4 @@
+import { publishableResult } from '../integrations/executors/publishableResult.js';
 import type { FastifyInstance } from 'fastify';
 
 import { ActionExecutor } from '../core/actions/ActionExecutor.js';
@@ -131,6 +132,8 @@ export interface AgentTaskRuntimeStatusItem {
   } | null;
   /** Prefer OpenClaw result.summary; fall back to lastError when failed. */
   summary?: string;
+  final_output?: string;
+  publish_fields?: Record<string, unknown>;
   /** First artifact for evidence hover; does not replace summary as primary result. */
   evidence?: AgentTaskEvidencePreview;
   /** Queued action blocked by ActionReadiness (OpenClaw config/auth); not a terminal queue_status. */
@@ -245,11 +248,25 @@ export function buildAgentTaskRuntimeStatusItem(action: {
       lastError: action.lastError,
     },
     summary,
+    ...publishableResult(action.result),
     evidence,
   };
 }
 
 export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
+  // Exact run lookup prevents two overlapping occurrences from consuming one
+  // another's latest task-level receipt. request.userContext is user-scoped.
+  app.get<{ Params: { id: string } }>('/agent-tasks/runs/:id/result', async (request, reply) => {
+    const action = new ActionRepository(request.userContext.db).getById(request.params.id);
+    if (!action || action.sourceKind !== 'agent_task') return reply.code(404).send({ error: 'Run not found' });
+    const publish = publishableResult(action.result);
+    return { runId: action.id, taskId: action.sourceRefId, status: action.queueStatus,
+      scheduleSpec: (action.params?.metadata as Record<string, unknown> | undefined)?.scheduleSpec,
+      summaryForOwner: getExecutionSummary(action.result) || action.lastError || '',
+      finalOutput: publish.final_output, publishFields: publish.publish_fields,
+      attachments: Array.isArray(action.result?.artifacts) ? action.result.artifacts : [] };
+  });
+
   app.get<{
     Querystring: { ids?: string; limit?: string };
   }>('/agent-tasks/runtime-status', async (request, reply) => {

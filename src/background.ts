@@ -1,3 +1,5 @@
+import { hostJiraSchedule } from './scheduleJira';
+import { createComposeSchedule, scheduleDeliveryMarkers, handleScheduleBridge, openSchedule, registerScheduleBridge, scheduleApi, scheduleConnection, SCHEDULE_PENDING_KEY } from './scheduleService';
 import { analyzeMessagesInBackground } from './messageDealing';
 // embeddings.ts 已废弃 — 后端 memory-service 处理嵌入生成
 import {
@@ -27,7 +29,6 @@ import {
 import {
   GOOGLE_AUTH_SCOPE_SETS,
   getGoogleAuthToken,
-  getGoogleAuthTokenSilently,
 } from './utils/googleAuth';
 import { IntelligentAgent } from './agentThinking';
 import { ProjectAnalysisResult } from './interfaces/analysisInterfaces';
@@ -84,41 +85,15 @@ import {
   waitForTabLoad,
   sendMessageWithRetry,
 } from './utils/tabHelpers';
-import { AppScriptUpdater } from './scheduled-messages/AppScriptUpdater';
-import { ConfigSyncService } from './scheduled-messages/ConfigSyncService';
-import { JiraRuleUpdater } from './scheduled-messages/JiraRuleUpdater';
-import { SheetSchemaUpdater } from './scheduled-messages/SheetSchemaUpdater';
-import { ScheduledMessageService } from './scheduled-messages/ScheduledMessageService';
 import { handleMulticaExtensionMessage } from './scheduled-messages/multica/multicaConnection.js';
-import {
-  applyTaskCenterSheetMirrorControl,
-  registerSheetMessageInLedgerSafe,
-  TASK_CENTER_SHEET_MIRROR_MESSAGE,
-  upsertTaskCenterSheetMirror,
-} from './services/TaskCenterLedgerSync';
 import { JiraAutomationService } from './scheduled-messages/JiraAutomationService';
 import {
-  getAgentTaskWebhookConfig,
-  hasRingCentralSenderCredentials,
-  normalizeSheetConfig,
-  withAgentTaskWebhook,
-} from './scheduled-messages/botAutomationConfig';
-import {
   formatLocalScheduleDateTime,
-  normalizeLocalScheduleTime,
 } from './scheduled-messages/scheduleDateTime';
 import {
   buildAgentTaskWebhookUrlFromMemoryBase,
   normalizeAgentTaskUserId,
-  resolveAgentTaskWebhookConfig,
 } from './scheduled-messages/agentTaskWebhookConfig';
-import { calculateScheduledMessageNextExecution } from './scheduled-messages/scheduleNextExecution';
-import type {
-  CreateMessageFormData,
-  PushLog,
-  ScheduledMessage,
-  SheetConfig,
-} from './scheduled-messages/types';
 import {
   getCurrentUser,
   getProjectByKey,
@@ -156,9 +131,7 @@ import {
   openMemoryEntryRules,
 } from './utils/memoryEntryRulesNavigation';
 import {
-  doesSnoozeReminderMatchSchedule,
   getSnoozeReminderSourceKey,
-  isOpenSnoozeReminder,
 } from './message-reaction/snoozeDeduplication';
 import {
   registerConcernedItemsDigestTask,
@@ -166,10 +139,7 @@ import {
 } from './services/DigestQueueService';
 import {
   buildFollowThreadMarkers,
-  buildScheduledPushLogMarkers,
-  buildScheduledSnoozeMarkers,
   mergeMarkerIndexes,
-  upsertGlipPendingScheduledMessage,
   writeGlipMessageMarkersCache,
 } from './services/GlipMessageMarkerService';
 import {
@@ -355,41 +325,6 @@ function buildComposerAssistDisabledResponse(debug = false) {
     queryTimeMs: 0,
     debug: debug ? { rejectedReason: 'composer_assist_disabled' } : undefined,
   };
-}
-
-async function ensureAgentTaskWebhookConfigForBackground(token: string): Promise<void> {
-  const storage = await chrome.storage.local.get(['scheduledMessagesConfig', 'userinfo']);
-  const config = storage.scheduledMessagesConfig
-    ? normalizeSheetConfig(storage.scheduledMessagesConfig) as SheetConfig
-    : null;
-  if (!config?.sheetId) {
-    throw new Error('缺少 Scheduled Messages 配置，无法写入 AgentTask webhook');
-  }
-
-  const existingWebhook = getAgentTaskWebhookConfig(config);
-  const envConfig = await getEnvConfig();
-  const resolvedWebhook = resolveAgentTaskWebhookConfig({
-    existingWebhook,
-    memoryServiceBaseUrl: envConfig.MEMORY_SERVICE_BASE_URL,
-    memoryServiceApiKey: envConfig.MEMORY_SERVICE_API_KEY,
-    userIdCandidates: [storage.userinfo?.username, storage.userinfo?.email],
-    requireUserId: true,
-  });
-  if (!resolvedWebhook.webhook) {
-    if (resolvedWebhook.missingReason === '缺少 memory-service 用户身份') {
-      throw new Error('缺少 memory-service 用户身份，无法创建重复 AR AgentTask');
-    }
-    throw new Error('缺少 memory-service webhook，无法创建重复 AR AgentTask');
-  }
-
-  if (!resolvedWebhook.changed) {
-    return;
-  }
-
-  const syncService = new ConfigSyncService(token);
-  await syncService.syncConfig(withAgentTaskWebhook(config, resolvedWebhook.webhook), {
-    syncAction: 'agent_task_webhook_auto_config',
-  });
 }
 
 function nonEmptyArString(value: unknown): string | undefined {
@@ -719,34 +654,6 @@ function executePersonalAiArBindingDeduped(data: Record<string, any>): Promise<{
   return task;
 }
 
-async function detachPersonalAiArAgentTask(data: Record<string, any>): Promise<ScheduledMessage> {
-  const messageId = String(data.messageId || '').trim();
-  const arBindingId = String(data.arBindingId || '').trim();
-  if (!messageId) {
-    throw new Error('缺少要暂停的 AgentTask 行 ID');
-  }
-
-  const token = await getGoogleAuthTokenSilently({
-    caller: 'background.detachAgentTaskFromArBinding',
-    scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-  });
-  if (!token) {
-    throw new Error('缺少 Google 授权，无法暂停重复 AR AgentTask');
-  }
-
-  const messageService = new ScheduledMessageService(token);
-  const updates: Partial<ScheduledMessage> = {
-    Status: 'Paused',
-    Agent_AR_Binding_ID: '',
-    Agent_Last_Status: 'ar_detached',
-    Agent_Last_Result: arBindingId
-      ? `AR binding ${arBindingId} 已取消重复执行`
-      : 'AR binding 已取消重复执行',
-    Exec_Log: 'AR binding 已取消重复执行；任务已暂停，历史记录保留。',
-  };
-  return messageService.updateMessage(messageId, updates);
-}
-
 function waitForDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1002,278 +909,8 @@ async function clearBackendNotificationMeta(
   }
 }
 
-interface OutreachTemplateMirrorOverrides {
-  targetType?: string;
-  targetRef?: string;
-  contextTemplate?: string;
-  maxFollowup?: number;
-  followupIntervalHours?: number;
-}
-
-function parseOutreachEpochSeconds(raw?: string): number | undefined {
-  if (!raw || !raw.trim()) return undefined;
-  const normalized = raw.includes('T')
-    ? raw
-    : raw.includes(' ')
-    ? raw.replace(' ', 'T')
-    : `${raw}T09:00:00`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return Math.floor(date.getTime() / 1000);
-}
-
-function getOutreachScheduleTimeZone(): string {
-  return (
-    Intl.DateTimeFormat().resolvedOptions().timeZone?.trim() || 'Asia/Shanghai'
-  );
-}
-
-function isRecurringScheduledMessage(message: ScheduledMessage): boolean {
-  return Boolean(message.Repeat_Every && message.Repeat_Unit);
-}
-
-function getExpectedOutreachScheduleTime(message: ScheduledMessage): string {
-  return normalizeLocalScheduleTime(message.Schedule_Time) || '09:00';
-}
-
-function isNextExecAlignedWithScheduleTime(
-  message: ScheduledMessage,
-  nextExecution?: string,
-): boolean {
-  if (!nextExecution?.trim()) return false;
-
-  try {
-    const { timeStr } = formatLocalScheduleDateTime(nextExecution);
-    return timeStr === getExpectedOutreachScheduleTime(message);
-  } catch {
-    return false;
-  }
-}
-
-function resolveOutreachNextExecution(message: ScheduledMessage): string {
-  if (!isRecurringScheduledMessage(message)) {
-    return message.Next_Exec || message.Schedule_Date || '';
-  }
-
-  if (isNextExecAlignedWithScheduleTime(message, message.Next_Exec)) {
-    return message.Next_Exec || '';
-  }
-
-  return calculateScheduledMessageNextExecution(message);
-}
-
-function buildOutreachScheduleSpec(
-  message: ScheduledMessage,
-): Record<string, unknown> {
-  const spec: Record<string, unknown> = {
-    timezone: getOutreachScheduleTimeZone(),
-  };
-  const nextDispatchAt = parseOutreachEpochSeconds(
-    resolveOutreachNextExecution(message),
-  );
-  if (nextDispatchAt) {
-    spec.nextDispatchAt = nextDispatchAt;
-  }
-  if (message.Schedule_Date) {
-    spec.scheduleDate = message.Schedule_Date;
-  }
-  if (message.Schedule_Time) {
-    spec.scheduleTime = message.Schedule_Time;
-  }
-  if (message.Repeat_Every && message.Repeat_Unit) {
-    spec.repeatEvery = Number(message.Repeat_Every);
-    spec.repeatUnit = message.Repeat_Unit;
-  }
-  if (message.Repeat_Days) {
-    spec.repeatDays = message.Repeat_Days;
-  }
-  if (message.End_Date) {
-    spec.endDate = message.End_Date;
-  }
-  if (message.Repeat_Count) {
-    spec.repeatCount = Number(message.Repeat_Count);
-  }
-  return spec;
-}
-
-function resolveOutreachTargetRef(
-  message: ScheduledMessage,
-  targetType?: string,
-): string {
-  return (
-    (targetType === 'group'
-      ? message.Glip_Team_ID?.trim()
-      : message.Glip_User_Name?.trim()) ||
-    message.Outreach_Target_Ref?.trim() ||
-    ''
-  );
-}
-
-function buildOutreachTemplatePayload(
-  message: ScheduledMessage,
-  overrides: OutreachTemplateMirrorOverrides = {},
-) {
-  const targetType =
-    overrides.targetType ||
-    message.Target_Type ||
-    message.Outreach_Target_Type ||
-    (message.Glip_Team_ID ? 'group' : 'private');
-  const targetRef =
-    overrides.targetRef?.trim() ||
-    resolveOutreachTargetRef(message, targetType);
-  const questionTemplate =
-    message.Content?.trim() ||
-    (
-      message as ScheduledMessage & { Outreach_Question?: string }
-    ).Outreach_Question?.trim();
-  if (!targetRef) {
-    throw new Error('Outreach target ref is required');
-  }
-  if (!questionTemplate) {
-    throw new Error('Outreach question is required');
-  }
-
-  const status = message.Status || 'Active';
-  const enabled = status === 'Active';
-  const syncState =
-    status === 'Paused'
-      ? 'paused'
-      : status === 'Completed' || status === 'Done'
-      ? 'cancelled'
-      : 'synced';
-
-  return {
-    id: message.ID,
-    sourceKind: 'scheduled_message',
-    sourceRefId: message.ID,
-    sheetMessageId: message.ID,
-    title: message.Topic,
-    questionTemplate,
-    contextTemplate: overrides.contextTemplate?.trim(),
-    informationGoalTemplate: overrides.contextTemplate?.trim(),
-    targetType,
-    targetRef,
-    scheduleSpec: buildOutreachScheduleSpec(message),
-    enabled,
-    approvalPolicy: 'manual_direct',
-    maxFollowup: overrides.maxFollowup,
-    followupIntervalSeconds:
-      overrides.followupIntervalHours === undefined
-        ? undefined
-        : Math.max(3600, Number(overrides.followupIntervalHours ?? 24) * 3600),
-    syncState,
-  };
-}
-
-async function syncOutreachTemplateMirror(
-  message: ScheduledMessage,
-  overrides?: OutreachTemplateMirrorOverrides,
-): Promise<void> {
-  const client = getMemoryServiceClient();
-  await client.upsertOutreachTemplate(
-    buildOutreachTemplatePayload(message, overrides),
-  );
-}
-
-async function cancelOutreachTemplateMirror(messageId: string): Promise<void> {
-  const client = getMemoryServiceClient();
-  await client.cancelOutreachTemplate(messageId);
-}
-
-/**
- * Registers AgentTask result-notification preferences directly with
- * memory-service instead of relying on them reaching it through Sheet ->
- * deployed Apps Script -> request body. That path only forwards whatever
- * fields the *deployed* GAS version knows about, so config added after the
- * last upgrade (e.g. successReceipt) silently never arrives.
- */
-function buildAgentTaskNotifyTargetPayload(
-  message: ScheduledMessage,
-): { type: 'private' | 'group'; targetGroupId?: string; glipUserName?: string } | null {
-  if (message.Target_Type === 'group') {
-    const groupId = message.Glip_Team_ID?.trim();
-    return groupId ? { type: 'group', targetGroupId: groupId } : null;
-  }
-  const glipUserName = message.Glip_User_Name?.trim();
-  return glipUserName ? { type: 'private', glipUserName } : null;
-}
-
-/** Empty means the task never chose, so memory-service keeps empty results silent. */
-function normalizeAgentNotifyWhenEmpty(value?: string): 'Y' | 'N' | undefined {
-  const normalized = String(value || '').trim().toUpperCase();
-  return normalized === 'Y' || normalized === 'N' ? normalized : undefined;
-}
-
-async function syncAgentTaskNotifyConfigMirror(message: ScheduledMessage): Promise<void> {
-  if (message.Push_Method !== 'AgentTask') return;
-  const client = getMemoryServiceClient();
-  await client.upsertAgentTaskNotifyConfig({
-    sheetMessageId: message.ID,
-    notifyTarget: buildAgentTaskNotifyTargetPayload(message),
-    successReceipt: message.Agent_Notify_Success_Receipt === 'N' ? 'N' : 'Y',
-    notifyVia: message.Agent_Notify_Via === 'asme' ? 'asme' : 'bot',
-    notifyTemplate: message.Agent_Notify_Template?.trim() || undefined,
-    notifyWhenEmpty: normalizeAgentNotifyWhenEmpty(message.Agent_Notify_When_Empty),
-  });
-}
-
-async function deleteAgentTaskNotifyConfigMirror(sheetMessageId: string): Promise<void> {
-  const client = getMemoryServiceClient();
-  await client.deleteAgentTaskNotifyConfig(sheetMessageId);
-}
-
-async function pauseOutreachTemplateMirror(
-  message: ScheduledMessage,
-): Promise<void> {
-  const client = getMemoryServiceClient();
-  try {
-    await client.pauseOutreachTemplate(message.ID);
-  } catch (error) {
-    const messageText = error instanceof Error ? error.message : String(error);
-    if (!messageText.includes('404')) {
-      throw error;
-    }
-    await client.upsertOutreachTemplate(
-      buildOutreachTemplatePayload({ ...message, Status: 'Paused' }),
-    );
-  }
-}
-
 let glipMarkerRefreshInFlight: Promise<any> | null = null;
 let glipMarkerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-async function getScheduledSheetDataForMarkers(): Promise<{
-  messages: ScheduledMessage[];
-  pushLogs: PushLog[];
-}> {
-  try {
-    const { scheduledMessagesConfig } = await chrome.storage.local.get([
-      'scheduledMessagesConfig',
-    ]);
-    if (!scheduledMessagesConfig?.sheetId) {
-      return { messages: [], pushLogs: [] };
-    }
-    const token = await getGoogleAuthTokenSilently({
-      caller: 'refreshGlipMessageMarkers',
-      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-    });
-    if (!token) {
-      return { messages: [], pushLogs: [] };
-    }
-    const service = new ScheduledMessageService(token);
-    const [messages, pushLogs] = await Promise.all([
-      service.getAllMessages(),
-      service.getRecentPushLogs(500),
-    ]);
-    return { messages, pushLogs };
-  } catch (error) {
-    console.warn(
-      '⚠️ 同步 Scheduled Message Glip 标注失败，跳过 Sheet marker:',
-      error,
-    );
-    return { messages: [], pushLogs: [] };
-  }
-}
 
 async function refreshGlipMessageMarkers(): Promise<unknown> {
   if (glipMarkerRefreshInFlight) {
@@ -1281,7 +918,7 @@ async function refreshGlipMessageMarkers(): Promise<unknown> {
   }
 
   glipMarkerRefreshInFlight = (async () => {
-    const [{ concernedItems }, outreachSnapshot, scheduledSheetData] =
+    const [{ concernedItems }, outreachSnapshot, scheduleData] =
       await Promise.all([
         chrome.storage.local.get(['concernedItems']),
         getMemoryServiceClient()
@@ -1293,13 +930,12 @@ async function refreshGlipMessageMarkers(): Promise<unknown> {
             );
             return { items: [], generatedAt: 0 };
           }),
-        getScheduledSheetDataForMarkers(),
+        scheduleDeliveryMarkers().catch(() => ({ markers: {}, delivered: [] })),
       ]);
 
     const markersByChatId = mergeMarkerIndexes(
       buildFollowThreadMarkers(concernedItems || []),
-      buildScheduledSnoozeMarkers(scheduledSheetData.messages),
-      buildScheduledPushLogMarkers(scheduledSheetData.pushLogs),
+      scheduleData.markers,
       // memory-service already returns flat marker records; index them via cache writer helper.
       mergeMarkerIndexes(
         ...outreachSnapshot.items.map((marker) => ({
@@ -1310,13 +946,8 @@ async function refreshGlipMessageMarkers(): Promise<unknown> {
       ),
     );
 
-    const deliveredScheduledMessageIds = scheduledSheetData.pushLogs
-      .filter((log) => log.Status === 'Success')
-      .map((log) => (typeof log.Message_ID === 'string' ? log.Message_ID : ''))
-      .filter(Boolean);
-
     return writeGlipMessageMarkersCache(markersByChatId, {
-      deliveredScheduledMessageIds,
+      deliveredScheduledMessageIds: scheduleData.delivered,
     });
   })().finally(() => {
     glipMarkerRefreshInFlight = null;
@@ -1466,118 +1097,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
     // 启动统一后台作业
     await backgroundJobs.startAllTasks();
-
-    // 如果是扩展更新，检查并更新 Sheet Schema、App Script 和 Jira Rule
-    // 注意：使用 getCachedAuthToken 避免在无用户操作时弹出授权窗口
-    if (details.reason === 'update') {
-      console.log(
-        '🔄 检测到扩展更新，检查 Sheet Schema、App Script 和 Jira Rule 是否需要更新...',
-      );
-
-      // 1. 检查并更新 Sheet Schema（先更新表结构，再更新脚本）
-      // 使用静默方法：只使用缓存的 token，不弹出授权窗口
-      SheetSchemaUpdater.checkAndAutoUpdate(
-        () =>
-          getGoogleAuthTokenSilently({
-            caller: 'background.autoUpdateSchema',
-            scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-          }),
-        {
-          showNotification: true,
-        },
-      )
-        .then(() => {
-          Logger.upgrade(manifest.version, true, 'Sheet Schema 更新成功', {
-            component: 'SheetSchema',
-          });
-        })
-        .catch((error) => {
-          console.error('❌ Sheet Schema 自动更新失败:', error);
-          Logger.upgrade(manifest.version, false, 'Sheet Schema 更新失败', {
-            component: 'SheetSchema',
-            error: error.message,
-          });
-        });
-
-      // 2. 检查并更新 App Script（延迟 3 秒，等待 Schema 更新完成）
-      // 使用静默方法：只使用缓存的 token，不弹出授权窗口
-      setTimeout(() => {
-        AppScriptUpdater.checkAndAutoUpdate(() =>
-          getGoogleAuthTokenSilently({
-            caller: 'background.autoUpdateAppScript',
-            scopes: GOOGLE_AUTH_SCOPE_SETS.APPS_SCRIPT_ADMIN,
-          }),
-        )
-          .then((outcome) => {
-            // checkAndAutoUpdate resolves even when it skipped or failed, so the
-            // log line has to follow the outcome instead of the promise.
-            if (outcome.status === 'updated') {
-              Logger.upgrade(manifest.version, true, 'App Script 更新成功', {
-                component: 'AppScript',
-                newVersion: outcome.newVersion,
-              });
-              return;
-            }
-
-            if (outcome.status === 'up_to_date') {
-              Logger.upgrade(manifest.version, true, 'App Script 已是最新版本', {
-                component: 'AppScript',
-                currentVersion: outcome.currentVersion,
-              });
-              return;
-            }
-
-            if (outcome.status === 'skipped') {
-              Logger.upgrade(manifest.version, true, `App Script 更新已跳过（${outcome.reason}）`, {
-                component: 'AppScript',
-                reason: outcome.reason,
-              });
-              return;
-            }
-
-            Logger.upgrade(manifest.version, false, 'App Script 更新失败', {
-              component: 'AppScript',
-              error: outcome.error,
-              ...('errorCode' in outcome && outcome.errorCode
-                ? { errorCode: outcome.errorCode }
-                : {}),
-            });
-          })
-          .catch((error) => {
-            console.error('❌ App Script 自动更新失败:', error);
-            Logger.upgrade(manifest.version, false, 'App Script 更新失败', {
-              component: 'AppScript',
-              error: error.message,
-            });
-          });
-      }, 3000);
-
-      // 3. 检查并更新 Jira Automation Rule（延迟 8 秒，避免与上面的更新冲突）
-      // 使用静默方法：只使用缓存的 token，不弹出授权窗口
-      JiraRuleUpdater.checkAndAutoUpdate(
-        () =>
-          getGoogleAuthTokenSilently({
-            caller: 'background.autoUpdateJiraRule',
-            scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-          }),
-        {
-          delay: 8000,
-          showNotification: true,
-        },
-      )
-        .then(() => {
-          Logger.upgrade(manifest.version, true, 'Jira Rule 更新成功', {
-            component: 'JiraRule',
-          });
-        })
-        .catch((error) => {
-          console.error('❌ Jira Rule 自动更新失败:', error);
-          Logger.upgrade(manifest.version, false, 'Jira Rule 更新失败', {
-            component: 'JiraRule',
-            error: error.message,
-          });
-        });
-    }
 
     chrome.storage.local.remove('ollamaAnalysisProgress');
 
@@ -1831,6 +1350,38 @@ async function openOptionsPageWithHash(hash?: string): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'GET_SCHEDULE_SETUP') {
+    void scheduleConnection().then(c => sendResponse({ configured: Boolean(c) })); return true;
+  }
+  if (request.type === 'OPEN_SCHEDULE_SETUP') {
+    void chrome.tabs.create({ url: chrome.runtime.getURL('options.html#personal-schedule-config') });
+    sendResponse({ success: true }); return true;
+  }
+  if (request.type === 'HOST_SCHEDULE_JIRA') {
+    void hostJiraSchedule(request.data).then(sendResponse).catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+  if (request.type === 'PERSONAL_SCHEDULE_BRIDGE') {
+    void handleScheduleBridge(request, sender).then(result => sendResponse({ success: true, result })).catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+  if (request.type === 'SCHEDULE_SETUP_SAVED') {
+    if (sender.url && !sender.url.startsWith(chrome.runtime.getURL(''))) return false;
+    void (async () => {
+      await registerScheduleBridge();
+      const stored = await chrome.storage.local.get(SCHEDULE_PENDING_KEY);
+      const pending = stored[SCHEDULE_PENDING_KEY];
+      if (pending?.kind === 'jira') return hostJiraSchedule(pending.data);
+      if (pending?.kind === 'compose') {
+        const result = await createComposeSchedule(pending.data);
+        if (!result.success) throw new Error(result.error);
+        return { success: true, message: '已继续提交定时消息，请在新版检查并启用。' };
+      }
+      return { success: true };
+    })().then(sendResponse).catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
   // 全局日志：记录所有收到的消息
   // console.log(
   //   '🔔 Background 收到消息:',
@@ -1959,176 +1510,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (
-    request.type === 'CREATE_AGENT_TASK_FROM_AR_BINDING' ||
-    request.type === 'UPSERT_AGENT_TASK_FROM_AR_BINDING'
-  ) {
-    (async () => {
-      try {
-        const data = request.data || {};
-        const token = await getGoogleAuthTokenSilently({
-          caller: 'background.createAgentTaskFromArBinding',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        if (!token) {
-          throw new Error('缺少 Google 授权，无法写入 Scheduled Messages');
-        }
-        await ensureAgentTaskWebhookConfigForBackground(token);
-
-        const messageService = new ScheduledMessageService(token);
-        const today = formatLocalScheduleDateTime(new Date()).dateStr;
-        const repeatUnit = data.repeatUnit === 'Month' ? 'Month' : 'Week';
-        const repeatEvery = data.repeatEvery === 3 ? 3 : 1;
-        const taskPrompt = String(data.taskPrompt || '').trim();
-        if (!taskPrompt) {
-          throw new Error('缺少 Agent task 描述');
-        }
-
-        const formData: CreateMessageFormData = {
-          Topic: String(data.title || 'AR 数据更新').trim() || 'AR 数据更新',
-          Content: taskPrompt,
-          Schedule_Date: today,
-          Schedule_Time: '',
-          Repeat_Every: repeatEvery,
-          Repeat_Unit: repeatUnit,
-          Push_Method: 'AgentTask',
-          Target_Type: 'private',
-          Category: 'AR 数据,帮我做',
-          Agent_Task_ID: String(data.agentTaskId || `agent_task_${Date.now()}`),
-          Agent_Executor: '',
-          Agent_Notify_Template: String(data.notifyTemplate || '').trim(),
-          Agent_Notify_Success_Receipt: 'Y',
-          Agent_Trigger_Source: 'jira_rule',
-          Agent_AR_Binding_ID: String(data.arBindingId || '').trim(),
-        };
-
-        let saved: ScheduledMessage;
-        const messageId = String(data.messageId || '').trim();
-        if (messageId) {
-          try {
-            saved = await messageService.updateMessage(messageId, formData);
-          } catch (error: any) {
-            if (!String(error?.message || '').includes('未找到消息')) {
-              throw error;
-            }
-            saved = await messageService.createMessage(formData);
-          }
-        } else {
-          saved = await messageService.createMessage(formData);
-        }
-
-        void registerSheetMessageInLedgerSafe(saved);
-        sendResponse({ success: true, message: saved });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'create_agent_task_failed',
-        });
+  if (['CREATE_AGENT_TASK_FROM_AR_BINDING', 'UPSERT_AGENT_TASK_FROM_AR_BINDING', 'DETACH_AGENT_TASK_FROM_AR_BINDING'].includes(request.type)) {
+    void (async () => {
+      const data = request.data || {};
+      if (request.type === 'DETACH_AGENT_TASK_FROM_AR_BINDING') {
+        await scheduleApi(`/tasks/${encodeURIComponent(data.messageId)}/status`, 'POST', { status: 'paused' });
+        return { success: true };
       }
-    })();
-    return true;
-  }
-
-  if (request.type === 'DETACH_AGENT_TASK_FROM_AR_BINDING') {
-    (async () => {
-      try {
-        const message = await detachPersonalAiArAgentTask(request.data || {});
-        sendResponse({ success: true, message });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'detach_agent_task_failed',
-        });
-      }
-    })();
-    return true;
-  }
-
-  if (request.type === 'SYNC_OUTREACH_TEMPLATE_MIRROR') {
-    (async () => {
-      try {
-        await syncOutreachTemplateMirror(
-          request.data?.message as ScheduledMessage,
-          request.data?.overrides as
-            | OutreachTemplateMirrorOverrides
-            | undefined,
-        );
-        sendResponse({ success: true });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'sync_failed',
-        });
-      }
-    })();
-    return true;
-  }
-
-  if (request.type === 'CANCEL_OUTREACH_TEMPLATE_MIRROR') {
-    (async () => {
-      try {
-        await cancelOutreachTemplateMirror(
-          String(request.data?.messageId || ''),
-        );
-        sendResponse({ success: true });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'cancel_failed',
-        });
-      }
-    })();
-    return true;
-  }
-
-  if (request.type === 'SYNC_AGENT_TASK_NOTIFY_CONFIG') {
-    (async () => {
-      try {
-        await syncAgentTaskNotifyConfigMirror(
-          request.data?.message as ScheduledMessage,
-        );
-        sendResponse({ success: true });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'sync_failed',
-        });
-      }
-    })();
-    return true;
-  }
-
-  if (request.type === 'DELETE_AGENT_TASK_NOTIFY_CONFIG') {
-    (async () => {
-      try {
-        await deleteAgentTaskNotifyConfigMirror(
-          String(request.data?.sheetMessageId || ''),
-        );
-        sendResponse({ success: true });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'delete_failed',
-        });
-      }
-    })();
-    return true;
-  }
-
-  if (request.type === 'PAUSE_OUTREACH_TEMPLATE_MIRROR') {
-    (async () => {
-      try {
-        await pauseOutreachTemplateMirror(
-          request.data?.message as ScheduledMessage,
-        );
-        sendResponse({ success: true });
-      } catch (error: any) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'pause_failed',
-        });
-      }
-    })();
+      const interval = Number(data.repeatEvery) === 3 ? 3 : 1;
+      const task = { type: 'agent_task', title: data.title || 'AR 数据更新', content: data.taskPrompt,
+        scheduleSpec: data.repeatUnit === 'Month' ? { kind: 'cron', expr: `0 9 1 */${interval} *`, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+          : { kind: 'rate', intervalMinutes: interval * 10080 },
+        config: { executor: 'memory', mode: 'write', arBindingId: data.arBindingId }, status: 'paused',
+        notify: { notifyMe: { mode: 'every' }, publish: { enabled: false } } };
+      const saved = await scheduleApi(data.messageId ? `/tasks/${encodeURIComponent(data.messageId)}` : '/tasks', data.messageId ? 'PATCH' : 'POST', task);
+      return { success: true, message: { ...saved.task, ID: saved.task.id } };
+    })().then(sendResponse).catch(e => sendResponse({ success: false, error: e.message }));
     return true;
   }
 
@@ -2350,33 +1747,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       } catch (error) {
         sendResponse({ success: false, error: error.message });
-      }
-    })();
-    return true;
-  }
-
-  if (request.type === TASK_CENTER_SHEET_MIRROR_MESSAGE) {
-    (async () => {
-      try {
-        const action = request.action || request.data?.action;
-        const task = request.task || request.data?.task;
-        if (!task) {
-          sendResponse({ success: false, error: 'missing task' });
-          return;
-        }
-        if (action === 'upsert') {
-          const saved = await upsertTaskCenterSheetMirror(task, {
-            interactive: request.interactive !== false,
-          });
-          sendResponse({ success: true, task: saved });
-          return;
-        }
-        await applyTaskCenterSheetMirrorControl(task, action, {
-          interactive: request.interactive === true,
-        });
-        sendResponse({ success: true });
-      } catch (error: any) {
-        sendResponse({ success: false, error: error?.message || 'sheet_mirror_failed' });
       }
     })();
     return true;
@@ -3921,393 +3291,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // 将 Incoming Webhook Trigger 转换回 Scheduled Trigger（撤销托管）
-  if (request.type === 'CONVERT_WEBHOOK_TO_SCHEDULED') {
-    (async () => {
-      try {
-        const { ruleId, projectId, jiraUrl, scheduleConfig } = request.data;
-        console.log(`🔄 将规则 ${ruleId} 的 trigger 转换回 scheduled...`);
-
-        // 使用 JiraAutomationService
-        const service = new JiraAutomationService();
-
-        // 获取项目 Key（使用统一的 jiraFetch）
-        const projectResponse = await jiraFetch(
-          `${jiraUrl}/rest/api/2/project/${projectId}`,
-        );
-        const projectData = await projectResponse.json();
-        const projectKey = projectData.key;
-
-        const config = {
-          jiraUrl,
-          projectKey,
-        };
-
-        // 转换为 scheduled trigger
-        await service.convertToScheduledTrigger(config, ruleId, scheduleConfig);
-
-        sendResponse({ success: true });
-      } catch (error: any) {
-        console.error('转换 Jira Rule 为 scheduled 失败:', error);
-        sendResponse({ success: false, error: error.message });
-      }
-    })();
-    return true;
-  }
-
-  // 添加 Scheduled Message（从 Jira Automation 页面调用）
-  if (request.type === 'ADD_SCHEDULED_MESSAGE') {
-    (async () => {
-      try {
-        console.log('📝 收到 ADD_SCHEDULED_MESSAGE 请求:', request.data);
-        const messageData = request.data;
-
-        // 获取配置和 token
-        const result = await chrome.storage.local.get([
-          'scheduledMessagesConfig',
-        ]);
-        const config = result.scheduledMessagesConfig;
-
-        console.log('📋 Scheduled Messages 配置:', config);
-
-        if (!config || !config.sheetId) {
-          console.error('❌ 未配置 Scheduled Messages');
-          sendResponse({
-            success: false,
-            error: '未配置 Scheduled Messages，请先在设置中初始化',
-          });
-          return;
-        }
-
-        // 获取 auth token（用户主动操作，可以弹窗）
-        console.log('🔐 获取 Google 认证 token...');
-        const token = await getGoogleAuthToken({
-          caller: 'background.createScheduledMessage',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        console.log('✅ Token 获取成功');
-
-        // 使用静态导入的 ScheduledMessageService（避免 Service Worker 中动态导入问题）
-        const service = new ScheduledMessageService(token);
-
-        console.log('📤 创建消息:', messageData);
-        // 创建消息
-        const newMessage = await service.createMessage(messageData);
-
-        console.log('✅ 消息创建成功:', newMessage);
-        void registerSheetMessageInLedgerSafe(newMessage);
-        sendResponse({ success: true, message: newMessage });
-      } catch (error: any) {
-        console.error('❌ 添加 Scheduled Message 失败:', error);
-        console.error('错误堆栈:', error.stack);
-        sendResponse({ success: false, error: error.message || '未知错误' });
-      }
-    })();
-    return true;
-  }
-
-  // 从 RingCentral 发送框创建定时消息
   if (request.type === 'CREATE_GLIP_COMPOSE_SCHEDULED_MESSAGE') {
-    (async () => {
-      try {
-        const data = request.data || {};
-        const content = typeof data.content === 'string' ? data.content.trim() : '';
-        const topic = typeof data.topic === 'string' && data.topic.trim()
-          ? data.topic.trim()
-          : '定时发送消息';
-        const scheduledAt = new Date(String(data.scheduledAt || ''));
-        const targetType = data.targetType === 'group' ? 'group' : 'private';
-        const glipUserName =
-          typeof data.glipUserName === 'string' ? data.glipUserName.trim() : '';
-        const glipTeamId =
-          typeof data.glipTeamId === 'string' ? data.glipTeamId.trim() : '';
-        const chatId = typeof data.chatId === 'string' ? data.chatId.trim() : '';
-
-        if (!content) {
-          sendResponse({
-            success: false,
-            reason: 'empty_content',
-            error: '请先输入要定时发送的消息',
-          });
-          return;
-        }
-
-        if (Number.isNaN(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) {
-          sendResponse({
-            success: false,
-            reason: 'invalid_time',
-            error: '请选择未来时间',
-          });
-          return;
-        }
-
-        if (targetType === 'group' && !glipTeamId) {
-          sendResponse({
-            success: false,
-            reason: 'missing_target',
-            error: '无法识别当前群组目标',
-          });
-          return;
-        }
-
-        if (!chatId) {
-          sendResponse({
-            success: false,
-            reason: 'missing_chat',
-            error: '无法识别当前聊天会话',
-          });
-          return;
-        }
-
-        if (targetType === 'private' && !glipUserName) {
-          sendResponse({
-            success: false,
-            reason: 'missing_target',
-            error: '无法识别当前私聊目标',
-          });
-          return;
-        }
-
-        const result = await chrome.storage.local.get([
-          'scheduledMessagesConfig',
-        ]);
-        const config = result.scheduledMessagesConfig;
-        const ringCentralSenderConfigured = hasRingCentralSenderCredentials(config);
-
-        if (!config || !config.sheetId) {
-          const created = await getMemoryServiceClient().createTaskCenterTask({
-            taskKind: 'push',
-            title: topic,
-            description: content,
-            lane: 'memory_cron',
-            cloudLaneAvailable: false,
-            scheduledAt: Math.floor(scheduledAt.getTime() / 1000),
-            sourceKind: 'glip_compose',
-            idempotencyKey: `glip_compose:${chatId}:${scheduledAt.toISOString()}`,
-            payload: {
-              content,
-              notifyVia: 'asme',
-              notifyTarget:
-                targetType === 'group'
-                  ? { type: 'group', targetGroupId: glipTeamId, glipTeamId }
-                  : {
-                      type: 'private',
-                      glipUserName,
-                      glipUser: glipUserName,
-                      targetUserId: glipUserName,
-                    },
-            },
-          });
-          const taskId = created.task.id;
-          await upsertGlipPendingScheduledMessage({
-            id: `compose-scheduled:ledger:${taskId}`,
-            messageId: taskId,
-            chatId,
-            topic,
-            content,
-            scheduledAt: scheduledAt.toISOString(),
-            targetType,
-            targetLabel: targetType === 'group' ? glipTeamId : glipUserName,
-            sourceUrl: typeof data.sourceUrl === 'string' ? data.sourceUrl : undefined,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            warnings: data.warnings,
-          });
-          sendResponse({
-            success: true,
-            messageId: taskId,
-            lane: 'memory_cron',
-            ringCentralSenderConfigured,
-          });
-          return;
-        }
-
-        const token = await getGoogleAuthToken({
-          caller: 'background.createGlipComposeScheduledMessage',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        if (!token) {
-          sendResponse({
-            success: false,
-            reason: 'auth_required',
-            error: '无法获取 Google 授权，请打开定时消息管理器重新授权',
-            ringCentralSenderConfigured,
-          });
-          return;
-        }
-
-        const { dateStr, timeStr } = formatLocalScheduleDateTime(scheduledAt);
-        const service = new ScheduledMessageService(token);
-        const formData: CreateMessageFormData = {
-          Topic: topic,
-          Content: content,
-          Schedule_Date: dateStr,
-          Schedule_Time: timeStr,
-          Push_Method: 'AsMe',
-          Target_Type: targetType,
-          Glip_User_Name: targetType === 'private' ? glipUserName : undefined,
-          Glip_Team_ID: targetType === 'group' ? glipTeamId : undefined,
-          Category: 'ComposeScheduled,定时发送',
-        };
-
-        const newMessage = await service.createMessage(formData);
-        void registerSheetMessageInLedgerSafe(newMessage);
-        await upsertGlipPendingScheduledMessage({
-          id: `compose-scheduled:${newMessage.ID || `${chatId}:${scheduledAt.toISOString()}`}`,
-          messageId: newMessage.ID,
-          chatId,
-          topic,
-          content,
-          scheduledAt: scheduledAt.toISOString(),
-          targetType,
-          targetLabel: targetType === 'group' ? glipTeamId : glipUserName,
-          sourceUrl: typeof data.sourceUrl === 'string' ? data.sourceUrl : undefined,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          warnings: data.warnings,
-        });
-        sendResponse({
-          success: true,
-          messageId: newMessage.ID,
-          ringCentralSenderConfigured,
-        });
-      } catch (error: any) {
-        console.error('❌ 从 Glip 发送框创建定时消息失败:', error);
-        sendResponse({
-          success: false,
-          reason: 'background_error',
-          error: error.message || '创建定时消息失败',
-        });
-      }
-    })();
+    void createComposeSchedule(request.data || {}).then(sendResponse).catch(e => sendResponse({ success: false, error: e.message }));
     return true;
   }
 
-  // 检查 Automation_Link 是否已存在于 Scheduled Messages 中
-  if (request.type === 'CHECK_AUTOMATION_LINK_EXISTS') {
-    (async () => {
-      try {
-        const { automationLink } = request.data;
-        console.log('🔍 检查 Automation_Link 是否存在:', automationLink);
-
-        // 获取配置和 token
-        const result = await chrome.storage.local.get([
-          'scheduledMessagesConfig',
-        ]);
-        const config = result.scheduledMessagesConfig;
-
-        if (!config || !config.sheetId) {
-          sendResponse({ exists: false });
-          return;
-        }
-
-        // 🔧 使用静默方法，避免在后台检查时弹出授权窗口
-        console.log(
-          '🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 使用静默方法（自动检查）',
-        );
-        const token = await getGoogleAuthTokenSilently({
-          caller: 'background.checkAutomationLink',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        if (!token) {
-          console.warn(
-            '🔐 [background.CHECK_AUTOMATION_LINK_EXISTS] 无缓存 token，返回不存在',
-          );
-          sendResponse({ exists: false });
-          return;
-        }
-
-        const service = new ScheduledMessageService(token);
-        const messages = await service.getAllMessages();
-
-        // 检查是否有相同的 Automation_Link
-        const exists = messages.some(
-          (msg) => msg.Automation_Link === automationLink,
-        );
-        console.log('🔍 检查结果:', exists ? '已存在' : '不存在');
-        sendResponse({ exists });
-      } catch (error: any) {
-        console.error('❌ 检查 Automation_Link 失败:', error);
-        sendResponse({ exists: false, error: error.message });
-      }
-    })();
+  if (['CHECK_AUTOMATION_LINK_EXISTS', 'BATCH_CHECK_AUTOMATION_LINKS_EXIST'].includes(request.type)) {
+    void (async () => {
+      const tasks = await scheduleConnection() ? await scheduleApi('/tasks?type=jira_automation') : [];
+      const links = new Set(tasks.map((task: any) => {
+        const ref = task.config?.jiraRuleRef;
+        return ref ? `${ref.jiraUrl}/secure/AutomationProjectAdminAction!default.jspa?projectKey=${encodeURIComponent(ref.projectKey || '')}#/rule/${encodeURIComponent(ref.ruleId)}` : '';
+      }));
+      if (request.type === 'CHECK_AUTOMATION_LINK_EXISTS') return { exists: links.has(request.data?.automationLink) };
+      const results: Record<string, boolean> = {};
+      for (const link of request.data?.automationLinks || []) results[link] = links.has(link);
+      return { results };
+    })().then(sendResponse).catch(e => sendResponse({ exists: false, error: e.message }));
     return true;
   }
 
-  // 批量检查多个 Automation_Link 是否已存在于 Scheduled Messages 中
-  if (request.type === 'BATCH_CHECK_AUTOMATION_LINKS_EXIST') {
-    (async () => {
-      try {
-        const { automationLinks } = request.data;
-        console.log(
-          '🔍 批量检查 Automation_Links 是否存在:',
-          automationLinks.length,
-          '个',
-        );
-
-        // 获取配置和 token
-        const result = await chrome.storage.local.get([
-          'scheduledMessagesConfig',
-        ]);
-        const config = result.scheduledMessagesConfig;
-
-        if (!config || !config.sheetId) {
-          const emptyResults: Record<string, boolean> = {};
-          automationLinks.forEach((link: string) => {
-            emptyResults[link] = false;
-          });
-          sendResponse({ results: emptyResults });
-          return;
-        }
-
-        // 🔧 使用静默方法，避免在后台批量检查时弹出授权窗口
-        console.log(
-          '🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 使用静默方法（自动预加载）',
-        );
-        const token = await getGoogleAuthTokenSilently({
-          caller: 'background.batchCheckAutomationLinks',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        if (!token) {
-          console.warn(
-            '🔐 [background.BATCH_CHECK_AUTOMATION_LINKS] 无缓存 token，返回空结果',
-          );
-          const emptyResults: Record<string, boolean> = {};
-          automationLinks.forEach((link: string) => {
-            emptyResults[link] = false;
-          });
-          sendResponse({ results: emptyResults });
-          return;
-        }
-
-        const service = new ScheduledMessageService(token);
-        const messages = await service.getAllMessages();
-
-        // 构建 Automation_Link 的 Set 用于快速查找
-        const existingLinks = new Set(
-          messages.map((msg) => msg.Automation_Link).filter(Boolean),
-        );
-
-        // 批量检查每个链接
-        const results: Record<string, boolean> = {};
-        automationLinks.forEach((link: string) => {
-          results[link] = existingLinks.has(link);
-        });
-
-        const existCount = Object.values(results).filter(Boolean).length;
-        console.log(
-          `🔍 批量检查完成: ${existCount}/${automationLinks.length} 个已存在`,
-        );
-        sendResponse({ results });
-      } catch (error: any) {
-        console.error('❌ 批量检查 Automation_Links 失败:', error);
-        sendResponse({ results: {}, error: error.message });
-      }
-    })();
-    return true;
-  }
-
-  // 调用 LLM 总结规则内容
   if (request.type === 'CALL_LLM_SUMMARIZE') {
     (async () => {
       try {
@@ -4462,59 +3465,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // 打开定时消息管理界面
   if (request.type === 'OPEN_SCHEDULED_MESSAGES') {
-    (async () => {
-      try {
-        console.log('📅 打开定时消息管理界面...');
-        const params = new URLSearchParams();
-        const requestData = request.data || {};
-        const categories = Array.isArray(requestData.categories)
-          ? requestData.categories
-          : requestData.category
-          ? [requestData.category]
-          : [];
-
-        categories
-          .map((category: unknown) =>
-            typeof category === 'string' ? category.trim() : '',
-          )
-          .filter(Boolean)
-          .forEach((category: string) => params.append('category', category));
-
-        if (requestData.filterPendingReview === true) {
-          params.set('filterPendingReview', 'true');
-        }
-
-        const targetMessageId =
-          typeof requestData.messageId === 'string'
-            ? requestData.messageId.trim()
-            : typeof requestData.targetMessageId === 'string'
-            ? requestData.targetMessageId.trim()
-            : '';
-        if (targetMessageId) {
-          params.set('messageId', targetMessageId);
-        }
-
-        if (requestData.configureRingCentralSender === true) {
-          params.set('configureRingCentralSender', 'true');
-        }
-
-        const query = params.toString();
-        const url = chrome.runtime.getURL(
-          `scheduled-messages.html${query ? `?${query}` : ''}`,
-        );
-        await chrome.tabs.create({ url });
-        sendResponse({ success: true });
-      } catch (error: any) {
-        console.error('❌ 打开定时消息管理界面失败:', error);
-        sendResponse({ success: false, error: error.message });
-      }
-    })();
+    void openSchedule().then(() => sendResponse({ success: true })).catch(e => sendResponse({ success: false, error: e.message }));
     return true;
   }
 
-  // 打开项目进度仪表盘
   if (request.type === 'OPEN_PROJECT_DASHBOARD') {
     (async () => {
       try {
@@ -4665,55 +3620,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           return;
         }
 
-        const result = await chrome.storage.local.get([
-          'scheduledMessagesConfig',
-        ]);
-        const config = result.scheduledMessagesConfig;
-        if (!config || !config.sheetId) {
-          sendResponse({
-            success: false,
-            error: '请先在设置中初始化定时消息系统',
-          });
-          return;
-        }
-
-        const token = await getGoogleAuthToken({
-          caller: 'background.cancelSnoozeReminder',
-          scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-        });
-        const service = new ScheduledMessageService(token);
-        const messages = await service.getAllMessages();
-        const message = messages.find((item) => item.ID === messageId);
-        if (!message) {
-          sendResponse({
-            success: false,
-            error: '未找到提醒，可能已被删除',
-          });
-          return;
-        }
-
-        if (!isOpenSnoozeReminder(message)) {
-          sendResponse({
-            success: false,
-            error: '只能撤销未完成的稍后处理提醒',
-          });
-          return;
-        }
-
-        if (
-          !doesSnoozeReminderMatchSchedule(message, {
-            scheduleDate: expectedScheduleDate,
-            scheduleTime: expectedScheduleTime,
-          })
-        ) {
-          sendResponse({
-            success: false,
-            error: '提醒时间已被更新，请到管理稍后处理中确认或删除',
-          });
-          return;
-        }
-
-        await service.deleteMessage(messageId);
+        // Snooze is a Memory business action, not a legacy Sheet row.
+        const listed = await getMemoryServiceClient().getTaskCenterTasks({ limit: 1000 });
+        const task = { task: listed.items.find(item => item.id === messageId) };
+        if (!task.task || task.task.sourceKind !== 'snooze' || !['queued', 'paused'].includes(task.task.queueStatus)) throw new Error('提醒已处理或不属于稍后处理');
+        const scheduled = formatLocalScheduleDateTime((task.task.scheduledAt || 0) * 1000);
+        if (scheduled.dateStr !== expectedScheduleDate || scheduled.timeStr !== expectedScheduleTime) throw new Error('提醒时间已更新，请重新检查');
+        await getMemoryServiceClient().controlTaskCenterTask(messageId, 'complete');
         sendResponse({ success: true });
       } catch (error: any) {
         console.error('❌ Background: 撤销 Snooze 提醒失败:', error);
@@ -6053,3 +4966,5 @@ async function _createProjectItem(actionType: string, data: any) {
     };
   }
 }
+
+void registerScheduleBridge().catch(e => console.warn('Schedule bridge registration failed', e));

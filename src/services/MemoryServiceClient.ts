@@ -3169,7 +3169,7 @@ export interface GlipMessageMarker {
   label: string;
   chatId: string;
   postId: string;
-  source: 'local' | 'memory_service' | 'sheet';
+  source: 'local' | 'memory_service' | 'sheet' | 'schedule_service';
   sourceId: string;
   sessionId?: string;
   status?: string;

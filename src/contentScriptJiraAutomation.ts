@@ -1,3 +1,4 @@
+import { jiraScheduleSpec } from './scheduleJira';
 /**
  * Jira Automation 导入功能 Content Script
  * 在Jira automation管理页面添加导入功能
@@ -42,7 +43,6 @@ import {
   getNextScheduleDate,
   parseFixedRateConfig,
   formatDaysOfWeekDisplay,
-  jiraDaysToJsDays
 } from './scheduled-messages/scheduleUtils';
 import { jiraFetch } from './jira';
 import {
@@ -3801,74 +3801,19 @@ async function handleAddToScheduledMessages(ruleId: string, projectId: string, d
     // 使用弹窗中已生成的 AI 总结
     const ruleSummary = dialogResult.ruleSummary;
     
-    showLoadingMessage('正在添加到 Scheduled Messages...', doc);
-    
-    // 准备消息数据 - 注意 ruleUrl 已在前面定义
-    const messageData: any = {
-      Topic: `${ruleInfo.name}`,
-      Content: ruleSummary,
-      Push_Method: 'JiraAutomation',
-      Target_Type: 'api',
-      // 根据 Jira Rule 的状态设置 Status：ENABLED -> Active, DISABLED -> Paused
-      Status: ruleInfo.state === 'ENABLED' ? 'Active' : 'Paused',
-      Automation_Link: ruleUrl,
-      // 添加 Category，使用项目 key
-      Category: projectKey
-    };
-    scheduleConfig.scheduleDate = dialogResult.scheduleDate || scheduleConfig.scheduleDate;
-    
-    if (scheduleConfig?.needsWebhookConversion && scheduleConfig.scheduleDate) {
-      // 情况一：scheduled + nosearch - 完整导入调度信息，但不立即转换为 webhook
-      // webhook 转换延迟到用户在 ScheduledMessagesManager 中确认托管时再执行
-      messageData.Schedule_Date = scheduleConfig.scheduleDate;
-      messageData.Schedule_Time = scheduleConfig.scheduleTime;
-      messageData.Repeat_Every = scheduleConfig.repeatEvery;
-      messageData.Repeat_Unit = scheduleConfig.repeatUnit;
-      // 如果有多星期配置，转换 Jira 格式 (1-7) 到 JS 格式 (0-6) 并保存
-      if (scheduleConfig.daysOfWeek && scheduleConfig.daysOfWeek.length > 0) {
-        const jsDays = jiraDaysToJsDays(scheduleConfig.daysOfWeek);
-        messageData.Repeat_Days = jsDays.join(',');
-        console.log('[Personal AI] 保存多星期配置:', { jiraDays: scheduleConfig.daysOfWeek, jsDays, Repeat_Days: messageData.Repeat_Days });
-      }
-      // 不设置 AI_Endpoint，留待用户在管理界面确认后再转换
-      // 用户可以在 ScheduledMessagesManager 中点击编辑按钮来激活 Personal AI 托管
-    } else if (scheduleConfig?.executionMode === 'jql') {
-      // 情况二：scheduled + jql - 读取日期和周期到 sheet，作为展示使用
-      messageData.Schedule_Date = scheduleConfig.scheduleDate;
-      messageData.Schedule_Time = scheduleConfig.scheduleTime;
-      messageData.Repeat_Every = scheduleConfig.repeatEvery;
-      messageData.Repeat_Unit = scheduleConfig.repeatUnit;
-      // 如果有多星期配置，转换并保存
-      if (scheduleConfig.daysOfWeek && scheduleConfig.daysOfWeek.length > 0) {
-        const jsDays = jiraDaysToJsDays(scheduleConfig.daysOfWeek);
-        messageData.Repeat_Days = jsDays.join(',');
-      }
-      // 不设置 AI_Endpoint，表示仅作为引用
-      messageData.Content = `Linked to Jira Automation Rule (JQL Mode, View Only): ${ruleInfo.name}`;
-    }
-    // 情况三：其他类型 - 仅添加引用，不设置调度信息
-    
-    // 发送到 background script 添加消息
-    console.log('[Personal AI] 发送 ADD_SCHEDULED_MESSAGE 消息:', messageData);
-    
-    let result: any;
-    try {
-      result = await chrome.runtime.sendMessage({
-        type: 'ADD_SCHEDULED_MESSAGE',
-        data: messageData
-      });
-      console.log('[Personal AI] ADD_SCHEDULED_MESSAGE 响应:', result);
-    } catch (sendError) {
-      console.error('[Personal AI] 发送消息失败:', sendError);
-      hideLoadingMessage(doc);
-      showErrorMessage(`发送消息失败: ${sendError instanceof Error ? sendError.message : '未知错误'}`);
+    if (!scheduleConfig.needsWebhookConversion) {
+      showErrorMessage('新版托管仅支持无需 JQL 的定时规则，原规则保持不变');
       return;
     }
-    
+    const triggerSchedule = ruleInfo.trigger?.value?.schedule;
+    const scheduleSpec = jiraScheduleSpec(triggerSchedule, triggerSchedule?.timezone || triggerSchedule?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone);
+    showLoadingMessage('正在连接 Personal Schedule...', doc);
+    const result = await chrome.runtime.sendMessage({ type: 'HOST_SCHEDULE_JIRA', data: {
+      ruleId, projectId, projectKey, content: ruleSummary, scheduleSpec,
+    } });
     hideLoadingMessage(doc);
-    
     if (result && result.success) {
-      showSuccessMessage(`已添加到 Scheduled Messages: ${ruleInfo.name}`);
+      showSuccessMessage(result.message || `已添加到 Personal Schedule: ${ruleInfo.name}`);
       
       // 将规则 ID 加入已管理列表
       managedRuleIds.add(ruleId);

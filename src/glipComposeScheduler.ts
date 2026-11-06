@@ -1484,9 +1484,14 @@ function attachComposer(composer: HTMLElement): void {
   (button as HTMLButtonElement & { __paiGlipComposeState?: ComposerState }).__paiGlipComposeState = state;
   processedComposers.set(composer, state);
 
-  button.addEventListener('click', (event) => {
+  button.addEventListener('click', async (event) => {
     event.preventDefault();
     event.stopPropagation();
+    const setup = await chrome.runtime.sendMessage({ type: 'GET_SCHEDULE_SETUP' });
+    if (!setup?.configured) {
+      await chrome.runtime.sendMessage({ type: 'OPEN_SCHEDULE_SETUP' });
+      return;
+    }
     void showSchedulePopover(composer);
   });
 

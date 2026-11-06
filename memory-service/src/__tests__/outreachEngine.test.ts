@@ -699,103 +699,32 @@ describe('OutreachEngine', () => {
     expect(followUpActions[0].actionType).toBe('delegate_openclaw');
   });
 
-  it('dispatches due scheduled templates and advances next dispatch', async () => {
-    outreachRepo.upsertTemplate({
-      id: 'template-1',
-      sourceKind: 'scheduled_message',
-      sourceRefId: 'template-1',
-      sheetMessageId: 'template-1',
-      title: '定时外联',
-      questionTemplate: '请同步当前 blocker。',
-      contextTemplate: '如果 blocker 未清除，请给出预计恢复时间。',
-      targetType: 'group',
-      targetRef: 'chat-template',
-      scheduleSpec: {
-        scheduleDate: '2026-03-18',
-        scheduleTime: '09:00',
-        repeatEvery: 1,
-        repeatUnit: 'Day',
-        nextDispatchAt: Math.floor(Date.now() / 1000) - 10,
-      },
-      enabled: true,
-      maxFollowup: 2,
-      followupIntervalSeconds: 7200,
-      syncState: 'synced',
-    });
-
-    mockRingCentralSend('chat-template', 'post-template');
-
+  it('accepts an external occurrence exactly once and leaves template timers inert', async () => {
     const engine = new OutreachEngine(db, userDataManager, 'test-user');
-    await engine.runSchedulerCycle();
-
-    const sessions = outreachRepo.listSessions({
-      templateId: 'template-1',
-      limit: 10,
-    }).items;
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0].status).toBe('waiting_reply');
-    expect(sessions[0].followupIntervalSeconds).toBe(7200);
-
-    const template = outreachRepo.getTemplateById('template-1');
-    expect(Number(template?.scheduleSpec.nextDispatchAt)).toBeGreaterThan(
-      Math.floor(Date.now() / 1000),
-    );
+    const input = { occurrenceKey: 'task:revision:slot', scheduledFor: Math.floor(Date.now()/1000),
+      template: { question: '请同步风险', recipients: [{ targetType: 'group', targetRef: 'chat-template' }], approvalPolicy: 'always_review' as const } };
+    const [first, duplicate] = await Promise.all([engine.triggerOccurrence('external-1', input), engine.triggerOccurrence('external-1', input)]);
+    expect(first.created).toBe(true); expect(duplicate.created).toBe(false);
+    expect(first.session.id).toBe(duplicate.session.id);
+    expect(first.session.status).toBe('pending_approval');
+    expect(outreachRepo.listSessions({ templateId: 'external-1' }).items).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(outreachRepo.getTemplateById('external-1')?.scheduleSpec).toEqual({});
   });
 
-  it('keeps weekly scheduled outreach occurrences on the configured local time', async () => {
-    vi.useFakeTimers();
-    const dueAt = shanghaiTimestamp('2026-05-19T10:36:00');
-    const previousDueAt = shanghaiTimestamp('2026-05-12T10:36:00');
-    vi.setSystemTime(new Date((dueAt + 60) * 1000));
+  it('does not scan existing due templates and preserves session advancement', async () => {
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    outreachRepo.upsertTemplate({ id: 'inert', sourceKind: 'scheduled_message', title: 'Old', questionTemplate: 'Old', targetType: 'group', targetRef: 'chat-template', enabled: true, scheduleSpec: { nextDispatchAt: 1 } });
+    vi.spyOn(RingCentralClient.prototype, 'maintainDirectoryCache').mockResolvedValue(undefined);
+    await engine.runSchedulerCycle();
+    expect(outreachRepo.listSessions({ templateId: 'inert' }).items).toHaveLength(0);
+  });
 
-    try {
-      outreachRepo.upsertTemplate({
-        id: 'template-weekly-local',
-        sourceKind: 'scheduled_message',
-        sourceRefId: 'template-weekly-local',
-        sheetMessageId: 'template-weekly-local',
-        title: '每周外联',
-        questionTemplate: 'RCV AI 页面本周需要更新吗？',
-        contextTemplate: '如果需要，请说明更新点。',
-        targetType: 'group',
-        targetRef: 'chat-weekly-local',
-        scheduleSpec: {
-          scheduleDate: '2026-05-12',
-          scheduleTime: '10:36',
-          repeatEvery: 1,
-          repeatUnit: 'Week',
-          timezone: 'Asia/Shanghai',
-          nextDispatchAt: dueAt,
-        },
-        enabled: true,
-        maxFollowup: 1,
-        followupIntervalSeconds: 3600,
-        syncState: 'synced',
-      });
-
-      mockRingCentralSend('chat-weekly-local', 'post-weekly-local');
-
-      const engine = new OutreachEngine(db, userDataManager, 'test-user');
-      await engine.runSchedulerCycle();
-
-      const sessions = outreachRepo.listSessions({
-        templateId: 'template-weekly-local',
-        limit: 10,
-      }).items;
-      expect(sessions).toHaveLength(1);
-      expect(sessions[0].scheduledFor).toBe(dueAt);
-      expect(sessions[0].occurrenceKey).toBe(
-        '2026-05-19T10:36@Asia/Shanghai',
-      );
-      expect(sessions[0].occurrenceStartAt).toBe(previousDueAt);
-
-      const template = outreachRepo.getTemplateById('template-weekly-local');
-      expect(template?.scheduleSpec.nextDispatchAt).toBe(
-        shanghaiTimestamp('2026-05-26T10:36:00'),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+  it('rejects invalid occurrences and unresolved multi-recipient payloads without creating sessions', async () => {
+    const engine = new OutreachEngine(db, userDataManager, 'test-user');
+    await expect(engine.triggerOccurrence('bad', { occurrenceKey: '', scheduledFor: 1 })).rejects.toThrow('Invalid occurrence');
+    await expect(engine.triggerOccurrence('bad', { occurrenceKey: 'slot', scheduledFor: 1, template: { question: 'hi', recipients: ['one', 'two'] } })).rejects.toThrow('Exactly one');
+    expect(outreachRepo.listSessions({ templateId: 'bad' }).items).toHaveLength(0);
   });
 
   it('starts a recurring occurrence after the previous occurrence terminal boundary', async () => {
@@ -808,7 +737,7 @@ describe('OutreachEngine', () => {
     try {
       outreachRepo.upsertTemplate({
         id: 'template-weekly-boundary',
-        sourceKind: 'scheduled_message',
+        sourceKind: 'schedule_service',
         sourceRefId: 'template-weekly-boundary',
         sheetMessageId: 'template-weekly-boundary',
         title: '每周 RCV AI 外联',
@@ -919,6 +848,7 @@ describe('OutreachEngine', () => {
       });
 
       const engine = new OutreachEngine(db, userDataManager, 'test-user');
+      await engine.triggerOccurrence('template-weekly-boundary', { occurrenceKey: '2026-05-19T10:36@Asia/Shanghai', scheduledFor: secondDueAt });
       await engine.runSchedulerCycle();
 
       const sessions = outreachRepo.listSessions({
@@ -931,118 +861,6 @@ describe('OutreachEngine', () => {
       expect(current?.occurrenceStartAt).toBe(firstResolvedAt);
       expect(sendCalled).toBe(true);
       expect(current?.status).toBe('waiting_reply');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('advances scheduled templates across selected weekdays and stops at the end date', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-06T09:05:00'));
-
-    try {
-      outreachRepo.upsertTemplate({
-        id: 'template-weekdays',
-        sourceKind: 'scheduled_message',
-        sourceRefId: 'template-weekdays',
-        sheetMessageId: 'template-weekdays',
-        title: '多星期外联',
-        questionTemplate: '请同步本周风险。',
-        contextTemplate: '只需要同步新增风险。',
-        targetType: 'group',
-        targetRef: 'chat-weekdays',
-        scheduleSpec: {
-          scheduleDate: '2026-05-04',
-          scheduleTime: '09:00',
-          repeatEvery: 1,
-          repeatUnit: 'Week',
-          repeatDays: '1,3,5',
-          endDate: '2026-05-08',
-          nextDispatchAt: Math.floor(Date.now() / 1000) - 10,
-        },
-        enabled: true,
-        maxFollowup: 1,
-        followupIntervalSeconds: 3600,
-        syncState: 'synced',
-      });
-
-      mockRingCentralSend('chat-weekdays', 'post-wed');
-      const engine = new OutreachEngine(db, userDataManager, 'test-user');
-      await engine.runSchedulerCycle();
-
-      let template = outreachRepo.getTemplateById('template-weekdays');
-      expect(template?.scheduleSpec.dispatchCount).toBe(1);
-      expect(template?.scheduleSpec.nextDispatchAt).toBe(
-        Math.floor(new Date('2026-05-08T09:00:00').getTime() / 1000),
-      );
-
-      vi.setSystemTime(new Date('2026-05-08T09:05:00'));
-      mockRingCentralSend('chat-weekdays', 'post-fri');
-      await engine.runSchedulerCycle();
-
-      template = outreachRepo.getTemplateById('template-weekdays');
-      expect(template?.scheduleSpec.dispatchCount).toBe(2);
-      expect(template?.scheduleSpec.nextDispatchAt).toBeUndefined();
-      expect(
-        outreachRepo.listSessions({
-          templateId: 'template-weekdays',
-          limit: 10,
-        }).items,
-      ).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('uses workday repeat semantics and stops after repeat count', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-08T09:05:00'));
-
-    try {
-      outreachRepo.upsertTemplate({
-        id: 'template-workday-count',
-        sourceKind: 'scheduled_message',
-        sourceRefId: 'template-workday-count',
-        sheetMessageId: 'template-workday-count',
-        title: '工作日外联',
-        questionTemplate: '请同步今天状态。',
-        contextTemplate: '工作日发送即可。',
-        targetType: 'group',
-        targetRef: 'chat-workday',
-        scheduleSpec: {
-          scheduleDate: '2026-05-08',
-          scheduleTime: '09:00',
-          repeatEvery: 1,
-          repeatUnit: 'Day',
-          repeatCount: 2,
-          nextDispatchAt: Math.floor(Date.now() / 1000) - 10,
-        },
-        enabled: true,
-        maxFollowup: 1,
-        followupIntervalSeconds: 3600,
-        syncState: 'synced',
-      });
-
-      mockRingCentralSend('chat-workday', 'post-friday');
-      const engine = new OutreachEngine(db, userDataManager, 'test-user');
-      await engine.runSchedulerCycle();
-
-      let template = outreachRepo.getTemplateById('template-workday-count');
-      expect(template?.scheduleSpec.dispatchCount).toBe(1);
-      expect(template?.scheduleSpec.nextDispatchAt).toBe(
-        Math.floor(new Date('2026-05-11T09:00:00').getTime() / 1000),
-      );
-
-      vi.setSystemTime(new Date('2026-05-11T09:05:00'));
-      mockRingCentralSend('chat-workday', 'post-monday');
-      await engine.runSchedulerCycle();
-
-      template = outreachRepo.getTemplateById('template-workday-count');
-      expect(template?.scheduleSpec.dispatchCount).toBe(2);
-      expect(template?.scheduleSpec.nextDispatchAt).toBeUndefined();
-      expect(
-        outreachRepo.listDueTemplates(Math.floor(Date.now() / 1000)),
-      ).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }

@@ -1,3 +1,4 @@
+import { scheduleConnection } from '../scheduleService';
 /**
  * 定时消息通用工具方法
  * 
@@ -13,10 +14,7 @@
  */
 export async function isScheduledMessagesInitialized(): Promise<boolean> {
   try {
-    const result = await chrome.storage.local.get(['scheduledMessagesConfig']);
-    const config = result.scheduledMessagesConfig;
-    // 检查配置是否存在且有基本的必要字段（如 sheetId）
-    return !!(config && config.sheetId);
+    return Boolean(await scheduleConnection());
   } catch (error) {
     console.error('检查定时消息配置失败', error);
     return false;

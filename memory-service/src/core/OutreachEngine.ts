@@ -19,7 +19,6 @@ import {
   getScheduleTimeZone,
   getWeekIndexSinceStart,
   isRecurringSchedule,
-  parseNextDispatch,
   parseRepeatDays,
   parseScheduleSeed,
   readDateTimePartsInTimeZone,
@@ -28,6 +27,7 @@ import { ConfirmRequestRepository } from '../repositories/ConfirmRequestReposito
 import {
   OutreachRepository,
   type OutreachOriginKind,
+  type OutreachApprovalPolicy,
   type OutreachSessionListFilters,
   type OutreachSessionRecord,
   type OutreachSessionStatus,
@@ -693,165 +693,6 @@ function isResolvedTargetStatus(status: string | undefined): boolean {
 // recurrence rollover reuses the identical semantics instead of growing a
 // second implementation of "when does this fire next".
 
-function formatOccurrenceKey(
-  scheduledFor: number,
-  timeZone: string,
-): string {
-  const parts = readDateTimePartsInTimeZone(scheduledFor * 1000, timeZone);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(
-    parts.hour,
-  )}:${pad(parts.minute)}@${timeZone}`;
-}
-
-function isScheduledOccurrenceCandidate(
-  candidate: Date,
-  seed: Date,
-  repeatEvery: number,
-  repeatUnit: string,
-  repeatDays: number[],
-): boolean {
-  if (candidate.getTime() < seed.getTime()) return false;
-  if (candidate.getUTCHours() !== seed.getUTCHours()) return false;
-  if (candidate.getUTCMinutes() !== seed.getUTCMinutes()) return false;
-
-  if (repeatUnit === 'Day') {
-    const daysSinceStart = Math.floor(
-      (getDayStart(candidate).getTime() - getDayStart(seed).getTime()) /
-        86400000,
-    );
-    return (
-      daysSinceStart >= 0 &&
-      daysSinceStart % repeatEvery === 0 &&
-      candidate.getUTCDay() >= 1 &&
-      candidate.getUTCDay() <= 5
-    );
-  }
-
-  if (repeatUnit === 'Week') {
-    if (
-      repeatDays.length > 0 &&
-      !repeatDays.includes(candidate.getUTCDay())
-    ) {
-      return false;
-    }
-    if (
-      repeatDays.length === 0 &&
-      candidate.getUTCDay() !== seed.getUTCDay()
-    ) {
-      return false;
-    }
-    const weekIndex = getWeekIndexSinceStart(candidate, seed);
-    return weekIndex >= 0 && weekIndex % repeatEvery === 0;
-  }
-
-  if (repeatUnit === 'Month') {
-    const monthDiff =
-      (candidate.getUTCFullYear() - seed.getUTCFullYear()) * 12 +
-      (candidate.getUTCMonth() - seed.getUTCMonth());
-    return (
-      monthDiff >= 0 &&
-      monthDiff % repeatEvery === 0 &&
-      candidate.getUTCDate() === seed.getUTCDate()
-    );
-  }
-
-  if (repeatUnit === 'Year') {
-    const yearDiff = candidate.getUTCFullYear() - seed.getUTCFullYear();
-    return (
-      yearDiff >= 0 &&
-      yearDiff % repeatEvery === 0 &&
-      candidate.getUTCMonth() === seed.getUTCMonth() &&
-      candidate.getUTCDate() === seed.getUTCDate()
-    );
-  }
-
-  return false;
-}
-
-function parsePreviousDispatch(
-  scheduleSpec: Record<string, unknown> | undefined,
-  scheduledFor: number,
-): number | null {
-  if (!scheduleSpec || !isRecurringSchedule(scheduleSpec)) return null;
-  const scheduleDate = normalizeString(scheduleSpec.scheduleDate);
-  if (!scheduleDate) return null;
-  const scheduleTime = normalizeString(scheduleSpec.scheduleTime) ?? '09:00';
-  const seed = parseScheduleSeed(scheduleDate, scheduleTime);
-  if (!seed) return null;
-
-  const repeatEvery = Number(scheduleSpec.repeatEvery);
-  const repeatUnit = normalizeString(scheduleSpec.repeatUnit);
-  if (!Number.isFinite(repeatEvery) || repeatEvery <= 0 || !repeatUnit) {
-    return null;
-  }
-
-  const timeZone = getScheduleTimeZone(scheduleSpec);
-  const repeatDays =
-    repeatUnit === 'Week' ? parseRepeatDays(scheduleSpec.repeatDays) : [];
-  const scheduledLocal = epochSecondsToFloatingDate(scheduledFor, timeZone);
-  const searchDay = getDayStart(scheduledLocal);
-
-  for (let offset = 1; offset <= 3660; offset += 1) {
-    const candidate = new Date(
-      Date.UTC(
-        searchDay.getUTCFullYear(),
-        searchDay.getUTCMonth(),
-        searchDay.getUTCDate() - offset,
-        seed.getUTCHours(),
-        seed.getUTCMinutes(),
-        0,
-        0,
-      ),
-    );
-
-    if (candidate.getTime() < seed.getTime()) return null;
-    if (candidate.getTime() >= scheduledLocal.getTime()) continue;
-    if (
-      isScheduledOccurrenceCandidate(
-        candidate,
-        seed,
-        repeatEvery,
-        repeatUnit,
-        repeatDays,
-      )
-    ) {
-      return floatingDateToEpochSeconds(candidate, timeZone);
-    }
-  }
-
-  return null;
-}
-
-function buildScheduledTemplateOccurrence(
-  template: { scheduleSpec: Record<string, unknown>; createdAt: number },
-  currentTime: number,
-): {
-  scheduledFor: number;
-  occurrenceKey: string;
-  occurrenceStartAt: number;
-} {
-  const rawNextDispatchAt = Number(template.scheduleSpec.nextDispatchAt);
-  const scheduledFor =
-    Number.isFinite(rawNextDispatchAt) && rawNextDispatchAt > 0
-      ? Math.floor(rawNextDispatchAt)
-      : currentTime;
-  const timeZone = getScheduleTimeZone(template.scheduleSpec);
-  const previousDispatch = parsePreviousDispatch(
-    template.scheduleSpec,
-    scheduledFor,
-  );
-  return {
-    scheduledFor,
-    occurrenceKey: formatOccurrenceKey(scheduledFor, timeZone),
-    occurrenceStartAt:
-      previousDispatch ??
-      (Number.isFinite(template.createdAt) && template.createdAt > 0
-        ? template.createdAt
-        : scheduledFor),
-  };
-}
-
 function parseEtaFromText(
   text: string,
   currentTime: number,
@@ -971,7 +812,6 @@ export class OutreachEngine {
     if (!runtime.outreachEnabled) return;
 
     await this.ringClient.maintainDirectoryCache();
-    await this.dispatchDueTemplates();
     await this.advancePendingSessions();
     await this.syncTerminalReflectionSessions();
   }
@@ -1867,87 +1707,49 @@ export class OutreachEngine {
     return null;
   }
 
-  private async dispatchDueTemplates(): Promise<void> {
-    const currentTime = now();
-    const templates = this.repo.listDueTemplates(currentTime, 100);
-    if (templates.length === 0) return;
-
+  /** Schedule owns time; Memory owns the durable conversation and approval. */
+  async triggerOccurrence(templateId: string, input: {
+    occurrenceKey: string; scheduledFor: number;
+    template?: { question: string; recipients?: Array<{ targetType?: string; targetRef?: string; chatId?: string } | string>;
+      targetType?: string; targetRef?: string; approvalPolicy?: OutreachApprovalPolicy;
+      maxFollowup?: number; followupIntervalSeconds?: number; context?: string } | null;
+  }) {
     const runtime = this.getRuntimeConfig();
-    for (const template of templates) {
-      const requiresApproval = runtime.outreachRequireApprovalForManual;
-      const occurrence = buildScheduledTemplateOccurrence(template, currentTime);
-      const existingSession = this.repo.getSessionByTemplateOccurrence(
-        template.id,
-        occurrence.occurrenceKey,
-      );
-      if (existingSession) {
-        const nextDispatch = parseNextDispatch(
-          template.scheduleSpec,
-          currentTime,
-        );
-        this.repo.markTemplateDispatch(
-          template.id,
-          nextDispatch,
-          existingSession.id,
-        );
-        continue;
-      }
-
-      const priorOccurrence =
-        this.repo.getLatestSessionBeforeTemplateOccurrence(
-          template.id,
-          occurrence.scheduledFor,
-        );
-      const priorBoundary =
-        priorOccurrence?.resolvedAt ??
-        priorOccurrence?.updatedAt ??
-        priorOccurrence?.createdAt;
-      if (Number.isFinite(priorBoundary) && (priorBoundary ?? 0) > 0) {
-        occurrence.occurrenceStartAt = Math.max(
-          occurrence.occurrenceStartAt,
-          priorBoundary!,
-        );
-      }
-
-      const session = this.repo.createSession({
-        templateId: template.id,
-        originKind: 'scheduled_template',
-        targetType: template.targetType,
-        targetRef: template.targetRef,
-        renderedQuestion: template.questionTemplate,
-        renderedContext: template.contextTemplate,
-        status: requiresApproval ? 'pending_approval' : 'scheduled',
-        requiresApproval,
-        maxFollowup: template.maxFollowup,
-        followupIntervalSeconds: template.followupIntervalSeconds,
-        nextCheckAt: requiresApproval ? null : currentTime,
-        scheduledFor: occurrence.scheduledFor,
-        occurrenceKey: occurrence.occurrenceKey,
-        occurrenceStartAt: occurrence.occurrenceStartAt,
-      });
-      const resolved = await this.resolveSessionTarget(session);
-      this.repo.createEvent(resolved.id, 'created', {
-        templateId: template.id,
-        originKind: 'scheduled_template',
-        requiresApproval: resolved.requiresApproval,
-        targetResolutionStatus: resolved.targetResolutionStatus,
-        targetResolvedLabel: resolved.targetResolvedLabel ?? null,
-        targetCandidates: resolved.targetCandidates?.length ?? 0,
-      });
-
-      const nextDispatch = parseNextDispatch(
-        template.scheduleSpec,
-        currentTime,
-      );
-      this.repo.markTemplateDispatch(template.id, nextDispatch, session.id);
-
-      if (
-        !resolved.requiresApproval &&
-        resolved.status !== 'pending_approval'
-      ) {
-        await this.dispatchSession(resolved);
-      }
+    if (!runtime.outreachEnabled) throw new Error('Outreach is disabled');
+    if (!input.occurrenceKey?.trim() || input.occurrenceKey.length > 512 ||
+        !Number.isFinite(input.scheduledFor) || input.scheduledFor <= 0) throw new Error('Invalid occurrence');
+    // Claim synchronously before any await. DB unique(template_id, occurrence_key)
+    // also guards concurrent requests; duplicates never resend the first ask.
+    const existing = this.repo.getSessionByTemplateOccurrence(templateId, input.occurrenceKey);
+    if (existing) return { created: false, session: existing };
+    let template = this.repo.getTemplateById(templateId);
+    if (input.template) {
+      const t = input.template;
+      // A template is one target/conversation. Refuse silently dropping recipients.
+      if (t.recipients && t.recipients.length !== 1) throw new Error('Exactly one outreach conversation is supported per task');
+      const recipient = t.recipients?.[0];
+      const targetRef = t.targetRef || (typeof recipient === 'string' ? recipient : recipient?.targetRef || recipient?.chatId);
+      const targetType = t.targetType || (typeof recipient === 'object' ? recipient.targetType : undefined) || 'group';
+      if (!t.question?.trim() || !targetRef) throw new Error('Question and recipient binding are required');
+      template = this.upsertTemplate({ id: templateId, sourceKind: 'schedule_service', sourceRefId: templateId,
+        title: t.question.slice(0, 120), questionTemplate: t.question, contextTemplate: t.context,
+        targetType, targetRef, enabled: true, scheduleSpec: {}, approvalPolicy: t.approvalPolicy,
+        maxFollowup: t.maxFollowup, followupIntervalSeconds: t.followupIntervalSeconds });
     }
+    if (!template?.enabled || template.sourceKind !== 'schedule_service') throw new Error('Active Schedule template required');
+    const requiresApproval = runtime.outreachRequireApprovalForManual || template.approvalPolicy !== 'manual_direct';
+    const prior = this.repo.getLatestSessionBeforeTemplateOccurrence(templateId, input.scheduledFor);
+    const session = this.repo.createSession({ templateId, originKind: 'scheduled_template',
+      targetType: template.targetType, targetRef: template.targetRef,
+      renderedQuestion: template.questionTemplate, renderedContext: template.contextTemplate,
+      status: requiresApproval ? 'pending_approval' : 'scheduled', requiresApproval,
+      maxFollowup: template.maxFollowup, followupIntervalSeconds: template.followupIntervalSeconds,
+      nextCheckAt: requiresApproval ? null : now(), scheduledFor: input.scheduledFor,
+      occurrenceKey: input.occurrenceKey, occurrenceStartAt: prior?.resolvedAt || prior?.createdAt || input.scheduledFor });
+    this.repo.createEvent(session.id, 'created', { sourceSystem: 'schedule_service', occurrenceKey: input.occurrenceKey });
+    // The existing session loop resolves targets, checks answers, dispatches and
+    // follows up. Keeping HTTP acceptance side-effect-free makes retries safe.
+    return { created: true, session };
   }
 
   private async dispatchSession(session: OutreachSessionRecord): Promise<void> {
@@ -2052,7 +1854,7 @@ export class OutreachEngine {
     const sessions = this.repo.listPendingSessions(currentTime, 200);
     for (const session of sessions) {
       if (session.status === 'scheduled') {
-        await this.dispatchSession(session);
+        await this.dispatchSession(isResolvedTargetStatus(session.targetResolutionStatus) ? session : await this.resolveSessionTarget(session));
         continue;
       }
       if (session.status !== 'waiting_reply' && session.status !== 'deferred') {

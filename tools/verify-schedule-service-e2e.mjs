@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import playwright from '../desktop-app/node_modules/playwright/index.js';
+const source = path.resolve(process.env.SCHEDULE_SOURCE || '../personal-schedule/service');
+const { openDb } = await import(pathToFileURL(path.join(source, 'src/db.js')));
+const { buildApp } = await import(pathToFileURL(path.join(source, 'src/server.js')));
+const { listen } = await import(pathToFileURL(path.join(source, 'src/http.js')));
+const db = openDb(':memory:');
+const { app, services } = buildApp(db);
+const server = await listen(app, { port: 0, host: '127.0.0.1' });
+const baseUrl = `http://127.0.0.1:${server.address().port}`;
+const owner = services.auth.ensureUser('owner-e184@example.test');
+const receiver = services.auth.ensureUser('receiver-e184@example.test');
+const ownerToken = services.auth.issueToken(owner.id);
+const token = services.auth.issueToken(receiver.id);
+const request = async (url, method = 'GET', body, credential = token) => {
+  const response = await fetch(baseUrl + '/api/v1' + url, { method, headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  assert(response.ok, `API ${url}: ${response.status}`); return response.json();
+};
+const tag = await request('/tags', 'POST', { name: 'E184 test group' }, ownerToken);
+const { task } = await request('/tasks', 'POST', { type: 'asme', title: 'Selected task', content: 'Safe local test content', scheduleSpec: { kind: 'rate', intervalMinutes: 120 }, tagIds: [tag.id] }, ownerToken);
+await request('/tasks', 'POST', { type: 'bot', title: 'Unselected task', content: 'not imported', scheduleSpec: { kind: 'rate', intervalMinutes: 120 }, tagIds: [tag.id] }, ownerToken);
+const { share } = await request(`/tags/${tag.id}/share`, 'POST', {}, ownerToken);
+const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'e184-extension-'));
+let context;
+try {
+  const extensionPath = path.resolve('dist');
+  context = await playwright.chromium.launchPersistentContext(profile, { channel: 'chromium', headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`] });
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+  const extensionId = new URL(worker.url()).host;
+  await worker.evaluate(async ({baseUrl, token}) => { await chrome.storage.local.set({ personalScheduleConnection: {baseUrl, token} }); }, {baseUrl, token});
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  const setup = await options.evaluate(() => chrome.runtime.sendMessage({ type: 'SCHEDULE_SETUP_SAVED' }));
+  assert.equal(setup.success, true, setup.error);
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/share/${share.token}`);
+  const panel = page.locator('#personal-schedule-extension');
+  await panel.getByRole('button', { name: '导入勾选任务', exact: true }).waitFor();
+  await panel.getByText('receiver-e184@example.test', { exact: false }).waitFor();
+  await panel.getByLabel('Unselected task', { exact: false }).uncheck();
+  await panel.getByRole('button', { name: '导入勾选任务', exact: true }).dblclick();
+  await panel.getByText('导入副本默认未启用', { exact: false }).waitFor();
+  let tasks = await request('/tasks');
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].title, 'Selected task'); assert.equal(tasks[0].status, 'inactive');
+  assert.equal(tasks[0].config.chatId, undefined);
+  await panel.getByRole('button', { name: '查看 / 重放本次导入结果' }).click();
+  assert.equal((await request('/tasks')).length, 1);
+  const forbidden = await options.evaluate(async ({baseUrl, token}) => chrome.runtime.sendMessage({ type: 'PERSONAL_SCHEDULE_BRIDGE', action: 'import', schemaVersion: 1, shareToken: token, selected: ['x'], requestId: 'evil' }), {baseUrl, token: share.token});
+  assert.equal(forbidden.success, false, 'extension origin is not an authorized website frame');
+  await request(`/shares/${share.token}/revoke`, 'POST', {}, ownerToken);
+  await page.reload();
+  await page.getByRole('heading', { name: '分享不可用' }).waitFor();
+  assert.equal((await request('/tasks')).length, 1, 'revocation preserves imported independent copy');
+  console.log('Real extension + real local Schedule API: authorized handshake, default selection, subset import, duplicate click/replay, inactive config, untrusted sender rejection, revocation passed');
+} finally {
+  if (context) await context.close();
+  await fs.rm(profile, {recursive: true, force: true});
+  await new Promise(resolve => server.close(resolve)); db.close();
+}

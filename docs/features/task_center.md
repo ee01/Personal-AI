@@ -1,5 +1,7 @@
 # 任务中心（Task Center）
 
+> 2026-11-06：旧 Sheet/jira_sheet 镜像、凭据收编及云端初始化入口已移除。任务中心保留 Memory 业务队列；用户计划任务使用 Personal Schedule。下文历史 lane 设计不再作为新任务的接入依据。当前入口与跨仓库限制见 `scheduled_messages_manager.md` 和 `../integrations/personal-schedule-contract.md`。
+
 > 一个账本、两条调度 lane。定时推送、Agent 任务、提醒我、开发委派、帮我问、反思候选共用同一张队列表、同一套幂等、同一套人工节点。
 
 - 设计决策与调研过程：[`docs/progressing/agent-task-ledger-plan.md`](../progressing/agent-task-ledger-plan.md)

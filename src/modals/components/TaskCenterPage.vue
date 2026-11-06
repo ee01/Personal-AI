@@ -823,21 +823,13 @@ import {
   type TaskLane,
 } from '../../services/MemoryServiceClient';
 import {
-  applyTaskCenterSheetMirrorControl,
-  pushAsmeCredentialsToSheet,
-  retryPendingTaskCenterMirrors,
-  upsertTaskCenterSheetMirror,
-} from '../../services/TaskCenterLedgerSync';
-import {
   foldReflectionTasks,
   isInboxTask,
 } from '../../scheduled-messages/taskCenterSheetMirror';
 import { probeTaskCenterLevels } from '../taskCenterLevels';
 import {
-  asmePushReceipt,
   buildL1AsmeSavePayload,
   buildL1BotSavePayload,
-  decideRingCentralAdoptFromSheet,
   hydrateL1AsmeDraft,
   hydrateL1BotDraft,
 } from '../taskCenterCredentials';
@@ -871,7 +863,6 @@ import {
 import { DEFAULT_TIMELINE_PROJECT, TIMELINE_PROJECTS } from '../../scheduled-messages/timelineProjects';
 import { STANDARD_TIMELINE_MILESTONE_OPTIONS } from '../../scheduled-messages/timelineMilestones';
 import { isValidTimelineOffsetValue } from '../../scheduled-messages/timelineFormatting';
-import type { RuntimeConfigResponse } from '../../services/MemoryServiceClient';
 
 const client = getMemoryServiceClient();
 
@@ -916,7 +907,6 @@ const l1ConfigPanel = ref<'bot' | 'asme' | null>(null);
 const l1Saving = ref(false);
 const l1BotDraft = ref(hydrateL1BotDraft(null));
 const l1AsmeDraft = ref(hydrateL1AsmeDraft(null));
-let ringCentralAdoptNotified = false;
 
 const draft = ref(createEmptyTaskDraft({ botConfigured: false, asmeConfigured: false }));
 const recipientError = ref('');
@@ -966,10 +956,6 @@ const createKindOptions: Array<{ value: TaskKind; label: string; hint: string }>
  * L2 (Sheet + Apps Script + Jira rule) lives on the scheduled-messages page.
  * L1 (Bot / AsMe) uses memory-service runtime config — same store as Options.
  */
-function openScheduledMessages(hash = '') {
-  window.open(chrome.runtime.getURL(`scheduled-messages.html${hash}`), '_blank');
-}
-
 async function openL1Config(kind: 'bot' | 'asme') {
   l1ConfigPanel.value = kind;
   try {
@@ -999,10 +985,6 @@ async function saveL1Config() {
     await client.updateRuntimeConfig(payload);
     await detectLevels();
     let note = l1ConfigPanel.value === 'bot' ? 'Bot 配置已保存' : 'AsMe 配置已保存（🏠 即时生效）';
-    if (l1ConfigPanel.value === 'asme' && cloudLaneAvailable.value) {
-      const push = await pushAsmeCredentialsToSheet(payload);
-      note += `；${asmePushReceipt(push)}`;
-    }
     showToast(note);
     closeL1Config();
   } catch (error) {
@@ -1012,27 +994,6 @@ async function saveL1Config() {
   }
 }
 
-async function adoptRingCentralFromSheetIfNeeded(
-  runtime: RuntimeConfigResponse | null,
-  scheduledMessagesConfig: unknown,
-): Promise<RuntimeConfigResponse | null> {
-  const decision = decideRingCentralAdoptFromSheet({
-    runtime,
-    scheduledMessagesConfig,
-    ringCentralServerUrl: runtime?.ringCentralServerUrl,
-  });
-  if (!decision.adopt) return runtime;
-  try {
-    const updated = await client.updateRuntimeConfig(decision.payload);
-    if (!ringCentralAdoptNotified) {
-      ringCentralAdoptNotified = true;
-      showToast('已从定时消息配置收编 AsMe 凭据（与 Options 共用）');
-    }
-    return updated;
-  } catch {
-    return runtime;
-  }
-}
 
 const levels = computed(() => [
   {
@@ -1057,31 +1018,7 @@ const levels = computed(() => [
     unlocks: 'Glip Bot 私发 / 群组、AsMe 本人身份作为通知目标',
     action: null as null | { label: string; hint: string; run: () => void },
   },
-  {
-    key: 'l2',
-    shortLabel: 'L2 云端',
-    label: 'L2 云端 lane（☁️ jira_sheet）',
-    active: cloudLaneAvailable.value,
-    detail: !levelsProbeReady.value
-      ? '正在探测本机 Sheet / Jira 缓存…'
-      : cloudLaneAvailable.value
-        ? `已从本机缓存探测到维护表${probedSheetId.value ? `（${probedSheetLabel.value}）` : ''}。原 Sheet / Jira 规则照常运行。`
-        : '未配置。需要 Google 授权和 Jira 项目 admin 权限。',
-    unlocks: '☁️ 调度器（memory-service 离线也照跑）、Timeline 里程碑触发、Drive 附件',
-    action: !levelsProbeReady.value
-      ? null
-      : cloudLaneAvailable.value
-        ? {
-            label: '打开定时消息页',
-            hint: '查看已接入的 Sheet、Jira 规则和 Bot 配置，不会再走一遍初始化',
-            run: () => openScheduledMessages(),
-          }
-        : {
-            label: '去一键初始化',
-            hint: '定时消息页 → 一键初始化，会创建 Sheet、部署脚本、装 Jira 规则。已有维护表请改用手动绑定。',
-            run: () => openScheduledMessages(),
-          },
-  },
+
 ]);
 
 const allLevelsActive = computed(() => levels.value.every((level) => level.active));
@@ -1505,19 +1442,6 @@ function canApproveGate(task: TaskCenterTask) {
   return task.queueStatus === 'input_required';
 }
 
-async function syncSheetControl(
-  task: TaskCenterTask,
-  action: 'pause' | 'resume' | 'delete' | 'complete',
-): Promise<string> {
-  if (task.lane !== 'jira_sheet') return '';
-  try {
-    await applyTaskCenterSheetMirrorControl(task, action, { interactive: false });
-    return '';
-  } catch (error) {
-    return `；Sheet 未同步：${(error as Error).message}`;
-  }
-}
-
 async function controlTask(
   task: TaskCenterTask,
   action: 'pause' | 'resume' | 'retry' | 'run_now' | 'complete',
@@ -1531,11 +1455,7 @@ async function controlTask(
       complete: '已标记完成',
     };
     const result = await client.controlTaskCenterTask(task.id, action);
-    let sheetNote = '';
-    if (action === 'pause' || action === 'resume' || action === 'complete') {
-      sheetNote = await syncSheetControl(result.task ?? task, action);
-    }
-    showToast(`${labels[action]}「${result.task.title}」${sheetNote}`);
+    showToast(`${labels[action]}「${result.task.title}」`);
     await loadAll({ silent: true });
     selectedId.value = result.task.id;
   } catch (error) {
@@ -1582,9 +1502,8 @@ async function confirmDeleteTask(task: TaskCenterTask) {
   saving.value = true;
   try {
     await client.deleteTaskCenterTask(task.id);
-    const sheetNote = await syncSheetControl(task, 'delete');
     pendingDelete.value = false;
-    showToast(`已删除「${task.title}」${sheetNote}`);
+    showToast(`已删除「${task.title}」`);
     if (selectedId.value === task.id) selectedId.value = '';
     await loadAll();
   } catch (error) {
@@ -1866,36 +1785,14 @@ async function saveTask() {
   if (!canSave.value) return;
   saving.value = true;
   try {
-    const previous = editingTaskId.value
-      ? tasks.value.find((item) => item.id === editingTaskId.value)
-      : undefined;
     const body = editorWriteBody();
     const response = editingTaskId.value
       ? await client.updateTaskCenterTask(editingTaskId.value, body)
       : await client.createTaskCenterTask(body);
     let saved = response.task;
-    let sheetNote = '';
-    if (previous?.lane === 'jira_sheet' && saved?.lane !== 'jira_sheet') {
-      sheetNote = await syncSheetControl(previous, 'delete');
-      if (sheetNote) sheetNote = sheetNote.replace('Sheet 未同步', '旧 Sheet 行未删');
-    } else if (saved?.lane === 'jira_sheet') {
-      try {
-        saved = await upsertTaskCenterSheetMirror(saved, { interactive: true });
-        sheetNote = ' · 已同步 Sheet ☁️';
-      } catch (error) {
-        sheetNote = ` · Sheet 未同步：${(error as Error).message}`;
-      }
-    }
     closeEditor();
-    const lane = response.lane;
     const title = saved?.title ?? body.title;
-    showToast(
-      lane && !lane.honoredRequest
-        ? `已保存，但调度器回落为 🏠：${lane.reason}`
-        : saved?.lane === 'jira_sheet'
-          ? `已保存「${title}」${sheetNote || (response.mirrorRequired ? ' · 待同步 Sheet ☁️' : ' · ☁️')}`
-          : `已保存「${title}」· 已入 memory_cron 队列 🏠`,
-    );
+    showToast(`已保存「${title}」`);
     await loadAll();
     if (saved?.id) selectedId.value = saved.id;
   } catch (error) {
@@ -1917,16 +1814,9 @@ async function sweep() {
 
 async function detectLevels() {
   try {
-    const [stored, runtimeRaw] = await Promise.all([
-      chrome.storage.local.get(['scheduledMessagesConfig']),
-      client.getRuntimeConfig().catch(() => null),
-    ]);
-    const runtime = await adoptRingCentralFromSheetIfNeeded(
-      runtimeRaw,
-      stored?.scheduledMessagesConfig,
-    );
+    const runtime = await client.getRuntimeConfig().catch(() => null);
     const probed = probeTaskCenterLevels({
-      scheduledMessagesConfig: stored?.scheduledMessagesConfig,
+      scheduledMessagesConfig: null,
       runtime,
     });
     cloudLaneAvailable.value = probed.cloudLaneAvailable;
@@ -1963,11 +1853,6 @@ async function loadAll(options: { silent?: boolean } = {}) {
     loadError.value = '';
     if (!selectedId.value && list.items.length > 0) {
       selectedId.value = list.items[0].id;
-    }
-    if (!options.silent) {
-      void retryPendingTaskCenterMirrors(list.items, { interactive: false }).then((synced) => {
-        if (synced > 0) void loadAll({ silent: true });
-      });
     }
   } catch (error) {
     loadError.value = (error as Error).message;

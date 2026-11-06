@@ -10,11 +10,7 @@
  */
 
 import { generateAutoReply } from '../llm';
-import {
-  GOOGLE_AUTH_SCOPE_SETS,
-  getGoogleAuthTokenSilently,
-} from '../utils/googleAuth';
-import { ScheduledMessageService } from '../scheduled-messages/ScheduledMessageService';
+import { scheduleApi } from '../scheduleService';
 import { isScheduledMessagesInitialized } from '../scheduled-messages/ScheduledMessagesUtils';
 import { formatLocalScheduleDateTime } from '../scheduled-messages/scheduleDateTime';
 import type { DigestConfig } from '../types/digestQueue';
@@ -327,21 +323,6 @@ async function createAutoReplyScheduledMessage(params: {
       throw new Error('定时消息未初始化');
     }
 
-    // 🔧 优先使用静默方法，避免在后台任务中弹出授权窗口
-    const token = await getGoogleAuthTokenSilently({
-      caller: 'AutoReplyHandler.createMessage',
-      scopes: GOOGLE_AUTH_SCOPE_SETS.SHEETS,
-    });
-    if (!token) {
-      console.warn(
-        '⚠️ 无缓存的 Google 认证 token，跳过创建自动答复消息（避免弹出授权窗口）',
-      );
-      // 🔥 关键修复：在后台任务中，如果没有缓存 token，直接抛出错误，不要尝试交互式获取
-      throw new Error('无缓存的 Google 认证 token');
-    }
-
-    const service = new ScheduledMessageService(token);
-
     // 根据 reviewMode 计算执行时间和状态
     const now = new Date();
     let scheduleTime: Date;
@@ -372,22 +353,14 @@ async function createAutoReplyScheduledMessage(params: {
     const { dateStr: scheduleDate, timeStr: scheduleTimeStr } =
       formatLocalScheduleDateTime(scheduleTime);
 
-    // 创建消息
-    const createResult = await service.createMessage({
-      Topic: buildAutoReplyTopic(msgContext),
-      Content: replyContent,
-      Schedule_Date: scheduleDate,
-      Schedule_Time: scheduleTimeStr,
-      Push_Method: 'AsMe',
-      Target_Type: msgContext.groupId ? 'group' : 'private',
-      Glip_Team_ID: msgContext.groupId || undefined,
-      Category: '自动答复',
+    if (!msgContext.groupId) throw new Error('无法识别自动答复的目标会话');
+    const saved = await scheduleApi('/tasks', 'POST', {
+      type: 'asme', title: buildAutoReplyTopic(msgContext), content: replyContent,
+      config: { chatId: msgContext.groupId }, status: status === 'PendingReview' ? 'paused' : undefined,
+      scheduleSpec: { kind: 'one_shot', dateTime: Math.floor(scheduleTime.getTime() / 1000),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
     });
-
-    // 如果创建成功，更新状态
-    if (createResult && status === 'PendingReview') {
-      await service.updateMessage(createResult.ID, { Status: 'PendingReview' });
-    }
+    const createResult = { ID: saved.task.id };
 
     // 记录自动答复历史
     if (msgContext.postId) {

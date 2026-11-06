@@ -579,69 +579,6 @@ export class OutreachRepository {
     return rows.map((row) => this.rowToTemplate(row));
   }
 
-  listDueTemplates(referenceTs: number, limit = 100): OutreachTemplateRecord[] {
-    return this.listTemplates(limit)
-      .filter((template) => template.enabled && template.syncState === 'synced')
-      .filter((template) => {
-        const repeatCount = Number(template.scheduleSpec.repeatCount);
-        const dispatchCount = Number(template.scheduleSpec.dispatchCount ?? 0);
-        return !(
-          Number.isFinite(repeatCount) &&
-          repeatCount > 0 &&
-          Number.isFinite(dispatchCount) &&
-          dispatchCount >= repeatCount
-        );
-      })
-      .filter((template) => {
-        const nextDispatchAt = Number(template.scheduleSpec.nextDispatchAt ?? 0);
-        return (
-          Number.isFinite(nextDispatchAt) &&
-          nextDispatchAt > 0 &&
-          nextDispatchAt <= referenceTs
-        );
-      });
-  }
-
-  markTemplateDispatch(
-    id: string,
-    nextDispatchAt: number | null,
-    lastSessionId: string,
-  ): OutreachTemplateRecord | null {
-    const template = this.getTemplateById(id);
-    if (!template) return null;
-    const scheduleSpec = { ...template.scheduleSpec };
-    const currentDispatchCount = Number(scheduleSpec.dispatchCount ?? 0);
-    const dispatchCount = Number.isFinite(currentDispatchCount)
-      ? Math.max(0, Math.floor(currentDispatchCount)) + 1
-      : 1;
-    const repeatCount = Number(scheduleSpec.repeatCount);
-    const reachedRepeatCount =
-      Number.isFinite(repeatCount) &&
-      repeatCount > 0 &&
-      dispatchCount >= repeatCount;
-
-    scheduleSpec.dispatchCount = dispatchCount;
-    if (
-      !reachedRepeatCount &&
-      nextDispatchAt &&
-      Number.isFinite(nextDispatchAt) &&
-      nextDispatchAt > 0
-    ) {
-      scheduleSpec.nextDispatchAt = Math.floor(nextDispatchAt);
-    } else {
-      delete scheduleSpec.nextDispatchAt;
-    }
-    this.db
-      .prepare(
-        `UPDATE outreach_templates
-         SET schedule_spec_json = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(JSON.stringify(scheduleSpec), now(), id);
-    const updated = this.getTemplateById(id);
-    return updated ? { ...updated, lastSessionId } : null;
-  }
-
   createSession(input: CreateOutreachSessionInput): OutreachSessionRecord {
     const id = input.id ?? randomUUID();
     const currentTime = input.createdAt ?? now();

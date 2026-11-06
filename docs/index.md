@@ -22,11 +22,11 @@
 | Native Join | NC 加会 | [meeting_native_join.md](./features/meeting_native_join.md) | |
 | Memory Storyline Builder | 记忆故事线 | [memory_storyline_builder.md](./features/memory_storyline_builder.md) | |
 | Notification Center | 通知中心 | [notification_center.md](./features/notification_center.md) | 含通知提醒与免打扰路径（`notification_records`） |
-| Task Center | 任务中心 | [task_center.md](./features/task_center.md) | 一个账本、两条调度 lane；异常隔离与网关默认 Agent；群通知区分入队/送达并回读核验；☁️ 子文档见 Scheduled Messages |
+| Task Center | 任务中心 | [task_center.md](./features/task_center.md) | Memory 业务队列与执行状态；异常隔离与网关默认 Agent；旧 Sheet 镜像已移除，计划任务转 Personal Schedule |
+| Personal Schedule | 计划任务与分组导入 | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 独立服务配置、Glip 续提、接收方扩展导入与 JIRA 禁用副本补全；跨仓库待联调项见契约 |
 | Message Analysis | 聊天消息分析入库 | [message_analysis.md](./features/message_analysis.md) | 含 Agent Workflow 多 Agent 编排引擎（`ANALYSIS_TYPE=agentWorkflow`，已并入主文档）；专题文档：[custom_prompts.md](./features/custom_prompts.md)（自定义提示词与用户上下文） |
 | Message Reaction | 消息交互 | [message_reaction.md](./features/message_reaction.md) | |
 | Topic Messages | 主题式消息阅读 | [topic_based_messages.md](./features/topic_based_messages.md) | |
-| Scheduled Messages | 定时消息 | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 任务中心 ☁️ `jira_sheet` lane；含主动询问（Outreach）排队外发与会话管理 |
 | Personal AI AR Data | AR 数据 | [ar_data_overlay.md](./features/ar_data_overlay.md) | |
 | Relationship Radar | 人脉关系 | [relationship_radar.md](./features/relationship_radar.md) | |
 | Project Dashboard | 项目面板 | [project_dashboard_usage_guide.md](./features/project_dashboard_usage_guide.md) | 数据源检查 / watched projects 补齐 / 证据修复见 [brain_like_project_analysis_system.md](./features/brain_like_project_analysis_system.md) |
@@ -53,7 +53,6 @@
 
 | 小功能点 | 所属能力 | 所在文档 | 说明 |
 |---|---|---|---|
-| 定时任务跨日领取与当天改期重推 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 历史未确认轮次不阻塞次日；改到今天未来时间生成新计划版本，保留原回执 |
 | 记忆基础架构 | Memory Service 全平台 | [memory_foundation.md](./features/memory_foundation.md) | v1/v2/v3 真值与血缘；睡眠期 A–E、kind 保护、alias 两车道；主动有界两跳/重排与被动真值过滤；梦境页回执/撤销、长期偏好确认、人工 blind 样本导出；shadow/live 资格与生产读取/夜间执行统计 |
 | 记忆主张归属 | Ask / Memory Lens / Compose Assist / User Profile / Meeting Pilot | [memory_claim_attribution.md](./features/memory_claim_attribution.md) | raw-first 句内 owner/stance/verification 门禁；普通 Glip 零新增操作，混合证据只在既有消费详情显示 compact receipt，纠错不改原文或外部系统；来源闭集与后台会话晋升门控 |
 | InteractionScene 场景快照 | Memory Lens / Compose Assist | [memory_system.md](./memory_system.md) | 前端确定性场景信号供给 `/context-recall` 与 `/composer/assist`；语义决策仍在 Memory Service |
@@ -131,22 +130,6 @@
 | 🏠 lane 执行后投递 | Task Center | [task_center.md](./features/task_center.md) | `ActionExecutor` 终态复用 `planAgentTaskNotifications`；`bot` / `asme` / `plugin`；失败写 `notifyDeliveryError` 不改 run 状态 |
 | L1 Bot / AsMe 分层 | Task Center | [task_center.md](./features/task_center.md) | 能力条认 Bot 或 AsMe；未配置通道置灰并链到定时消息页 / Options 追问凭据 |
 | 提醒我 | Task Center | [task_center.md](./features/task_center.md) | 快捷时间（1 小时后 / 今晚 / 明早 / 下周一）；到点走 `notify_user`，过点时间顺延到下一档 |
-| 定时消息新表升级 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 旧版只读门禁、可恢复候选表（排除 HEAD 测试部署）、整行复制与未决隔离、旧触发器退役回执、Jira 换址语义回读、已完成部署引用修复、收据记忆收起、成功刷新解锁及人工补发；Apps Script 3.1.0 |
-| 定时消息一键初始化 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet、Apps Script、触发器；当前用户 Memory 连接 Config 自动补齐；Multica 当前 Webhook 归 Messages 行，旧绑定表迁移校验后删除；创建 / 授权 / 恢复按钮标明阶段边界 |
-| 定时消息创建/编辑/删除 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Messages 表驱动；行内编辑 / 删除按钮说明本地草稿、确认、写入和历史发送边界；AI Report 自定义版块增删改标明只是弹窗草稿；托管 JiraAutomation 编辑保留 `Automation_Link` 并继续同步 Rule 名称；Done 单次改成仍有下次执行的循环会自动恢复 Active |
-| Glip 快速定时与未来消息 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 输入框闹钟创建 `ComposeScheduled` AsMe；列表底部虚线未来消息是本地 pending 快照，不是已发送消息 |
-| 多执行引擎 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | AsMe / Bot / AI Report / JiraAutomation / Outreach / AgentTask；AgentTask 按有效 Relay Key 选择 Jira 直连或自建 Dify 网络中转；[配置说明](../src/scheduled-messages/dify/README.md) |
-| 定时消息列表筛选 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Active / Done / Snooze 等 |
-| 队列健康提示 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 队列风险、诊断线索、改期写入中回执和恢复入口 |
-| 执行匹配与补偿窗口 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 当前分钟、过去 30 分钟、08:00 后队列；活补偿行显示未发送回执 |
-| 队列可视化与改期建议 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 拥挤槽位、展开快照回执、建议依据、建议处理对象与操作边界 |
-| Timeline 缓存与 Jira Milestone | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Jira JSON/Groovy Map 兼容、诊断范围回执和 dry-run 排障 |
-| 定时消息配置同步 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet Config 与本地 storage 同步；同步按钮 hover/读屏说明读 Config、刷新缓存、必要写回和不执行队列边界 |
-| 定时消息领取与交付诊断 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | API 领取仅写待确认；Executor 1.8.2 将 AgentTask 协议分支与确认回调置于独立条件容器，避免提交后跳过确认；区分执行服务受理与群投递 |
-| 历史轮次不补发恢复 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 所有者逐 key 关闭过期未决领取，原子保存 Skipped 审计，不发送、不累计次数，解除对后续轮次的阻塞；Apps Script 3.2.3 |
-| 定时消息持久幂等账本 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | Sheet 原子领取/确认、满属性迁移、旧表四步诊断助手、初始化元数据缓存修复（3.0.1）、未知提交冻结、48h 去重与兼容回滚；3.0.0 需维护窗口切换 |
-| App Script 自动更新 | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | deployments.update、版本探测、项目归属预检、保留项目私有管理校验值；可升级横幅显示 getVersion 证明回执，检查/升级/恢复按钮 hover 与读屏标明只读、写入和回退边界 |
-| 帮我做 AgentTask | Scheduled Messages | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) / [agent_executor_runtime.md](./features/agent_executor_runtime.md) | 新建任务默认定时送到用户自己的 Multica Autopilot，时间仍由 Jira 触发，结果在 Multica；编辑默认折叠执行配置，复用本机 PAT 与上次 workspace/project，支持新建替代绑定及切换 Memory；Memory/Multica 到期共用 Dify HTTP Relay，Apps Script 校验凭据与业务回执；已有任务继续由 Jira Rule 触发 memory-service 入队 `delegate_agent`，执行器由 Options registry 选择。成功通知分执行/整理/投递三段；`Agent_Notify_When_Empty` 控制 0 匹配是否仍推（默认不推） |
 | 执行器连通性测试 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | Options「测试 / 深度测试」；`POST /agent-executors/:id/probe`；stage=dns/connect/auth/ready；缓存 5 分钟；不跑 LLM |
 | Agent Worker 远程执行 | Agent 编排 | [agent_executor_runtime.md](./features/agent_executor_runtime.md) | ACP `runtime=remote` 入队 `awaiting_claim`；pair/heartbeat/claim/report + lease fencing；Desktop 内嵌或 headless `install.sh` |
 | Agent Workflow 多 Agent 编排 | Message Analysis | [message_analysis.md](./features/message_analysis.md) | 标准消息入口 workflow（`ANALYSIS_TYPE=agentWorkflow`）；低置信度复核和保存样例删除都有本地边界回执 |

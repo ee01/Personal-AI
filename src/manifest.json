@@ -3,7 +3,7 @@
   "name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
   "default_locale": "zh_CN",
-  "version": "12.1.20",
+  "version": "12.2.0",
   "permissions": [
     "tabs",
     "storage",
@@ -128,6 +128,19 @@
       ],
       "run_at": "document_idle",
       "all_frames": false
+    },
+    {
+      "matches": [
+        "http://schedule.xmnup.com/*",
+        "https://schedule.xmnup.com/*",
+        "http://localhost:3230/*",
+        "http://127.0.0.1:3230/*"
+      ],
+      "js": [
+        "contentScriptSchedule.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "action": {
@@ -189,7 +202,6 @@
         "auth-logs.js",
         "meeting-sidepanel.html",
         "meeting-sidepanel.js",
-        "app-script-template.gs",
         "glipNativePopoutPage.js",
         "previews/Personal AI - fetch jira.png",
         "previews/Personal AI - import jira automation.png",

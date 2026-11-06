@@ -110,6 +110,17 @@ function deriveUpstreamStatus(message: string): number | undefined {
 
 export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   app.post<{
+    Params: { id: string };
+    Body: Parameters<OutreachEngine['triggerOccurrence']>[1] & { sourceSystem?: string };
+  }>('/outreach/templates/:id/trigger-occurrence', async (request, reply) => {
+    if (request.body?.sourceSystem !== 'schedule_service') return reply.code(400).send({ error: 'sourceSystem must be schedule_service' });
+    const { db, userDataManager } = request.userContext;
+    const engine = new OutreachEngine(db, userDataManager, request.userId);
+    try { return reply.code(200).send(await engine.triggerOccurrence(request.params.id, request.body)); }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  app.post<{
     Body: UpsertTemplateBody;
   }>('/outreach/templates/upsert', async (request, reply) => {
     const { db, userDataManager } = request.userContext;
