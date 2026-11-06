@@ -3,6 +3,7 @@ import { handleScheduleAuth, handleScheduleLogin } from '../src/scheduleAuth.js'
 const state: Record<string, any> = {};
 const calls: Array<{url: string; init: any}> = [];
 let mail = true, enabled = true, rejectToken = false, badIdentity = false, failTLS = false;
+let signedWeb = false, wrongGuest = false;
 const deviceToken = 'pst_FIXTURE_DEVICE_SECRET';
 const baseUrl = 'https://schedule.fixture.test';
 const email = 'receiver@ringcentral.com';
@@ -15,11 +16,13 @@ const email = 'receiver@ringcentral.com';
   calls.push({ url, init });
   if (failTLS) throw new Error('certificate invalid');
   let value: any = {}, status = 200;
-  if (url.endsWith('/auth/meta')) value = { emailLogin: true, resendConfigured: mail, devFallback: !mail, extensionLogin: { enabled, schemaVersion: 1 } };
+  if (url.endsWith('/auth/meta')) value = { emailLogin: true, resendConfigured: mail, devFallback: !mail,
+    loginBridge: { enabled, nonceTtlSec: 120, channel: 'personal-schedule-extension-v1' } };
   else if (url.endsWith('/auth/email/verify')) value = { user: { id: 'receiver', email: badIdentity ? 'other@ringcentral.com' : email } };
   else if (url.endsWith('/auth/tokens')) value = { token: deviceToken };
-  else if (url.endsWith('/me')) { value = { id: 'receiver', email }; if (rejectToken) status = 401; }
-  else if (url.endsWith('/auth/extension/ticket')) value = { ticket: 't'.repeat(48), requestId: JSON.parse(init.body).requestId, expiresAt: Date.now() + 30000 };
+  else if (url.endsWith('/me')) { value = init.credentials === 'include'
+    ? { id: wrongGuest ? 'other-guest' : 'guest', isGuest: !signedWeb } : { id: 'receiver', email }; if (rejectToken) status = 401; }
+  else if (url.endsWith('/auth/bridge/exchange')) value = { user: { id: 'receiver', email } };
   return { ok: status === 200, status, json: async () => value };
 };
 const options = { id: 'test-extension', url: 'chrome-extension://test-extension/options.html' };
@@ -41,7 +44,7 @@ assert.deepEqual(bound, { email, bound: true });
 assert(!JSON.stringify(bound).includes(deviceToken));
 assert.equal(state.personalScheduleConnection.token, deviceToken);
 await assert.rejects(handleScheduleAuth({ ...request, action: 'verify-code', challengeId, code: '123456' }, options), /失效/);
-const login = (id: string, sender = page) => handleScheduleLogin({ schemaVersion: 1, requestId: id.repeat(32) }, sender);
+const login = (id: string, sender = page) => handleScheduleLogin({ schemaVersion: 1, nonce: id.repeat(32), initiatorId: 'guest' }, sender);
 const before = calls.length;
 await assert.rejects(login('a', { ...page, url: 'https://evil.fixture.test/app' }), /绑定/);
 await assert.rejects(login('a', { ...page, frameId: 1 }), /绑定/);
@@ -51,9 +54,14 @@ enabled = false;
 await assert.rejects(login('b'), /一次性/);
 assert(!calls.some(c => c.url.endsWith('/auth/login')));
 enabled = true;
-const ticket = await login('c');
-assert.equal(ticket.userId, 'receiver'); assert(!JSON.stringify(ticket).includes(deviceToken));
+const exchanged = await login('c');
+assert.equal(exchanged.userId, 'receiver'); assert(!JSON.stringify(exchanged).includes(deviceToken));
 await assert.rejects(login('c'), /已使用/);
+signedWeb = true;
+await assert.rejects(login('e'), /身份已变更/);
+signedWeb = false; wrongGuest = true;
+await assert.rejects(login('f'), /身份已变更/);
+wrongGuest = false;
 rejectToken = true;
 await assert.rejects(login('d'), /401/);
 rejectToken = false; badIdentity = true;

@@ -95,34 +95,36 @@ export async function handleScheduleAuth(request: any, sender: chrome.runtime.Me
   } finally { verifying.delete(challengeId); }
 }
 
-/** One-use ticket is delivered to our isolated script, never to page JS. */
+/** Exchange the page's registered nonce in the background. PAT stays here. */
 export async function handleScheduleLogin(request: any, sender: chrome.runtime.MessageSender) {
   const c = await scheduleConnection();
   if (!c || !authorizedScheduleSender(sender, c.baseUrl) || sender.tab?.id === undefined) throw new Error('请先在扩展中绑定本站账号');
   if (!c.allowWebLogin) throw new Error('请先在扩展 Options 重新验证邮箱并授权网页登录');
   const base = secureBase(c.baseUrl);
-  if (request.schemaVersion !== 1 || !/^[a-f0-9]{32}$/.test(request.requestId || '')) throw new Error('登录请求不兼容');
+  if (request.schemaVersion !== SCHEDULE_LOGIN_PROTOCOL || !/^[A-Za-z0-9_-]{16,128}$/.test(request.nonce || '') ||
+    typeof request.initiatorId !== 'string' || !request.initiatorId) throw new Error('登录请求不兼容');
   const tabId = sender.tab.id;
   if (inFlight.has(tabId)) throw new Error('此页面已有登录请求');
-  const nonceKey = `${tabId}:${request.requestId}`;
+  const nonceKey = `${tabId}:${request.nonce}`;
   usedRequests.forEach((expiresAt, key) => { if (expiresAt <= Date.now()) usedRequests.delete(key); });
   if (usedRequests.has(nonceKey) || usedRequests.size >= 1024) throw new Error('登录请求已使用，请刷新页面');
-  usedRequests.set(nonceKey, Date.now() + 60000);
+  usedRequests.set(nonceKey, Date.now() + 300000);
   inFlight.add(tabId);
   try {
     const meta = await authFetch(base, '/auth/meta');
-    if (meta.extensionLogin?.schemaVersion !== SCHEDULE_LOGIN_PROTOCOL || meta.extensionLogin?.enabled !== true) {
+    if (meta.loginBridge?.enabled !== true || meta.loginBridge?.channel !== 'personal-schedule-extension-v1') {
       throw new Error('本站尚未提供一次性扩展登录协议，请使用邮箱登录');
     }
     const me = await authFetch(base, '/me', undefined, c.token);
     if (!me.id || me.isGuest) throw new Error('设备绑定已失效，请重新验证邮箱');
-    const result = await authFetch(base, '/auth/extension/ticket', { requestId: request.requestId, origin: new URL(base).origin }, c.token);
-    if (result.requestId !== request.requestId || typeof result.ticket !== 'string' ||
-      !/^[A-Za-z0-9_-]{32,512}$/.test(result.ticket) || !Number.isFinite(result.expiresAt) ||
-      result.expiresAt <= Date.now() || result.expiresAt > Date.now() + 60000) throw new Error('一次性登录凭据响应无效');
-    // Detect account switches/unbinding while the network request was pending.
+    // Cookie jar is shared with this authorized site. Recheck the initiating
+    // guest identity immediately before exchange to avoid silent account swaps.
+    const web = await authFetch(base, '/me', undefined, undefined, true);
+    if (web.isGuest !== true || web.id !== request.initiatorId) throw new Error('网页身份已变更，请重新发起登录');
     const current = await scheduleConnection();
     if (current?.baseUrl !== c.baseUrl || current?.token !== c.token) throw new Error('账号绑定已变更，请重新登录');
-    return { ticket: result.ticket, requestId: result.requestId, expiresAt: result.expiresAt, userId: me.id };
+    const result = await authFetch(base, '/auth/bridge/exchange', { nonce: request.nonce }, c.token, true);
+    if (result.user?.id !== me.id) throw new Error('登录兑换身份不匹配');
+    return { nonce: request.nonce, userId: me.id };
   } finally { inFlight.delete(tabId); }
 }

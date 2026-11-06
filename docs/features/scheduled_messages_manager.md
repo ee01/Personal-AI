@@ -29,4 +29,6 @@ Schedule 已透传服务端再次净化的已授权规则 payload；仅有源 ru
 
 邮箱绑定要求受信 HTTPS 和实际可用邮件服务。未配置 Resend、日志验证码回退或证书失败时，界面明确拒绝绑定。设备凭据不返回界面、不交给普通网页；高级 PAT 导入连接保留，但不自动授权网页登录。解除本机绑定仅删除本机凭据，丢失设备应在网站设置中吊销对应令牌。
 
-网页登录适配器仅在 HTTPS 和服务端显式支持一次性兑换协议时启用，已登录的网页账号不会被静默替换。当前服务端接口仍需与 E-183 收敛，不能将网页的 `login-request` 当成完整联调。契约、代码入口和验证界限见 `docs/integrations/personal-schedule-contract.md`、`src/scheduleAuth.ts`、`src/contentScriptSchedule.ts`。验证用 `tools/verify-schedule-auth.ts` 与 `tools/verify-schedule-auth-e2e.mjs`；后者的邮件和 ticket 协议为受控测试端，不能证明线上邮件/自动登录成功。
+网页登录现已对齐真实 `loginBridge/register/exchange`：访客 Cookie 注册 nonce，后台携设备凭据兑换并核对恢复身份，网页不接触长期 PAT，已有真实账号不被扩展静默替换。线上 HTTPS 未就绪继续禁用桥。服务端 nonce 会话绑定等安全回归尚有失败，不能称为整体联调通过；旧 ticket/redeem 草案与测试 shim 已移除。当前服务端把访客草稿写入数据库后登录迁入账号，和原先仅本地草稿有区别，但创建/修改不能启用、不能保存连接凭据，验证 Runner 无 occurrence。既有 E 管理员 PAT 可登录，邮箱例外仍待服务端修复。
+
+契约与入口见 `docs/integrations/personal-schedule-contract.md`、`src/scheduleAuth.ts`、`src/contentScriptSchedule.ts`。`tools/verify-schedule-bridge-real.mjs` 检查实际服务端并输出未满足的安全要求；`tools/verify-schedule-auth.ts` 检查扩展门禁；`tools/verify-schedule-auth-e2e.mjs` 使用实际路由和正常浏览器证书校验，需要预先受信的本地证书/私钥路径，没有时退出2，明确未覆盖正向登录。邮件仍是受控发送端。

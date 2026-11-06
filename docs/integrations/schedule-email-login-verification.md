@@ -1,4 +1,6 @@
-# E-184 扩展邮箱绑定与网页登录：交付及验证边界
+# E-184 扩展邮箱绑定与网页登录：历史轮次验证
+
+本文件记录 b134bcd2 交付时的受控结果；其 ticket/redeem 草案和 shim 已被后续 `schedule-real-bridge-verification.md` 及共用 register/exchange 契约取代，不代表当前联调结论。
 
 2026-11-06。依据用户 10:17 授权及 Astra 后续收敛要求。本轮仅修改 Personal AI 扩展，Schedule 源码/部署仍由 glm 负责。用户已选 Resend 邮箱验证码（新注册限 ringcentral.com）＋扩展便利登录，无需再次确认方向。
 
