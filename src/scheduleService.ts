@@ -106,16 +106,17 @@ export async function handleScheduleBridge(request: any, sender: chrome.runtime.
 }
 export async function registerScheduleBridge(): Promise<void> {
   const c = await scheduleConnection();
+  const builtInOrigins = ['http://schedule.xmnup.com', 'https://schedule.xmnup.com', 'http://localhost:3230', 'http://127.0.0.1:3230'];
   const scripting = chrome.scripting as typeof chrome.scripting & {
     unregisterContentScripts(filter: { ids: string[] }): Promise<void>;
     registerContentScripts(scripts: Array<{ id: string; matches: string[]; js: string[]; runAt: 'document_idle'; allFrames: boolean }>): Promise<void>;
   };
   await scripting.unregisterContentScripts({ ids: ['personal-schedule'] }).catch(() => undefined);
-  if (c && !['http://schedule.xmnup.com', 'https://schedule.xmnup.com', 'http://localhost:3230', 'http://127.0.0.1:3230'].includes(new URL(c.baseUrl).origin)) await scripting.registerContentScripts([{ id: 'personal-schedule',
+  if (c && !builtInOrigins.includes(new URL(c.baseUrl).origin)) await scripting.registerContentScripts([{ id: 'personal-schedule',
     matches: [`${new URL(c.baseUrl).origin}/*`], js: ['contentScriptSchedule.js'], runAt: 'document_idle', allFrames: false }]);
   // Installation and account setup also reach share tabs that are already open.
   // Content scripts registered after navigation otherwise need a manual reload.
-  const origins = c ? [new URL(c.baseUrl).origin] : ['http://schedule.xmnup.com', 'https://schedule.xmnup.com'];
+  const origins = c ? [new URL(c.baseUrl).origin] : builtInOrigins;
   const tabs = await chrome.tabs.query({ url: origins.map(origin => `${origin}/*`) });
   await Promise.all(tabs.filter(tab => tab.id !== undefined).map(tab =>
     chrome.scripting.executeScript({ target: { tabId: tab.id! }, files: ['contentScriptSchedule.js'] }).catch(() => undefined)));

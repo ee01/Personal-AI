@@ -73,6 +73,28 @@ if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname)) {
   let confirmDuplicates = false;
   let working = false;
   let account = '';
+  // These are public task references only, never credentials. Keep choices
+  // across install/setup reinjection instead of silently selecting everything.
+  const selectionKey = `personalScheduleShareSelection:${location.origin}:${shareToken}`;
+  const initialSelection = (tasks: Array<{ refKey: string }>): Set<string> | null => {
+    try {
+      const own = JSON.parse(sessionStorage.getItem(selectionKey) || 'null');
+      if (Array.isArray(own) && own.every(key => typeof key === 'string')) return new Set(own);
+      // The existing website stores checkbox indexes before installation.
+      const legacy = JSON.parse(sessionStorage.getItem(`ps-share-sel-${shareToken}`) || 'null');
+      if (Array.isArray(legacy) && legacy.every(index => /^\d+$/.test(String(index)))) {
+        return new Set(legacy.map(index => tasks[Number(index)]?.refKey).filter(Boolean));
+      }
+    } catch { /* unavailable storage must not prevent explicit selection */ }
+    return null;
+  };
+  rows.addEventListener('change', () => {
+    try {
+      sessionStorage.setItem(selectionKey, JSON.stringify(
+        [...rows.querySelectorAll<HTMLInputElement>('input:checked')].map(input => input.value),
+      ));
+    } catch { /* the visible choices still apply to this import */ }
+  });
   const call = async (action: string, extra: any = {}) => {
     const response = await chrome.runtime.sendMessage({ type: 'PERSONAL_SCHEDULE_BRIDGE', action, shareToken, schemaVersion: 1, ...extra });
     if (!response?.success) throw new Error(response?.error || '连接失败');
@@ -115,9 +137,10 @@ if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname)) {
       account = hello.account;
       const preview = await call('preview');
       if (preview.schemaVersion !== 1) throw new Error('分享格式不兼容，请升级扩展');
-      status.textContent = `将导入到 ${hello.account}；当前分组 ${preview.tasks.length} 个任务。默认全选，可取消勾选。`;
+      const selected = initialSelection(preview.tasks);
+      status.textContent = `将导入到 ${hello.account}；当前分组 ${preview.tasks.length} 个任务。${selected === null ? '默认全选，可取消勾选。' : '已恢复此前勾选，请确认后导入。'}`;
       for (const task of preview.tasks) {
-        const label = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = true; input.value = task.refKey;
+        const label = document.createElement('label'); const input = document.createElement('input'); input.type = 'checkbox'; input.checked = selected === null || selected.has(task.refKey); input.value = task.refKey;
         label.append(input, document.createTextNode(` ${task.title} · ${task.type} · ${task.scheduleSpec?.timezone || '请确认时区'}`)); rows.append(label);
       }
       button.disabled = false;

@@ -42,3 +42,7 @@ Schedule任务按`memoryTemplateId || task.id`关联Memory模板，单次运行�
 ### 等待中追加追问额度（2026-11-07）
 
 等待中“追问上限 +2”使用 Memory `POST /api/v1/outreach/sessions/:id/increase-followup-limit`，body `{requestId,expectedMaxFollowup}`。仅 waiting_reply/deferred，新上限精确+2；不立即发送、不改发送时间或已有次数、不重开终态、不改模板。持久事件回执与原上限比较在同一事务中防重复/并发覆盖，历史事件 `followup_limit_increased` 沿用追问链读取。与终态 `continue-followup` 分开；详细错误、权限及UI重试规则见 `docs/integrations/schedule-outreach-chain.md`。没有真实时区来源则显示未知。
+
+### 分享安装后的勾选续导入
+
+分享页先勾选、再安装/配置扩展时，真实扩展读取该页已保存的选择；重新注入时保留扩展面板的 refKey 选择，包含明确的空选择，避免恢复成全选。接收者确认账号和勾选后才提交，恢复过程不自动写入。实际安装续导入探针为 `tools/verify-schedule-install-resume.mjs`；它使用真正Chrome扩展及Schedule，不使用ready替身。当前商店公开11.1.0不含Schedule能力，12.2.0源码候选的解压加载成功不能当作商店发布完成；真实入口须待兼容版本发布并核验后由Schedule部署配置。
