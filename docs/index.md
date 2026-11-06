@@ -23,7 +23,7 @@
 | Memory Storyline Builder | 记忆故事线 | [memory_storyline_builder.md](./features/memory_storyline_builder.md) | |
 | Notification Center | 通知中心 | [notification_center.md](./features/notification_center.md) | 含通知提醒与免打扰路径（`notification_records`） |
 | Task Center | 任务中心 | [task_center.md](./features/task_center.md) | Memory 业务队列与执行状态；异常隔离与网关默认 Agent；旧 Sheet 镜像已移除，计划任务转 Personal Schedule |
-| Personal Schedule | 计划任务与分组导入 | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 独立服务配置、Glip 续提、接收方扩展导入与 JIRA 禁用副本补全；跨仓库待联调项见契约 |
+| Personal Schedule | 计划任务与分组导入 | [scheduled_messages_manager.md](./features/scheduled_messages_manager.md) | 独立服务配置、Glip 续提、接收方扩展导入与 JIRA 禁用副本补全；跨仓库待联调项见契约；补齐精确 occurrence 结果、模板字段和唯一通知/发布归属 |
 | Message Analysis | 聊天消息分析入库 | [message_analysis.md](./features/message_analysis.md) | 含 Agent Workflow 多 Agent 编排引擎（`ANALYSIS_TYPE=agentWorkflow`，已并入主文档）；专题文档：[custom_prompts.md](./features/custom_prompts.md)（自定义提示词与用户上下文） |
 | Message Reaction | 消息交互 | [message_reaction.md](./features/message_reaction.md) | |
 | Topic Messages | 主题式消息阅读 | [topic_based_messages.md](./features/topic_based_messages.md) | |

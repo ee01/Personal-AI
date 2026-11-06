@@ -6,6 +6,8 @@ export function publishableResult(result?: Record<string, unknown>) {
   const fields = result?.publish_fields ?? payload.publish_fields ?? raw.publish_fields;
   return {
     final_output: typeof final === 'string' ? final : undefined,
+    attachments: Array.isArray(result?.attachments ?? payload.attachments ?? raw.attachments)
+      ? (result?.attachments ?? payload.attachments ?? raw.attachments) as unknown[] : undefined,
     publish_fields: fields && typeof fields === 'object' && !Array.isArray(fields) ? fields as Record<string, unknown> : undefined,
   };
 }

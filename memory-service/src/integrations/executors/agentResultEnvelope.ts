@@ -267,7 +267,9 @@ function resolveEnvelopeParts(
   );
   let artifacts = collectArtifactList(parsed, rawRecord, payload);
   let summary =
-    typeof parsed.summary === 'string' && parsed.summary.trim()
+    typeof parsed.summary_for_owner === 'string' && parsed.summary_for_owner.trim()
+      ? parsed.summary_for_owner.trim()
+      : typeof parsed.summary === 'string' && parsed.summary.trim()
       ? parsed.summary.trim()
       : typeof rawRecord.summary === 'string' && rawRecord.summary.trim()
         ? rawRecord.summary.trim()

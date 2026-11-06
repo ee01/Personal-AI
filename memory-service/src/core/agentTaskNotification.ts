@@ -1162,13 +1162,15 @@ export function readLedgerNotifyConfig(action: QueuedActionRecord): LedgerNotify
   const metadata = asRecord(params.metadata);
   const notify =
     metadata.suppressRecoveryNotifications !== true &&
+    metadata.notificationOwner !== 'schedule_service' &&
     params.notify !== false &&
     metadata.notify !== false;
   const successReceipt =
     metadata.successReceipt !== false && params.successReceipt !== false;
   const viaRaw = metadata.notifyVia ?? params.notifyVia ?? params.channel;
   const notifyVia = normalizeAgentTaskNotifyVia(viaRaw);
-  const notifyTarget = normalizeAgentTaskNotifyTarget(
+  // Schedule is the sole publisher, including replayed/persisted actions.
+  const notifyTarget = metadata.triggerSource === 'schedule_service' ? undefined : normalizeAgentTaskNotifyTarget(
     metadata.notifyTarget ?? params.notifyTarget,
   );
   const notifyTemplate =

@@ -1716,40 +1716,50 @@ export class OutreachEngine {
   }) {
     const runtime = this.getRuntimeConfig();
     if (!runtime.outreachEnabled) throw new Error('Outreach is disabled');
-    if (!input.occurrenceKey?.trim() || input.occurrenceKey.length > 512 ||
-        !Number.isFinite(input.scheduledFor) || input.scheduledFor <= 0) throw new Error('Invalid occurrence');
-    // Claim synchronously before any await. DB unique(template_id, occurrence_key)
-    // also guards concurrent requests; duplicates never resend the first ask.
-    const existing = this.repo.getSessionByTemplateOccurrence(templateId, input.occurrenceKey);
-    if (existing) return { created: false, session: existing };
-    let template = this.repo.getTemplateById(templateId);
-    if (input.template) {
-      const t = input.template;
-      // A template is one target/conversation. Refuse silently dropping recipients.
-      if (t.recipients && t.recipients.length !== 1) throw new Error('Exactly one outreach conversation is supported per task');
-      const recipient = t.recipients?.[0];
-      const targetRef = t.targetRef || (typeof recipient === 'string' ? recipient : recipient?.targetRef || recipient?.chatId);
-      const targetType = t.targetType || (typeof recipient === 'object' ? recipient.targetType : undefined) || 'group';
-      if (!t.question?.trim() || !targetRef) throw new Error('Question and recipient binding are required');
-      template = this.upsertTemplate({ id: templateId, sourceKind: 'schedule_service', sourceRefId: templateId,
-        title: t.question.slice(0, 120), questionTemplate: t.question, contextTemplate: t.context,
-        targetType, targetRef, enabled: true, scheduleSpec: {}, approvalPolicy: t.approvalPolicy,
-        maxFollowup: t.maxFollowup, followupIntervalSeconds: t.followupIntervalSeconds });
-    }
-    if (!template?.enabled || template.sourceKind !== 'schedule_service') throw new Error('Active Schedule template required');
-    const requiresApproval = runtime.outreachRequireApprovalForManual || template.approvalPolicy !== 'manual_direct';
-    const prior = this.repo.getLatestSessionBeforeTemplateOccurrence(templateId, input.scheduledFor);
-    const session = this.repo.createSession({ templateId, originKind: 'scheduled_template',
-      targetType: template.targetType, targetRef: template.targetRef,
-      renderedQuestion: template.questionTemplate, renderedContext: template.contextTemplate,
-      status: requiresApproval ? 'pending_approval' : 'scheduled', requiresApproval,
-      maxFollowup: template.maxFollowup, followupIntervalSeconds: template.followupIntervalSeconds,
-      nextCheckAt: requiresApproval ? null : now(), scheduledFor: input.scheduledFor,
-      occurrenceKey: input.occurrenceKey, occurrenceStartAt: prior?.resolvedAt || prior?.createdAt || input.scheduledFor });
-    this.repo.createEvent(session.id, 'created', { sourceSystem: 'schedule_service', occurrenceKey: input.occurrenceKey });
-    // The existing session loop resolves targets, checks answers, dispatches and
-    // follows up. Keeping HTTP acceptance side-effect-free makes retries safe.
-    return { created: true, session };
+    if (typeof templateId !== 'string' || !templateId.trim() || templateId.length > 512 ||
+        typeof input?.occurrenceKey !== 'string' || !input.occurrenceKey.trim() || input.occurrenceKey.length > 512 ||
+        !Number.isSafeInteger(input.scheduledFor) || input.scheduledFor <= 0) throw new Error('Invalid occurrence');
+    // Snapshot + session + event are atomic, with no external IO in the claim.
+    return this.db.transaction(() => {
+      const existing = this.repo.getSessionByTemplateOccurrence(templateId, input.occurrenceKey);
+      if (existing) return { created: false, session: existing, reason: 'duplicate_occurrence' as const,
+        notificationOwner: 'memory' as const, publishOwner: 'memory' as const };
+      let template = this.repo.getTemplateById(templateId);
+      if (template && template.sourceKind !== 'schedule_service') throw new Error('Template is not owned by Schedule');
+      if (input.template) {
+        const t = input.template;
+        if (t.recipients && (!Array.isArray(t.recipients) || t.recipients.length !== 1)) {
+          throw new Error('Exactly one outreach conversation is supported per task');
+        }
+        const recipient = t.recipients?.[0];
+        const targetRef = t.targetRef || (typeof recipient === 'string' ? recipient : recipient?.targetRef || recipient?.chatId);
+        const targetType = t.targetType || (recipient && typeof recipient === 'object' ? recipient.targetType : undefined) || 'group';
+        if (typeof t.question !== 'string' || !t.question.trim() || typeof targetRef !== 'string' || !targetRef.trim()) {
+          throw new Error('Question and recipient binding are required');
+        }
+        if (t.approvalPolicy !== undefined && !['always_review', 'manual_direct', 'reflection_review'].includes(t.approvalPolicy)) {
+          throw new Error('Invalid approvalPolicy');
+        }
+        template = this.upsertTemplate({ id: templateId, sourceKind: 'schedule_service', sourceRefId: templateId,
+          title: t.question.slice(0, 120), questionTemplate: t.question, contextTemplate: t.context,
+          targetType, targetRef, enabled: true, scheduleSpec: {}, approvalPolicy: t.approvalPolicy,
+          maxFollowup: t.maxFollowup, followupIntervalSeconds: t.followupIntervalSeconds });
+      }
+      if (!template?.enabled) throw new Error('Active Schedule template required');
+      const requiresApproval = runtime.outreachRequireApprovalForManual || template.approvalPolicy !== 'manual_direct';
+      const prior = this.repo.getLatestSessionBeforeTemplateOccurrence(templateId, input.scheduledFor);
+      const session = this.repo.createSession({ templateId, originKind: 'scheduled_template',
+        targetType: template.targetType, targetRef: template.targetRef,
+        renderedQuestion: template.questionTemplate, renderedContext: template.contextTemplate,
+        status: requiresApproval ? 'pending_approval' : 'scheduled', requiresApproval,
+        maxFollowup: template.maxFollowup, followupIntervalSeconds: template.followupIntervalSeconds,
+        nextCheckAt: requiresApproval ? null : Math.max(now(), input.scheduledFor), scheduledFor: input.scheduledFor,
+        occurrenceKey: input.occurrenceKey, occurrenceStartAt: prior?.resolvedAt || prior?.createdAt || input.scheduledFor });
+      this.repo.createEvent(session.id, 'created', { sourceSystem: 'schedule_service', occurrenceKey: input.occurrenceKey });
+      // Memory alone sends first asks, followups and session notices; Schedule
+      // records acceptance, never duplicates these as its own publish action.
+      return { created: true, session, notificationOwner: 'memory' as const, publishOwner: 'memory' as const };
+    })();
   }
 
   private async dispatchSession(session: OutreachSessionRecord): Promise<void> {

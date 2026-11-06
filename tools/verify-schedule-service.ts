@@ -77,6 +77,14 @@ const calls: any[] = [];
   } else if(url.endsWith('/tasks/tsk_jira')) payload={id:'tsk_jira',type:'jira_automation',config:{jiraRuleRef:{jiraUrl:'https://source-no-access.test',projectId:'SOURCE',ruleId:'1'},jiraRuleExport:artifact}};
   return {ok:status===200,status,json:async()=>payload};
 };
+const sourceOnlyFetch = globalThis.fetch;
+(globalThis as any).fetch = async (url: string, init: any = {}) => {
+  if (url.endsWith('/tasks/tsk_jira')) return { ok: true, status: 200, json: async () => ({ id: 'tsk_jira', type: 'jira_automation', config: { jiraRuleRef: { jiraUrl: 'https://source-no-access.test', projectId: 'SOURCE', ruleId: '1' } } }) };
+  return sourceOnlyFetch(url, init);
+};
+await assert.rejects(previewJiraCompletion('tsk_jira', 'TARGET'), /未包含已授权规则内容/);
+assert.equal(jiraCreates, 0, 'a bare jiraRuleRef never creates a destination rule');
+(globalThis as any).fetch = sourceOnlyFetch;
 const preview = await previewJiraCompletion('tsk_jira','TARGET');
 assert.equal(preview.payload.actorAccountId,'receiver-jira-actor');
 assert.equal(preview.payload.state,'DISABLED');

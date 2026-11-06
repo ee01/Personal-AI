@@ -1,3 +1,4 @@
+import { normalizePublishTemplate } from '../integrations/executors/scheduleResultContract.js';
 import { publishableResult } from '../integrations/executors/publishableResult.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -56,6 +57,9 @@ export type {
 const AGENT_TASK_OPENCLAW_TIMEOUT_MS = 10 * 60 * 1000;
 
 interface AgentTaskExecuteBody {
+  /** Schedule alone publishes task output; Memory may own the private receipt. */
+  notificationOwner?: 'memory' | 'schedule_service';
+  publishTemplate?: unknown;
   taskId?: string;
   sheetMessageId?: string;
   rowIndex?: number;
@@ -260,11 +264,15 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
     const action = new ActionRepository(request.userContext.db).getById(request.params.id);
     if (!action || action.sourceKind !== 'agent_task') return reply.code(404).send({ error: 'Run not found' });
     const publish = publishableResult(action.result);
-    return { runId: action.id, taskId: action.sourceRefId, status: action.queueStatus,
+    const metadata = action.params?.metadata as Record<string, unknown> | undefined;
+    return { schemaVersion: 1, runId: action.id, taskId: action.sourceRefId, status: action.queueStatus,
+      resultStatus: getResultStatus(action.result, action.queueStatus),
+      notificationOwner: metadata?.notificationOwner ?? 'memory',
+      publishOwner: metadata?.triggerSource === 'schedule_service' ? 'schedule_service' : 'memory',
       scheduleSpec: (action.params?.metadata as Record<string, unknown> | undefined)?.scheduleSpec,
       summaryForOwner: getExecutionSummary(action.result) || action.lastError || '',
       finalOutput: publish.final_output, publishFields: publish.publish_fields,
-      attachments: Array.isArray(action.result?.artifacts) ? action.result.artifacts : [] };
+      attachments: publish.attachments ?? (Array.isArray(action.result?.artifacts) ? action.result.artifacts : []) };
   });
 
   app.get<{
@@ -388,7 +396,19 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       }
       const executor = executorInstance.id;
 
-      const userId = nonEmptyString(body.userId) || request.userId || 'default';
+      const scheduleOwned = body.triggerSource === 'schedule_service';
+      if (scheduleOwned && body.userId && body.userId !== request.userId) {
+        return reply.code(403).send({ error: 'Schedule userId must match authenticated identity' });
+      }
+      if (scheduleOwned && body.notificationOwner !== undefined &&
+          !['memory', 'schedule_service'].includes(body.notificationOwner)) {
+        return reply.code(400).send({ error: 'Invalid notificationOwner' });
+      }
+      let publishTemplate: ReturnType<typeof normalizePublishTemplate>;
+      try { publishTemplate = normalizePublishTemplate(body.publishTemplate); }
+      catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+      const notificationOwner = scheduleOwned ? (body.notificationOwner ?? 'memory') : 'memory';
+      const userId = scheduleOwned ? request.userId : (nonEmptyString(body.userId) || request.userId || 'default');
       const title = nonEmptyString(body.title) || taskId;
       const triggerSource = nonEmptyString(body.triggerSource) || 'jira_rule';
       const targetSystem =
@@ -416,12 +436,12 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       // A request body field always wins; this row only fills in what the caller
       // omitted. It exists because the deployed Apps Script version is what
       // decides which fields actually get sent — see migration 064.
-      const storedNotifyConfig = new AgentTaskNotifyConfigRepository(db).get(sourceRefId);
-      const notifyTarget = normalizeAgentTaskNotifyTarget(
+      const storedNotifyConfig = scheduleOwned ? undefined : new AgentTaskNotifyConfigRepository(db).get(sourceRefId);
+      const notifyTarget = scheduleOwned ? undefined : normalizeAgentTaskNotifyTarget(
         body.notifyTarget !== undefined ? body.notifyTarget : storedNotifyConfig?.notifyTarget,
       );
       const timeoutMs = normalizeAgentTaskTimeoutMs(body.timeoutMs);
-      const shouldNotify = body.notify !== false;
+      const shouldNotify = body.notify !== false && notificationOwner === 'memory';
       const successReceipt =
         body.successReceipt !== undefined
           ? body.successReceipt !== false
@@ -431,9 +451,8 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       const notifyVia = normalizeAgentTaskNotifyVia(
         body.notifyVia !== undefined ? body.notifyVia : storedNotifyConfig?.notifyVia,
       );
-      const notifyTemplate =
-        nonEmptyString(body.notifyTemplate) ??
-        nonEmptyString(storedNotifyConfig?.notifyTemplate);
+      const notifyTemplate = scheduleOwned ? undefined : (
+        nonEmptyString(body.notifyTemplate) ?? nonEmptyString(storedNotifyConfig?.notifyTemplate));
       // Undefined stays undefined so the delivery layer applies the shared default (stay quiet).
       const notifyWhenEmpty =
         body.notifyWhenEmpty !== undefined
@@ -441,7 +460,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           : storedNotifyConfig?.notifyWhenEmpty !== undefined
             ? storedNotifyConfig.notifyWhenEmpty !== 'N'
             : undefined;
-      const asmeSender = normalizeAsMeSenderCredentials(body.asmeSender);
+      const asmeSender = scheduleOwned ? undefined : normalizeAsMeSenderCredentials(body.asmeSender);
       const resultTarget = resolveExplicitAgentTaskResultTarget(notifyTarget);
       // API response: prefer explicit result target; otherwise report owner receipt fallback.
       const resolvedNotificationTarget =
@@ -472,6 +491,9 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
             executionHints,
             notifyTemplate,
             triggerSource,
+            notificationOwner,
+            publishOwner: scheduleOwned ? 'schedule_service' : 'memory',
+            publishTemplate,
             arBindingId,
             notifyTarget,
             successReceipt,
@@ -479,7 +501,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
             notifyWhenEmpty,
             source: body.source,
             scheduleSpec: body.scheduleSpec,
-            suppressRecoveryNotifications: body.notify === false,
+            suppressRecoveryNotifications: !shouldNotify,
             candidateArtifacts: arBindingId
               ? [
                   {
@@ -505,7 +527,11 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
       });
 
       const reused = Boolean(existingAction);
+      const deliveryMetadata = action.params?.metadata as Record<string, unknown> | undefined;
+      const effectiveNotificationOwner = deliveryMetadata?.notificationOwner ?? 'memory';
+      const effectivePublishOwner = deliveryMetadata?.triggerSource === 'schedule_service' ? 'schedule_service' : 'memory';
       const statusUrl = `/api/v1/agent-tasks/runtime-status?ids=${encodeURIComponent(sourceRefId)}`;
+      const resultUrl = `/api/v1/agent-tasks/runs/${encodeURIComponent(action.id)}/result`;
       // Only short-circuit when a run is in flight or already succeeded with a stored result.
       // failed / dead_letter / stale queued fall through so the user can retry the same idempotency key.
       if (
@@ -518,6 +544,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
           taskId,
           runId: action.id,
           actionId: action.id,
+          resultUrl, notificationOwner: effectiveNotificationOwner, publishOwner: effectivePublishOwner,
           queueStatus: action.queueStatus,
           statusUrl,
           result: action.result,
@@ -555,6 +582,7 @@ export async function agentTaskRoutes(app: FastifyInstance): Promise<void> {
         taskId,
         runId: action.id,
         actionId: action.id,
+        resultUrl, notificationOwner: effectiveNotificationOwner, publishOwner: effectivePublishOwner,
         queueStatus: action.queueStatus,
         statusUrl,
         notificationTarget: resolvedNotificationTarget,
