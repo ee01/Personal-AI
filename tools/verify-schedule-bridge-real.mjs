@@ -24,7 +24,9 @@ globalThis.fetch = async (url, init) => {
 const server = await listen(app, {port:0,host:'127.0.0.1'});
 const base = `http://127.0.0.1:${server.address().port}`;
 const results = [];
+const supplementary = [];
 const check = (name, expected, actual) => results.push({name,expected,actual,passed:JSON.stringify(expected)===JSON.stringify(actual)});
+const extraCheck = (name, expected, actual) => supplementary.push({name,expected,actual,passed:JSON.stringify(expected)===JSON.stringify(actual)});
 async function call(endpoint, body, cookie, bearer, method = body === undefined ? 'GET' : 'POST', origin) {
   const response = await fetch(`${base}/api/v1${endpoint}`, {method,headers:{'Content-Type':'application/json',
     ...(cookie ? {Cookie:cookie}:{}),...(bearer ? {Authorization:`Bearer ${bearer}`} : {}),...(origin ? {Origin:origin}: {})},
@@ -92,10 +94,44 @@ try {
   check('historical unlinked cookie remains explicit exception',200,(await call('/me',undefined,`ps_session=${historical}`)).status);
   config.authLoginBridgeEnabled=false;
   check('bridge disable flag denies register',400,(await register(await guest(),nonce())).status);
+  // Keep the original 25 cases/count intact. These extra cases prove failed
+  // attacks do not consume a valid nonce or break subsequent legitimate login.
+  config.authLoginBridgeEnabled=true;
+  const followupToken=services.auth.issueToken(e.id,'failed-exchange-followup');
+  for(const attack of ['different guest','missing cookie','wrong origin','real logged-in cookie','overwrite registration']){
+    const initiator=await guest(), value=nonce();
+    assert.equal((await register(initiator,value)).status,200);
+    let rejected;
+    if(attack==='different guest') rejected=await exchange(await guest(),value,followupToken);
+    if(attack==='missing cookie') rejected=await exchange(null,value,followupToken);
+    if(attack==='wrong origin') rejected=await exchange(initiator,value,followupToken,'https://evil.example.test');
+    if(attack==='real logged-in cookie') rejected=await exchange(signed,value,followupToken);
+    if(attack==='overwrite registration') rejected=await register(await guest(),value);
+    const retained=Boolean(db.prepare('SELECT nonce FROM login_bridges WHERE nonce=?').get(value));
+    const legitimate=await exchange(initiator,value,followupToken);
+    extraCheck(`rejection preserves legitimate nonce: ${attack}`,
+      {rejected:400,retained:true,legitimate:200,sameUser:true},
+      {rejected:rejected.status,retained,legitimate:legitimate.status,sameUser:legitimate.body.user?.id===e.id});
+  }
+  const eGuest=await guest();
+  const eLogin=await call('/auth/email/verify',{email:e.email,code:codes.get(e.email)},eGuest.cookie);
+  assert.equal((await call('/auth/email/request',{email:e.email})).status,200);
+  const repeatedELogin=await call('/auth/email/verify',{email:e.email,code:codes.get(e.email)},eLogin.cookie);
+  extraCheck('existing E email verifies twice without duplicate account',
+    {first:200,second:200,sameUser:true,count:1},
+    {first:eLogin.status,second:repeatedELogin.status,sameUser:eLogin.body.user?.id===e.id&&repeatedELogin.body.user?.id===e.id,
+      count:db.prepare('SELECT count(*) n FROM users WHERE email=?').get(e.email).n});
+  extraCheck('unregistered external-domain email still rejected',400,
+    (await call('/auth/email/request',{email:'new-outsider@example.test'})).status);
+  const schemaVersion=db.prepare('SELECT version FROM schema_version').get().version;
+  extraCheck('actual migration has nonce session binding',
+    {version:6,sessionColumn:true},
+    {version:schemaVersion,sessionColumn:db.prepare('PRAGMA table_info(login_bridges)').all().some(c=>c.name==='session_id')});
   const dir=path.resolve('test-results/schedule-auth'); await fs.mkdir(dir,{recursive:true});
-  await fs.writeFile(path.join(dir,'real-server-contract.json'),JSON.stringify({sourceRevision,transport:'local HTTP API, not browser TLS evidence',mail:'controlled Resend only; no login/nonce route shim',results},null,2));
-  console.log(JSON.stringify({passed:results.filter(r=>r.passed).length,failed:results.filter(r=>!r.passed)},null,2));
-  if(results.some(r=>!r.passed)) process.exitCode=1;
+  await fs.writeFile(path.join(dir,'real-server-contract.json'),JSON.stringify({sourceRevision,schemaVersion,transport:'local HTTP API, not browser TLS evidence',mail:'controlled Resend only; no login/nonce route shim',results,supplementary},null,2));
+  const failed=[...results,...supplementary].filter(r=>!r.passed);
+  console.log(JSON.stringify({sourceRevision,schemaVersion,originalPassed:results.filter(r=>r.passed).length,supplementaryPassed:supplementary.filter(r=>r.passed).length,failed},null,2));
+  if(failed.length) process.exitCode=1;
 } finally {
   server.closeAllConnections(); await new Promise(resolve=>server.close(resolve)); db.close(); globalThis.fetch=originalFetch;
 }

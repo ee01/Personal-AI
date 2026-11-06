@@ -1,4 +1,6 @@
-# E-184：真实 register/exchange 契约收敛与验收缺口
+# E-184：真实 register/exchange 历史轮次验收缺口
+
+此文件保留 c07879e 的原始19通过/6失败结论；后续修复版独立复验已关闭这六项，当前结论见 `schedule-bridge-retest-verification.md`。
 
 2026-11-06，Schedule 基线 c07879e，Personal AI 基于 b134bcd2 继续适配。本轮没有修改 Schedule 服务端或部署，没有另建任务。此报告取代上一轮 ticket/redeem shim 的当前结论。
 
