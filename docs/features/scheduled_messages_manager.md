@@ -4,7 +4,7 @@
 
 ## 大白话运行逻辑
 
-在 Options 的 Personal Schedule 区域填入服务地址和自己的 API Token，连接后可以打开新版网站。Glip 输入框的定时按钮把消息提交到这个服务；没配置就打开配置页，保存后继续提交。旧管理页链接直接跳转新版。
+在 Options 的 Personal Schedule 区域填写受信 HTTPS 服务地址、验证本人邮箱后绑定设备；已有 PAT 的集成保留高级导入连接。连接后可以打开新版网站。Glip 输入框的定时按钮把消息提交到这个服务；没配置就打开配置页，保存后继续提交。旧管理页链接直接跳转新版。
 
 分享页上的扩展导入面板会显示将使用的接收方账号、默认勾选全部任务，也可取消部分。扩展只为已在设置中授权的网站使用自己的凭证；任务导入后是独立、未启用的副本，缺少的收件人、凭证和时区到新版补全。已有默认执行器由服务复用。重复导入需要再次明确确认，重复点击复用同一个请求。
 
@@ -23,3 +23,10 @@ Schedule 已透传服务端再次净化的已授权规则 payload；仅有源 ru
 `src/scheduleService.ts`：账户配置、API、Glip 创建与续提、防重、来源授权。`src/contentScriptSchedule.ts`：接收方导入面板。`src/scheduleJira.ts`：源侧导出与目标侧补全。`memory-service/src/routes/outreach.ts` 和 `agentTasks.ts`：外部 occurrence 与精确运行结果。
 
 运行 `npm run verify:schedule-service`、开发构建，以及 `npm run verify:schedule-service:e2e`、`npm run verify:schedule-jira:e2e`。浏览器 E2E 默认连接相邻 personal-schedule 仓库的本地服务实现，不使用生产凭据，不启动 Runner，不产生真实消息。完整接口差异、线上限制与证据见 `docs/integrations/personal-schedule-contract.md`。
+## Schedule 邮箱登录与扩展设备连接（2026-11-06 补充）
+
+在 Options → Personal Schedule 验证本人邮箱后，扩展后台为此设备签发独立凭据并保存到本地。新设备重新验证同一邮箱，访问的是服务端同一账号数据；不依赖 Chrome Sync，也不使用 Memory key。首次注册域名限制由 Schedule 服务端执行，已有管理员账号例外也必须由服务端保留。
+
+邮箱绑定要求受信 HTTPS 和实际可用邮件服务。未配置 Resend、日志验证码回退或证书失败时，界面明确拒绝绑定。设备凭据不返回界面、不交给普通网页；高级 PAT 导入连接保留，但不自动授权网页登录。解除本机绑定仅删除本机凭据，丢失设备应在网站设置中吊销对应令牌。
+
+网页登录适配器仅在 HTTPS 和服务端显式支持一次性兑换协议时启用，已登录的网页账号不会被静默替换。当前服务端接口仍需与 E-183 收敛，不能将网页的 `login-request` 当成完整联调。契约、代码入口和验证界限见 `docs/integrations/personal-schedule-contract.md`、`src/scheduleAuth.ts`、`src/contentScriptSchedule.ts`。验证用 `tools/verify-schedule-auth.ts` 与 `tools/verify-schedule-auth-e2e.mjs`；后者的邮件和 ticket 协议为受控测试端，不能证明线上邮件/自动登录成功。

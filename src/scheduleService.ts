@@ -1,5 +1,5 @@
 /** Extension-owned Schedule credentials. Never expose tokens to a web page. */
-export interface ScheduleConnection { baseUrl: string; token: string }
+export interface ScheduleConnection { baseUrl: string; token: string; allowWebLogin?: boolean }
 export const SCHEDULE_CONNECTION_KEY = 'personalScheduleConnection';
 export const SCHEDULE_PENDING_KEY = 'personalSchedulePending';
 export function scheduleBase(value: string): string {
@@ -12,7 +12,7 @@ export function scheduleBase(value: string): string {
 export async function scheduleConnection(): Promise<ScheduleConnection | null> {
   const data = await chrome.storage.local.get(SCHEDULE_CONNECTION_KEY);
   const c = data[SCHEDULE_CONNECTION_KEY];
-  return c?.baseUrl && c?.token ? { baseUrl: scheduleBase(c.baseUrl), token: c.token } : null;
+  return c?.baseUrl && c?.token ? { baseUrl: scheduleBase(c.baseUrl), token: c.token, allowWebLogin: c.allowWebLogin === true } : null;
 }
 export async function scheduleApi(path: string, method = 'GET', body?: unknown, connection?: ScheduleConnection): Promise<any> {
   const c = connection || await scheduleConnection();
@@ -116,7 +116,7 @@ export async function registerScheduleBridge(): Promise<void> {
   // Installation and account setup also reach share tabs that are already open.
   // Content scripts registered after navigation otherwise need a manual reload.
   const origins = c ? [new URL(c.baseUrl).origin] : ['http://schedule.xmnup.com', 'https://schedule.xmnup.com'];
-  const tabs = await chrome.tabs.query({ url: origins.map(origin => `${origin}/share/*`) });
+  const tabs = await chrome.tabs.query({ url: origins.map(origin => `${origin}/*`) });
   await Promise.all(tabs.filter(tab => tab.id !== undefined).map(tab =>
     chrome.scripting.executeScript({ target: { tabId: tab.id! }, files: ['contentScriptSchedule.js'] }).catch(() => undefined)));
 }

@@ -1,4 +1,49 @@
 /** Isolated-world UI: receiver credentials never cross into the website. */
+(() => {
+  // Injection can run both from manifest and immediately after Options setup.
+  if ((globalThis as any).__personalScheduleLoginV1 || window !== window.top || location.protocol !== 'https:') return;
+  (globalThis as any).__personalScheduleLoginV1 = true;
+  const channel = 'personal-schedule-extension-v1';
+  let working = false;
+  let attempted = false;
+  async function login(manual: boolean, pageRequestId?: string) {
+    if (working || !manual && attempted) return;
+    attempted = true; working = true;
+    const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    try {
+      // Never silently replace a real web account with another bound account.
+      const current = await fetch('/api/v1/me', { credentials: 'same-origin', redirect: 'error' });
+      if (current.ok) {
+        const me = await current.json();
+        if (!me.isGuest) return;
+      } else if (current.status !== 401) throw new Error('暂不能确认当前网页身份，请稍后重试');
+      const response = await chrome.runtime.sendMessage({ type: 'SCHEDULE_WEB_LOGIN', requestId, schemaVersion: 1 });
+      if (!response?.success) throw new Error(response?.error || '请在扩展设置中验证邮箱');
+      const { ticket, expiresAt, userId } = response.result;
+      if (response.result.requestId !== requestId || expiresAt <= Date.now()) throw new Error('登录请求已过期');
+      // The only credential sent from this isolated world is a short-lived,
+      // origin-bound, single-use ticket. Never substitute a long-lived PAT.
+      const redeemed = await fetch('/api/v1/auth/extension/redeem', { method: 'POST',
+        credentials: 'same-origin', redirect: 'error', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket, requestId }) });
+      const result = await redeemed.json();
+      if (!redeemed.ok || result.user?.id !== userId) throw new Error('登录兑换失败，请重新登录');
+      window.postMessage({ channel, type: 'login-result', success: true, requestId: pageRequestId || requestId }, location.origin);
+      location.reload();
+    } catch(e) {
+      // Passive detection must not cover the site with auth errors.
+      if (manual) window.postMessage({ channel, type: 'login-result', success: false,
+        requestId: pageRequestId || requestId, error: e instanceof Error ? e.message : '扩展登录失败' }, location.origin);
+    } finally { working = false; }
+  }
+  window.addEventListener('message', event => {
+    if (event.source !== window || event.origin !== location.origin || event.data?.channel !== channel || event.data.type !== 'login-request') return;
+    if (event.data.requestId !== undefined && !/^[a-zA-Z0-9_-]{16,128}$/.test(event.data.requestId)) return;
+    void login(true, event.data.requestId);
+  });
+  window.postMessage({ channel, type: 'ready', version: chrome.runtime.getManifest().version, schemaVersion: 1 }, location.origin);
+  void login(false);
+})();
 const scheduleChannel = 'personal-schedule-extension-v1';
 const shareToken = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
 if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname)) {

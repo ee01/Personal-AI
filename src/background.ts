@@ -1,4 +1,5 @@
 import { hostJiraSchedule } from './scheduleJira';
+import { handleScheduleAuth, handleScheduleLogin } from './scheduleAuth';
 import { createComposeSchedule, scheduleDeliveryMarkers, handleScheduleBridge, openSchedule, registerScheduleBridge, scheduleApi, scheduleConnection, SCHEDULE_PENDING_KEY } from './scheduleService';
 import { analyzeMessagesInBackground } from './messageDealing';
 // embeddings.ts 已废弃 — 后端 memory-service 处理嵌入生成
@@ -1350,6 +1351,12 @@ async function openOptionsPageWithHash(hash?: string): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === 'SCHEDULE_ACCOUNT_AUTH' || request.type === 'SCHEDULE_WEB_LOGIN') {
+    const work = request.type === 'SCHEDULE_ACCOUNT_AUTH' ? handleScheduleAuth : handleScheduleLogin;
+    void work(request, sender).then(result => sendResponse({ success: true, result }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
   if (request.type === 'GET_SCHEDULE_SETUP') {
     void scheduleConnection().then(c => sendResponse({ configured: Boolean(c) })); return true;
   }
