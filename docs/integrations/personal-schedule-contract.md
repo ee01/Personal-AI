@@ -111,3 +111,7 @@ Use `npm run verify:schedule-service`, `npm run verify:schedule-service:e2e` and
 `SCHEDULE_LIVE_URL=http://schedule.xmnup.com npm run verify:schedule-jira:e2e` additionally exercises the deployed Schedule with only labeled temporary tasks/shares and cleans those resources. The test reuses the task-authorized server credential in process memory, never prints/persists it; do not generalize this into a product credential-fetch mechanism. Live Jira remains a controlled local HTTP fixture, not production Jira creation evidence. Browser captures contain fixture task data only.
 
 The earlier `/health` database flag is now diagnosed by E-183: the public health route skips user auth and has no userContext, so connected:false cannot be used to infer data corruption. Memory af396b92 has been deployed by E-183. RC/Multica genuine execution, target Jira permissions and authenticated installed-version access remain live acceptance conditions; no credentials belong in issue comments.
+
+### 等待中追问上限 +2（2026-11-07）
+
+Memory新增 `POST /api/v1/outreach/sessions/:id/increase-followup-limit`，仅接受 `{requestId,expectedMaxFollowup}`。对waiting_reply/deferred精确加2，事务性写 `followup_limit_increased` 历史及持久幂等回执；不发送、重排或重开。Schedule复用既有task/occurrence归属校验与个人Memory连接，不能用终态continue-followup代替。完整响应、409/503重试语义及样例见 `docs/integrations/schedule-outreach-chain.md`。

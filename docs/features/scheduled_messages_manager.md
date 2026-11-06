@@ -38,3 +38,7 @@ Schedule 已透传服务端再次净化的已授权规则 payload；仅有源 ru
 Schedule任务按`memoryTemplateId || task.id`关联Memory模板，单次运行用occurrenceKey定位会话，sessionId已在触发回执中。Memory现有sessions列表可选`includeHistory=1`及精确occurrenceKey，返回原始状态/轮次/回复、持久事件与两层分页。只读投影不发送、不推进状态，不把“已触发会话”等同于初问已发送或已完成。
 
 代理与UI由Schedule接入，Memory不另建追问管理器。九种状态、空态与故障、个人key隔离、原型字段对应和既有“继续”语义差异见`docs/integrations/schedule-outreach-chain.md`。验证运行`memory-service`的`api-outreach-chain.test.ts`与`outreachEngine.test.ts`；样例来自本地真实HTTP和明确标注的业务fixture，不是生产消息证据。
+
+### 等待中追加追问额度（2026-11-07）
+
+等待中“追问上限 +2”使用 Memory `POST /api/v1/outreach/sessions/:id/increase-followup-limit`，body `{requestId,expectedMaxFollowup}`。仅 waiting_reply/deferred，新上限精确+2；不立即发送、不改发送时间或已有次数、不重开终态、不改模板。持久事件回执与原上限比较在同一事务中防重复/并发覆盖，历史事件 `followup_limit_increased` 沿用追问链读取。与终态 `continue-followup` 分开；详细错误、权限及UI重试规则见 `docs/integrations/schedule-outreach-chain.md`。没有真实时区来源则显示未知。

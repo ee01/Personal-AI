@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { OutreachEngine } from '../core/OutreachEngine.js';
-import { OutreachRepository } from '../repositories/OutreachRepository.js';
+import { FollowupLimitError, OutreachRepository } from '../repositories/OutreachRepository.js';
 import type {
   OutreachApprovalPolicy,
   OutreachSessionStatus,
@@ -480,6 +480,29 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     }
     return reply.status(200).send({ session });
   });
+
+  app.post<{ Params: { id: string }; Body: { requestId?: unknown; expectedMaxFollowup?: unknown } }>(
+    '/outreach/sessions/:id/increase-followup-limit', async (request, reply) => {
+      const input = request.body;
+      if (!input || typeof input.requestId !== 'string' ||
+          !/^[A-Za-z0-9_-]{16,128}$/.test(input.requestId) ||
+          !Number.isSafeInteger(input.expectedMaxFollowup) || Number(input.expectedMaxFollowup) < 0 ||
+          Object.keys(input).some(key => !['requestId', 'expectedMaxFollowup'].includes(key))) {
+        return reply.status(400).send({ error: 'invalid_followup_limit_request' });
+      }
+      try {
+        const result = new OutreachRepository(request.userContext.db).increaseFollowupLimit(
+          request.params.id, input.requestId, input.expectedMaxFollowup as number);
+        return reply.header('Cache-Control', 'private, no-store').send(result);
+      } catch (error) {
+        if (error instanceof FollowupLimitError) {
+          return reply.status(error.statusCode).send({ error: error.code });
+        }
+        request.log.error({ err: error }, 'Follow-up limit update failed');
+        return reply.status(503).send({ error: 'followup_limit_unavailable', retryable: true });
+      }
+    },
+  );
 
   app.post<{
     Params: { id: string };

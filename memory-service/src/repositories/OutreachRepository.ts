@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 
 import { now } from '../utils/time.js';
@@ -35,6 +35,7 @@ export type OutreachEventType =
   | 'deferred_by_reply'
   | 'followup_sent'
   | 'followup_continued'
+  | 'followup_limit_increased'
   | 'reply_resolution_pending'
   | 'resolved_without_dispatch'
   | 'followup_skipped_by_answer'
@@ -46,6 +47,12 @@ export type OutreachEventType =
   | 'cancelled'
   | 'retried'
   | 'failed';
+
+export class FollowupLimitError extends Error {
+  constructor(public readonly code: string, public readonly statusCode: number) {
+    super(code);
+  }
+}
 
 export interface OutreachTemplateRecord {
   id: string;
@@ -919,6 +926,44 @@ export class OutreachRepository {
       );
 
     return this.getSessionById(id);
+  }
+
+  /** Serialize the cap change and its durable receipt; never dispatch or reschedule. */
+  increaseFollowupLimit(sessionId: string, requestId: string, expectedMaxFollowup: number) {
+    return this.db.transaction(() => {
+      const session = this.getSessionById(sessionId);
+      if (!session) throw new FollowupLimitError('outreach_session_not_found', 404);
+      const eventId = 'followup-limit:' + createHash('sha256')
+        .update(JSON.stringify([sessionId, requestId])).digest('hex');
+      const receipt = this.db.prepare('SELECT payload_json FROM outreach_events WHERE id = ?')
+        .get(eventId) as { payload_json: string } | undefined;
+      if (receipt) {
+        const payload = JSON.parse(receipt.payload_json);
+        if (payload.previousMaxFollowup !== expectedMaxFollowup) {
+          throw new FollowupLimitError('idempotency_conflict', 409);
+        }
+        return { session, replayed: true, eventId, appliedMaxFollowup: payload.maxFollowup as number };
+      }
+      if (session.status !== 'waiting_reply' && session.status !== 'deferred') {
+        throw new FollowupLimitError('outreach_session_not_waiting', 409);
+      }
+      if (session.maxFollowup !== expectedMaxFollowup) {
+        throw new FollowupLimitError('followup_limit_conflict', 409);
+      }
+      const maxFollowup = session.maxFollowup + 2;
+      if (!Number.isSafeInteger(maxFollowup)) {
+        throw new FollowupLimitError('followup_limit_overflow', 409);
+      }
+      this.db.prepare('UPDATE outreach_sessions SET max_followup = ?, updated_at = ? WHERE id = ?')
+        .run(maxFollowup, now(), sessionId);
+      const updated = this.getSessionById(sessionId)!;
+      this.db.prepare(`INSERT INTO outreach_events (id, session_id, event_type, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?)`).run(eventId, sessionId, 'followup_limit_increased', JSON.stringify({
+          requestId, previousMaxFollowup: session.maxFollowup, maxFollowup, increment: 2,
+          status: session.status,
+        }), now());
+      return { session: updated, replayed: false, eventId, appliedMaxFollowup: maxFollowup };
+    }).immediate();
   }
 
   createEvent(

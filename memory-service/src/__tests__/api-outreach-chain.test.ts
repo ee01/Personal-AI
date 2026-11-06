@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -136,6 +137,104 @@ describe('Schedule outreach chain: actual HTTP routes and per-user databases', (
         available:response.available,source:response.source,sessionCount:response.sessions.total,customTemplateMapping:true,
         historyOptInAvailable:direct.body.historyIncluded,taskEnabled:false,businessMessagesSent:0},null,2));
     } finally { server.closeAllConnections();await new Promise<void>(resolve=>server.close(resolve));scheduleDb.close(); }
+  });
+  const capUrl = () => `/outreach/sessions/${firstId}/increase-followup-limit`;
+  function waiting(status: 'waiting_reply' | 'deferred' = 'waiting_reply') {
+    repo.updateSession(firstId, { status, maxFollowup:3, followupCount:1,
+      waitUntil:2000000000, nextCheckAt:1999999900, lastPollAt:1999999800,
+      sentChatId:'fixture-thread', sentPostId:'fixture-first-post' });
+  }
+  it('increases a waiting cap by exactly two without dispatch, reschedule or reset; exposes history', async () => {
+    waiting(); const before = repo.getSessionById(firstId)!;
+    const external = vi.fn(() => { throw new Error('cap change must not send'); }); vi.stubGlobal('fetch',external);
+    const result = await call(capUrl(),alice,{requestId:'cap-waiting-request-01',expectedMaxFollowup:3});
+    expect(result.status).toBe(200); expect(result.body).toMatchObject({replayed:false,appliedMaxFollowup:5});
+    expect(result.body.session).toEqual({...before,maxFollowup:5,updatedAt:result.body.session.updatedAt});
+    expect(external).not.toHaveBeenCalled();
+    const history=await call(`/outreach/sessions?templateId=${templateId}&occurrenceKey=${encodeURIComponent(occurrenceKey)}&includeHistory=1`);
+    const event=history.body.items[0].events.find((e:any)=>e.id===result.body.eventId);
+    expect(event).toMatchObject({eventType:'followup_limit_increased',payload:{previousMaxFollowup:3,maxFollowup:5,increment:2,status:'waiting_reply'}});
+    const out=path.resolve('..','test-results','outreach-cap');fs.mkdirSync(out,{recursive:true});
+    fs.writeFileSync(path.join(out,'sample.json'),JSON.stringify({transport:'actual local HTTP; isolated fixtures; no external send',
+      request:{method:'POST',path:capUrl(),body:{requestId:'cap-waiting-request-01',expectedMaxFollowup:3}},response:result.body,event},null,2));
+  });
+  it('serializes concurrent duplicate HTTP requests into one durable change and event', async () => {
+    waiting(); const body={requestId:'cap-concurrent-same-01',expectedMaxFollowup:3};
+    const results=await Promise.all(Array.from({length:8},()=>call(capUrl(),alice,body)));
+    expect(results.map(r=>r.status)).toEqual(Array(8).fill(200));
+    expect(results.filter(r=>!r.body.replayed)).toHaveLength(1);
+    expect(new Set(results.map(r=>r.body.eventId)).size).toBe(1);
+    expect(repo.getSessionById(firstId)?.maxFollowup).toBe(5);
+    expect(repo.listEventsBySession(firstId).filter(e=>e.payload?.requestId===body.requestId)).toHaveLength(1);
+    const secondConnection=new Database(manager.getContext('chain-alice').db.name);
+    try {
+      const fresh=new OutreachRepository(secondConnection);
+      expect(fresh.increaseFollowupLimit(firstId,body.requestId,3).replayed).toBe(true);
+      expect(fresh.getSessionById(firstId)?.maxFollowup).toBe(5);
+    } finally { secondConnection.close(); }
+  });
+  it('rejects concurrent distinct clicks with the same old cap; permits a deliberate next increment', async () => {
+    waiting();
+    const results=await Promise.all(['cap-distinct-click-01','cap-distinct-click-02'].map(requestId=>call(capUrl(),alice,{requestId,expectedMaxFollowup:3})));
+    expect(results.map(r=>r.status).sort()).toEqual([200,409]);
+    expect(repo.getSessionById(firstId)?.maxFollowup).toBe(5);
+    expect((await call(capUrl(),alice,{requestId:'cap-deliberate-next-01',expectedMaxFollowup:5})).body.session.maxFollowup).toBe(7);
+  });
+  it('rejects receipt reuse with a different body and never reopens a terminal session on replay', async () => {
+    waiting(); const body={requestId:'cap-replay-terminal-01',expectedMaxFollowup:3};
+    expect((await call(capUrl(),alice,body)).status).toBe(200);
+    expect((await call(capUrl(),alice,{...body,expectedMaxFollowup:5})).body.error).toBe('idempotency_conflict');
+    repo.updateSession(firstId,{status:'resolved',resolvedAt:1999999999});
+    const before=repo.getSessionById(firstId);
+    const replay=await call(capUrl(),alice,body);
+    expect(replay.body).toMatchObject({replayed:true,session:{status:'resolved',maxFollowup:5}});
+    expect(repo.getSessionById(firstId)).toEqual(before);
+  });
+  it('preserves deferred timing and rejects every non-waiting state without writes', async () => {
+    waiting('deferred');
+    expect((await call(capUrl(),alice,{requestId:'cap-deferred-request-01',expectedMaxFollowup:3})).body.session).toMatchObject({status:'deferred',maxFollowup:5,nextCheckAt:1999999900,waitUntil:2000000000,followupCount:1});
+    for(const status of ['pending_approval','scheduled','resolved','no_reply','escalated','cancelled','failed'] as const) {
+      repo.updateSession(firstId,{status});const before=repo.getSessionById(firstId);const count=repo.listEventsBySession(firstId).length;
+      const response=await call(capUrl(),alice,{requestId:`cap-invalid-${status}-01`,expectedMaxFollowup:5});
+      expect(response.status).toBe(409);expect(response.body.error).toBe('outreach_session_not_waiting');
+      expect(repo.getSessionById(firstId)).toEqual(before);expect(repo.listEventsBySession(firstId)).toHaveLength(count);
+    }
+  });
+  it('requires owner write scope and refuses foreign identities and unknown sessions', async () => {
+    const body={requestId:'cap-ownership-request-01',expectedMaxFollowup:3};
+    const own=manager.getContext('chain-alice'),other=manager.getContext('chain-bob');
+    const reader=issueUserApiKey(own.db,own.userId,{scopes:['memory.read']}).token;
+    const otherWriter=issueUserApiKey(other.db,other.userId,{scopes:['memory.read','memory.write']}).token;
+    // Existing write guard rejects unauthenticated writes before auth middleware.
+    expect((await call(capUrl(),'',body)).status).toBe(403);
+    expect((await call(capUrl(),reader,body)).status).toBe(403);
+    expect((await call(capUrl(),otherWriter,body)).status).toBe(404);
+    expect((await call(capUrl(),otherWriter,body,{'X-User-Id':own.userId})).status).toBe(403);
+    expect((await call('/outreach/sessions/missing/increase-followup-limit',alice,body)).status).toBe(404);
+  });
+  it('rejects malformed inputs and unsafe numeric overflow without partially applying', async () => {
+    waiting();
+    for(const body of [{},{requestId:'short',expectedMaxFollowup:3},{requestId:'cap-invalid-input-01',expectedMaxFollowup:'3'},
+      {requestId:'cap-invalid-input-01',expectedMaxFollowup:-1},{requestId:'cap-invalid-input-01',expectedMaxFollowup:1.5},
+      {requestId:'cap-invalid-input-01',expectedMaxFollowup:3,increment:99}]) {
+      expect((await call(capUrl(),alice,body)).status).toBe(400);
+    }
+    repo.updateSession(firstId,{maxFollowup:9});
+    expect((await call(capUrl(),alice,{requestId:'cap-above-ten-request-01',expectedMaxFollowup:9})).body.session.maxFollowup).toBe(11);
+    repo.updateSession(firstId,{maxFollowup:Number.MAX_SAFE_INTEGER});
+    expect((await call(capUrl(),alice,{requestId:'cap-overflow-request-01',expectedMaxFollowup:Number.MAX_SAFE_INTEGER})).body.error).toBe('followup_limit_overflow');
+    expect(repo.getSessionById(firstId)?.maxFollowup).toBe(Number.MAX_SAFE_INTEGER);
+  });
+  it('rolls back the cap when history persistence fails, then safely retries', async () => {
+    waiting();const db=manager.getContext('chain-alice').db;
+    db.exec(`CREATE TEMP TRIGGER fail_cap_event BEFORE INSERT ON outreach_events WHEN NEW.event_type = 'followup_limit_increased' BEGIN SELECT RAISE(ABORT, 'controlled failure'); END`);
+    const body={requestId:'cap-rollback-request-01',expectedMaxFollowup:3};
+    try {
+      expect((await call(capUrl(),alice,body)).status).toBe(503);
+      expect(repo.getSessionById(firstId)?.maxFollowup).toBe(3);
+      expect(repo.listEventsBySession(firstId).some(e=>e.payload?.requestId===body.requestId)).toBe(false);
+    } finally { db.exec('DROP TRIGGER fail_cap_event'); }
+    expect((await call(capUrl(),alice,body)).body).toMatchObject({replayed:false,appliedMaxFollowup:5});
   });
   it('rejects malformed queries and distinguishes transient failure from empty success', async () => {
     for (const query of ['includeHistory=1','includeHistory=bad','templateId=x&includeHistory=1&eventLimit=201','templateId=x&includeHistory=1&offset=-1','occurrenceKey=unscoped']) {
