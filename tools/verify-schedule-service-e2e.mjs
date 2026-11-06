@@ -33,13 +33,13 @@ try {
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/share/${share.token}`);
   await worker.evaluate(async ({baseUrl, token}) => { await chrome.storage.local.set({ personalScheduleConnection: {baseUrl, token} }); }, {baseUrl, token});
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   const setup = await options.evaluate(() => chrome.runtime.sendMessage({ type: 'SCHEDULE_SETUP_SAVED' }));
   assert.equal(setup.success, true, setup.error);
-  const page = await context.newPage();
-  await page.goto(`${baseUrl}/share/${share.token}`);
   const panel = page.locator('#personal-schedule-extension');
   await panel.getByRole('button', { name: '导入勾选任务', exact: true }).waitFor();
   await panel.getByText('receiver-e184@example.test', { exact: false }).waitFor();
@@ -57,7 +57,7 @@ try {
   await page.reload();
   await page.getByRole('heading', { name: '分享不可用' }).waitFor();
   assert.equal((await request('/tasks')).length, 1, 'revocation preserves imported independent copy');
-  console.log('Real extension + real local Schedule API: authorized handshake, default selection, subset import, duplicate click/replay, inactive config, untrusted sender rejection, revocation passed');
+  console.log('Real extension + real local Schedule API: already-open-page setup continuation, authorized handshake, default selection, subset import, duplicate click/replay, inactive config, untrusted sender rejection, revocation passed');
 } finally {
   if (context) await context.close();
   await fs.rm(profile, {recursive: true, force: true});

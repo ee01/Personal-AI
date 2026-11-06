@@ -1,7 +1,8 @@
 /** Isolated-world UI: receiver credentials never cross into the website. */
 const scheduleChannel = 'personal-schedule-extension-v1';
 const shareToken = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
-if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname) && !document.getElementById('personal-schedule-extension')) {
+if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname)) {
+  document.getElementById('personal-schedule-extension')?.remove();
   const mount = document.createElement('div');
   mount.id = 'personal-schedule-extension';
   const root = mount.attachShadow({ mode: 'open' });

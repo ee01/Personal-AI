@@ -111,6 +111,12 @@ export async function registerScheduleBridge(): Promise<void> {
   await scripting.unregisterContentScripts({ ids: ['personal-schedule'] }).catch(() => undefined);
   if (c && !['http://schedule.xmnup.com', 'https://schedule.xmnup.com', 'http://localhost:3230', 'http://127.0.0.1:3230'].includes(new URL(c.baseUrl).origin)) await scripting.registerContentScripts([{ id: 'personal-schedule',
     matches: [`${new URL(c.baseUrl).origin}/*`], js: ['contentScriptSchedule.js'], runAt: 'document_idle', allFrames: false }]);
+  // Installation and account setup also reach share tabs that are already open.
+  // Content scripts registered after navigation otherwise need a manual reload.
+  const origins = c ? [new URL(c.baseUrl).origin] : ['http://schedule.xmnup.com', 'https://schedule.xmnup.com'];
+  const tabs = await chrome.tabs.query({ url: origins.map(origin => `${origin}/share/*`) });
+  await Promise.all(tabs.filter(tab => tab.id !== undefined).map(tab =>
+    chrome.scripting.executeScript({ target: { tabId: tab.id! }, files: ['contentScriptSchedule.js'] }).catch(() => undefined)));
 }
 
 /** Confirm pending Glip previews from delivery evidence, never from elapsed time. */
