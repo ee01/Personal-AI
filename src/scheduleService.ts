@@ -56,10 +56,12 @@ export async function createComposeSchedule(data: any): Promise<any> {
     const saved = await chrome.storage.local.get('personalScheduleComposeReceipt');
     if (saved.personalScheduleComposeReceipt?.key === key) {
       if (saved.personalScheduleComposeReceipt.result) return saved.personalScheduleComposeReceipt.result;
-      throw new Error('此前提交结果未知，请先在 Schedule 任务列表核对，避免重复发送');
+      if (!saved.personalScheduleComposeReceipt.idempotencyKey) throw new Error('此前提交结果未知，请先在 Schedule 任务列表核对，避免重复发送');
     }
-    await chrome.storage.local.set({ personalScheduleComposeReceipt: { key, state: 'creating' } });
-    const payload = await scheduleApi('/tasks', 'POST', task);
+    const idempotencyKey = saved.personalScheduleComposeReceipt?.key === key
+      ? saved.personalScheduleComposeReceipt.idempotencyKey : crypto.randomUUID();
+    await chrome.storage.local.set({ personalScheduleComposeReceipt: { key, state: 'creating', idempotencyKey } });
+    const payload = await scheduleApi('/tasks', 'POST', { ...task, idempotencyKey });
     const result = { success: true, messageId: payload.task.id, task: payload.task,
       ringCentralSenderConfigured: !payload.missing?.length };
     await chrome.storage.local.set({ personalScheduleComposeReceipt: { key, result } });

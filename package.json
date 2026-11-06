@@ -120,7 +120,8 @@
     "verify:attention-triage:e2e": "node tools/verify-attention-triage-e2e.mjs",
     "verify:memory-mirror-options:e2e": "node tools/verify-memory-mirror-options-e2e.mjs",
     "verify:schedule-service": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm --experimental-specifier-resolution=node tools/verify-schedule-service.ts",
-    "verify:schedule-service:e2e": "node tools/verify-schedule-service-e2e.mjs"
+    "verify:schedule-service:e2e": "node tools/verify-schedule-service-e2e.mjs",
+    "verify:schedule-jira:e2e": "node tools/verify-schedule-jira-e2e.mjs"
   },
   "type": "module",
   "license": "MIT",

@@ -18,6 +18,9 @@ if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname)) {
   const retry = document.createElement('button'); retry.textContent = '重试失败项'; retry.hidden = true;
   section.append(heading, status, rows, button, retry, setup); root.append(style, section);
   document.body.prepend(mount);
+  // Installed presence is independent of account authorization. No credentials
+  // cross this channel, and the site never replies on it.
+  window.postMessage({ channel: scheduleChannel, type: 'ready', version: chrome.runtime.getManifest().version, schemaVersion: 1 }, location.origin);
   let requestId = '';
   let priorSelected = '';
   let importId = '';
@@ -48,7 +51,7 @@ if (/^\/share\/shr_[A-Za-z0-9_-]+\/?$/.test(location.pathname)) {
     working = true; button.disabled = true;
     try {
       const storageKey = `scheduleImport:${location.origin}:${account}:${shareToken}:${priorSelected}`;
-      if (!requestId) requestId = sessionStorage.getItem(storageKey) || crypto.randomUUID();
+      if (!requestId) requestId = sessionStorage.getItem(storageKey) || `ext_${Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')}`;
       sessionStorage.setItem(storageKey, requestId);
       showResult(await call('import', { selected, requestId, confirmDuplicates }));
     } catch(e) { status.textContent = e instanceof Error ? e.message : String(e); }

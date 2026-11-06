@@ -1,7 +1,6 @@
 import { getJiraBaseUrl, jiraFetch } from './jira';
 import { JiraAutomationService, type JiraAutomationConfig } from './scheduled-messages/JiraAutomationService';
-import { buildJiraAutomationImportRule, parseJiraAutomationExport, buildJiraAutomationImportReviewFindings,
-  JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER } from './jira-automation-import/transform';
+import { buildJiraAutomationImportRule, parseJiraAutomationExport, buildJiraAutomationImportReviewFindings } from './jira-automation-import/transform';
 import { openSchedule, scheduleApi, scheduleConnection, SCHEDULE_PENDING_KEY } from './scheduleService';
 const service = () => new JiraAutomationService();
 async function jiraConfig(projectKey: string): Promise<JiraAutomationConfig> {
@@ -20,8 +19,9 @@ export function prepareJiraSharedRule(rule: any) {
     replaceSensitiveValues: true, disableAfterImport: true, allowOtherRuleTrigger: false });
   // Never carry the source trigger (including the source webhook secret).
   safe.trigger = { id: '__NEW__TRIGGER', component: 'TRIGGER', type: 'jira.incoming.webhook',
-    value: { webhookToken: JIRA_AUTOMATION_IMPORT_SECRET_PLACEHOLDER, searchOrProvide: 'none', jql: null } };
-  return { schemaVersion: 1, rules: [safe], requiresReview: true };
+    value: { searchOrProvide: 'none', jql: null } };
+  return { schemaVersion: 1, ruleName: safe.name, payload: safe, preparedAt: Date.now(),
+    summary: '源用户审查的脱敏规则；目标侧需重新核验字段、执行身份和凭证。' };
 }
 export function jiraScheduleSpec(schedule: any, timezone: string) {
   if (schedule?.method === 'FIXED') {
@@ -84,10 +84,17 @@ export async function previewJiraCompletion(taskId: string, projectKey: string, 
   ]);
   // Only accept reviewed source-side material, never send receiver credentials to
   // a URL from a share, and never fetch the source project under receiver auth.
-  const artifact = suppliedExport ? parseJiraAutomationExport(suppliedExport) : task.config?.jiraRuleExport;
-  if (!artifact || artifact.schemaVersion !== 1 && !suppliedExport) throw new Error('源分享未包含已授权规则内容；请让分享者在扩展设置预览并授权导出');
-  const rule = artifact.rules?.[0];
-  if (!rule || artifact.rules.length !== 1) throw new Error('需要单条规则导出');
+  const material = suppliedExport ? JSON.parse(suppliedExport) : task.config?.jiraRuleExport;
+  let rule;
+  if (material?.schemaVersion === 1 && material.payload && typeof material.payload === 'object' && !Array.isArray(material.payload)) {
+    rule = material.payload;
+  } else if (suppliedExport) {
+    const nativeExport = parseJiraAutomationExport(suppliedExport);
+    if (nativeExport.rules.length !== 1) throw new Error('需要单条规则导出');
+    rule = nativeExport.rules[0];
+  } else {
+    throw new Error('源分享未包含已授权规则内容；请让分享者在扩展设置预览并授权导出');
+  }
   const payload = buildJiraAutomationImportRule(rule, { projectId: String(project.id), ownerId: actor.key || actor.accountId || actor.name,
     projectKey, projectTypeKey: project.projectTypeKey, disableAfterImport: true, replaceSensitiveValues: true, allowOtherRuleTrigger: false });
   payload.trigger = { id: '__NEW__TRIGGER', component: 'TRIGGER', type: 'jira.incoming.webhook',
@@ -115,15 +122,44 @@ export async function completeJiraImport(taskId: string, preview: Awaited<Return
     journal = { ...journal, ruleId: String(target.id), state: 'created_disabled' };
     await chrome.storage.local.set({ [key]: journal });
   }
-  // A fresh target-side token is minted by createRule; no source credentials.
-  if (target.state !== 'DISABLED' || target.trigger?.type !== 'jira.incoming.webhook' || !target.trigger?.value?.webhookToken) throw new Error('目标规则必须为禁用的 webhook 规则；请核对后重试');
-  const webhookUrl = `${preview.config.jiraUrl}/rest/cb-automation/latest/hooks/${target.trigger.value.webhookToken}`;
-  const task = await scheduleApi(`/tasks/${encodeURIComponent(taskId)}`);
-  await scheduleApi(`/tasks/${encodeURIComponent(taskId)}`, 'PATCH', { config: { ...task.config, webhookUrl,
-    jiraRuleRef: { jiraUrl: preview.config.jiraUrl, projectId: preview.projectId, ruleId: String(target.id) },
-    jiraImportState: 'created_disabled_needs_review', jiraImportMarker: marker } });
+  // Report the disabled target through the server state machine. No webhook is
+  // activated until the user has reviewed/enabled this exact target in JIRA.
+  await scheduleApi(`/tasks/${encodeURIComponent(taskId)}/jira-import`, 'POST', {
+    state: 'created_disabled_needs_review', targetRuleId: String(target.id),
+    targetProjectId: preview.projectId, targetJiraUrl: preview.config.jiraUrl, marker,
+  });
   await scheduleApi(`/tasks/${encodeURIComponent(taskId)}/status`, 'POST', { status: 'paused' });
   await chrome.storage.local.set({ [key]: { ...journal, ruleId: String(target.id), state: 'bound_disabled' } });
   return { ruleId: String(target.id), url: service().getRuleUrl(preview.config, String(target.id)),
-    message: '已创建并绑定禁用副本。请在目标 JIRA 核验字段、凭证和权限，启用规则后再到 Schedule 启用任务。仅新 webhook 触发，无 JIRA 时间源。' };
+    message: '已创建并登记禁用副本。请先在目标 JIRA 审查字段、凭证和权限并启用规则，再回到此处核验完成；计划仍未启用。' };
+}
+
+/** Read back the exact receiver target; completing never creates/enables a rule. */
+export async function finalizeJiraImport(taskId: string, reviewed: boolean) {
+  if (reviewed !== true) throw new Error('请先确认已在目标 JIRA 审查字段、凭证和权限');
+  const task = await scheduleApi(`/tasks/${encodeURIComponent(taskId)}`);
+  if (task.type !== 'jira_automation') throw new Error('不是 JIRA 托管任务');
+  const target = task.config?.jiraTarget;
+  if (!target?.ruleId || !target.projectId || !target.jiraUrl ||
+      !['created_disabled_needs_review', 'completed'].includes(task.config?.jiraImportState)) {
+    throw new Error('请先创建并登记目标禁用副本');
+  }
+  const jiraUrl = (await getJiraBaseUrl()).replace(/\/+$/, '');
+  if (new URL(target.jiraUrl).origin !== new URL(jiraUrl).origin) throw new Error('请在扩展 JIRA 配置切换到目标副本所在站点后继续');
+  const project = await jiraJson(`${jiraUrl}/rest/api/2/project/${encodeURIComponent(target.projectId)}`);
+  if (String(project.id) !== String(target.projectId)) throw new Error('目标项目身份不匹配');
+  const config = await jiraConfig(project.key);
+  const rule = (await service().getRules(config)).find(r => String(r.id) === String(target.ruleId));
+  if (!rule || rule.state !== 'ENABLED' || rule.trigger?.type !== 'jira.incoming.webhook' ||
+      !rule.trigger.value?.webhookToken) throw new Error('目标规则尚未启用或不是有效的 webhook 规则；请在目标 JIRA 核对，不会自动启用');
+  const webhookUrl = `${jiraUrl}/rest/cb-automation/latest/hooks/${rule.trigger.value.webhookToken}`;
+  if (task.config.jiraImportState !== 'completed') {
+    await scheduleApi(`/tasks/${encodeURIComponent(taskId)}/jira-import`, 'POST', {
+      state: 'completed', targetRuleId: String(rule.id), targetProjectId: String(project.id),
+      targetJiraUrl: jiraUrl, webhookUrl, marker: target.marker,
+    });
+  } else if (task.config.webhookUrl !== webhookUrl) {
+    throw new Error('已完成绑定的 webhook 已变更，请核对目标规则后重新配置');
+  }
+  return { ruleId: String(rule.id), message: '已核验目标规则启用且仅由 webhook 触发，绑定补全完成。请到 Schedule 检查计划后显式启用；本次没有执行规则。' };
 }

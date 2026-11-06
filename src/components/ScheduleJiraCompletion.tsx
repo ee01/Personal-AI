@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useState } from 'react';
 import { scheduleApi } from '../scheduleService';
-import { previewJiraCompletion, completeJiraImport } from '../scheduleJira';
+import { previewJiraCompletion, completeJiraImport, finalizeJiraImport } from '../scheduleJira';
 export function ScheduleJiraCompletion() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [id, setId] = useState('');
@@ -11,13 +11,14 @@ export function ScheduleJiraCompletion() {
   const [reviewed, setReviewed] = useState(false);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [targetReviewed, setTargetReviewed] = useState(false);
   async function act(fn: () => Promise<void>) {
     setBusy(true); try { await fn(); } catch(e) { setNotice(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   return <details><summary>JIRA Automation 分享导出 / 导入补全</summary>
     <p>分享者先预览并授权规则内容。接收方选择自己的目标项目；新规则以禁用状态创建，核验字段和凭证后再启用。</p>
     <button type="button" disabled={busy} onClick={() => void act(async () => setTasks(await scheduleApi('/tasks?type=jira_automation')))}>读取我的 JIRA 任务</button>
-    <select aria-label="JIRA 计划任务" value={id} onChange={e => { setId(e.target.value); setPreview(null); setReviewed(false); }}>
+    <select aria-label="JIRA 计划任务" value={id} onChange={e => { setId(e.target.value); setPreview(null); setReviewed(false); setTargetReviewed(false); setSource(''); }}>
       <option value="">选择任务</option>{tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
     </select>
     <button type="button" disabled={busy || !id} onClick={() => void act(async () => {
@@ -40,6 +41,10 @@ export function ScheduleJiraCompletion() {
     {preview && <><pre style={{ whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto' }}>{JSON.stringify({ findings: preview.findings, rule: preview.payload }, null, 2)}</pre>
       <label><input type="checkbox" checked={reviewed} onChange={e => setReviewed(e.target.checked)} />已审查上述依赖，创建禁用副本，后续到目标 JIRA 补齐并核验</label>
       <button type="button" disabled={busy || !reviewed} onClick={() => void act(async () => { const result = await completeJiraImport(id, preview); setNotice(`${result.message} 目标 rule ID: ${result.ruleId}`); })}>创建或续绑目标副本</button></>}
+    <label><input type="checkbox" checked={targetReviewed} onChange={e => setTargetReviewed(e.target.checked)} />我已在目标 JIRA 审查字段、凭证和权限，并手动启用了目标副本</label>
+    <button type="button" disabled={busy || !id || !targetReviewed} onClick={() => void act(async () => {
+      const result = await finalizeJiraImport(id, targetReviewed); setNotice(result.message);
+    })}>核验目标规则并完成绑定</button>
     <div role="status">{notice}</div>
   </details>;
 }

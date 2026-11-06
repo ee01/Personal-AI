@@ -40,7 +40,7 @@ assert.equal(requests.length, count);
 const rule = { name: 'Source', state: 'ENABLED', actorAccountId: 'source-actor', authorAccountId: 'source-author',
   trigger: { type: 'jira.incoming.webhook', value: { webhookToken: 'SOURCE-SECRET' } }, components: [], projects: [] };
 const artifact = prepareJiraSharedRule(rule);
-assert.equal(artifact.rules[0].state, 'DISABLED'); assert.equal(artifact.rules[0].actorAccountId, 'TARGET_ACTOR');
+assert.equal(artifact.payload.state, 'DISABLED'); assert.equal(artifact.payload.actorAccountId, 'TARGET_ACTOR');
 assert(!JSON.stringify(artifact).includes('SOURCE-SECRET')); assert(!JSON.stringify(artifact).includes('source-actor'));
 assert.equal(rule.state, 'ENABLED'); assert.equal(rule.trigger.value.webhookToken, 'SOURCE-SECRET');
 console.log('Schedule client: authorization, schema, configuration continuation, duplicate click and source credential isolation checks passed');
@@ -49,14 +49,33 @@ assert.equal(jiraScheduleSpec({ method: 'CRON', cronExpression: '0 30 9 ? * 2-6 
 assert.equal(jiraScheduleSpec({ method: 'FIXED', rate: 2, rateInterval: 3600 }, 'UTC').intervalMinutes, 120);
 assert.throws(() => jiraScheduleSpec({ method: 'CRON', cronExpression: '0 0 9 L * ?' }, 'UTC'));
 
+// An interrupted create keeps its durable idempotency key across retries.
+const createFetch = globalThis.fetch;
+let loseCreate = true;
+const createKeys: string[] = [];
+(globalThis as any).fetch = async (url: string, init: any) => {
+  if (url.endsWith('/tasks') && init.method === 'POST') {
+    createKeys.push(JSON.parse(init.body).idempotencyKey);
+    if (loseCreate) { loseCreate = false; throw new Error('lost create response'); }
+  }
+  return createFetch(url, init);
+};
+const interrupted = { ...compose, content: 'interrupted creation fixture' };
+await assert.rejects(createComposeSchedule(interrupted), /lost create response/);
+const retry = await createComposeSchedule(interrupted);
+assert(retry.success); assert.equal(createKeys.length, 2); assert(createKeys[0]); assert.equal(createKeys[0], createKeys[1]);
+(globalThis as any).fetch = createFetch;
+
 // Exercise the existing Jira request path with controlled HTTP responses.
 // No live rule is created, enabled or touched by this verifier.
-const { previewJiraCompletion, completeJiraImport } = await import('../src/scheduleJira.js');
+const { previewJiraCompletion, completeJiraImport, finalizeJiraImport } = await import('../src/scheduleJira.js');
 state.envConfig = { JIRA_BASE_URL: 'https://jira.test', JIRA_API_TOKEN: 'receiver-jira-secret' };
 let target: any = null;
 let jiraCreates = 0;
 let failBind = true;
 let denyProject = false;
+let jiraImportState = 'pending_target';
+let jiraTarget: any = null;
 const calls: any[] = [];
 (globalThis as any).fetch = async (url: string, init: any) => {
   calls.push({url, init});
@@ -71,10 +90,12 @@ const calls: any[] = [];
     } else if(url.endsWith('/rule')) payload=target?[target]:[];
     else throw new Error('Unexpected Jira request');
   } else if(url.endsWith('/me')) payload={id:'receiver',email:'receiver@example.test'};
-  else if(url.endsWith('/tasks/tsk_jira') && init.method === 'PATCH') {
+  else if(url.endsWith('/tasks/tsk_jira/jira-import') && init.method === 'POST') {
     if(failBind) {failBind=false; throw new Error('simulated interrupted Schedule binding');}
+    const body = JSON.parse(init.body); jiraImportState = body.state;
+    jiraTarget = {ruleId:body.targetRuleId,projectId:body.targetProjectId,jiraUrl:body.targetJiraUrl,marker:body.marker};
     payload={task:{id:'tsk_jira'}};
-  } else if(url.endsWith('/tasks/tsk_jira')) payload={id:'tsk_jira',type:'jira_automation',config:{jiraRuleRef:{jiraUrl:'https://source-no-access.test',projectId:'SOURCE',ruleId:'1'},jiraRuleExport:artifact}};
+  } else if(url.endsWith('/tasks/tsk_jira')) payload={id:'tsk_jira',type:'jira_automation',config:{jiraRuleRef:{jiraUrl:'https://source-no-access.test',projectId:'SOURCE',ruleId:'1'},jiraRuleExport:artifact,jiraImportState,jiraTarget}};
   return {ok:status===200,status,json:async()=>payload};
 };
 const sourceOnlyFetch = globalThis.fetch;
@@ -96,6 +117,13 @@ const bound = await completeJiraImport('tsk_jira',preview);
 assert.equal(bound.ruleId,'9001'); assert.equal(jiraCreates,1,'retry reuses disabled target rule');
 assert.equal(target.state,'DISABLED'); assert.equal(target.trigger.value.webhookToken,'FRESH-TARGET-WEBHOOK');
 assert(!calls.some(c=>c.init.method==='PUT'),'never edits source rule');
+await assert.rejects(finalizeJiraImport('tsk_jira', false), /请先确认/);
+await assert.rejects(finalizeJiraImport('tsk_jira', true), /尚未启用/);
+assert.equal(jiraImportState, 'created_disabled_needs_review');
+target.state = 'ENABLED'; // controlled fixture simulates user review/enable in Jira
+const completed = await finalizeJiraImport('tsk_jira', true);
+assert.equal(completed.ruleId, '9001'); assert.equal(jiraImportState, 'completed');
+assert.equal(jiraCreates, 1);
 const before=calls.length; denyProject=true;
 await assert.rejects(previewJiraCompletion('tsk_jira','TARGET'),/403/);
 assert.equal(jiraCreates,1);
